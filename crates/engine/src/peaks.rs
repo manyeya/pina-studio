@@ -12,7 +12,10 @@ impl Peaks {
     pub fn from_samples(samples: &[f32]) -> Self {
         let (min, max) = samples
             .chunks(BLOCK)
-            .map(|b| b.iter().fold((0f32, 0f32), |(lo, hi), &s| (lo.min(s), hi.max(s))))
+            .map(|b| {
+                b.iter()
+                    .fold((0f32, 0f32), |(lo, hi), &s| (lo.min(s), hi.max(s)))
+            })
             .unzip();
         Peaks { min, max }
     }

@@ -16,8 +16,8 @@ use vst3::{
     Class, ComPtr, ComRef, ComWrapper, Interface,
     Steinberg::{
         Vst::{
-            BusDirections_::*, Event_::EventTypes_::*, MediaTypes_::*, ProcessContext_::StatesAndFlags_::*,
-            ProcessModes_::*, SymbolicSampleSizes_::*, *,
+            BusDirections_::*, Event_::EventTypes_::*, MediaTypes_::*,
+            ProcessContext_::StatesAndFlags_::*, ProcessModes_::*, SymbolicSampleSizes_::*, *,
         },
         *,
     },
@@ -30,11 +30,23 @@ pub const AUDIO_MODULE: &str = "Audio Module Class";
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
-    fn CFURLCreateFromFileSystemRepresentation(a: *const c_void, buf: *const u8, len: isize, dir: u8) -> *const c_void;
+    fn CFURLCreateFromFileSystemRepresentation(
+        a: *const c_void,
+        buf: *const u8,
+        len: isize,
+        dir: u8,
+    ) -> *const c_void;
     fn CFBundleCreate(a: *const c_void, url: *const c_void) -> *const c_void;
     fn CFBundleLoadExecutable(bundle: *const c_void) -> u8;
-    fn CFBundleGetFunctionPointerForName(bundle: *const c_void, name: *const c_void) -> *const c_void;
-    fn CFStringCreateWithCString(a: *const c_void, s: *const c_char, encoding: u32) -> *const c_void;
+    fn CFBundleGetFunctionPointerForName(
+        bundle: *const c_void,
+        name: *const c_void,
+    ) -> *const c_void;
+    fn CFStringCreateWithCString(
+        a: *const c_void,
+        s: *const c_char,
+        encoding: u32,
+    ) -> *const c_void;
     fn CFRelease(cf: *const c_void);
 }
 
@@ -54,8 +66,14 @@ impl Module {
     pub fn load(path: &Path) -> Result<Module, String> {
         let fail = |why: &str| format!("{}: {why}", path.display());
         unsafe {
-            let p = CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| fail("bad path"))?;
-            let url = CFURLCreateFromFileSystemRepresentation(ptr::null(), p.as_ptr().cast(), p.as_bytes().len() as isize, 1);
+            let p =
+                CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| fail("bad path"))?;
+            let url = CFURLCreateFromFileSystemRepresentation(
+                ptr::null(),
+                p.as_ptr().cast(),
+                p.as_bytes().len() as isize,
+                1,
+            );
             if url.is_null() {
                 return Err(fail("bad path"));
             }
@@ -74,7 +92,8 @@ impl Module {
             if !entry(bundle) {
                 return Err(fail("bundleEntry failed"));
             }
-            let factory = ComPtr::from_raw(get_factory()).ok_or_else(|| fail("no plugin factory"))?;
+            let factory =
+                ComPtr::from_raw(get_factory()).ok_or_else(|| fail("no plugin factory"))?;
             Ok(Module { factory })
         }
     }
@@ -98,7 +117,10 @@ impl Module {
         let mut obj = ptr::null_mut();
         let iid = I::IID;
         unsafe {
-            (self.factory.createInstance(cid.as_ptr(), iid.as_ptr().cast(), &mut obj) == kResultOk)
+            (self
+                .factory
+                .createInstance(cid.as_ptr(), iid.as_ptr().cast(), &mut obj)
+                == kResultOk)
                 .then(|| ComPtr::from_raw(obj.cast()))
                 .flatten()
         }
@@ -116,7 +138,11 @@ unsafe fn symbol<F: Copy>(bundle: *const c_void, name: &CStr) -> Option<F> {
 }
 
 fn text(chars: &[c_char]) -> String {
-    let bytes: Vec<u8> = chars.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
+    let bytes: Vec<u8> = chars
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
@@ -160,16 +186,25 @@ pub struct Note {
 }
 
 impl Plugin {
-    pub fn instantiate(module: &Module, class: &ClassInfo, rate: f64, max_block: usize) -> Result<(Plugin, Processor), String> {
+    pub fn instantiate(
+        module: &Module,
+        class: &ClassInfo,
+        rate: f64,
+        max_block: usize,
+    ) -> Result<(Plugin, Processor), String> {
         let fail = |why: &str| format!("{}: {why}", class.name);
         unsafe {
             let host = ComWrapper::new(HostApplication);
             let host_ptr = com_ptr::<_, IHostApplication>(&host).cast::<FUnknown>();
-            let component: ComPtr<IComponent> = module.create(&class.cid).ok_or_else(|| fail("couldn't create it"))?;
+            let component: ComPtr<IComponent> = module
+                .create(&class.cid)
+                .ok_or_else(|| fail("couldn't create it"))?;
             if component.initialize(host_ptr) != kResultOk {
                 return Err(fail("initialize failed"));
             }
-            let processor: ComPtr<IAudioProcessor> = component.cast().ok_or_else(|| fail("not an audio processor"))?;
+            let processor: ComPtr<IAudioProcessor> = component
+                .cast()
+                .ok_or_else(|| fail("not an audio processor"))?;
 
             let controller: ComPtr<IEditController> = match component.cast() {
                 Some(c) => c,
@@ -178,9 +213,14 @@ impl Plugin {
                     if component.getControllerClassId(&mut cid) != kResultOk {
                         return Err(fail("no edit controller"));
                     }
-                    let c: ComPtr<IEditController> = module.create(&cid).ok_or_else(|| fail("couldn't create its controller"))?;
+                    let c: ComPtr<IEditController> = module
+                        .create(&cid)
+                        .ok_or_else(|| fail("couldn't create its controller"))?;
                     c.initialize(host_ptr);
-                    if let (Some(a), Some(b)) = (component.cast::<IConnectionPoint>(), c.cast::<IConnectionPoint>()) {
+                    if let (Some(a), Some(b)) = (
+                        component.cast::<IConnectionPoint>(),
+                        c.cast::<IConnectionPoint>(),
+                    ) {
                         a.connect(b.as_ptr());
                         b.connect(a.as_ptr());
                     }
@@ -229,7 +269,9 @@ impl Plugin {
                 let b = AudioBusBuffers {
                     numChannels: ptrs.len() as int32,
                     silenceFlags: 0,
-                    __field0: AudioBusBuffers__type0 { channelBuffers32: ptrs.as_mut_ptr() },
+                    __field0: AudioBusBuffers__type0 {
+                        channelBuffers32: ptrs.as_mut_ptr(),
+                    },
                 };
                 channels.push(ptrs);
                 b
@@ -259,7 +301,12 @@ impl Plugin {
             context.timeSigDenominator = 4;
             context.state = (kPlaying | kTempoValid | kTimeSigValid) as _;
 
-            let plugin = Plugin { name: class.name.clone(), controller, _host: host, _handler: handler };
+            let plugin = Plugin {
+                name: class.name.clone(),
+                controller,
+                _host: host,
+                _handler: handler,
+            };
             let processor = Processor {
                 processor,
                 events: ComWrapper::new(EventList::with_capacity(512)),
@@ -282,30 +329,48 @@ impl Plugin {
     pub fn open_editor(&self, mtm: MainThreadMarker) -> Result<Editor, String> {
         let fail = |why: &str| format!("{}: {why}", self.name);
         unsafe {
-            let view = ComPtr::from_raw(self.controller.createView(ViewType::kEditor)).ok_or_else(|| fail("no editor"))?;
+            let view = ComPtr::from_raw(self.controller.createView(ViewType::kEditor))
+                .ok_or_else(|| fail("no editor"))?;
             if view.isPlatformTypeSupported(kPlatformTypeNSView) != kResultTrue {
                 return Err(fail("editor isn't an NSView"));
             }
             let mut rect: ViewRect = std::mem::zeroed();
             view.getSize(&mut rect);
-            let size = NSSize::new((rect.right - rect.left) as f64, (rect.bottom - rect.top) as f64);
+            let size = NSSize::new(
+                (rect.right - rect.left) as f64,
+                (rect.bottom - rect.top) as f64,
+            );
             let window = NSWindow::initWithContentRect_styleMask_backing_defer(
                 mtm.alloc(),
                 NSRect::new(NSPoint::new(200.0, 200.0), size),
-                NSWindowStyleMask::Titled | NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable,
+                NSWindowStyleMask::Titled
+                    | NSWindowStyleMask::Closable
+                    | NSWindowStyleMask::Miniaturizable,
                 NSBackingStoreType::Buffered,
                 false,
             );
             window.setReleasedWhenClosed(false);
             window.setTitle(&NSString::from_str(&self.name));
-            let frame = ComWrapper::new(PlugFrame { window: window.clone() });
+            let frame = ComWrapper::new(PlugFrame {
+                window: window.clone(),
+            });
             view.setFrame(com_ptr::<_, IPlugFrame>(&frame));
-            let content = window.contentView().ok_or_else(|| fail("window has no content view"))?;
-            if view.attached(Retained::as_ptr(&content) as *mut c_void, kPlatformTypeNSView) != kResultOk {
+            let content = window
+                .contentView()
+                .ok_or_else(|| fail("window has no content view"))?;
+            if view.attached(
+                Retained::as_ptr(&content) as *mut c_void,
+                kPlatformTypeNSView,
+            ) != kResultOk
+            {
                 return Err(fail("editor wouldn't attach"));
             }
             window.makeKeyAndOrderFront(None);
-            Ok(Editor { _view: view, _frame: frame, window })
+            Ok(Editor {
+                _view: view,
+                _frame: frame,
+                window,
+            })
         }
     }
 }
@@ -331,16 +396,30 @@ impl IPlugFrameTrait for PlugFrame {
             return kInvalidArgument;
         };
         let r = unsafe { *size };
-        self.window.setContentSize(NSSize::new((r.right - r.left) as f64, (r.bottom - r.top) as f64));
+        self.window.setContentSize(NSSize::new(
+            (r.right - r.left) as f64,
+            (r.bottom - r.top) as f64,
+        ));
         unsafe { view.onSize(size) };
         kResultOk
     }
 }
 
 impl Processor {
-    /// Runs one block of `frames` (at most the max block) with these notes and any editor edits.
+    /// Tells the plugin where the transport is, before a `process`.
+    pub fn set_transport(&mut self, playing: bool, position: u64, tempo: f64) {
+        let c = &mut self.context;
+        c.tempo = tempo;
+        c.projectTimeSamples = position as i64;
+        c.projectTimeMusic = position as f64 / c.sampleRate * tempo / 60.0;
+        let playing = if playing { kPlaying } else { 0 };
+        c.state = (kTempoValid | kTimeSigValid | kProjectTimeMusicValid | playing) as _;
+    }
+
+    /// Runs one block in place: `buf` goes to the main input (if the plugin has one) and comes
+    /// back holding the main output. Applies these notes and any edits from the editor.
     /// Allocation-free: safe on the audio thread.
-    pub fn process(&mut self, frames: usize, notes: &[Note]) {
+    pub fn process(&mut self, buf: [&mut [f32]; 2], frames: usize, notes: &[Note]) {
         assert!(frames <= self.max_block);
         self.events.clear();
         for n in notes {
@@ -348,10 +427,23 @@ impl Processor {
             e.sampleOffset = n.offset as int32;
             if n.velocity > 0.0 {
                 e.r#type = kNoteOnEvent as _;
-                e.__field0.noteOn = NoteOnEvent { channel: 0, pitch: n.pitch as _, tuning: 0.0, velocity: n.velocity, length: 0, noteId: -1 };
+                e.__field0.noteOn = NoteOnEvent {
+                    channel: 0,
+                    pitch: n.pitch as _,
+                    tuning: 0.0,
+                    velocity: n.velocity,
+                    length: 0,
+                    noteId: -1,
+                };
             } else {
                 e.r#type = kNoteOffEvent as _;
-                e.__field0.noteOff = NoteOffEvent { channel: 0, pitch: n.pitch as _, velocity: 0.0, noteId: -1, tuning: 0.0 };
+                e.__field0.noteOff = NoteOffEvent {
+                    channel: 0,
+                    pitch: n.pitch as _,
+                    velocity: 0.0,
+                    noteId: -1,
+                    tuning: 0.0,
+                };
             }
             self.events.push(e);
         }
@@ -362,9 +454,15 @@ impl Processor {
         for b in &mut self.outputs {
             b.silenceFlags = 0;
         }
-        for b in &mut self.inputs {
+        for (i, b) in self.inputs.iter().enumerate() {
             for c in 0..b.numChannels as usize {
-                unsafe { std::slice::from_raw_parts_mut(*b.__field0.channelBuffers32.add(c), frames).fill(0.0) };
+                let dst = unsafe {
+                    std::slice::from_raw_parts_mut(*b.__field0.channelBuffers32.add(c), frames)
+                };
+                match buf.get(c).filter(|_| i == 0) {
+                    Some(src) => dst.copy_from_slice(&src[..frames]),
+                    None => dst.fill(0.0),
+                }
             }
         }
         let mut data = ProcessData {
@@ -373,7 +471,11 @@ impl Processor {
             numSamples: frames as int32,
             numInputs: self.inputs.len() as int32,
             numOutputs: self.outputs.len() as int32,
-            inputs: if self.inputs.is_empty() { ptr::null_mut() } else { self.inputs.as_mut_ptr() },
+            inputs: if self.inputs.is_empty() {
+                ptr::null_mut()
+            } else {
+                self.inputs.as_mut_ptr()
+            },
             outputs: self.outputs.as_mut_ptr(),
             inputParameterChanges: com_ptr::<_, IParameterChanges>(&self.params),
             outputParameterChanges: ptr::null_mut(),
@@ -384,12 +486,14 @@ impl Processor {
         unsafe { self.processor.process(&mut data) };
         self.context.projectTimeSamples += frames as i64;
         self.context.continousTimeSamples += frames as i64;
-    }
-
-    /// Channel `c` of the main output, as of the last `process`.
-    pub fn output(&self, c: usize, frames: usize) -> &[f32] {
-        let b = &self.outputs[0];
-        let c = c.min(b.numChannels as usize - 1);
-        unsafe { std::slice::from_raw_parts(*b.__field0.channelBuffers32.add(c), frames) }
+        // Mono output goes to both sides.
+        let out = &self.outputs[0];
+        for (c, dst) in buf.into_iter().enumerate() {
+            let c = c.min(out.numChannels as usize - 1);
+            let src = unsafe {
+                std::slice::from_raw_parts(*out.__field0.channelBuffers32.add(c), frames)
+            };
+            dst[..frames].copy_from_slice(src);
+        }
     }
 }

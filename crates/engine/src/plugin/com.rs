@@ -29,7 +29,12 @@ impl IHostApplicationTrait for HostApplication {
         kResultOk
     }
 
-    unsafe fn createInstance(&self, _cid: *mut TUID, _iid: *mut TUID, obj: *mut *mut c_void) -> tresult {
+    unsafe fn createInstance(
+        &self,
+        _cid: *mut TUID,
+        _iid: *mut TUID,
+        obj: *mut *mut c_void,
+    ) -> tresult {
         // ponytail: no host-made IMessage/IAttributeList; add when a plugin needs them.
         unsafe { *obj = std::ptr::null_mut() };
         kNotImplemented
@@ -43,7 +48,9 @@ pub struct ComponentHandler {
 
 impl ComponentHandler {
     pub fn new(edits: rtrb::Producer<(ParamID, ParamValue)>) -> Self {
-        ComponentHandler { edits: Mutex::new(edits) }
+        ComponentHandler {
+            edits: Mutex::new(edits),
+        }
     }
 }
 
@@ -150,7 +157,9 @@ pub struct EventList {
 
 impl EventList {
     pub fn with_capacity(n: usize) -> Self {
-        EventList { events: RefCell::new(Vec::with_capacity(n)) }
+        EventList {
+            events: RefCell::new(Vec::with_capacity(n)),
+        }
     }
 
     pub fn clear(&self) {
@@ -261,7 +270,10 @@ impl ParameterChanges {
                 })
             })
             .collect();
-        ParameterChanges { queues, used: Cell::new(0) }
+        ParameterChanges {
+            queues,
+            used: Cell::new(0),
+        }
     }
 
     pub fn clear(&self) {
@@ -271,7 +283,9 @@ impl ParameterChanges {
     pub fn add(&self, id: ParamID, offset: int32, value: ParamValue) {
         let q = unsafe { self.addParameterData(&id, std::ptr::null_mut()) };
         if !q.is_null() {
-            let i = (0..self.used.get()).find(|&i| self.queues[i].id.get() == id).unwrap();
+            let i = (0..self.used.get())
+                .find(|&i| self.queues[i].id.get() == id)
+                .unwrap();
             unsafe { self.queues[i].addPoint(offset, value, std::ptr::null_mut()) };
         }
     }
@@ -293,7 +307,11 @@ impl IParameterChangesTrait for ParameterChanges {
         }
     }
 
-    unsafe fn addParameterData(&self, id: *const ParamID, index: *mut int32) -> *mut IParamValueQueue {
+    unsafe fn addParameterData(
+        &self,
+        id: *const ParamID,
+        index: *mut int32,
+    ) -> *mut IParamValueQueue {
         if id.is_null() {
             return std::ptr::null_mut();
         }
@@ -312,7 +330,10 @@ impl IParameterChangesTrait for ParameterChanges {
         if !index.is_null() {
             unsafe { *index = i as int32 };
         }
-        self.queues[i].as_com_ref::<IParamValueQueue>().unwrap().as_ptr()
+        self.queues[i]
+            .as_com_ref::<IParamValueQueue>()
+            .unwrap()
+            .as_ptr()
     }
 }
 

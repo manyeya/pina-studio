@@ -1,0 +1,230 @@
+{
+  "tempo": 100,
+  "sample_rate": 48000,
+  "tracks": [
+    {
+      "name": "Keys",
+      "instrument": "synth",
+      "volume_db": -9,
+      "pan": -0.2,
+      "regions": [
+        {
+          "start": 0,
+          "length": 15360,
+          "midi": {
+            "notes": [
+              {
+                "start": 0,
+                "length": 3780,
+                "pitch": 48,
+                "velocity": 80
+              },
+              {
+                "start": 0,
+                "length": 3780,
+                "pitch": 60,
+                "velocity": 80
+              },
+              {
+                "start": 0,
+                "length": 3780,
+                "pitch": 64,
+                "velocity": 80
+              },
+              {
+                "start": 0,
+                "length": 3780,
+                "pitch": 67,
+                "velocity": 80
+              },
+              {
+                "start": 3840,
+                "length": 3780,
+                "pitch": 45,
+                "velocity": 80
+              },
+              {
+                "start": 3840,
+                "length": 3780,
+                "pitch": 57,
+                "velocity": 80
+              },
+              {
+                "start": 3840,
+                "length": 3780,
+                "pitch": 60,
+                "velocity": 80
+              },
+              {
+                "start": 3840,
+                "length": 3780,
+                "pitch": 64,
+                "velocity": 80
+              },
+              {
+                "start": 7680,
+                "length": 3780,
+                "pitch": 41,
+                "velocity": 80
+              },
+              {
+                "start": 7680,
+                "length": 3780,
+                "pitch": 57,
+                "velocity": 80
+              },
+              {
+                "start": 7680,
+                "length": 3780,
+                "pitch": 60,
+                "velocity": 80
+              },
+              {
+                "start": 7680,
+                "length": 3780,
+                "pitch": 65,
+                "velocity": 80
+              },
+              {
+                "start": 11520,
+                "length": 3780,
+                "pitch": 43,
+                "velocity": 80
+              },
+              {
+                "start": 11520,
+                "length": 3780,
+                "pitch": 55,
+                "velocity": 80
+              },
+              {
+                "start": 11520,
+                "length": 3780,
+                "pitch": 59,
+                "velocity": 80
+              },
+              {
+                "start": 11520,
+                "length": 3780,
+                "pitch": 62,
+                "velocity": 80
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Lead",
+      "instrument": "synth",
+      "volume_db": -6,
+      "pan": 0.3,
+      "regions": [
+        {
+          "start": 0,
+          "length": 15360,
+          "midi": {
+            "notes": [
+              {
+                "start": 0,
+                "length": 840,
+                "pitch": 72,
+                "velocity": 100
+              },
+              {
+                "start": 960,
+                "length": 840,
+                "pitch": 74,
+                "velocity": 100
+              },
+              {
+                "start": 1920,
+                "length": 840,
+                "pitch": 76,
+                "velocity": 100
+              },
+              {
+                "start": 2880,
+                "length": 840,
+                "pitch": 79,
+                "velocity": 100
+              },
+              {
+                "start": 3840,
+                "length": 840,
+                "pitch": 76,
+                "velocity": 100
+              },
+              {
+                "start": 4800,
+                "length": 840,
+                "pitch": 74,
+                "velocity": 100
+              },
+              {
+                "start": 5760,
+                "length": 840,
+                "pitch": 72,
+                "velocity": 100
+              },
+              {
+                "start": 6720,
+                "length": 840,
+                "pitch": 69,
+                "velocity": 100
+              },
+              {
+                "start": 7680,
+                "length": 840,
+                "pitch": 69,
+                "velocity": 100
+              },
+              {
+                "start": 8640,
+                "length": 840,
+                "pitch": 72,
+                "velocity": 100
+              },
+              {
+                "start": 9600,
+                "length": 840,
+                "pitch": 74,
+                "velocity": 100
+              },
+              {
+                "start": 10560,
+                "length": 840,
+                "pitch": 77,
+                "velocity": 100
+              },
+              {
+                "start": 11520,
+                "length": 840,
+                "pitch": 79,
+                "velocity": 100
+              },
+              {
+                "start": 12480,
+                "length": 840,
+                "pitch": 77,
+                "velocity": 100
+              },
+              {
+                "start": 13440,
+                "length": 840,
+                "pitch": 74,
+                "velocity": 100
+              },
+              {
+                "start": 14400,
+                "length": 840,
+                "pitch": 71,
+                "velocity": 100
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
