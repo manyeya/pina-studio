@@ -4,6 +4,7 @@ mod mcp;
 mod menu;
 mod pianoroll;
 mod record;
+mod score;
 mod server;
 mod steps;
 mod strip;
@@ -126,6 +127,7 @@ fn open(dir: &Path) -> Result<(), String> {
                 MenuItem::action("Mixer", ToggleMixer),
                 MenuItem::action("Piano Roll", TogglePianoRoll),
                 MenuItem::action("Live Loops", ToggleLoops),
+                MenuItem::action("Score", ToggleScore),
                 MenuItem::action("Automation", ToggleAutomation),
                 MenuItem::action("Inspector", ToggleInspector),
                 MenuItem::separator(),

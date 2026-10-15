@@ -48,6 +48,7 @@ actions!(
         CreateStack,
         NewPattern,
         ToggleLoops,
+        ToggleScore,
     ]
 );
 
@@ -67,6 +68,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("i", ToggleInspector, Some("Arrange")),
         KeyBinding::new("p", TogglePianoRoll, Some("Arrange")),
         KeyBinding::new("l", ToggleLoops, Some("Arrange")),
+        KeyBinding::new("n", ToggleScore, Some("Arrange")),
         KeyBinding::new("a", ToggleAutomation, Some("Arrange")),
         KeyBinding::new("r", Record, None),
         KeyBinding::new("cmd-k", ToggleTyping, None),
@@ -164,6 +166,7 @@ pub enum Bottom {
     Takes,
     Steps,
     Loops,
+    Score,
 }
 
 pub struct Workspace {
@@ -546,8 +549,8 @@ impl Workspace {
     }
 
     fn delete(&mut self, cx: &mut Context<Self>) {
-        if let (Some(at), Some(i), Some(Bottom::PianoRoll)) = (self.region, self.note, self.bottom)
-        {
+        let notes_shown = matches!(self.bottom, Some(Bottom::PianoRoll | Bottom::Score));
+        if let (Some(at), Some(i), true) = (self.region, self.note, notes_shown) {
             self.edit(cx, |ws| {
                 ws.session.project.notes_mut(at).unwrap().remove(i);
                 ws.note = None;
@@ -1130,6 +1133,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &Record, _, cx| ws.record(cx)))
             .on_action(cx.listener(|ws, _: &NewPattern, _, cx| ws.new_pattern(cx)))
             .on_action(
+                cx.listener(|ws, _: &ToggleScore, _, cx| ws.toggle_bottom(Bottom::Score, cx)),
+            )
+            .on_action(
                 cx.listener(|ws, _: &ToggleLoops, _, cx| ws.toggle_bottom(Bottom::Loops, cx)),
             )
             .on_action(cx.listener(|ws, _: &CreateStack, _, cx| {
@@ -1185,6 +1191,9 @@ impl Render for Workspace {
             })
             .when(self.bottom == Some(Bottom::Steps), |d| {
                 d.child(self.steps_pane(cx))
+            })
+            .when(self.bottom == Some(Bottom::Score), |d| {
+                d.child(self.score_pane(cx))
             })
             .when(self.bottom == Some(Bottom::Loops), |d| {
                 d.child(self.loops_pane(cx))

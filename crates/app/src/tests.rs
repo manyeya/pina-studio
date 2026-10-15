@@ -598,3 +598,42 @@ fn live_loops_take_a_region_and_launch_it(cx: &mut TestAppContext) {
     click_on(cx, "cell-1-2", Modifiers::none(), MouseButton::Right); // empty it
     assert!(ws.read_with(cx, |ws, _| ws.session.project.tracks[1].cells.is_empty()));
 }
+
+#[gpui::test]
+fn the_score_shows_a_regions_notes_to_select_and_delete(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    cx.simulate_click(spot(&ws, cx, PPQ, 1), Modifiers::none()); // the Lead region
+    cx.simulate_keystrokes("n");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.bottom), Some(Bottom::Score));
+    let before = ws.read_with(cx, |ws, _| {
+        ws.session
+            .project
+            .region((1, 0))
+            .content
+            .notes(0)
+            .unwrap()
+            .len()
+    });
+    let names: Vec<&'static str> = (0..before)
+        .map(|i| &*Box::leak(format!("score-note-{i}").into_boxed_str()))
+        .collect();
+    let drawn = names
+        .iter()
+        .filter(|n| cx.debug_bounds(n).is_some())
+        .count();
+    assert!(drawn > 4, "{drawn} of {before} notes drawn");
+    click_on(cx, "score-note-2", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.note), Some(2));
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws
+            .session
+            .project
+            .region((1, 0))
+            .content
+            .notes(0)
+            .unwrap()
+            .len()),
+        before - 1
+    );
+}
