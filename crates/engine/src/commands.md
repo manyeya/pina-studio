@@ -49,6 +49,8 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   stays where it is on the timeline.
 - `split_region` `{"track": 0, "region": 0, "at": 1920}`: answers with the second half.
 - `delete_region` `{"track": 0, "region": 1}`
+- `flex_region` `{"track": 2, "region": 0, "length": 7680}`: Flex Time: stretches an audio region
+  to that length, slower or faster but at the same pitch (up to four times either way).
 - `comp` `{"track": 0, "region": 0, "from": 0, "to": 1920, "take": 1}`: in a take folder (a
   region with `"takes"`, made by recording over a region), take 1 plays for that range (ticks
   from the region's start). Takes are numbered from 0, oldest first; with no comp the newest plays.

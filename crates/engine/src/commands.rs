@@ -122,6 +122,12 @@ pub enum Command {
         track: usize,
         region: usize,
     },
+    /// Flex: stretches an audio region to `length` ticks, keeping its pitch.
+    FlexRegion {
+        track: usize,
+        region: usize,
+        length: u64,
+    },
     /// Comps a take folder: take `take` plays from `from` to `to`, ticks from the region's start.
     Comp {
         track: usize,
@@ -406,7 +412,11 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
             }
             let frames = wav.duration() as u64;
             let length = length.unwrap_or_else(|| p.ticks(frames.saturating_sub(offset)).max(1));
-            let content = Content::Audio { file, offset };
+            let content = Content::Audio {
+                file,
+                offset,
+                stretch: 1.0,
+            };
             let regions = &mut track(p, t)?.regions;
             regions.push(Region {
                 start,
@@ -455,6 +465,14 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
                 .split_region((t, r), at)
                 .ok_or("that tick isn't inside the region")?;
             return Ok(json!({ "region": [second.0, second.1] }));
+        }
+        Command::FlexRegion {
+            track: t,
+            region: r,
+            length,
+        } => {
+            region_at(p, t, r)?;
+            p.flex((t, r), length)?;
         }
         Command::Comp {
             track: t,
@@ -731,6 +749,7 @@ mod tests {
             "trim_region",
             "split_region",
             "delete_region",
+            "flex_region",
             "comp",
             "flatten",
             "add_send",

@@ -221,6 +221,10 @@ pub enum Content {
         file: PathBuf,
         #[serde(default)]
         offset: u64,
+        /// Flex: how much longer the audio plays than it was recorded, its pitch kept. 2 is half
+        /// speed. `offset` is in the file's own samples.
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        stretch: f64,
     },
     /// A step pattern, as Logic's step sequencer makes: rows of steps, looped over the region.
     Pattern {
@@ -236,6 +240,14 @@ pub enum Content {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         comp: Vec<CompPiece>,
     },
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+fn is_one(v: &f64) -> bool {
+    *v == 1.0
 }
 
 fn sixteenth() -> u64 {
@@ -516,6 +528,22 @@ impl Project {
         (track, i)
     }
 
+    /// Flex: stretches a plain audio region to `length` ticks, its audio slower or faster and its
+    /// pitch kept, as option-dragging its end does in Logic. From a quarter to four times as long
+    /// as it was recorded.
+    pub fn flex(&mut self, at: At, length: u64) -> Result<(), String> {
+        let r = &mut self.tracks[at.0].regions[at.1];
+        let Content::Audio { stretch, .. } = &mut r.content else {
+            return Err("only audio regions flex".into());
+        };
+        // The stretch that fills `length`, within limits, and the length that gives.
+        let wanted = *stretch * length.max(1) as f64 / r.length as f64;
+        let ratio = wanted.clamp(0.25, 4.0);
+        r.length = (length.max(1) as f64 * ratio / wanted).round() as u64;
+        *stretch = ratio;
+        Ok(())
+    }
+
     /// Comps a take folder: `take` plays from `from` to `to` (ticks from the region's start).
     pub fn comp(&mut self, at: At, from: u64, to: u64, take: usize) -> Result<(), String> {
         let r = &mut self.tracks[at.0].regions[at.1];
@@ -579,11 +607,20 @@ impl Project {
             for &(a, b, t) in &segments {
                 let take = &takes[t];
                 let from = (a as i64).max(take.start);
-                if let (Content::Audio { file, offset }, true) = (&take.content, from < b as i64) {
+                if let (
+                    Content::Audio {
+                        file,
+                        offset,
+                        stretch,
+                    },
+                    true,
+                ) = (&take.content, from < b as i64)
+                {
                     let skip = self.samples((from - take.start) as u64, rate);
                     let content = Content::Audio {
                         file: file.clone(),
-                        offset: offset + skip,
+                        offset: offset + (skip as f64 / stretch) as u64,
+                        stretch: *stretch,
                     };
                     out.push(Region {
                         start: r.start + from as u64,
@@ -629,8 +666,14 @@ impl Project {
         let r = self.region(at);
         let end = r.start + r.length;
         let mut start = start.min(end - 1);
-        if let Content::Audio { offset, .. } = r.content {
-            start = start.max(r.start.saturating_sub(self.ticks(offset)));
+        if let Content::Audio {
+            offset, stretch, ..
+        } = r.content
+        {
+            start = start.max(
+                r.start
+                    .saturating_sub(self.ticks((offset as f64 * stretch) as u64)),
+            );
         }
         let (old, rate) = (r.start, self.sample_rate as f64);
         let moved = if start >= old {
@@ -645,7 +688,9 @@ impl Project {
                     n.start -= start as i64 - old as i64;
                 }
             }
-            Content::Audio { offset, .. } => *offset = (*offset as i64 + moved).max(0) as u64,
+            Content::Audio {
+                offset, stretch, ..
+            } => *offset = (*offset as f64 + moved as f64 / *stretch).max(0.0) as u64,
             // A pattern starts over from the region's start.
             Content::Pattern { .. } => {}
             // Takes keep their place on the timeline; the comp keeps its, from the new start.
@@ -701,7 +746,12 @@ impl Project {
                     n.start -= first as i64;
                 }
             }
-            (_, Content::Audio { offset, .. }) => *offset += skip,
+            (
+                _,
+                Content::Audio {
+                    offset, stretch, ..
+                },
+            ) => *offset += (skip as f64 / *stretch) as u64,
             (Content::Pattern { .. }, _) => {}
             (
                 Content::Takes { takes, comp: left },
@@ -753,6 +803,7 @@ mod tests {
             content: Content::Audio {
                 file: "a.wav".into(),
                 offset,
+                stretch: 1.0,
             },
         }
     }

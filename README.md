@@ -37,7 +37,8 @@ In the app, as in Logic:
 - X shows the mixer, P the piano roll (or double-click a MIDI region), A automation, I the
   inspector; ⌘K turns on musical typing (A to K play a C major scale from C3, W E T Y U the
   sharps, Z and X change octave).
-- Drag regions to move them (across tracks too) and their edges to trim. In the piano roll,
+- Drag regions to move them (across tracks too) and their edges to trim; option-drag an audio
+  region's end to flex it (Flex Time: slower or faster, same pitch, by Signalsmith Stretch). In the piano roll,
   double-click to add a note, drag it to move it, drag its right edge to resize it.
 - Recording over a region of the same kind makes a take folder, as in Logic. Double-click it to
   see its takes; swipe across a take to comp that stretch from it, click one to use all of it,

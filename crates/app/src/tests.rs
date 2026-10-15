@@ -544,3 +544,30 @@ fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
     assert_eq!((rows[1].pitch, rows[1].cells[4]), (38, 127));
     assert_eq!((rows.len(), rows[5].pitch), (6, 49));
 }
+
+#[gpui::test]
+fn option_dragging_an_audio_regions_end_flexes_it(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    // The first drums region's right edge, option-dragged a bar longer.
+    let edge = spot(&ws, cx, BAR, 2) - point(px(2.), px(0.));
+    let alt = Modifiers {
+        alt: true,
+        ..Modifiers::none()
+    };
+    cx.simulate_mouse_down(edge, MouseButton::Left, alt);
+    cx.run_until_parked();
+    cx.simulate_mouse_move(edge + point(px(48. * 4.), px(0.)), MouseButton::Left, alt);
+    cx.simulate_mouse_up(edge + point(px(48. * 4.), px(0.)), MouseButton::Left, alt);
+    cx.run_until_parked();
+    let (length, content) = ws.read_with(cx, |ws, _| {
+        let r = ws.session.project.region((2, 0));
+        (r.length, r.content.clone())
+    });
+    assert_eq!(length, BAR * 2);
+    assert!(
+        matches!(content, Content::Audio { stretch: 2.0, .. }),
+        "{content:?}"
+    );
+    // And an ordinary drag of the same edge still trims.
+    assert_eq!(ws.read_with(cx, |ws, _| ws.status.clone()), None);
+}

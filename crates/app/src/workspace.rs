@@ -84,6 +84,8 @@ pub enum Edge {
     Move,
     Start,
     End,
+    /// The end, flexing the audio rather than trimming it.
+    Stretch,
 }
 
 /// A mouse drag in progress. Edits checkpoint when they start, so a drag is one undo step.
@@ -358,6 +360,13 @@ impl Workspace {
                         let end = self.snap(end as f64 + dt);
                         self.session.project.trim_end(at, end);
                     }
+                    // Stretching audio is slow, so the engine hears of it when the drag ends.
+                    Edge::Stretch => {
+                        let length = self.snap(end as f64 + dt).max(start + 1) - start;
+                        let _ = self.session.project.flex(at, length);
+                        cx.notify();
+                        return;
+                    }
                 }
             }
             Some(Drag::Fader { channel, y, pos }) => {
@@ -430,6 +439,14 @@ impl Workspace {
         if let Some(Drag::Comp { at, take, from, to }) = self.drag {
             self.drag = None;
             self.finish_comp(at, take, from, to, cx);
+        }
+        if let Some(Drag::Region {
+            edge: Edge::Stretch,
+            moved: true,
+            ..
+        }) = self.drag
+        {
+            self.changed(cx);
         }
         // Release whatever note the drag was sounding.
         match self.drag {
@@ -676,7 +693,9 @@ impl Workspace {
                     self.player.preview(track, new, 100);
                 }
             }
-            Edge::End | Edge::Start => n.length = (new_end - n.start).max(grid) as u64,
+            Edge::End | Edge::Start | Edge::Stretch => {
+                n.length = (new_end - n.start).max(grid) as u64
+            }
         }
     }
 

@@ -524,6 +524,9 @@ impl Workspace {
                                 _ => format!("{} · Comp", track.name),
                             }
                         }
+                        Content::Audio { stretch, .. } if *stretch != 1.0 => {
+                            format!("{} · Flex ×{stretch:.2}", track.name)
+                        }
                         _ => track.name.clone(),
                     }),
             )
@@ -681,6 +684,13 @@ fn grab(
                 return;
             }
         }
+        // Option-dragging an audio region's end flexes it, as in Logic.
+        let audio = matches!(ws.session.project.region(at).content, Content::Audio { .. });
+        let edge = if edge == Edge::End && e.modifiers.alt && audio {
+            Edge::Stretch
+        } else {
+            edge
+        };
         let from = e.position.map(f32::from);
         let drag = Drag::Region {
             at,
@@ -725,13 +735,19 @@ impl Workspace {
                     .notes
                     .extend(shown.map(|n| (at + n.start, n.length, n.pitch)));
             }
-            Content::Audio { file, offset } => {
+            Content::Audio {
+                file,
+                offset,
+                stretch,
+            } => {
                 let begin = (from as i64).max(at);
                 let Some(peaks) = self.player.peaks(file).filter(|_| begin < to as i64) else {
                     return;
                 };
-                let samples_per_tick =
-                    project.sample_rate as f32 * 60.0 / (project.tempo as f32 * PPQ as f32);
+                // In the file's own samples: flexed audio covers fewer per tick.
+                let samples_per_tick = project.sample_rate as f32 * 60.0
+                    / (project.tempo as f32 * PPQ as f32)
+                    / *stretch as f32;
                 inside.waves.push(Wave {
                     x0: begin as f32 * ppt,
                     x1: to as f32 * ppt,

@@ -183,7 +183,11 @@ impl Workspace {
                 Ok(0) => return,
                 Ok(frames) => {
                     let length = self.session.project.ticks(frames).max(1);
-                    let content = Content::Audio { file, offset: 0 };
+                    let content = Content::Audio {
+                        file,
+                        offset: 0,
+                        stretch: 1.0,
+                    };
                     (
                         track,
                         Region {

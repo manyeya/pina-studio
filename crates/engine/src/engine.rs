@@ -50,6 +50,8 @@ pub struct AudioFiles {
     dir: PathBuf,
     rate: f64,
     files: HashMap<PathBuf, (Arc<AudioData>, Arc<Peaks>)>,
+    /// Flexed copies, by file and stretch.
+    stretched: HashMap<(PathBuf, u64), Arc<AudioData>>,
 }
 
 impl AudioFiles {
@@ -58,7 +60,22 @@ impl AudioFiles {
             dir: dir.to_path_buf(),
             rate,
             files: HashMap::new(),
+            stretched: HashMap::new(),
         }
+    }
+
+    /// A file stretched in time, its pitch kept; computed once per stretch.
+    fn stretched(&mut self, file: &Path, stretch: f64) -> Result<Arc<AudioData>, String> {
+        if stretch == 1.0 {
+            return self.get(file);
+        }
+        let key = (file.to_path_buf(), stretch.to_bits());
+        if let Some(data) = self.stretched.get(&key) {
+            return Ok(data.clone());
+        }
+        let data = Arc::new(time_stretch(&*self.get(file)?, stretch, self.rate));
+        self.stretched.insert(key, data.clone());
+        Ok(data)
     }
 
     fn get(&mut self, file: &Path) -> Result<Arc<AudioData>, String> {
@@ -375,15 +392,21 @@ pub fn compile(
                         });
                     }
                 }
-                Content::Audio { file, offset } => {
+                Content::Audio {
+                    file,
+                    offset,
+                    stretch,
+                } => {
                     let begin = (from as i64).max(at);
                     if begin >= to as i64 {
                         return;
                     }
+                    // In the stretched audio, the offset is stretched too.
+                    let offset = (*offset as f64 * stretch) as u64;
                     let skip = project.samples((begin - at) as u64, rate);
                     let start = project.samples(region.start + begin as u64, rate);
                     let end = project.samples(region.start + to, rate);
-                    match files.get(file) {
+                    match files.stretched(file, *stretch) {
                         Ok(data) => clips.push(Clip {
                             start,
                             len: end - start,
@@ -1002,6 +1025,23 @@ impl Engine {
     }
 }
 
+/// Stretches audio by `ratio` in time with Signalsmith Stretch, keeping its pitch.
+fn time_stretch(data: &AudioData, ratio: f64, rate: f64) -> AudioData {
+    let channels = data.channels.len();
+    let frames = data.channels[0].len();
+    let input: Vec<f32> = (0..frames)
+        .flat_map(|i| data.channels.iter().map(move |c| c[i]))
+        .collect();
+    let out_frames = (frames as f64 * ratio).round() as usize;
+    let mut output = vec![0f32; out_frames * channels];
+    let mut stretch = signalsmith_stretch::Stretch::preset_default(channels as u32, rate as u32);
+    stretch.exact(&input, &mut output);
+    let channels = (0..channels)
+        .map(|c| output.iter().skip(c).step_by(channels).copied().collect())
+        .collect();
+    AudioData { channels }
+}
+
 // ponytail: WAV only, at the engine's rate; add symphonia and rubato for AIFF/MP3 and resampling.
 fn load_wav(path: &Path, rate: f64) -> Result<AudioData, String> {
     let err = |e: hound::Error| format!("{}: {e}", path.display());
@@ -1282,6 +1322,7 @@ mod tests {
             content: Content::Audio {
                 file: "ramp.wav".into(),
                 offset: 100,
+                stretch: 1.0,
             },
         };
         let track = Track {
@@ -1306,6 +1347,7 @@ mod tests {
             content: Content::Audio {
                 file: "gone.wav".into(),
                 offset: 0,
+                stretch: 1.0,
             },
         };
         let audio = Track {
@@ -1401,6 +1443,56 @@ mod tests {
             .map(|e| (e.at, e.pitch))
             .collect();
         assert_eq!(ons, [(0, 57), (BEAT as u64, 69)]);
+    }
+
+    #[test]
+    fn flex_stretches_audio_and_keeps_its_pitch() {
+        // A second of 441 Hz, flexed to fill two seconds (four beats at 120 bpm).
+        let dir = scratch_dir("flex");
+        let tone: Vec<f32> = (0..48_000)
+            .map(|i| 0.5 * (std::f32::consts::TAU * 441.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(dir.join("tone.wav"), spec).unwrap();
+        tone.iter().for_each(|&s| w.write_sample(s).unwrap());
+        w.finalize().unwrap();
+        let content = Content::Audio {
+            file: "tone.wav".into(),
+            offset: 0,
+            stretch: 1.0,
+        };
+        let region = Region {
+            start: 0,
+            length: PPQ * 2,
+            content,
+        };
+        let mut p = project(vec![Track {
+            name: "a".into(),
+            regions: vec![region],
+            ..Default::default()
+        }]);
+        p.flex((0, 0), PPQ * 4).unwrap();
+        assert!(matches!(
+            p.region((0, 0)).content,
+            Content::Audio { stretch: 2.0, .. }
+        ));
+        let [l, _] = render(&p, &dir, BEAT * 5);
+        // Sound to the end of the second second, and silence after.
+        assert!(peak(&l[BEAT * 3..BEAT * 4 - 4_000]) > 0.2);
+        assert!(peak(&l[BEAT * 4 + 2_000..]) < 0.05);
+        // Still 441 Hz: about 441 upward zero crossings a second.
+        let second = &l[24_000..72_000];
+        let ups = second
+            .windows(2)
+            .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
+            .count();
+        assert!((ups as i64 - 441).abs() <= 3, "{ups}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
