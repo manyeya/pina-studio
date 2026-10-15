@@ -571,3 +571,30 @@ fn option_dragging_an_audio_regions_end_flexes_it(cx: &mut TestAppContext) {
     // And an ordinary drag of the same edge still trims.
     assert_eq!(ws.read_with(cx, |ws, _| ws.status.clone()), None);
 }
+
+#[gpui::test]
+fn live_loops_take_a_region_and_launch_it(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    cx.simulate_click(spot(&ws, cx, PPQ, 1), Modifiers::none()); // select the Lead region
+    cx.simulate_keystrokes("l");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.bottom), Some(Bottom::Loops));
+    click_on(cx, "cell-1-2", Modifiers::none(), MouseButton::Left); // copy it into scene 3
+    let cells = ws.read_with(cx, |ws, _| ws.session.project.tracks[1].cells.clone());
+    assert_eq!(
+        (cells.len(), cells[0].scene, cells[0].region.start),
+        (1, 2, 0)
+    );
+
+    // Launching it starts playback; the scene button launches it too, and clicking it stops it.
+    click_on(cx, "cell-1-2", Modifiers::none(), MouseButton::Left);
+    until(cx, &ws, |ws| ws.player.playing());
+    let id = ws.read_with(cx, |ws, _| ws.session.project.tracks[1].id);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.live[&id].0), Some(2));
+    click_on(cx, "cell-1-2", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.live[&id].0), None);
+    click_on(cx, "scene-2", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.live[&id].0), Some(2));
+
+    click_on(cx, "cell-1-2", Modifiers::none(), MouseButton::Right); // empty it
+    assert!(ws.read_with(cx, |ws, _| ws.session.project.tracks[1].cells.is_empty()));
+}

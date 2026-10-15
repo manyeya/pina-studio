@@ -22,7 +22,9 @@ use crate::{
     drums::Drums,
     peaks::Peaks,
     plugin::{AUDIO_MODULE, Module, Note, Plugin, Processor},
-    project::{AutoPoint, Content, Instrument, PluginRef, Project, comp_segments, value_at},
+    project::{
+        AutoPoint, Content, Instrument, PluginRef, Project, Region, comp_segments, value_at,
+    },
     synth::Synth,
 };
 
@@ -139,6 +141,53 @@ impl Arrangement {
     }
 }
 
+/// What a Live Loops cell plays, from 0, over `length` samples.
+struct CellPlan {
+    events: Vec<Event>,
+    clips: Vec<Clip>,
+    length: u64,
+}
+
+/// Adds what `events` and `clips` play from `from` to `to` (samples) into a block, `into`
+/// samples into it.
+#[allow(clippy::too_many_arguments)]
+fn gather(
+    events: &[Event],
+    clips: &[Clip],
+    (from, to): (u64, u64),
+    into: usize,
+    notes: &mut [Note; BLOCK_NOTES],
+    n: &mut usize,
+    held: &mut [bool; 128],
+    [l, r]: [&mut [f32]; 2],
+) {
+    let first = events.partition_point(|e| e.at < from);
+    for e in events[first..].iter().take_while(|e| e.at < to) {
+        if *n == BLOCK_NOTES {
+            break;
+        }
+        held[e.pitch as usize] = e.velocity > 0.0;
+        notes[*n] = Note {
+            offset: (e.at - from) as u32 + into as u32,
+            pitch: e.pitch,
+            velocity: e.velocity,
+        };
+        *n += 1;
+    }
+    // ponytail: walks the clips from the first every block; index them by time if a track gets
+    // thousands of regions.
+    for c in clips.iter().take_while(|c| c.start < to) {
+        let (a, b) = (from.max(c.start), to.min(c.start + c.len));
+        for (ch, dst) in [&mut *l, &mut *r].into_iter().enumerate() {
+            let src = &c.data.channels[ch.min(c.data.channels.len() - 1)];
+            for t in a..b {
+                let i = (c.offset + t - c.start) as usize;
+                dst[(t - from) as usize + into] += src.get(i).copied().unwrap_or(0.0);
+            }
+        }
+    }
+}
+
 /// An aux: it plays its bus through its inserts into the master.
 struct AuxPlan {
     slot: usize,
@@ -229,6 +278,8 @@ struct Plan {
     pans: Vec<AutoPoint>,
     /// Aux index and level.
     sends: Vec<(usize, f32)>,
+    /// Live Loops cells, in the track's order.
+    cells: Vec<CellPlan>,
     /// The aux it plays into instead of the master.
     output: Option<usize>,
     /// Delay compensation before the sends, and on the direct path after them.
@@ -277,6 +328,10 @@ pub struct Lane {
     /// Delay compensation: before a track's sends, and after them (or after an aux's inserts).
     pre: Delay,
     post: Delay,
+    /// The Live Loops cell playing instead of the track, and the sample its loop began; and a
+    /// change waiting for its sample.
+    cell: Option<(usize, u64)>,
+    queued: Option<(Option<usize>, u64)>,
 }
 
 /// The main-thread halves of a lane's plugins.
@@ -344,6 +399,8 @@ pub fn make_lane(
         held: [false; 128],
         pre: Delay::new(),
         post: Delay::new(),
+        cell: None,
+        queued: None,
     };
     Ok((lane, plugins, latency))
 }
@@ -366,67 +423,47 @@ pub fn compile(
     for (i, (t, &(slot, _))) in project.tracks.iter().zip(tracks).enumerate() {
         let (mut clips, mut events) = (Vec::new(), Vec::new());
         for region in &t.regions {
-            // Plays `content`, which begins `at` ticks into the region, from `from` to `to` (ticks
-            // into the region).
-            let mut emit = |content: &Content, at: i64, from: u64, to: u64| match content {
-                // Notes starting in their part of the region play, for their full length.
-                Content::Midi { .. } | Content::Pattern { .. } => {
-                    let notes = content.notes((to as i64 - at).max(0) as u64).unwrap();
-                    for n in notes
-                        .iter()
-                        .filter(|n| (from as i64..to as i64).contains(&(at + n.start)))
-                    {
-                        let on = region.start + (at + n.start) as u64;
-                        let velocity = n.velocity as f32 / 127.0;
-                        let (pitch, start) = (n.pitch, project.samples(on, rate));
-                        events.push(Event {
-                            at: start,
-                            pitch,
-                            velocity,
-                        });
-                        let off = project.samples(on + n.length, rate);
-                        events.push(Event {
-                            at: off,
-                            pitch,
-                            velocity: 0.0,
-                        });
-                    }
-                }
-                Content::Audio {
-                    file,
-                    offset,
-                    stretch,
-                } => {
-                    let begin = (from as i64).max(at);
-                    if begin >= to as i64 {
-                        return;
-                    }
-                    // In the stretched audio, the offset is stretched too.
-                    let offset = (*offset as f64 * stretch) as u64;
-                    let skip = project.samples((begin - at) as u64, rate);
-                    let start = project.samples(region.start + begin as u64, rate);
-                    let end = project.samples(region.start + to, rate);
-                    match files.stretched(file, *stretch) {
-                        Ok(data) => clips.push(Clip {
-                            start,
-                            len: end - start,
-                            offset: offset + skip,
-                            data,
-                        }),
-                        Err(e) => problems.push(e),
-                    }
-                }
-                Content::Takes { .. } => {}
-            };
-            match &region.content {
-                Content::Takes { takes, comp } => {
-                    for (from, to, take) in comp_segments(comp, takes.len(), region.length) {
-                        emit(&takes[take].content, takes[take].start, from, to);
-                    }
-                }
-                content => emit(content, 0, 0, region.length),
-            }
+            play_region(
+                project,
+                rate,
+                region,
+                files,
+                &mut events,
+                &mut clips,
+                &mut problems,
+            );
         }
+        // A loop cell plays its region from 0, every note ending by the loop's end.
+        let cells = t
+            .cells
+            .iter()
+            .map(|cell| {
+                let region = Region {
+                    start: 0,
+                    ..cell.region.clone()
+                };
+                let (mut events, mut clips) = (Vec::new(), Vec::new());
+                play_region(
+                    project,
+                    rate,
+                    &region,
+                    files,
+                    &mut events,
+                    &mut clips,
+                    &mut problems,
+                );
+                let length = project.samples(region.length, rate).max(1);
+                for e in &mut events {
+                    e.at = e.at.min(length - 1);
+                }
+                events.sort_by_key(|e| (e.at, e.velocity > 0.0));
+                CellPlan {
+                    events,
+                    clips,
+                    length,
+                }
+            })
+            .collect();
         // Offs first at the same sample, so back-to-back notes of one pitch both sound.
         events.sort_by_key(|e| (e.at, e.velocity > 0.0));
         clips.sort_by_key(|c| c.start);
@@ -453,6 +490,7 @@ pub fn compile(
             pan: t.pan,
             volume: in_samples(&t.automation.volume),
             pans: in_samples(&t.automation.pan),
+            cells,
             sends: t
                 .sends
                 .iter()
@@ -496,6 +534,78 @@ pub fn compile(
     (arrangement, problems)
 }
 
+/// Adds the note events and audio clips a region plays, in samples.
+fn play_region(
+    project: &Project,
+    rate: f64,
+    region: &Region,
+    files: &mut AudioFiles,
+    events: &mut Vec<Event>,
+    clips: &mut Vec<Clip>,
+    problems: &mut Vec<String>,
+) {
+    // Plays `content`, which begins `at` ticks into the region, from `from` to `to` (ticks
+    // into the region).
+    let mut emit = |content: &Content, at: i64, from: u64, to: u64| match content {
+        // Notes starting in their part of the region play, for their full length.
+        Content::Midi { .. } | Content::Pattern { .. } => {
+            let notes = content.notes((to as i64 - at).max(0) as u64).unwrap();
+            for n in notes
+                .iter()
+                .filter(|n| (from as i64..to as i64).contains(&(at + n.start)))
+            {
+                let on = region.start + (at + n.start) as u64;
+                let velocity = n.velocity as f32 / 127.0;
+                let (pitch, start) = (n.pitch, project.samples(on, rate));
+                events.push(Event {
+                    at: start,
+                    pitch,
+                    velocity,
+                });
+                let off = project.samples(on + n.length, rate);
+                events.push(Event {
+                    at: off,
+                    pitch,
+                    velocity: 0.0,
+                });
+            }
+        }
+        Content::Audio {
+            file,
+            offset,
+            stretch,
+        } => {
+            let begin = (from as i64).max(at);
+            if begin >= to as i64 {
+                return;
+            }
+            // In the stretched audio, the offset is stretched too.
+            let offset = (*offset as f64 * stretch) as u64;
+            let skip = project.samples((begin - at) as u64, rate);
+            let start = project.samples(region.start + begin as u64, rate);
+            let end = project.samples(region.start + to, rate);
+            match files.stretched(file, *stretch) {
+                Ok(data) => clips.push(Clip {
+                    start,
+                    len: end - start,
+                    offset: offset + skip,
+                    data,
+                }),
+                Err(e) => problems.push(e),
+            }
+        }
+        Content::Takes { .. } => {}
+    };
+    match &region.content {
+        Content::Takes { takes, comp } => {
+            for (from, to, take) in comp_segments(comp, takes.len(), region.length) {
+                emit(&takes[take].content, takes[take].start, from, to);
+            }
+        }
+        content => emit(content, 0, 0, region.length),
+    }
+}
+
 /// From the main thread to the live engine.
 pub enum Msg {
     Arrange(Box<Arrangement>),
@@ -504,6 +614,12 @@ pub enum Msg {
     Play,
     Stop,
     Locate(u64),
+    /// Start a lane's Live Loops cell (or stop it, with None) at a sample: its loop begins there.
+    Launch {
+        slot: usize,
+        cell: Option<usize>,
+        at: u64,
+    },
     /// Play or release a note on a lane now, as when clicking a key in the piano roll.
     Note {
         slot: usize,
@@ -682,6 +798,13 @@ impl Engine {
         self.link.as_ref().is_some_and(|l| l.rx.is_abandoned())
     }
 
+    /// Starts a lane's loop cell, or stops it with None, when the playhead reaches `at`.
+    pub fn launch(&mut self, slot: usize, cell: Option<usize>, at: u64) {
+        if let Some(lane) = self.lanes.get_mut(slot).and_then(|l| l.as_deref_mut()) {
+            lane.queued = Some((cell, at));
+        }
+    }
+
     fn receive(&mut self) {
         let Some(link) = &mut self.link else { return };
         while let Ok(msg) = link.rx.pop() {
@@ -708,6 +831,11 @@ impl Engine {
                 Msg::Locate(at) => {
                     self.position = at;
                     self.release = true;
+                }
+                Msg::Launch { slot, cell, at } => {
+                    if let Some(lane) = self.lanes.get_mut(slot).and_then(|l| l.as_deref_mut()) {
+                        lane.queued = Some((cell, at));
+                    }
                 }
                 Msg::Note {
                     slot,
@@ -803,30 +931,67 @@ impl Engine {
                     n += 1;
                 }
             }
-            if playing {
-                let first = plan.events.partition_point(|e| e.at < from);
-                for e in plan.events[first..].iter().take_while(|e| e.at < to) {
-                    if n == BLOCK_NOTES {
-                        break;
+            // A launched cell takes over when its sample comes, held notes let go.
+            if let Some((cell, at)) = lane.queued
+                && at < to
+            {
+                lane.cell = cell.map(|c| (c, at));
+                lane.queued = None;
+                for (pitch, held) in lane.held.iter_mut().enumerate().filter(|(_, h)| **h) {
+                    *held = false;
+                    if n < BLOCK_NOTES {
+                        notes[n] = Note {
+                            offset: 0,
+                            pitch: pitch as u8,
+                            velocity: 0.0,
+                        };
+                        n += 1;
                     }
-                    lane.held[e.pitch as usize] = e.velocity > 0.0;
-                    notes[n] = Note {
-                        offset: (e.at - from) as u32,
-                        pitch: e.pitch,
-                        velocity: e.velocity,
-                    };
-                    n += 1;
                 }
-                // ponytail: walks the lane's clips from the first every block; index them by time
-                // if a track gets thousands of regions.
-                for c in plan.clips.iter().take_while(|c| c.start < to) {
-                    let (a, b) = (from.max(c.start), to.min(c.start + c.len));
-                    for (ch, dst) in [&mut *l, &mut *r].into_iter().enumerate() {
-                        let src = &c.data.channels[ch.min(c.data.channels.len() - 1)];
-                        for t in a..b {
-                            let i = (c.offset + t - c.start) as usize;
-                            dst[(t - from) as usize] += src.get(i).copied().unwrap_or(0.0);
+            }
+            if playing {
+                let into = [&mut *l, &mut *r];
+                match lane
+                    .cell
+                    .and_then(|(c, start)| Some((plan.cells.get(c)?, start)))
+                {
+                    // Looping: the part of the loop this block covers, wrapping round, from the
+                    // sample it starts on if that's in this block.
+                    Some((cell, start)) => {
+                        let lead = start.saturating_sub(from).min(frames as u64);
+                        let span = frames as u64 - lead;
+                        let p0 = from.max(start).saturating_sub(start) % cell.length;
+                        let first = (cell.length - p0).min(span);
+                        let held = &mut lane.held;
+                        let (e, c) = (&cell.events, &cell.clips);
+                        gather(
+                            e,
+                            c,
+                            (p0, p0 + first),
+                            lead as usize,
+                            &mut notes,
+                            &mut n,
+                            held,
+                            into,
+                        );
+                        if first < span {
+                            let into = [&mut *l, &mut *r];
+                            let at = (lead + first) as usize;
+                            gather(e, c, (0, span - first), at, &mut notes, &mut n, held, into);
                         }
+                    }
+                    None => {
+                        let held = &mut lane.held;
+                        gather(
+                            &plan.events,
+                            &plan.clips,
+                            (from, to),
+                            0,
+                            &mut notes,
+                            &mut n,
+                            held,
+                            into,
+                        );
                     }
                 }
             }
@@ -1077,7 +1242,7 @@ fn load_wav(path: &Path, rate: f64) -> Result<AudioData, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{AuxSend, Note as MidiNote, PPQ, Region, Track};
+    use crate::project::{AuxSend, Note as MidiNote, PPQ, Track};
 
     const RATE: f64 = 48_000.0;
     const BEAT: usize = 24_000; // samples per beat at 120 bpm
@@ -1493,6 +1658,39 @@ mod tests {
             .count();
         assert!((ups as i64 - 441).abs() <= 3, "{ups}");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_launched_cell_loops_instead_of_the_track() {
+        use crate::project::Cell;
+        // The track's own region is silent; its cell is a beat-long loop with a short note.
+        let mut t = synth_track("a", vec![], PPQ * 8);
+        let notes = vec![note(0, PPQ / 4, 69)];
+        let region = Region {
+            start: 0,
+            length: PPQ,
+            content: Content::Midi { notes },
+        };
+        t.cells.push(Cell { scene: 0, region });
+        let (mut engine, _) = Engine::load(&project(vec![t]), Path::new("."), RATE).unwrap();
+        engine.play();
+        assert_eq!(peak(&run(&mut engine, BEAT)[0]), 0.0);
+        // Launched at beat 2: it plays there, rests, and comes round again at beat 3.
+        engine.launch(0, Some(0), BEAT as u64 * 2);
+        let [l, _] = run(&mut engine, BEAT * 3);
+        let beat = |b: usize, from: f32, to: f32| {
+            peak(
+                &l[b * BEAT + (BEAT as f32 * from) as usize
+                    ..b * BEAT + (BEAT as f32 * to) as usize],
+            )
+        };
+        assert_eq!(beat(0, 0.0, 1.0), 0.0); // beat 2 of the song is before the launch
+        assert!(beat(1, 0.02, 0.2) > 0.1 && beat(1, 0.5, 0.95) == 0.0);
+        assert!(beat(2, 0.02, 0.2) > 0.1);
+        // Stopped, the track's own (silent) region plays again.
+        engine.launch(0, None, engine.position());
+        let [l, _] = run(&mut engine, BEAT);
+        assert_eq!(peak(&l[RELEASE + MAX_BLOCK..]), 0.0);
     }
 
     #[test]

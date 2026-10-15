@@ -308,6 +308,15 @@ impl Player {
         let _ = self.live.lock().unwrap().push(note);
     }
 
+    /// Starts a track's Live Loops cell (its index in the track's cells), or stops it with None,
+    /// when the playhead reaches `at` (samples).
+    pub fn launch(&mut self, track: u64, cell: Option<usize>, at: u64) {
+        if let Some(s) = self.lanes.get(&track) {
+            let slot = s.slot;
+            let _ = self.send(Msg::Launch { slot, cell, at });
+        }
+    }
+
     /// Plays or releases a note on a track now, as when clicking a key in the piano roll.
     pub fn preview(&mut self, track: u64, pitch: u8, velocity: u8) {
         if let Some(s) = self.lanes.get(&track) {

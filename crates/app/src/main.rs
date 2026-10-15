@@ -1,4 +1,5 @@
 mod cli;
+mod liveloops;
 mod mcp;
 mod menu;
 mod pianoroll;
@@ -34,7 +35,8 @@ const USAGE: &str = "usage:
   tempo analyze <project|file.wav> loudness, peaks and balance, of the mix and each track
   tempo render <project> <out>     bounce to a WAV file
   tempo play <project>             play it (in the app if it's open, else through the output)
-  tempo stop|save|undo|redo <project>, tempo locate <project> <tick>
+  tempo stop|save|undo|redo <project>, tempo locate <project> <tick>,
+  tempo launch <project> <track> [scene]
                                    drive the app that has the project open
   tempo plugins                    the VST3 plugins installed
   tempo mcp                        an MCP server on stdin and stdout";
@@ -64,6 +66,12 @@ fn main() {
             Ok(tick) => print(cli::app(p(dir), Request::Locate { tick })),
             Err(_) => Err(format!("{tick} isn't a tick")),
         },
+        ["launch", dir, track, scene @ ..] if scene.len() <= 1 => {
+            match (track.parse(), scene.first().map(|s| s.parse()).transpose()) {
+                (Ok(track), Ok(scene)) => print(cli::app(p(dir), Request::Launch { track, scene })),
+                _ => Err("tempo launch <project> <track> [scene], numbers from 0".to_string()),
+            }
+        }
         ["plugins"] => print(cli::plugins()),
         ["mcp"] => mcp::serve(),
         // What a plugin bundle holds, as JSON: run by the plugin scan, one bundle per process.
@@ -117,6 +125,7 @@ fn open(dir: &Path) -> Result<(), String> {
             Menu::new("View").items([
                 MenuItem::action("Mixer", ToggleMixer),
                 MenuItem::action("Piano Roll", TogglePianoRoll),
+                MenuItem::action("Live Loops", ToggleLoops),
                 MenuItem::action("Automation", ToggleAutomation),
                 MenuItem::action("Inspector", ToggleInspector),
                 MenuItem::separator(),

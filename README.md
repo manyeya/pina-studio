@@ -12,7 +12,7 @@ A DAW in the shape of Logic Pro, written in Rust: gpui for the UI, VST3 plugins.
   scan (`scan.rs`), edits as data (`commands.rs`, described in `commands.md`) and measuring
   audio (`analysis.rs`).
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
-  `tracks.rs` (headers, ruler, regions, automation), `pianoroll.rs`, `takes.rs` (take folders), `steps.rs` (the step sequencer), `record.rs` (recording
+  `tracks.rs` (headers, ruler, regions, automation), `pianoroll.rs`, `takes.rs` (take folders), `steps.rs` (the step sequencer), `liveloops.rs`, `record.rs` (recording
   takes), `strip.rs` (channel strips), `menu.rs` (plugin and bus menus), `theme.rs`,
   `server.rs` (the project's socket), `cli.rs` (the commands for agents), `mcp.rs`, and `tests.rs`, which drives the window
   headless with simulated mouse and keys.
@@ -51,6 +51,10 @@ In the app, as in Logic:
   in, on the General MIDI drum notes) or an audio track. ⌥⌘P makes a step pattern region on the
   selected instrument track; double-click one for the step sequencer: click steps on, option-click
   for an accent, "+ Sound" for more rows. Patterns loop over their region.
+- L shows Live Loops: a grid of loop cells, a row per track and a column per scene. Click an
+  empty cell to copy the track's selected region into it; click a cell to launch it (on the next
+  bar, or at once, starting playback) and again to stop it; right-click to empty it; the buttons
+  under the grid launch a scene. A launched cell plays instead of the track's regions.
 - ⇧⌘D makes a summing stack of the selected track: a stack channel (in the mixer) it plays
   into, its name shown on the track. A strip's "→" row routes a track into any stack or aux, or
   back to Stereo Out.

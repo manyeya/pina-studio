@@ -49,6 +49,11 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   stays where it is on the timeline.
 - `split_region` `{"track": 0, "region": 0, "at": 1920}`: answers with the second half.
 - `delete_region` `{"track": 0, "region": 1}`
+- `set_cell` `{"track": 1, "scene": 0, "region": {"length": 3840, "midi": {"notes": […]}}}`:
+  puts a loop in a Live Loops cell (scenes numbered from 0); any region content works, `start`
+  doesn't matter. Without `region`, empties the cell. Launch cells in the app: `tempo launch
+  <project> <track> <scene>` starts a cell at the next bar (or now, starting playback), and
+  `tempo launch <project> <track>` stops it, the track's own regions playing again.
 - `flex_region` `{"track": 2, "region": 0, "length": 7680}`: Flex Time: stretches an audio region
   to that length, slower or faster but at the same pitch (up to four times either way).
 - `comp` `{"track": 0, "region": 0, "from": 0, "to": 1920, "take": 1}`: in a take folder (a

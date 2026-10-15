@@ -60,13 +60,15 @@ fn tools() -> Value {
         },
         {
             "name": "transport",
-            "description": "Drives the app that has the project open: play, stop, locate (to a tick), save, undo, redo.",
+            "description": "Drives the app that has the project open: play, stop, locate (to a tick), save, undo, redo, or launch (a track's Live Loops cell for a scene, or stop it without one).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "project": project,
-                    "action": { "type": "string", "enum": ["play", "stop", "locate", "save", "undo", "redo"] },
-                    "tick": { "type": "integer", "minimum": 0 }
+                    "action": { "type": "string", "enum": ["play", "stop", "locate", "save", "undo", "redo", "launch"] },
+                    "tick": { "type": "integer", "minimum": 0 },
+                    "track": { "type": "integer", "minimum": 0 },
+                    "scene": { "type": "integer", "minimum": 0 }
                 },
                 "required": ["project", "action"]
             }
@@ -105,13 +107,27 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
                 Some("save") => Request::Save,
                 Some("undo") => Request::Undo,
                 Some("redo") => Request::Redo,
+                Some("launch") => Request::Launch {
+                    track: args
+                        .get("track")
+                        .and_then(Value::as_u64)
+                        .ok_or("launch needs a `track`")? as usize,
+                    scene: args
+                        .get("scene")
+                        .and_then(Value::as_u64)
+                        .map(|s| s as usize),
+                },
                 Some("locate") => Request::Locate {
                     tick: args
                         .get("tick")
                         .and_then(Value::as_u64)
                         .ok_or("locate needs a `tick`")?,
                 },
-                _ => return Err("`action` is one of play, stop, locate, save, undo, redo".into()),
+                _ => {
+                    return Err(
+                        "`action` is one of play, stop, locate, save, undo, redo, launch".into(),
+                    );
+                }
             };
             cli::app(&path(args, "project")?, request)
         }

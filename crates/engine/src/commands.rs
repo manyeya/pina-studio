@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::project::{
-    AUDIO_DIR, AutoPoint, AuxSend, Content, Instrument, Note, PPQ, PatternRow, PluginRef, Project,
-    Region, Track,
+    AUDIO_DIR, AutoPoint, AuxSend, Cell, Content, Instrument, Note, PPQ, PatternRow, PluginRef,
+    Project, Region, Track,
 };
 
 /// What `tempo describe` prints: every command, for people and agents.
@@ -121,6 +121,13 @@ pub enum Command {
     DeleteRegion {
         track: usize,
         region: usize,
+    },
+    /// Puts a loop in a track's Live Loops cell for a scene, or empties the cell.
+    SetCell {
+        track: usize,
+        scene: usize,
+        #[serde(default)]
+        region: Option<Region>,
     },
     /// Flex: stretches an audio region to `length` ticks, keeping its pitch.
     FlexRegion {
@@ -466,6 +473,25 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
                 .ok_or("that tick isn't inside the region")?;
             return Ok(json!({ "region": [second.0, second.1] }));
         }
+        Command::SetCell {
+            track: t,
+            scene,
+            region,
+        } => {
+            let tr = track(p, t)?;
+            if let Some(r) = &region
+                && r.content.is_midi() != tr.instrument.is_some()
+            {
+                return Err(format!("track {t} can't play that loop"));
+            }
+            tr.cells.retain(|c| c.scene != scene);
+            if let Some(region) = region {
+                tr.cells.push(Cell {
+                    scene,
+                    region: Region { start: 0, ..region },
+                });
+            }
+        }
         Command::FlexRegion {
             track: t,
             region: r,
@@ -750,6 +776,7 @@ mod tests {
             "split_region",
             "delete_region",
             "flex_region",
+            "set_cell",
             "comp",
             "flatten",
             "add_send",

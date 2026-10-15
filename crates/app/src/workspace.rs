@@ -47,6 +47,7 @@ actions!(
         ToggleTyping,
         CreateStack,
         NewPattern,
+        ToggleLoops,
     ]
 );
 
@@ -65,6 +66,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("x", ToggleMixer, Some("Arrange")),
         KeyBinding::new("i", ToggleInspector, Some("Arrange")),
         KeyBinding::new("p", TogglePianoRoll, Some("Arrange")),
+        KeyBinding::new("l", ToggleLoops, Some("Arrange")),
         KeyBinding::new("a", ToggleAutomation, Some("Arrange")),
         KeyBinding::new("r", Record, None),
         KeyBinding::new("cmd-k", ToggleTyping, None),
@@ -161,6 +163,7 @@ pub enum Bottom {
     PianoRoll,
     Takes,
     Steps,
+    Loops,
 }
 
 pub struct Workspace {
@@ -190,6 +193,8 @@ pub struct Workspace {
     typed: HashMap<String, u8>,
     /// An open pop-up menu.
     pub menu: Option<Menu>,
+    /// Live Loops launched, by track id: the scene (None, stopped) and the sample it begins at.
+    pub live: HashMap<u64, (Option<usize>, u64)>,
     /// The plugins installed, once the scan is done.
     pub plugins: Option<Vec<PluginInfo>>,
     pub drag: Option<Drag>,
@@ -242,6 +247,7 @@ impl Workspace {
             typed: HashMap::new(),
             menu: None,
             plugins: None,
+            live: HashMap::new(),
             drag: None,
             levels: HashMap::new(),
             master_level: 0.0,
@@ -1123,6 +1129,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|ws, _: &Record, _, cx| ws.record(cx)))
             .on_action(cx.listener(|ws, _: &NewPattern, _, cx| ws.new_pattern(cx)))
+            .on_action(
+                cx.listener(|ws, _: &ToggleLoops, _, cx| ws.toggle_bottom(Bottom::Loops, cx)),
+            )
             .on_action(cx.listener(|ws, _: &CreateStack, _, cx| {
                 // A summing stack of the selected track, as Logic's ⇧⌘D makes of the selection.
                 if ws.track < ws.session.project.tracks.len() {
@@ -1176,6 +1185,9 @@ impl Render for Workspace {
             })
             .when(self.bottom == Some(Bottom::Steps), |d| {
                 d.child(self.steps_pane(cx))
+            })
+            .when(self.bottom == Some(Bottom::Loops), |d| {
+                d.child(self.loops_pane(cx))
             })
             .when_some(status, |d, s| {
                 d.child(

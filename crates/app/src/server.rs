@@ -21,14 +21,24 @@ use crate::workspace::Workspace;
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "request", rename_all = "snake_case")]
 pub enum Request {
-    Edit { command: Command },
+    Edit {
+        command: Command,
+    },
     Project,
     Play,
     Stop,
-    Locate { tick: u64 },
+    Locate {
+        tick: u64,
+    },
     Save,
     Undo,
     Redo,
+    /// Launches a track's Live Loops cell for a scene, or stops it without one.
+    Launch {
+        track: usize,
+        #[serde(default)]
+        scene: Option<usize>,
+    },
 }
 
 pub type Reply = Result<Value, String>;
@@ -153,6 +163,13 @@ impl Workspace {
                 true => ok,
                 false => Err(self.status.clone().unwrap_or_default()),
             },
+            Request::Launch { track, scene } => {
+                if track >= self.session.project.tracks.len() {
+                    return Err(format!("no track {track}"));
+                }
+                self.launch(track, scene, cx);
+                ok
+            }
             Request::Undo | Request::Redo => {
                 let done = match request {
                     Request::Undo => self.session.undo(),

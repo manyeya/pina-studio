@@ -61,9 +61,21 @@ pub struct Track {
     /// Post-fader sends to aux buses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sends: Vec<AuxSend>,
+    /// Live Loops cells: loops to launch, a region each, by scene.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cells: Vec<Cell>,
     /// The bus the track plays into instead of the master: an aux, or a summing stack.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<u32>,
+}
+
+/// A Live Loops cell: a loop on a track, in a scene's column. Its region's start doesn't matter;
+/// it loops over its length from wherever it's launched.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Cell {
+    pub scene: usize,
+    #[serde(flatten)]
+    pub region: Region,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -203,6 +215,7 @@ impl PluginRef {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Region {
     /// Position and length on the timeline, in ticks.
+    #[serde(default)]
     pub start: u64,
     pub length: u64,
     #[serde(flatten)]
