@@ -1,0 +1,13 @@
+[package]
+name = "tempo"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempo-engine = { path = "../engine" }
+# gpui-pre: a weekly crates.io republish of Zed's gpui, since Zed's own release is stale and its
+# git repo can't be a dependency. 0.3.9 is zed@93d7456 plus labeled packaging edits, checked with
+# scripts/check-gpui-pre.py; rerun it when bumping.
+gpui = { package = "gpui-pre", version = "=0.3.9" }
+# runtime_shaders: compile Metal shaders at launch, so building doesn't need full Xcode. font-kit: text.
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["runtime_shaders", "font-kit"] }
