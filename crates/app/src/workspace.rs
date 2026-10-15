@@ -653,7 +653,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn save(&mut self, cx: &mut Context<Self>) -> bool {
+    pub fn save(&mut self, cx: &mut Context<Self>) -> bool {
         let result = self
             .player
             .save_states(&mut self.session.project)

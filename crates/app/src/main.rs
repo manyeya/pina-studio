@@ -1,6 +1,9 @@
+mod cli;
+mod mcp;
 mod menu;
 mod pianoroll;
 mod record;
+mod server;
 mod strip;
 #[cfg(test)]
 mod tests;
@@ -16,38 +19,71 @@ use std::{
 };
 
 use gpui::{App, AppContext, Bounds, Menu, MenuItem, WindowBounds, WindowOptions, px, size};
+use serde_json::Value;
+use server::Request;
 use tempo_engine::{engine::Engine, player::Player, project::Project, session::Session};
 use workspace::*;
 
 const USAGE: &str = "usage:
-  tempo [project]                 open a project folder (default ~/Music/tempo/Untitled)
-  tempo render <project> <out>    bounce a project folder to a WAV file
-  tempo play <project>            play a project folder through the default output";
-
-/// Seconds after the last region, for releases and effect tails.
-const TAIL: f64 = 2.0;
+  tempo [project]                  open a project folder (default ~/Music/tempo/Untitled)
+  tempo describe                   the commands an agent can send, with examples
+  tempo show <project>             the project, as JSON
+  tempo do <project> <command>     apply a command (JSON); live in the app if it's open there
+  tempo analyze <project|file.wav> loudness, peaks and balance, of the mix and each track
+  tempo render <project> <out>     bounce to a WAV file
+  tempo play <project>             play it (in the app if it's open, else through the output)
+  tempo stop|save|undo|redo <project>, tempo locate <project> <tick>
+                                   drive the app that has the project open
+  tempo plugins                    the VST3 plugins installed
+  tempo mcp                        an MCP server on stdin and stdout";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let p = Path::new;
     let result = match args.as_slice() {
-        ["render", dir, out] => render(Path::new(dir), Path::new(out)),
-        ["play", dir] => play(Path::new(dir)),
+        ["describe"] => {
+            print!("{}", tempo_engine::commands::DESCRIBE);
+            Ok(())
+        }
+        ["show", dir] => print(cli::show(p(dir))),
+        ["do", dir, command] => print(cli::edit(p(dir), command)),
+        ["analyze", path] => print(cli::analyze(p(path))),
+        ["render", dir, out] => print(cli::render(p(dir), p(out))),
+        ["play", dir] => match server::ask(p(dir), &Request::Play) {
+            Some(reply) => print(reply),
+            None => play(p(dir)),
+        },
+        ["stop", dir] => print(cli::app(p(dir), Request::Stop)),
+        ["save", dir] => print(cli::app(p(dir), Request::Save)),
+        ["undo", dir] => print(cli::app(p(dir), Request::Undo)),
+        ["redo", dir] => print(cli::app(p(dir), Request::Redo)),
+        ["locate", dir, tick] => match tick.parse() {
+            Ok(tick) => print(cli::app(p(dir), Request::Locate { tick })),
+            Err(_) => Err(format!("{tick} isn't a tick")),
+        },
+        ["plugins"] => print(cli::plugins()),
+        ["mcp"] => mcp::serve(),
         // What a plugin bundle holds, as JSON: run by the plugin scan, one bundle per process.
-        ["__scan", bundle] => tempo_engine::scan::inspect(Path::new(bundle))
-            .map(|p| println!("{}", serde_json::to_string(&p).unwrap())),
+        ["__scan", bundle] => tempo_engine::scan::inspect(p(bundle))
+            .map(|found| println!("{}", serde_json::to_string(&found).unwrap())),
         ["-h" | "--help" | "help"] => {
             println!("{USAGE}");
             Ok(())
         }
         [] => open(&default_project()),
-        [dir] if !dir.starts_with('-') => open(Path::new(dir)),
+        [dir] if !dir.starts_with('-') => open(p(dir)),
         _ => Err(USAGE.to_string()),
     };
     if let Err(e) = result {
         eprintln!("{e}");
         exit(1);
     }
+}
+
+fn print(result: Result<Value, String>) -> Result<(), String> {
+    println!("{}", serde_json::to_string_pretty(&result?).unwrap());
+    Ok(())
 }
 
 fn default_project() -> PathBuf {
@@ -97,8 +133,10 @@ fn open(dir: &Path) -> Result<(), String> {
         };
         cx.open_window(options, |window, cx| {
             cx.new(|cx| {
+                let dir = session.dir.clone();
                 let mut ws = Workspace::new(session, player, window, cx);
                 ws.start_scan(cx);
+                server::serve(cx.entity().downgrade(), &dir, cx);
                 ws
             })
         })
@@ -109,32 +147,13 @@ fn open(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Loads a project and its engine, and how long it plays for, in samples.
-type Loaded = (Project, Engine, Vec<tempo_engine::engine::LanePlugins>, u64);
-
-fn load(dir: &Path) -> Result<Loaded, String> {
+/// Plays a project through the default output, without the app.
+fn play(dir: &Path) -> Result<(), String> {
     let project = Project::load(dir)?;
     let rate = project.sample_rate as f64;
-    let (engine, plugins) = Engine::load(&project, dir, rate)?;
-    let frames = project.samples(project.end(), rate) + (TAIL * rate) as u64;
-    Ok((project, engine, plugins, frames))
-}
-
-fn render(dir: &Path, out: &Path) -> Result<(), String> {
-    let (project, mut engine, _plugins, frames) = load(dir)?;
-    engine.bounce(out, frames)?;
-    println!(
-        "{}: {:.1} s at {} Hz",
-        out.display(),
-        frames as f64 / engine.rate(),
-        project.sample_rate
-    );
-    Ok(())
-}
-
-fn play(dir: &Path) -> Result<(), String> {
-    let (_project, mut engine, _plugins, frames) = load(dir)?;
-    let seconds = frames as f64 / engine.rate();
+    let (mut engine, _plugins) = Engine::load(&project, dir, rate)?;
+    let frames = project.samples(project.end(), rate) + (cli::TAIL * rate) as u64;
+    let seconds = frames as f64 / rate;
     engine.play();
     let _stream = engine.start_output()?;
     println!("playing {seconds:.1} s (ctrl-c stops)");

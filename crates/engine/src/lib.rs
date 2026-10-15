@@ -1,3 +1,5 @@
+pub mod analysis;
+pub mod commands;
 pub mod engine;
 pub mod midi;
 pub mod peaks;

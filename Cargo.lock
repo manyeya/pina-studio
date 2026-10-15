@@ -5220,8 +5220,10 @@ dependencies = [
 name = "tempo"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "gpui-pre",
  "gpui-pre-platform",
+ "serde",
  "serde_json",
  "tempo-engine",
 ]

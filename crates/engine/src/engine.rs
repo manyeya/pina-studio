@@ -883,6 +883,20 @@ impl Engine {
         }
     }
 
+    /// Plays `frames` from the start into memory.
+    pub fn render(&mut self, frames: u64) -> [Vec<f32>; 2] {
+        let mut out = [vec![0f32; frames as usize], vec![0f32; frames as usize]];
+        self.locate(0);
+        self.play();
+        for at in (0..frames as usize).step_by(MAX_BLOCK) {
+            let n = MAX_BLOCK.min(frames as usize - at);
+            let [l, r] = &mut out;
+            self.process([&mut l[at..], &mut r[at..]], n);
+        }
+        self.stop();
+        out
+    }
+
     /// Plays `frames` from the start into a stereo 32-bit float WAV.
     pub fn bounce(&mut self, path: &Path, frames: u64) -> Result<(), String> {
         let err = |e: hound::Error| format!("{}: {e}", path.display());

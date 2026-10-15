@@ -27,8 +27,15 @@ fn demo() -> PathBuf {
 }
 
 fn open(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
+    open_at(cx, &demo())
+}
+
+fn open_at<'a>(
+    cx: &'a mut TestAppContext,
+    dir: &Path,
+) -> (Entity<Workspace>, &'a mut VisualTestContext) {
     cx.update(bind_keys);
-    let session = Session::open(&demo()).unwrap();
+    let session = Session::open(dir).unwrap();
     let player = Player::silent(&session.project, &session.dir);
     let (ws, cx) = cx.add_window_view(|window, cx| Workspace::new(session, player, window, cx));
     cx.run_until_parked();
@@ -385,4 +392,44 @@ fn a_plugin_that_wont_load_is_reported_and_removable(cx: &mut TestAppContext) {
         )
     });
     assert_eq!((inserts, status), (0, None));
+}
+
+#[gpui::test]
+fn agents_edit_the_open_project_through_its_socket(cx: &mut TestAppContext) {
+    // A copy of the demo, so a tempo that has the real one open isn't disturbed.
+    let dir = std::env::temp_dir().join(format!("tempo-test-socket-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("Audio Files")).unwrap();
+    for f in ["project.json", "Audio Files/drums.wav"] {
+        std::fs::copy(demo().join(f), dir.join(f)).unwrap();
+    }
+    cx.executor().allow_parking();
+    let (ws, cx) = open_at(cx, &dir);
+    let weak = ws.downgrade();
+    cx.update(|_, cx| crate::server::serve(weak, &dir, cx));
+
+    // Ask from another thread, as `tempo do` would from another process.
+    let ask = |cx: &mut VisualTestContext, command: &'static str| {
+        let d = dir.clone();
+        let asker = thread::spawn(move || crate::cli::edit(&d, command));
+        while !asker.is_finished() {
+            cx.run_until_parked();
+            thread::sleep(Duration::from_millis(1));
+        }
+        asker.join().unwrap()
+    };
+    assert_eq!(
+        ask(cx, r#"{"op": "set_tempo", "bpm": 90}"#),
+        Ok(serde_json::json!({}))
+    );
+    assert_eq!(ws.read_with(cx, |ws, _| ws.session.project.tempo), 90.0);
+    let err = ask(cx, r#"{"op": "delete_track", "track": 9}"#).unwrap_err();
+    assert!(err.contains("no track 9"), "{err}");
+    // It's an edit like any other: undo takes it back, and the file wasn't touched.
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.session.project.tempo), 100.0);
+    assert_eq!(
+        tempo_engine::project::Project::load(&dir).unwrap().tempo,
+        100.0
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
 }

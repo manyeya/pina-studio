@@ -8,11 +8,13 @@ A DAW in the shape of Logic Pro, written in Rust: gpui for the UI, VST3 plugins.
   (`engine.rs`), the built-in synth, and VST3 hosting (`plugin/`).
 - `crates/engine` also has the live `player.rs` (keeps the engine in step with edits) and
   `session.rs` (an open project and its undo history).
-- `crates/engine` also has MIDI input (`midi.rs`), audio recording (`record.rs`) and the
-  plugin scan (`scan.rs`).
+- `crates/engine` also has MIDI input (`midi.rs`), audio recording (`record.rs`), the plugin
+  scan (`scan.rs`), edits as data (`commands.rs`, described in `commands.md`) and measuring
+  audio (`analysis.rs`).
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
   `tracks.rs` (headers, ruler, regions, automation), `pianoroll.rs`, `record.rs` (recording
-  takes), `strip.rs` (channel strips), `menu.rs` (plugin and bus menus), `theme.rs`, and `tests.rs`, which drives the window
+  takes), `strip.rs` (channel strips), `menu.rs` (plugin and bus menus), `theme.rs`,
+  `server.rs` (the project's socket), `cli.rs` (the commands for agents), `mcp.rs`, and `tests.rs`, which drives the window
   headless with simulated mouse and keys.
 
 ## Run
@@ -52,6 +54,24 @@ __scan`), so a broken one can't crash the app, and the results are cached in
 in the project. Plugin latency is compensated, as Logic does.
 
 Builds need only the Command Line Tools: gpui compiles its Metal shaders at launch.
+
+## Agents
+
+tempo is made to be driven by agents as well as people. `tempo describe` prints every command an
+agent can send, with examples. An agent can:
+
+- Read a project with `tempo show <project>`.
+- Change it one command at a time with `tempo do <project> '<json>'`.
+- Measure it with `tempo analyze` (LUFS, peaks, clipping, low/mid/high balance, for the mix and
+  each track), since it can't listen.
+
+When the project is open in the app, commands go to the app over a socket. Each lands on screen as
+one undoable edit, and `tempo save` saves it. Otherwise the folder is edited directly.
+
+`tempo mcp` is the same as an MCP server on stdio. Its tools are `describe`, `show`, `edit`,
+`analyze`, `render`, `transport` and `plugins`. For Claude Code:
+
+    claude mcp add tempo -- /path/to/tempo mcp
 
 ## Projects
 
