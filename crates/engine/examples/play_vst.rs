@@ -45,7 +45,7 @@ fn main() {
     println!("output: {} Hz, {channels} channels", config.sample_rate);
 
     let (plugin, mut processor) =
-        Plugin::instantiate(&module, class, config.sample_rate as f64, MAX_BLOCK).unwrap();
+        Plugin::instantiate(&module, class, config.sample_rate as f64, MAX_BLOCK, None).unwrap();
     println!("loaded {}", plugin.name);
 
     let (mut notes_tx, mut notes_rx) = rtrb::RingBuffer::<Note>::new(256);

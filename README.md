@@ -8,10 +8,11 @@ A DAW in the shape of Logic Pro, written in Rust: gpui for the UI, VST3 plugins.
   (`engine.rs`), the built-in synth, and VST3 hosting (`plugin/`).
 - `crates/engine` also has the live `player.rs` (keeps the engine in step with edits) and
   `session.rs` (an open project and its undo history).
-- `crates/engine` also has MIDI input (`midi.rs`) and audio recording (`record.rs`).
+- `crates/engine` also has MIDI input (`midi.rs`), audio recording (`record.rs`) and the
+  plugin scan (`scan.rs`).
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
   `tracks.rs` (headers, ruler, regions, automation), `pianoroll.rs`, `record.rs` (recording
-  takes), `strip.rs` (channel strips), `theme.rs`, and `tests.rs`, which drives the window
+  takes), `strip.rs` (channel strips), `menu.rs` (plugin and bus menus), `theme.rs`, and `tests.rs`, which drives the window
   headless with simulated mouse and keys.
 
 ## Run
@@ -40,6 +41,15 @@ In the app, as in Logic:
   one; each track header switches between volume and pan.
 - Drag faders, pan knobs and the tempo; option-click a fader or knob to reset it. Click or drag
   in the ruler to move the playhead; ⌘-scroll zooms.
+- On a channel strip, click a plugin to open its editor; click an empty slot, or right-click any,
+  to choose a plugin. "+ Send" sends the track to a bus, making an aux for a new one; drag a send
+  for its level, right-click it to remove it.
+
+Plugins are found in `/Library/Audio/Plug-Ins/VST3`, `~/Library/Audio/Plug-Ins/VST3` and the
+folders in `TEMPO_VST3_PATH` (colon-separated). Each is first opened in a child process (`tempo
+__scan`), so a broken one can't crash the app, and the results are cached in
+`~/Library/Caches/tempo/plugins.json`. Saving writes each plugin's settings to `Plugin States/`
+in the project. Plugin latency is compensated, as Logic does.
 
 Builds need only the Command Line Tools: gpui compiles its Metal shaders at launch.
 
@@ -70,4 +80,9 @@ are in ticks, 960 to a quarter note; audio offsets are in samples.
 ```
 
 An instrument is `"synth"` (built in) or `{ "vst3": { "path": …, "class": … } }`; a track without
-one is an audio track. Audio files must be WAV at the project's sample rate, for now.
+one is an audio track. Audio files must be WAV at the project's sample rate, for now. Tracks can
+have `"sends": [{ "bus": 1, "level_db": -6 }]`, played by an aux in `"auxes": [{ "bus": 1, "name":
+"Reverb", "inserts": […] }]`.
+
+The engine's tests that need a real plugin are opt-in:
+`TEMPO_TEST_VST3="/path/to/Some Synth.vst3" cargo test -p tempo-engine -- --ignored`.

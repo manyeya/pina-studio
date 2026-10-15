@@ -90,6 +90,19 @@ impl MemoryStream {
     pub fn rewind(&self) {
         self.pos.set(0);
     }
+
+    pub fn bytes(&self) -> Vec<u8> {
+        self.data.borrow().clone()
+    }
+}
+
+impl From<Vec<u8>> for MemoryStream {
+    fn from(data: Vec<u8>) -> Self {
+        MemoryStream {
+            data: RefCell::new(data),
+            pos: Cell::new(0),
+        }
+    }
 }
 
 impl Class for MemoryStream {

@@ -21,7 +21,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crate::{
     peaks::Peaks,
     plugin::{AUDIO_MODULE, Module, Note, Plugin, Processor},
-    project::{AutoPoint, Content, Instrument, PluginRef, Project, Track, value_at},
+    project::{AutoPoint, Content, Instrument, PluginRef, Project, value_at},
     synth::Synth,
 };
 
@@ -31,6 +31,8 @@ pub const MAX_BLOCK: usize = 512;
 const BLOCK_NOTES: usize = 256;
 /// Most live or previewed notes the engine takes in one block.
 const LIVE_NOTES: usize = 64;
+/// The longest delay compensation for one lane, in samples.
+const MAX_DELAY: usize = 1 << 14;
 /// Lanes the live engine holds.
 pub const SLOTS: usize = 256;
 /// The master meter's index in `Shared::meters`.
@@ -99,6 +101,98 @@ pub struct Arrangement {
     tempo: f64,
     master: f32,
     plans: Vec<Plan>,
+    auxes: Vec<AuxPlan>,
+    /// What tracks send to each aux, this block.
+    buses: Vec<[Vec<f32>; 2]>,
+    /// How far ahead of what's heard the engine reads, so plugins' latency doesn't make it late.
+    lookahead: u64,
+}
+
+impl Arrangement {
+    fn empty() -> Self {
+        Arrangement {
+            tempo: 120.0,
+            master: 1.0,
+            plans: Vec::new(),
+            auxes: Vec::new(),
+            buses: Vec::new(),
+            lookahead: 0,
+        }
+    }
+}
+
+/// An aux: it plays its bus through its inserts into the master.
+struct AuxPlan {
+    slot: usize,
+    gain: [f32; 2],
+    /// Delay compensation after its inserts.
+    delay: usize,
+}
+
+/// Plugin delay compensation: delays that line every track and aux up at the master, and how
+/// far ahead the engine reads so that what's heard is on time.
+#[derive(Debug, PartialEq)]
+struct Compensation {
+    lookahead: u64,
+    /// Per track, before its sends.
+    tracks: Vec<usize>,
+    /// On every track's direct path, to wait for the slowest aux.
+    direct: usize,
+    /// Per aux, after its inserts.
+    auxes: Vec<usize>,
+}
+
+fn compensate(tracks: &[u32], auxes: &[u32]) -> Compensation {
+    let slowest = |l: &[u32]| {
+        l.iter()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .min(MAX_DELAY as u32 - 1)
+    };
+    let (t, a) = (slowest(tracks), slowest(auxes));
+    let behind = |max: u32| move |&l: &u32| (max - l.min(max)) as usize;
+    Compensation {
+        lookahead: (t + a) as u64,
+        tracks: tracks.iter().map(behind(t)).collect(),
+        direct: a as usize,
+        auxes: auxes.iter().map(behind(a)).collect(),
+    }
+}
+
+/// A stereo delay line, for delay compensation. It keeps its history while the delay changes.
+struct Delay {
+    buf: [Vec<f32>; 2],
+    pos: usize,
+}
+
+impl Delay {
+    fn new() -> Self {
+        Delay {
+            buf: [vec![0.0; MAX_DELAY], vec![0.0; MAX_DELAY]],
+            pos: 0,
+        }
+    }
+
+    /// Delays `l` and `r` in place by `d` samples.
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], d: usize) {
+        let d = d.min(MAX_DELAY - 1);
+        for i in 0..l.len() {
+            let w = self.pos;
+            let rd = (w + MAX_DELAY - d) % MAX_DELAY;
+            self.buf[0][w] = l[i];
+            self.buf[1][w] = r[i];
+            l[i] = self.buf[0][rd];
+            r[i] = self.buf[1][rd];
+            self.pos = (w + 1) % MAX_DELAY;
+        }
+    }
+}
+
+/// Left and right gain for a level and a balance pan.
+fn balance(g: f32, pan: f32) -> [f32; 2] {
+    let pan = pan.clamp(-1.0, 1.0);
+    [g * (1.0 - pan).min(1.0), g * (1.0 + pan).min(1.0)]
 }
 
 /// What one lane plays.
@@ -115,18 +209,19 @@ struct Plan {
     /// Automation, with ticks turned to samples; empty follows the fader.
     volume: Vec<AutoPoint>,
     pans: Vec<AutoPoint>,
+    /// Aux index and level.
+    sends: Vec<(usize, f32)>,
+    /// Delay compensation before the sends, and on the direct path after them.
+    delay: usize,
+    direct: usize,
 }
 
 impl Plan {
     /// Left and right gain at a sample.
     fn gain(&self, at: u64) -> [f32; 2] {
         let volume = value_at(&self.volume, at as f64).unwrap_or(self.volume_db);
-        let pan = value_at(&self.pans, at as f64)
-            .unwrap_or(self.pan)
-            .clamp(-1.0, 1.0);
-        let g = self.audible * db(volume);
-        // Balance: panning turns the other side down.
-        [g * (1.0 - pan).min(1.0), g * (1.0 + pan).min(1.0)]
+        let pan = value_at(&self.pans, at as f64).unwrap_or(self.pan);
+        balance(self.audible * db(volume), pan)
     }
 }
 
@@ -158,21 +253,33 @@ pub struct Lane {
     inserts: Vec<Processor>,
     /// Notes the instrument is holding, to release on stop or locate.
     held: [bool; 128],
+    /// Delay compensation: before a track's sends, and after them (or after an aux's inserts).
+    pre: Delay,
+    post: Delay,
+}
+
+/// The main-thread halves of a lane's plugins.
+#[derive(Default)]
+pub struct LanePlugins {
+    pub instrument: Option<Plugin>,
+    pub inserts: Vec<Plugin>,
 }
 
 fn db(db: f32) -> f32 {
     10f32.powf(db / 20.0)
 }
 
-/// Builds a track's lane at `rate`, and the main-thread halves of its plugins, which must live as
-/// long as it.
+/// Builds a lane (a track's instrument and inserts, or an aux's inserts) at `rate`, with each
+/// plugin's saved settings from `dir`. Also returns the main-thread halves of its plugins, which
+/// must live as long as it, and its latency in samples.
 pub fn make_lane(
-    track: &Track,
+    instrument: Option<&Instrument>,
+    inserts: &[PluginRef],
     rate: f64,
     modules: &mut Modules,
-) -> Result<(Lane, Vec<Plugin>), String> {
-    let mut plugins = Vec::new();
-    let mut instantiate = |r: &PluginRef| -> Result<Processor, String> {
+    dir: &Path,
+) -> Result<(Lane, LanePlugins, u32), String> {
+    let mut instantiate = |r: &PluginRef| -> Result<(Plugin, Processor), String> {
         if !modules.contains_key(&r.path) {
             modules.insert(r.path.clone(), Module::load(&r.path)?);
         }
@@ -182,38 +289,59 @@ pub fn make_lane(
             .iter()
             .find(|c| c.category == AUDIO_MODULE && c.name == r.class)
             .ok_or_else(|| format!("{}: no plugin named {:?}", r.path.display(), r.class))?;
-        let (plugin, processor) = Plugin::instantiate(module, class, rate, MAX_BLOCK)?;
-        plugins.push(plugin);
-        Ok(processor)
+        // A missing settings file just means default settings.
+        let state = r
+            .state
+            .as_ref()
+            .and_then(|f| std::fs::read(dir.join(f)).ok());
+        Plugin::instantiate(module, class, rate, MAX_BLOCK, state.as_deref())
     };
-    let source = match &track.instrument {
+    let mut plugins = LanePlugins::default();
+    let source = match instrument {
         None => Source::Audio,
         Some(Instrument::Synth) => Source::Synth(Synth::new(rate)),
-        Some(Instrument::Vst3(r)) => Source::Plugin(instantiate(r)?),
+        Some(Instrument::Vst3(r)) => {
+            let (plugin, processor) = instantiate(r)?;
+            plugins.instrument = Some(plugin);
+            Source::Plugin(processor)
+        }
     };
-    let inserts = track
-        .inserts
-        .iter()
-        .map(&mut instantiate)
-        .collect::<Result<_, _>>()?;
+    let mut processors = Vec::new();
+    for r in inserts {
+        let (plugin, processor) = instantiate(r)?;
+        plugins.inserts.push(plugin);
+        processors.push(processor);
+    }
+    let latency = match &source {
+        Source::Plugin(p) => p.latency(),
+        _ => 0,
+    } + processors.iter().map(Processor::latency).sum::<u32>();
     let lane = Lane {
         source,
-        inserts,
+        inserts: processors,
         held: [false; 128],
+        pre: Delay::new(),
+        post: Delay::new(),
     };
-    Ok((lane, plugins))
+    Ok((lane, plugins, latency))
 }
 
-/// Compiles what `project` plays at `rate`, track `i` on lane `slots[i]`.
+/// Compiles what `project` plays at `rate`. Track `i` is on lane `tracks[i].0`, whose plugins
+/// make it `tracks[i].1` samples late; likewise auxes. Regions whose audio can't be read are left
+/// out, and the reasons returned, so one missing file doesn't stop the rest playing.
 pub fn compile(
     project: &Project,
     rate: f64,
-    slots: &[usize],
+    tracks: &[(usize, u32)],
+    auxes: &[(usize, u32)],
     files: &mut AudioFiles,
-) -> Result<Arrangement, String> {
+) -> (Arrangement, Vec<String>) {
+    let mut problems = Vec::new();
+    let latencies = |l: &[(usize, u32)]| l.iter().map(|&(_, l)| l).collect::<Vec<_>>();
+    let pdc = compensate(&latencies(tracks), &latencies(auxes));
     let any_solo = project.tracks.iter().any(|t| t.solo);
     let mut plans = Vec::new();
-    for (t, &slot) in project.tracks.iter().zip(slots) {
+    for (i, (t, &(slot, _))) in project.tracks.iter().zip(tracks).enumerate() {
         let (mut clips, mut events) = (Vec::new(), Vec::new());
         for region in &t.regions {
             let start = project.samples(region.start, rate);
@@ -241,12 +369,15 @@ pub fn compile(
                         });
                     }
                 }
-                Content::Audio { file, offset } => clips.push(Clip {
-                    start,
-                    len: end - start,
-                    offset: *offset,
-                    data: files.get(file)?,
-                }),
+                Content::Audio { file, offset } => match files.get(file) {
+                    Ok(data) => clips.push(Clip {
+                        start,
+                        len: end - start,
+                        offset: *offset,
+                        data,
+                    }),
+                    Err(e) => problems.push(e),
+                },
             }
         }
         // Offs first at the same sample, so back-to-back notes of one pitch both sound.
@@ -275,13 +406,43 @@ pub fn compile(
             pan: t.pan,
             volume: in_samples(&t.automation.volume),
             pans: in_samples(&t.automation.pan),
+            sends: t
+                .sends
+                .iter()
+                .filter_map(|s| {
+                    let aux = project.auxes.iter().position(|a| a.bus == s.bus)?;
+                    Some((aux, db(s.level_db)))
+                })
+                .collect(),
+            delay: pdc.tracks[i],
+            direct: pdc.direct,
         });
     }
-    Ok(Arrangement {
+    let auxes = project
+        .auxes
+        .iter()
+        .zip(auxes)
+        .zip(&pdc.auxes)
+        .map(|((a, &(slot, _)), &delay)| {
+            let g = if a.mute { 0.0 } else { db(a.volume_db) };
+            AuxPlan {
+                slot,
+                gain: balance(g, a.pan),
+                delay,
+            }
+        })
+        .collect::<Vec<_>>();
+    let arrangement = Arrangement {
         tempo: project.tempo,
         master: db(project.master_volume_db),
         plans,
-    })
+        buses: (0..auxes.len())
+            .map(|_| [vec![0.0; MAX_BLOCK], vec![0.0; MAX_BLOCK]])
+            .collect(),
+        auxes,
+        lookahead: pdc.lookahead,
+    };
+    (arrangement, problems)
 }
 
 /// From the main thread to the live engine.
@@ -402,26 +563,43 @@ impl Engine {
 
     /// The engine for `project` (whose files are in `dir`) at `rate`, for offline use. The plugins
     /// it returns are the main-thread halves of its plugin processors: keep them as long as it.
-    pub fn load(project: &Project, dir: &Path, rate: f64) -> Result<(Engine, Vec<Plugin>), String> {
+    pub fn load(
+        project: &Project,
+        dir: &Path,
+        rate: f64,
+    ) -> Result<(Engine, Vec<LanePlugins>), String> {
         let (mut modules, mut plugins, mut lanes) = (Modules::new(), Vec::new(), Vec::new());
-        for t in &project.tracks {
-            let (lane, p) = make_lane(t, rate, &mut modules)?;
+        let mut add = |instrument: Option<&Instrument>, inserts: &[PluginRef]| {
+            let (lane, p, latency) = make_lane(instrument, inserts, rate, &mut modules, dir)?;
             lanes.push(Some(Box::new(lane)));
-            plugins.extend(p);
+            plugins.push(p);
+            Ok::<_, String>((lanes.len() - 1, latency))
+        };
+        let tracks = project
+            .tracks
+            .iter()
+            .map(|t| add(t.instrument.as_ref(), &t.inserts))
+            .collect::<Result<Vec<_>, _>>()?;
+        let auxes = project
+            .auxes
+            .iter()
+            .map(|a| add(None, &a.inserts))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut files = AudioFiles::new(dir, rate);
+        let (arrangement, problems) = compile(project, rate, &tracks, &auxes, &mut files);
+        if let Some(p) = problems.into_iter().next() {
+            return Err(p);
         }
-        let slots: Vec<usize> = (0..lanes.len()).collect();
-        let arrangement = compile(project, rate, &slots, &mut AudioFiles::new(dir, rate))?;
         Ok((Engine::new(rate, arrangement, lanes), plugins))
     }
 
     /// An empty engine, filled and driven through its link.
     pub fn live(rate: f64, link: Link) -> Self {
-        let empty = Arrangement {
-            tempo: 120.0,
-            master: 1.0,
-            plans: Vec::new(),
-        };
-        let mut e = Engine::new(rate, empty, (0..SLOTS).map(|_| None).collect());
+        let mut e = Engine::new(
+            rate,
+            Arrangement::empty(),
+            (0..SLOTS).map(|_| None).collect(),
+        );
         e.link = Some(link);
         e
     }
@@ -536,14 +714,26 @@ impl Engine {
         let [out_l, out_r] = out;
         out_l[..frames].fill(0.0);
         out_r[..frames].fill(0.0);
-        let (from, to) = (self.position, self.position + frames as u64);
+        // What's heard now is `position`; the engine reads ahead by the plugins' latency, which
+        // delay compensation then makes up, so it's heard on time.
+        // ponytail: the first `lookahead` samples after starting play are skipped.
+        let heard = self.position;
+        let (from, to) = (
+            heard + self.arrangement.lookahead,
+            heard + self.arrangement.lookahead + frames as u64,
+        );
         let release = std::mem::take(&mut self.release);
-        let (playing, position, tempo) = (self.playing, self.position, self.arrangement.tempo);
+        let (playing, tempo) = (self.playing, self.arrangement.tempo);
         let shared = self.link.as_ref().map(|l| &*l.shared);
         let [l, r] = &mut self.scratch;
         let (l, r) = (&mut l[..frames], &mut r[..frames]);
+        let arrangement = &mut *self.arrangement;
+        for bus in &mut arrangement.buses {
+            bus[0][..frames].fill(0.0);
+            bus[1][..frames].fill(0.0);
+        }
 
-        for plan in &self.arrangement.plans {
+        for plan in &arrangement.plans {
             let Some(lane) = self.lanes[plan.slot].as_deref_mut() else {
                 continue;
             };
@@ -610,16 +800,22 @@ impl Engine {
                 Source::Audio => {}
                 Source::Synth(s) => s.process([&mut *l, &mut *r], frames, notes),
                 Source::Plugin(p) => {
-                    p.set_transport(playing, position, tempo);
+                    p.set_transport(playing, from, tempo);
                     p.process([&mut *l, &mut *r], frames, notes);
                 }
             }
             for p in &mut lane.inserts {
-                p.set_transport(playing, position, tempo);
+                p.set_transport(playing, from, tempo);
                 p.process([&mut *l, &mut *r], frames, &[]);
             }
+            lane.pre.process(l, r, plan.delay);
             // Gain ramps across the block, so automation moves smoothly.
-            let (g0, g1) = (plan.gain(from), plan.gain(if playing { to } else { from }));
+            let later = if playing {
+                heard + frames as u64
+            } else {
+                heard
+            };
+            let (g0, g1) = (plan.gain(heard), plan.gain(later));
             let step = [
                 (g1[0] - g0[0]) / frames as f32,
                 (g1[1] - g0[1]) / frames as f32,
@@ -627,7 +823,42 @@ impl Engine {
             let mut peak = 0f32;
             for i in 0..frames {
                 let k = i as f32;
-                let (a, b) = (l[i] * (g0[0] + step[0] * k), r[i] * (g0[1] + step[1] * k));
+                l[i] *= g0[0] + step[0] * k;
+                r[i] *= g0[1] + step[1] * k;
+                peak = peak.max(l[i].abs()).max(r[i].abs());
+            }
+            // Post-fader sends.
+            for &(aux, level) in &plan.sends {
+                let bus = &mut arrangement.buses[aux];
+                for i in 0..frames {
+                    bus[0][i] += l[i] * level;
+                    bus[1][i] += r[i] * level;
+                }
+            }
+            lane.post.process(l, r, plan.direct);
+            for i in 0..frames {
+                out_l[i] += l[i];
+                out_r[i] += r[i];
+            }
+            if let Some(s) = shared {
+                s.meters[plan.slot].fetch_max(peak.to_bits(), Ordering::Relaxed);
+            }
+        }
+
+        for (aux, plan) in arrangement.auxes.iter().enumerate() {
+            let Some(lane) = self.lanes[plan.slot].as_deref_mut() else {
+                continue;
+            };
+            l.copy_from_slice(&arrangement.buses[aux][0][..frames]);
+            r.copy_from_slice(&arrangement.buses[aux][1][..frames]);
+            for p in &mut lane.inserts {
+                p.set_transport(playing, from, tempo);
+                p.process([&mut *l, &mut *r], frames, &[]);
+            }
+            lane.post.process(l, r, plan.delay);
+            let mut peak = 0f32;
+            for i in 0..frames {
+                let (a, b) = (l[i] * plan.gain[0], r[i] * plan.gain[1]);
                 out_l[i] += a;
                 out_r[i] += b;
                 peak = peak.max(a.abs()).max(b.abs());
@@ -639,11 +870,11 @@ impl Engine {
 
         let mut peak = 0f32;
         for s in out_l[..frames].iter_mut().chain(out_r[..frames].iter_mut()) {
-            *s *= self.arrangement.master;
+            *s *= arrangement.master;
             peak = peak.max(s.abs());
         }
         if playing {
-            self.position = to;
+            self.position = heard + frames as u64;
         }
         if let Some(s) = shared {
             s.meters[MASTER].fetch_max(peak.to_bits(), Ordering::Relaxed);
@@ -756,7 +987,7 @@ fn load_wav(path: &Path, rate: f64) -> Result<AudioData, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{Note as MidiNote, PPQ, Region};
+    use crate::project::{AuxSend, Note as MidiNote, PPQ, Region, Track};
 
     const RATE: f64 = 48_000.0;
     const BEAT: usize = 24_000; // samples per beat at 120 bpm
@@ -866,6 +1097,83 @@ mod tests {
     }
 
     #[test]
+    fn compensation_lines_everything_up() {
+        let c = compensate(&[0, 100, 30], &[50, 0]);
+        assert_eq!(
+            c,
+            Compensation {
+                lookahead: 150,
+                tracks: vec![100, 0, 70],
+                direct: 50,
+                auxes: vec![0, 50]
+            }
+        );
+        assert_eq!(compensate(&[], &[]).lookahead, 0);
+    }
+
+    #[test]
+    fn delay_lines_delay() {
+        let mut d = Delay::new();
+        let (mut l, mut r) = ([1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]);
+        d.process(&mut l, &mut r, 2);
+        assert_eq!((l, r), ([0.0, 0.0, 1.0, 2.0], [0.0, 0.0, 5.0, 6.0]));
+    }
+
+    #[test]
+    fn sends_reach_their_aux_after_the_fader() {
+        // A unity send to a unity aux: the track is heard twice as loud, direct and through it.
+        let track = synth_track("a", vec![note(0, PPQ, 69)], PPQ);
+        let [alone, _] = render(&project(vec![track.clone()]), Path::new("."), BEAT);
+        let mut p = project(vec![track]);
+        p.tracks[0].sends = vec![AuxSend {
+            bus: 1,
+            level_db: 0.0,
+        }];
+        p.add_aux();
+        let [l, _] = render(&p, Path::new("."), BEAT);
+        assert!(peak(&alone) > 0.1);
+        assert_eq!(l, alone.iter().map(|x| x * 2.0).collect::<Vec<_>>());
+
+        p.auxes[0].mute = true;
+        assert_eq!(render(&p, Path::new("."), BEAT)[0], alone);
+        p.auxes[0].mute = false;
+        p.tracks[0].volume_db = -144.0; // post-fader: the send goes quiet too
+        assert!(peak(&render(&p, Path::new("."), BEAT)[0]) < 1e-6);
+    }
+
+    #[test]
+    fn delay_compensation_waits_for_the_slowest_track() {
+        // Two synth tracks, left and right; say the left one's plugins are 100 samples late.
+        // The right one is delayed to match, and the engine reads 100 samples ahead. The synth
+        // isn't really late, so the left is heard 100 samples early and the right on time.
+        let mut a = synth_track("a", vec![note(PPQ as i64, PPQ, 69)], PPQ * 2);
+        a.pan = -1.0;
+        let mut b = a.clone();
+        b.pan = 1.0;
+        let p = project(vec![a, b]);
+        let mut lanes = Vec::new();
+        for t in &p.tracks {
+            let (lane, _, _) = make_lane(
+                t.instrument.as_ref(),
+                &[],
+                RATE,
+                &mut Modules::new(),
+                Path::new("."),
+            )
+            .unwrap();
+            lanes.push(Some(Box::new(lane)));
+        }
+        let mut files = AudioFiles::new(Path::new("."), RATE);
+        let (arrangement, _) = compile(&p, RATE, &[(0, 100), (1, 0)], &[], &mut files);
+        let mut engine = Engine::new(RATE, arrangement, lanes);
+        engine.play();
+        let [l, r] = run(&mut engine, BEAT * 2);
+        let onset = |s: &[f32]| s.iter().position(|x| x.abs() > 0.0).unwrap();
+        assert_eq!(onset(&r) - onset(&l), 100);
+        assert!((onset(&r) as i64 - BEAT as i64).abs() <= 1);
+    }
+
+    #[test]
     fn mute_and_solo() {
         let a = synth_track("a", vec![note(0, PPQ, 60)], PPQ);
         let b = synth_track("b", vec![note(0, PPQ, 72)], PPQ);
@@ -927,6 +1235,31 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_audio_file_leaves_out_its_region_only() {
+        let region = Region {
+            start: 0,
+            length: PPQ,
+            content: Content::Audio {
+                file: "gone.wav".into(),
+                offset: 0,
+            },
+        };
+        let audio = Track {
+            name: "audio".into(),
+            regions: vec![region],
+            ..Default::default()
+        };
+        let synth = synth_track("a", vec![note(0, PPQ, 69)], PPQ);
+        let p = project(vec![audio, synth]);
+        let mut files = AudioFiles::new(Path::new("."), RATE);
+        let (arrangement, problems) = compile(&p, RATE, &[(0, 0), (1, 0)], &[], &mut files);
+        assert_eq!(problems.len(), 1);
+        assert!(arrangement.plans[0].clips.is_empty());
+        assert_eq!(arrangement.plans[1].events.len(), 2);
+        assert!(Engine::load(&p, Path::new("."), RATE).is_err()); // a bounce does fail
+    }
+
+    #[test]
     fn stopping_releases_held_notes() {
         let p = project(vec![synth_track("a", vec![note(0, PPQ * 8, 69)], PPQ * 8)]);
         let (mut engine, _) = Engine::load(&p, Path::new("."), RATE).unwrap();
@@ -954,9 +1287,17 @@ mod tests {
         };
         let mut engine = Engine::live(RATE, link);
         let p = project(vec![synth_track("a", vec![note(0, PPQ * 8, 69)], PPQ * 8)]);
-        let (lane, _) = make_lane(&p.tracks[0], RATE, &mut Modules::new()).unwrap();
+        let t = &p.tracks[0];
+        let (lane, _, _) = make_lane(
+            t.instrument.as_ref(),
+            &[],
+            RATE,
+            &mut Modules::new(),
+            Path::new("."),
+        )
+        .unwrap();
         let mut files = AudioFiles::new(Path::new("."), RATE);
-        let arrangement = compile(&p, RATE, &[7], &mut files).unwrap();
+        let (arrangement, _) = compile(&p, RATE, &[(7, 0)], &[], &mut files);
         for m in [
             Msg::Insert(7, Box::new(lane)),
             Msg::Arrange(Box::new(arrangement)),

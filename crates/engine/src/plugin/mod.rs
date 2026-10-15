@@ -59,6 +59,9 @@ pub struct Module {
 pub struct ClassInfo {
     pub name: String,
     pub category: String,
+    pub vendor: String,
+    /// An instrument rather than an effect, by its subcategories.
+    pub instrument: bool,
     cid: TUID,
 }
 
@@ -99,13 +102,28 @@ impl Module {
     }
 
     pub fn classes(&self) -> Vec<ClassInfo> {
+        let factory2 = self.factory.cast::<IPluginFactory2>();
         unsafe {
             (0..self.factory.countClasses())
                 .filter_map(|i| {
+                    if let Some(f) = &factory2 {
+                        let mut info: PClassInfo2 = std::mem::zeroed();
+                        if f.getClassInfo2(i, &mut info) == kResultOk {
+                            return Some(ClassInfo {
+                                name: text(&info.name),
+                                category: text(&info.category),
+                                vendor: text(&info.vendor),
+                                instrument: text(&info.subCategories).contains("Instrument"),
+                                cid: info.cid,
+                            });
+                        }
+                    }
                     let mut info: PClassInfo = std::mem::zeroed();
                     (self.factory.getClassInfo(i, &mut info) == kResultOk).then(|| ClassInfo {
                         name: text(&info.name),
                         category: text(&info.category),
+                        vendor: String::new(),
+                        instrument: false,
                         cid: info.cid,
                     })
                 })
@@ -150,18 +168,23 @@ fn com_ptr<C: Class, I: Interface>(obj: &ComWrapper<C>) -> *mut I {
     obj.as_com_ref::<I>().unwrap().as_ptr()
 }
 
-/// A plugin's main-thread side: its controller and editor.
-// ponytail: no teardown; plugins live until the process exits. Add with track deletion.
+/// A plugin's main-thread side: its controller and editor, and its saved state.
 pub struct Plugin {
     pub name: String,
+    component: ComPtr<IComponent>,
     controller: ComPtr<IEditController>,
     _host: ComWrapper<HostApplication>,
     _handler: ComWrapper<ComponentHandler>,
 }
 
-/// A plugin's audio-thread side.
+/// A plugin's audio-thread side. Dropping it shuts the plugin down, so it's dropped back on the
+/// main thread, after its `Plugin`.
 pub struct Processor {
     processor: ComPtr<IAudioProcessor>,
+    component: ComPtr<IComponent>,
+    controller: ComPtr<IEditController>,
+    /// The component and controller, when they're separate objects talking to each other.
+    links: Option<(ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>)>,
     events: ComWrapper<EventList>,
     params: ComWrapper<ParameterChanges>,
     edits: rtrb::Consumer<(ParamID, ParamValue)>,
@@ -186,11 +209,13 @@ pub struct Note {
 }
 
 impl Plugin {
+    /// Creates a plugin at `rate`, restoring `state` (from `Plugin::state`) if given.
     pub fn instantiate(
         module: &Module,
         class: &ClassInfo,
         rate: f64,
         max_block: usize,
+        state: Option<&[u8]>,
     ) -> Result<(Plugin, Processor), String> {
         let fail = |why: &str| format!("{}: {why}", class.name);
         unsafe {
@@ -206,6 +231,7 @@ impl Plugin {
                 .cast()
                 .ok_or_else(|| fail("not an audio processor"))?;
 
+            let mut links = None;
             let controller: ComPtr<IEditController> = match component.cast() {
                 Some(c) => c,
                 None => {
@@ -223,6 +249,7 @@ impl Plugin {
                     ) {
                         a.connect(b.as_ptr());
                         b.connect(a.as_ptr());
+                        links = Some((a, b));
                     }
                     let state = ComWrapper::new(MemoryStream::default());
                     if component.getState(com_ptr::<_, IBStream>(&state)) == kResultOk {
@@ -232,6 +259,18 @@ impl Plugin {
                     c
                 }
             };
+
+            if let Some((ours, theirs)) = state.and_then(unpack) {
+                let stream = |bytes: &[u8]| ComWrapper::new(MemoryStream::from(bytes.to_vec()));
+                let s = stream(ours);
+                component.setState(com_ptr::<_, IBStream>(&s));
+                let s = stream(ours);
+                controller.setComponentState(com_ptr::<_, IBStream>(&s));
+                if !theirs.is_empty() {
+                    let s = stream(theirs);
+                    controller.setState(com_ptr::<_, IBStream>(&s));
+                }
+            }
 
             let (edits_tx, edits) = rtrb::RingBuffer::new(1024);
             let handler = ComWrapper::new(ComponentHandler::new(edits_tx));
@@ -303,12 +342,16 @@ impl Plugin {
 
             let plugin = Plugin {
                 name: class.name.clone(),
-                controller,
+                component: component.clone(),
+                controller: controller.clone(),
                 _host: host,
                 _handler: handler,
             };
             let processor = Processor {
                 processor,
+                component,
+                controller,
+                links,
                 events: ComWrapper::new(EventList::with_capacity(512)),
                 params: ComWrapper::new(ParameterChanges::with_capacity(64)),
                 edits,
@@ -323,9 +366,21 @@ impl Plugin {
         }
     }
 
-    /// Opens the plugin's editor in a window of its own.
-    // ponytail: fixed size unless the plugin asks to resize, and closing only hides it; handle
-    // user resizing and `removed()` when the mixer opens and closes editors.
+    /// The plugin's settings, to save with the project and give back to `instantiate`.
+    pub fn state(&self) -> Option<Vec<u8>> {
+        unsafe {
+            let ours = ComWrapper::new(MemoryStream::default());
+            if self.component.getState(com_ptr::<_, IBStream>(&ours)) != kResultOk {
+                return None;
+            }
+            let theirs = ComWrapper::new(MemoryStream::default());
+            self.controller.getState(com_ptr::<_, IBStream>(&theirs));
+            Some(pack(&ours.bytes(), &theirs.bytes()))
+        }
+    }
+
+    /// Opens the plugin's editor in a window of its own; dropping it closes the window.
+    // ponytail: fixed size unless the plugin asks to resize; handle user resizing later.
     pub fn open_editor(&self, mtm: MainThreadMarker) -> Result<Editor, String> {
         let fail = |why: &str| format!("{}: {why}", self.name);
         unsafe {
@@ -367,7 +422,7 @@ impl Plugin {
             }
             window.makeKeyAndOrderFront(None);
             Ok(Editor {
-                _view: view,
+                view,
                 _frame: frame,
                 window,
             })
@@ -376,9 +431,56 @@ impl Plugin {
 }
 
 pub struct Editor {
-    _view: ComPtr<IPlugView>,
+    view: ComPtr<IPlugView>,
     _frame: ComWrapper<PlugFrame>,
     pub window: Retained<NSWindow>,
+}
+
+impl Editor {
+    /// Brings the window back, if it was closed.
+    pub fn show(&self) {
+        self.window.makeKeyAndOrderFront(None);
+    }
+}
+
+impl Drop for Editor {
+    fn drop(&mut self) {
+        unsafe { self.view.removed() };
+        self.window.close();
+    }
+}
+
+impl Drop for Processor {
+    fn drop(&mut self) {
+        unsafe {
+            self.processor.setProcessing(0);
+            self.component.setActive(0);
+            if let Some((a, b)) = &self.links {
+                a.disconnect(b.as_ptr());
+                b.disconnect(a.as_ptr());
+                self.controller.terminate();
+            }
+            self.component.terminate();
+        }
+    }
+}
+
+const STATE_MAGIC: &[u8; 4] = b"TMPS";
+
+/// A plugin's state as one blob: the component's, then the controller's.
+fn pack(component: &[u8], controller: &[u8]) -> Vec<u8> {
+    let mut out = STATE_MAGIC.to_vec();
+    out.extend((component.len() as u32).to_le_bytes());
+    out.extend(component);
+    out.extend(controller);
+    out
+}
+
+fn unpack(blob: &[u8]) -> Option<(&[u8], &[u8])> {
+    let rest = blob.strip_prefix(STATE_MAGIC)?;
+    let (len, rest) = rest.split_first_chunk::<4>()?;
+    let len = u32::from_le_bytes(*len) as usize;
+    (len <= rest.len()).then(|| rest.split_at(len))
 }
 
 /// Lets an editor resize its window.
@@ -406,6 +508,11 @@ impl IPlugFrameTrait for PlugFrame {
 }
 
 impl Processor {
+    /// How late the plugin's output is, in samples.
+    pub fn latency(&self) -> u32 {
+        unsafe { self.processor.getLatencySamples() }
+    }
+
     /// Tells the plugin where the transport is, before a `process`.
     pub fn set_transport(&mut self, playing: bool, position: u64, tempo: f64) {
         let c = &mut self.context;
@@ -495,5 +602,52 @@ impl Processor {
             };
             dst[..frames].copy_from_slice(src);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// With a real instrument, which CI doesn't have:
+    /// `TEMPO_TEST_VST3="/path/Some Synth.vst3" cargo test -p tempo-engine -- --ignored`
+    #[test]
+    #[ignore]
+    fn a_real_instrument_plays_saves_restores_and_shuts_down() {
+        let path = std::env::var("TEMPO_TEST_VST3").expect("set TEMPO_TEST_VST3");
+        let module = Module::load(Path::new(&path)).unwrap();
+        let classes = module.classes();
+        let class = classes.iter().find(|c| c.category == AUDIO_MODULE).unwrap();
+        assert!(class.instrument, "{} isn't an instrument", class.name);
+        let (plugin, mut processor) =
+            Plugin::instantiate(&module, class, 48_000.0, 512, None).unwrap();
+        let (mut l, mut r) = (vec![0f32; 512], vec![0f32; 512]);
+        let note = Note {
+            offset: 0,
+            pitch: 60,
+            velocity: 1.0,
+        };
+        processor.process([&mut l, &mut r], 512, &[note]);
+        let mut loudest = 0f32;
+        for _ in 0..20 {
+            processor.process([&mut l, &mut r], 512, &[]);
+            loudest = l.iter().fold(loudest, |m, x| m.max(x.abs()));
+        }
+        assert!(loudest > 1e-3, "{loudest}");
+
+        let state = plugin.state().unwrap();
+        drop(plugin);
+        drop(processor);
+        let (again, _processor) =
+            Plugin::instantiate(&module, class, 48_000.0, 512, Some(&state)).unwrap();
+        assert_eq!(again.state().unwrap(), state);
+    }
+
+    #[test]
+    fn state_blobs_round_trip() {
+        let blob = pack(b"component", b"controller");
+        assert_eq!(unpack(&blob), Some((&b"component"[..], &b"controller"[..])));
+        assert_eq!(unpack(b"junk"), None);
+        assert_eq!(unpack(&blob[..10]), None); // cut short
     }
 }

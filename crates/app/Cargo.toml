@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 tempo-engine = { path = "../engine" }
+serde_json = "1"
 # gpui-pre: a weekly crates.io republish of Zed's gpui, since Zed's own release is stale and its
 # git repo can't be a dependency. 0.3.9 is zed@93d7456 plus labeled packaging edits, checked with
 # scripts/check-gpui-pre.py; rerun it when bumping.

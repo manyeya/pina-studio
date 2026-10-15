@@ -16,6 +16,7 @@ pub const BEATS_PER_BAR: u64 = 4;
 
 pub const FILE: &str = "project.json";
 pub const AUDIO_DIR: &str = "Audio Files";
+pub const STATES_DIR: &str = "Plugin States";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Project {
@@ -25,6 +26,9 @@ pub struct Project {
     #[serde(default)]
     pub master_volume_db: f32,
     pub tracks: Vec<Track>,
+    /// Aux channels: tracks send to them by bus number, and they play into the master.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auxes: Vec<Aux>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -53,6 +57,34 @@ pub struct Track {
     /// Volume and pan over time. A parameter with points follows them instead of its fader.
     #[serde(default, skip_serializing_if = "Automation::is_empty")]
     pub automation: Automation,
+    /// Post-fader sends to aux buses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sends: Vec<AuxSend>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct AuxSend {
+    pub bus: u32,
+    #[serde(default)]
+    pub level_db: f32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Aux {
+    /// As `Track::id`.
+    #[serde(skip)]
+    pub id: u64,
+    /// The bus it listens to.
+    pub bus: u32,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inserts: Vec<PluginRef>,
+    #[serde(default)]
+    pub volume_db: f32,
+    #[serde(default)]
+    pub pan: f32,
+    #[serde(default)]
+    pub mute: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -147,6 +179,16 @@ pub struct PluginRef {
     pub path: PathBuf,
     /// The class name, for bundles with more than one plugin.
     pub class: String,
+    /// Its settings, saved under `Plugin States/` in the project folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<PathBuf>,
+}
+
+impl PluginRef {
+    /// Which plugin this is, settings aside.
+    pub fn same_plugin(&self, other: &PluginRef) -> bool {
+        self.path == other.path && self.class == other.class
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -199,6 +241,7 @@ impl Project {
             sample_rate,
             master_volume_db: 0.0,
             tracks: Vec::new(),
+            auxes: Vec::new(),
         }
     }
 
@@ -225,11 +268,27 @@ impl Project {
         std::fs::write(&path, json + "\n").map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    /// Gives every track that has none an id.
+    /// Gives every track and aux that has none an id.
     pub fn assign_ids(&mut self) {
         for t in self.tracks.iter_mut().filter(|t| t.id == 0) {
             t.id = next_id();
         }
+        for a in self.auxes.iter_mut().filter(|a| a.id == 0) {
+            a.id = next_id();
+        }
+    }
+
+    /// Adds an aux on the next free bus, as Logic does when a send picks a new bus; returns the
+    /// bus.
+    pub fn add_aux(&mut self) -> u32 {
+        let bus = self.auxes.iter().map(|a| a.bus).max().unwrap_or(0) + 1;
+        self.auxes.push(Aux {
+            id: next_id(),
+            bus,
+            name: format!("Aux {bus}"),
+            ..Default::default()
+        });
+        bus
     }
 
     /// Ticks to samples at `rate`.

@@ -5,5 +5,6 @@ pub mod player;
 pub mod plugin;
 pub mod project;
 pub mod record;
+pub mod scan;
 pub mod session;
 pub mod synth;

@@ -1,9 +1,10 @@
 //! The live engine, from the main thread: plays through the output device and follows the
-//! project as it's edited, keeping each track's instrument and plugins through every edit.
+//! project as it's edited, keeping each track's and aux's plugins through every edit. It also
+//! opens plugins' editors and saves their settings.
 
 use std::{
-    collections::HashMap,
-    path::Path,
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -11,25 +12,42 @@ use std::{
 
 use crate::{
     engine::{
-        AudioFiles, Engine, Garbage, Link, LiveNote, MASTER, MAX_BLOCK, Modules, Msg, Played,
-        SLOTS, Shared, compile, make_lane,
+        AudioFiles, Engine, Garbage, LanePlugins, Link, LiveNote, MASTER, MAX_BLOCK, Modules, Msg,
+        Played, SLOTS, Shared, compile, make_lane,
     },
     midi::{self, LiveInput},
     peaks::Peaks,
-    plugin::Plugin,
-    project::{Instrument, PluginRef, Project, Track},
+    plugin::{Editor, Plugin},
+    project::{Instrument, PluginRef, Project, STATES_DIR},
 };
 
-/// A track's lane: which slot it's in, what it was built from, and its plugins' main-thread
-/// halves.
+/// A lane: which slot it's in, what it was built from, its latency, and its plugins'
+/// main-thread halves.
 struct Slot {
     slot: usize,
-    sound: (Option<Instrument>, Vec<PluginRef>),
-    _plugins: Vec<Plugin>,
+    sound: Sound,
+    latency: u32,
+    plugins: LanePlugins,
 }
 
-fn sound(t: &Track) -> (Option<Instrument>, Vec<PluginRef>) {
-    (t.instrument.clone(), t.inserts.clone())
+/// Which plugins make a lane's sound, settings aside: the instrument (`Some(None)` for the
+/// built-in synth) and the inserts.
+type Sound = (Option<Option<(PathBuf, String)>>, Vec<(PathBuf, String)>);
+
+fn sound(instrument: Option<&Instrument>, inserts: &[PluginRef]) -> Sound {
+    let key = |r: &PluginRef| (r.path.clone(), r.class.clone());
+    let instrument = instrument.map(|i| match i {
+        Instrument::Synth => None,
+        Instrument::Vst3(r) => Some(key(r)),
+    });
+    (instrument, inserts.iter().map(key).collect())
+}
+
+/// A plugin on a track or aux.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Which {
+    Instrument,
+    Insert(usize),
 }
 
 pub struct Player {
@@ -46,6 +64,9 @@ pub struct Player {
     live: LiveInput,
     played: rtrb::Consumer<Played>,
     _midi: Vec<midir::MidiInputConnection<()>>,
+    dir: PathBuf,
+    /// Open plugin editors, by track or aux id.
+    editors: HashMap<(u64, Which), Editor>,
 }
 
 impl Player {
@@ -79,6 +100,8 @@ impl Player {
             modules: Modules::new(),
             files: AudioFiles::new(dir, rate),
             _stream: None,
+            dir: dir.to_path_buf(),
+            editors: HashMap::new(),
         };
         (player, engine)
     }
@@ -106,49 +129,135 @@ impl Player {
         player
     }
 
-    /// Brings the engine up to date with `project`: builds lanes for new tracks (and for tracks
-    /// whose instrument or inserts changed), drops lanes of deleted tracks, and swaps in what
-    /// every track plays.
+    /// Brings the engine up to date with `project`: builds lanes for new tracks and auxes (and for
+    /// those whose instrument or inserts changed), drops lanes of deleted ones, and swaps in what
+    /// everything plays.
     pub fn sync(&mut self, project: &Project) -> Result<(), String> {
         self.collect();
-        let current: HashMap<u64, &Track> = project.tracks.iter().map(|t| (t.id, t)).collect();
+        let channels: Vec<(u64, Option<&Instrument>, &[PluginRef])> = project
+            .tracks
+            .iter()
+            .map(|t| (t.id, t.instrument.as_ref(), &t.inserts[..]))
+            .chain(project.auxes.iter().map(|a| (a.id, None, &a.inserts[..])))
+            .collect();
+        let current: HashMap<u64, Sound> = channels
+            .iter()
+            .map(|&(id, instrument, inserts)| (id, sound(instrument, inserts)))
+            .collect();
         let stale: Vec<u64> = self
             .lanes
             .iter()
-            .filter(|(id, s)| current.get(id).is_none_or(|t| sound(t) != s.sound))
+            .filter(|(id, s)| current.get(id) != Some(&s.sound))
             .map(|(id, _)| *id)
             .collect();
         for id in stale {
+            // Editors close before their plugins go; the engine lets the processors go after.
+            self.editors.retain(|(of, _), _| *of != id);
             let s = self.lanes.remove(&id).unwrap();
             self.send(Msg::Remove(s.slot))?;
             self.free.push(s.slot);
         }
-        for t in &project.tracks {
-            if self.lanes.contains_key(&t.id) {
+        let mut problems = Vec::new();
+        for &(id, instrument, inserts) in &channels {
+            if self.lanes.contains_key(&id) {
                 continue;
             }
             let slot = self.free.pop().ok_or("too many tracks")?;
-            let (lane, plugins) = make_lane(t, self.rate, &mut self.modules).inspect_err(|_| {
-                self.free.push(slot);
-            })?;
+            // A plugin that won't load leaves its track silent rather than stopping the rest.
+            let made = make_lane(instrument, inserts, self.rate, &mut self.modules, &self.dir);
+            let (lane, plugins, latency) = made.unwrap_or_else(|e| {
+                problems.push(e);
+                let empty = make_lane(None, &[], self.rate, &mut self.modules, &self.dir);
+                empty.expect("a lane without plugins always builds")
+            });
             self.send(Msg::Insert(slot, Box::new(lane)))?;
-            let sound = sound(t);
+            let sound = sound(instrument, inserts);
             self.lanes.insert(
-                t.id,
+                id,
                 Slot {
                     slot,
                     sound,
-                    _plugins: plugins,
+                    latency,
+                    plugins,
                 },
             );
         }
-        let slots: Vec<usize> = project
-            .tracks
-            .iter()
-            .map(|t| self.lanes[&t.id].slot)
-            .collect();
-        let arrangement = compile(project, self.rate, &slots, &mut self.files)?;
-        self.send(Msg::Arrange(Box::new(arrangement)))
+        let lane = |id: &u64| (self.lanes[id].slot, self.lanes[id].latency);
+        let tracks: Vec<_> = project.tracks.iter().map(|t| lane(&t.id)).collect();
+        let auxes: Vec<_> = project.auxes.iter().map(|a| lane(&a.id)).collect();
+        let (arrangement, missing) = compile(project, self.rate, &tracks, &auxes, &mut self.files);
+        problems.extend(missing);
+        self.send(Msg::Arrange(Box::new(arrangement)))?;
+        match problems.is_empty() {
+            true => Ok(()),
+            false => Err(problems.join("; ")),
+        }
+    }
+
+    fn plugin(&self, id: u64, which: Which) -> Option<&Plugin> {
+        let plugins = &self.lanes.get(&id)?.plugins;
+        match which {
+            Which::Instrument => plugins.instrument.as_ref(),
+            Which::Insert(i) => plugins.inserts.get(i),
+        }
+    }
+
+    /// Opens (or brings back) a plugin's editor. Main thread only.
+    pub fn open_editor(&mut self, id: u64, which: Which) -> Result<(), String> {
+        if let Some(e) = self.editors.get(&(id, which)) {
+            e.show();
+            return Ok(());
+        }
+        let mtm = objc2::MainThreadMarker::new().ok_or("editors open on the main thread")?;
+        let plugin = self.plugin(id, which).ok_or("no plugin there")?;
+        let editor = plugin.open_editor(mtm)?;
+        self.editors.insert((id, which), editor);
+        Ok(())
+    }
+
+    /// Writes every plugin's settings into `Plugin States/` and points the project at them, so
+    /// saving the project saves them. Files no longer used are removed.
+    pub fn save_states(&self, project: &mut Project) -> Result<(), String> {
+        let dir = self.dir.join(STATES_DIR);
+        let err = |e: std::io::Error| format!("{}: {e}", dir.display());
+        std::fs::create_dir_all(&dir).map_err(err)?;
+        let mut kept = HashSet::new();
+        let mut save = |r: &mut PluginRef, p: &Plugin, name: String| -> Result<(), String> {
+            if let Some(bytes) = p.state() {
+                let file = PathBuf::from(STATES_DIR).join(name);
+                std::fs::write(self.dir.join(&file), bytes).map_err(err)?;
+                kept.insert(self.dir.join(&file));
+                r.state = Some(file);
+            }
+            Ok(())
+        };
+        for (n, t) in project.tracks.iter_mut().enumerate() {
+            let Some(slot) = self.lanes.get(&t.id) else {
+                continue;
+            };
+            if let (Some(Instrument::Vst3(r)), Some(p)) =
+                (&mut t.instrument, &slot.plugins.instrument)
+            {
+                save(r, p, format!("Track {} instrument.state", n + 1))?;
+            }
+            for (i, (r, p)) in t.inserts.iter_mut().zip(&slot.plugins.inserts).enumerate() {
+                save(r, p, format!("Track {} insert {}.state", n + 1, i + 1))?;
+            }
+        }
+        for a in &mut project.auxes {
+            let Some(slot) = self.lanes.get(&a.id) else {
+                continue;
+            };
+            for (i, (r, p)) in a.inserts.iter_mut().zip(&slot.plugins.inserts).enumerate() {
+                save(r, p, format!("Aux {} insert {}.state", a.bus, i + 1))?;
+            }
+        }
+        for entry in std::fs::read_dir(&dir).map_err(err)?.flatten() {
+            if !kept.contains(&entry.path()) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        Ok(())
     }
 
     fn send(&mut self, msg: Msg) -> Result<(), String> {
@@ -215,7 +324,7 @@ impl Player {
         std::iter::from_fn(|| self.played.pop().ok()).collect()
     }
 
-    /// A track's peak level since the last call.
+    /// A track's or aux's peak level since the last call.
     pub fn meter(&self, track: u64) -> f32 {
         self.lanes
             .get(&track)
@@ -230,5 +339,51 @@ impl Player {
     /// The waveform overview of an audio file in the project.
     pub fn peaks(&self, file: &Path) -> Option<Arc<Peaks>> {
         self.files.peaks(file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::Track;
+
+    /// With a real instrument, which CI doesn't have:
+    /// `TEMPO_TEST_VST3="/path/Some Synth.vst3" cargo test -p tempo-engine -- --ignored`
+    #[test]
+    #[ignore]
+    fn plugin_settings_are_saved_with_the_project_and_loaded_back() {
+        let path = std::env::var("TEMPO_TEST_VST3").expect("set TEMPO_TEST_VST3");
+        let class = crate::scan::inspect(Path::new(&path))
+            .unwrap()
+            .remove(0)
+            .class;
+        let dir = std::env::temp_dir().join(format!("tempo-test-states-{}", std::process::id()));
+        let plugin = PluginRef {
+            path: path.into(),
+            class,
+            state: None,
+        };
+        let mut project = Project::new(48_000);
+        project.add_track(
+            0,
+            Track {
+                name: "Synth".into(),
+                instrument: Some(Instrument::Vst3(plugin)),
+                ..Default::default()
+            },
+        );
+        let mut player = Player::silent(&project, &dir);
+        player.sync(&project).unwrap();
+        player.save_states(&mut project).unwrap();
+        let Some(Instrument::Vst3(r)) = &project.tracks[0].instrument else {
+            unreachable!()
+        };
+        let file = r.state.clone().expect("a state file");
+        assert!(dir.join(&file).exists());
+        // A bounce of the saved project loads it.
+        project.save(&dir).unwrap();
+        let loaded = Project::load(&dir).unwrap();
+        assert!(Engine::load(&loaded, &dir, 48_000.0).is_ok());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

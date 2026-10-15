@@ -13,7 +13,8 @@ use gpui::{
 };
 use tempo_engine::{
     player::Player,
-    project::{BEATS_PER_BAR, Content, PPQ},
+    project::{AuxSend, BEATS_PER_BAR, Content, PPQ},
+    scan::PluginInfo,
     session::Session,
 };
 
@@ -293,4 +294,95 @@ fn musical_typing_records_a_midi_region(cx: &mut TestAppContext) {
     let notes = keys_notes(&ws, cx, 1);
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].1, 60);
+}
+
+fn click_on(
+    cx: &mut VisualTestContext,
+    name: &'static str,
+    modifiers: Modifiers,
+    button: MouseButton,
+) {
+    let b = cx
+        .debug_bounds(name)
+        .unwrap_or_else(|| panic!("no {name} on screen"));
+    let at = b.center();
+    cx.simulate_mouse_down(at, button, modifiers);
+    cx.simulate_mouse_up(at, button, modifiers);
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn a_send_to_a_new_aux_and_its_level(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    click_on(cx, "add-send-0", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.menu.is_some()));
+    click_on(cx, "menu-0", Modifiers::none(), MouseButton::Left); // the only bus: New Aux
+    let (auxes, sends) = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        (p.auxes.len(), p.tracks[0].sends.clone())
+    });
+    assert_eq!(auxes, 1);
+    assert_eq!(
+        sends,
+        [AuxSend {
+            bus: 1,
+            level_db: 0.0
+        }]
+    );
+
+    // Dragging the send down 20 pixels takes 10 dB off.
+    let at = cx.debug_bounds("send-0-0").unwrap().center();
+    drag(cx, at, at + point(px(0.), px(20.)));
+    let level = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].sends[0].level_db);
+    assert_eq!(level, -10.0);
+    // The mixer has a strip for the aux.
+    assert!(cx.debug_bounds("strip-Aux(0)").is_none());
+    cx.simulate_keystrokes("x");
+    assert!(cx.debug_bounds("strip-Aux(0)").is_some());
+}
+
+#[gpui::test]
+fn a_plugin_that_wont_load_is_reported_and_removable(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let missing = PluginInfo {
+        path: "/nowhere/Missing.vst3".into(),
+        class: "Missing".into(),
+        vendor: "Nobody".into(),
+        instrument: false,
+    };
+    ws.update(cx, |ws, _| ws.plugins = Some(vec![missing]));
+    // The Keys strip's empty insert slot offers No Plug-in and the effect.
+    click_on(
+        cx,
+        "slot-Track(0)-Insert(0)",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    let items = ws.read_with(cx, |ws, _| ws.menu.as_ref().unwrap().items.len());
+    assert_eq!(items, 2);
+    click_on(cx, "menu-1", Modifiers::none(), MouseButton::Left);
+    let (inserts, status) = ws.read_with(cx, |ws, _| {
+        (
+            ws.session.project.tracks[0].inserts.len(),
+            ws.status.clone(),
+        )
+    });
+    assert_eq!(inserts, 1);
+    assert!(status.unwrap().contains("Missing.vst3"));
+
+    // Right-click the slot and take it out again: the error goes with it.
+    click_on(
+        cx,
+        "slot-Track(0)-Insert(0)",
+        Modifiers::none(),
+        MouseButton::Right,
+    );
+    click_on(cx, "menu-0", Modifiers::none(), MouseButton::Left);
+    let (inserts, status) = ws.read_with(cx, |ws, _| {
+        (
+            ws.session.project.tracks[0].inserts.len(),
+            ws.status.clone(),
+        )
+    });
+    assert_eq!((inserts, status), (0, None));
 }

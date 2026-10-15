@@ -14,11 +14,13 @@ use tempo_engine::{
     engine::LiveNote,
     player::Player,
     project::{At, BEATS_PER_BAR, Instrument, PPQ, Param, Track},
+    scan::{self, PluginInfo},
     session::Session,
 };
 
 use crate::{
-    strip,
+    menu::Menu,
+    strip::{self, Channel},
     theme::{self, *},
 };
 
@@ -93,14 +95,21 @@ pub enum Drag {
         moved: bool,
     },
     Fader {
-        track: Option<usize>,
+        channel: Channel,
         y: f32,
         pos: f32,
     },
     Pan {
-        track: usize,
+        channel: Channel,
         y: f32,
         pan: f32,
+    },
+    /// A send's level: a dB for every 2 pixels.
+    Send {
+        track: usize,
+        index: usize,
+        y: f32,
+        level: f32,
     },
     Tempo {
         y: f32,
@@ -164,6 +173,10 @@ pub struct Workspace {
     /// Musical typing's octave shift, when it's on; and the notes its held keys play.
     pub typing: Option<i8>,
     typed: HashMap<String, u8>,
+    /// An open pop-up menu.
+    pub menu: Option<Menu>,
+    /// The plugins installed, once the scan is done.
+    pub plugins: Option<Vec<PluginInfo>>,
     pub drag: Option<Drag>,
     /// Meter readings, falling back slowly, by track id.
     pub levels: HashMap<u64, f32>,
@@ -212,6 +225,8 @@ impl Workspace {
             recording: None,
             typing: None,
             typed: HashMap::new(),
+            menu: None,
+            plugins: None,
             drag: None,
             levels: HashMap::new(),
             master_level: 0.0,
@@ -332,15 +347,21 @@ impl Workspace {
                     }
                 }
             }
-            Some(Drag::Fader { track, y, pos }) => {
+            Some(Drag::Fader { channel, y, pos }) => {
                 let db = strip::fader_db((pos - (p.y - y) / FADER_H).clamp(0.0, 1.0));
-                match track {
-                    Some(t) => self.session.project.tracks[t].volume_db = db,
-                    None => self.session.project.master_volume_db = db,
-                }
+                self.set_volume(channel, db);
             }
-            Some(Drag::Pan { track, y, pan }) => {
-                self.session.project.tracks[track].pan = (pan - (p.y - y) / 100.0).clamp(-1.0, 1.0);
+            Some(Drag::Pan { channel, y, pan }) => {
+                self.set_pan(channel, (pan - (p.y - y) / 100.0).clamp(-1.0, 1.0));
+            }
+            Some(Drag::Send {
+                track,
+                index,
+                y,
+                level,
+            }) => {
+                let db = (level - (p.y - y) / 2.0).clamp(strip::SILENT, 6.0);
+                self.session.project.tracks[track].sends[index].level_db = db;
             }
             Some(Drag::Tempo { y, bpm }) => {
                 self.session.project.tempo =
@@ -633,7 +654,10 @@ impl Workspace {
     }
 
     fn save(&mut self, cx: &mut Context<Self>) -> bool {
-        let result = self.session.save();
+        let result = self
+            .player
+            .save_states(&mut self.session.project)
+            .and_then(|()| self.session.save());
         self.status = Some(match &result {
             Ok(()) => format!("Saved {}", self.session.dir.display()),
             Err(e) => e.clone(),
@@ -921,15 +945,21 @@ impl Workspace {
                     .flex()
                     .gap_1()
                     .when(has_track, |d| {
-                        d.child(strip::strip(self, Some(self.track), cx))
+                        d.child(strip::strip(self, Channel::Track(self.track), cx))
                     })
-                    .child(strip::strip(self, None, cx)),
+                    .child(strip::strip(self, Channel::Master, cx)),
             )
     }
 
     fn mixer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let strips: Vec<Div> = (0..self.session.project.tracks.len())
-            .map(|i| strip::strip(self, Some(i), cx))
+        let project = &self.session.project;
+        let channels: Vec<Channel> = (0..project.tracks.len())
+            .map(Channel::Track)
+            .chain((0..project.auxes.len()).map(Channel::Aux))
+            .collect();
+        let strips: Vec<Div> = channels
+            .into_iter()
+            .map(|ch| strip::strip(self, ch, cx))
             .collect();
         div()
             .h(px(MIXER_H))
@@ -953,8 +983,28 @@ impl Workspace {
                     .p_1()
                     .border_l_1()
                     .border_color(rgb(BORDER))
-                    .child(strip::strip(self, None, cx)),
+                    .child(strip::strip(self, Channel::Master, cx)),
             )
+    }
+
+    /// Finds the installed plugins in the background, for the plugin menus.
+    pub fn start_scan(&mut self, cx: &mut Context<Self>) {
+        let Ok(exe) = std::env::current_exe() else {
+            self.plugins = Some(Vec::new());
+            return;
+        };
+        let found = cx.background_spawn(async move {
+            scan::scan(&exe, &scan::bundles(&scan::folders()), &scan::cache_file())
+        });
+        cx.spawn(async move |this, cx| {
+            let plugins = found.await;
+            this.update(cx, |ws, cx| {
+                ws.plugins = Some(plugins);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 }
 
@@ -1075,5 +1125,6 @@ impl Render for Workspace {
                 )
             })
             .when(self.drag.is_some(), |d| d.child(self.drag_listener(cx)))
+            .children(self.menu_view(cx))
     }
 }

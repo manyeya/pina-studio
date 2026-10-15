@@ -1,3 +1,4 @@
+mod menu;
 mod pianoroll;
 mod record;
 mod strip;
@@ -32,6 +33,9 @@ fn main() {
     let result = match args.as_slice() {
         ["render", dir, out] => render(Path::new(dir), Path::new(out)),
         ["play", dir] => play(Path::new(dir)),
+        // What a plugin bundle holds, as JSON: run by the plugin scan, one bundle per process.
+        ["__scan", bundle] => tempo_engine::scan::inspect(Path::new(bundle))
+            .map(|p| println!("{}", serde_json::to_string(&p).unwrap())),
         ["-h" | "--help" | "help"] => {
             println!("{USAGE}");
             Ok(())
@@ -92,7 +96,11 @@ fn open(dir: &Path) -> Result<(), String> {
             ..Default::default()
         };
         cx.open_window(options, |window, cx| {
-            cx.new(|cx| Workspace::new(session, player, window, cx))
+            cx.new(|cx| {
+                let mut ws = Workspace::new(session, player, window, cx);
+                ws.start_scan(cx);
+                ws
+            })
         })
         .unwrap();
         cx.on_window_closed(|cx, _| cx.quit()).detach();
@@ -102,7 +110,9 @@ fn open(dir: &Path) -> Result<(), String> {
 }
 
 /// Loads a project and its engine, and how long it plays for, in samples.
-fn load(dir: &Path) -> Result<(Project, Engine, Vec<tempo_engine::plugin::Plugin>, u64), String> {
+type Loaded = (Project, Engine, Vec<tempo_engine::engine::LanePlugins>, u64);
+
+fn load(dir: &Path) -> Result<Loaded, String> {
     let project = Project::load(dir)?;
     let rate = project.sample_rate as f64;
     let (engine, plugins) = Engine::load(&project, dir, rate)?;

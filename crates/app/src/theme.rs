@@ -17,6 +17,7 @@ pub const TEXT: u32 = 0xdedee2;
 pub const TEXT_DIM: u32 = 0x8e8e94;
 pub const MIDI: u32 = 0x4fae5a;
 pub const AUDIO: u32 = 0x3f86e0;
+pub const AUX: u32 = 0xb07ad6;
 pub const MUTE: u32 = 0x3f95ee;
 pub const SOLO: u32 = 0xf0c63c;
 pub const PLAYING: u32 = 0x4cd964;
@@ -36,7 +37,7 @@ pub const RULER_H: f32 = 28.0;
 pub const LANE_H: f32 = 64.0;
 pub const STRIP_W: f32 = 82.0;
 pub const FADER_H: f32 = 150.0;
-pub const MIXER_H: f32 = 330.0;
+pub const MIXER_H: f32 = 420.0;
 pub const ROLL_H: f32 = 300.0;
 
 pub const MONO: &str = "Menlo";
