@@ -17,7 +17,7 @@ use crate::{
     },
     midi::{self, LiveInput},
     peaks::Peaks,
-    plugin::{Editor, Plugin},
+    plugin::{Editor, Plugin, PluginParam},
     project::{Instrument, PluginRef, Project, STATES_DIR},
 };
 
@@ -334,16 +334,69 @@ impl Player {
         std::iter::from_fn(|| self.played.pop().ok()).collect()
     }
 
-    /// A track's or aux's peak level since the last call.
-    pub fn meter(&self, track: u64) -> f32 {
+    /// A track's or aux's peak level since the last call, left and right.
+    pub fn meter(&self, track: u64) -> [f32; 2] {
         self.lanes
             .get(&track)
-            .map_or(0.0, |s| self.shared.take_meter(s.slot))
+            .map_or([0.0; 2], |s| self.shared.take_meter(s.slot))
     }
 
-    /// The master's peak level since the last call.
-    pub fn master_meter(&self) -> f32 {
+    /// The master's peak level since the last call, left and right.
+    pub fn master_meter(&self) -> [f32; 2] {
         self.shared.take_meter(MASTER)
+    }
+
+    /// How far a track's or aux's compressor (or the master's, with None) turned it down since the
+    /// last call, in dB.
+    pub fn reduction(&self, track: Option<u64>) -> f32 {
+        match track {
+            Some(id) => self
+                .lanes
+                .get(&id)
+                .map_or(0.0, |s| self.shared.take_reduction(s.slot)),
+            None => self.shared.take_reduction(MASTER),
+        }
+    }
+
+    /// The busiest the audio thread has been since the last call: 1 is all of its time.
+    pub fn load(&self) -> f32 {
+        self.shared.take_load()
+    }
+
+    /// The output device's buffer, in frames; 0 before it's asked for one.
+    pub fn buffer(&self) -> u32 {
+        self.shared.buffer()
+    }
+
+    pub fn set_metronome(&self, on: bool) {
+        self.shared.set_metronome(on);
+    }
+
+    pub fn metronome(&self) -> bool {
+        self.shared.metronome()
+    }
+
+    /// A plugin's parameters, as its controller has them now.
+    pub fn params(&self, id: u64, which: Which) -> Vec<PluginParam> {
+        self.plugin(id, which).map_or(Vec::new(), Plugin::params)
+    }
+
+    /// Sets a plugin's parameter (0 to 1), as if turned in its editor.
+    pub fn set_param(&self, id: u64, which: Which, param: u32, value: f64) {
+        if let Some(p) = self.plugin(id, which) {
+            p.set_param(param, value);
+        }
+    }
+
+    /// A plugin parameter's value now, from 0 to 1.
+    pub fn param_value(&self, id: u64, which: Which, param: u32) -> f64 {
+        self.plugin(id, which).map_or(0.0, |p| p.param_value(param))
+    }
+
+    /// A parameter's value as the plugin shows it, units and all.
+    pub fn param_text(&self, id: u64, which: Which, param: u32, value: f64) -> String {
+        self.plugin(id, which)
+            .map_or(String::new(), |p| p.param_text(param, value))
     }
 
     /// The waveform overview of an audio file in the project.

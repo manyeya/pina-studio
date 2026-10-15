@@ -1,9 +1,16 @@
-//! A pop-up list of choices, like the plugin and bus menus on Logic's channel strips.
+//! A pop-up list of choices: plugins and buses on the channel strips, keys, markers, snap.
 
 use gpui::{Context, MouseButton, Pixels, Point, anchored, deferred, div, prelude::*, px, rgb};
-use tempo_engine::project::{At, AuxSend, Content, Instrument, PatternRow, PluginRef};
+use tempo_engine::{
+    music::NoteEdit,
+    project::{At, AuxSend, Comp, Content, Eq, Instrument, PatternRow, PluginRef},
+};
 
-use crate::{strip::Channel, theme::*, workspace::Workspace};
+use crate::{
+    strip::{Builtin, Channel},
+    theme::*,
+    workspace::{Snap, Workspace},
+};
 
 pub struct Menu {
     pub at: Point<Pixels>,
@@ -22,6 +29,15 @@ pub enum MenuAction {
         channel: Channel,
         index: usize,
         plugin: Option<PluginRef>,
+    },
+    /// Adds a channel's built-in EQ or compressor, or takes it out.
+    AddBuiltin {
+        channel: Channel,
+        builtin: Builtin,
+    },
+    RemoveBuiltin {
+        channel: Channel,
+        builtin: Builtin,
     },
     /// Sends a track to a bus, or to a new aux.
     Send {
@@ -42,16 +58,56 @@ pub enum MenuAction {
     NewTrack {
         instrument: Option<Instrument>,
     },
+    /// The song's key, or None to work it out from the notes.
+    Key(Option<String>),
+    /// Quantizes the selected region to a grid (ticks).
+    Quantize(u64),
+    Snap(Snap),
+    /// The track whose notes the piano roll shows faintly, by id.
+    Ghost(Option<u64>),
+    /// Names a marker, or adds one at a tick.
+    NameMarker(usize, String),
+    AddMarker(u64, String),
+    DeleteMarker(usize),
+    Save,
+    Export,
 }
+
+/// What markers are usually called.
+pub const MARKER_NAMES: [&str; 9] = [
+    "Intro",
+    "Verse",
+    "Pre-Chorus",
+    "Chorus",
+    "Bridge",
+    "Breakdown",
+    "Drop",
+    "Solo",
+    "Outro",
+];
 
 impl Workspace {
     pub fn choose(&mut self, action: MenuAction, cx: &mut Context<Self>) {
         self.menu = None;
         match action {
             MenuAction::Nothing => {}
-            MenuAction::Instrument { track, instrument } => self.edit(cx, |ws| {
-                ws.session.project.tracks[track].instrument = Some(instrument);
-            }),
+            MenuAction::Instrument { track, instrument } => {
+                let t = &self.session.project.tracks[track];
+                let audio = t
+                    .regions
+                    .iter()
+                    .any(|r| matches!(r.content, Content::Audio { .. }));
+                if t.instrument.is_none() && audio {
+                    self.status = Some(format!(
+                        "{} has audio on it: instruments go on instrument tracks.",
+                        t.name
+                    ));
+                } else {
+                    self.edit(cx, |ws| {
+                        ws.session.project.tracks[track].instrument = Some(instrument);
+                    });
+                }
+            }
             MenuAction::Insert {
                 channel,
                 index,
@@ -65,6 +121,27 @@ impl Workspace {
                     Some(p) => list.push(p),
                     None if index < list.len() => drop(list.remove(index)),
                     None => {}
+                }
+            }),
+            MenuAction::AddBuiltin { channel, builtin } => {
+                self.channel = channel;
+                self.edit(cx, |ws| {
+                    let (eq, comp) = ws.strip_dsp_mut(channel);
+                    match builtin {
+                        Builtin::Eq => {
+                            eq.get_or_insert_with(Eq::default);
+                        }
+                        Builtin::Comp => {
+                            comp.get_or_insert_with(Comp::default);
+                        }
+                    }
+                })
+            }
+            MenuAction::RemoveBuiltin { channel, builtin } => self.edit(cx, |ws| {
+                let (eq, comp) = ws.strip_dsp_mut(channel);
+                match builtin {
+                    Builtin::Eq => *eq = None,
+                    Builtin::Comp => *comp = None,
                 }
             }),
             MenuAction::Send { track, bus } => self.edit(cx, |ws| {
@@ -88,6 +165,39 @@ impl Workspace {
                 }
             }),
             MenuAction::NewTrack { instrument } => self.new_track(instrument, cx),
+            MenuAction::Key(key) => self.edit(cx, |ws| ws.session.project.key = key),
+            MenuAction::Quantize(grid) => {
+                self.roll.grid = grid;
+                if let Some(at) = self.region {
+                    let edit = NoteEdit::Quantize {
+                        grid,
+                        strength: self.roll.strength,
+                        swing: self.roll.swing,
+                    };
+                    self.edit_notes(at, edit, cx);
+                }
+            }
+            MenuAction::Snap(snap) => self.snap = snap,
+            MenuAction::Ghost(id) => self.roll.ghost = id,
+            MenuAction::NameMarker(i, name) => self.edit(cx, |ws| {
+                if let Some(m) = ws.session.project.markers.get_mut(i) {
+                    m.name = name;
+                }
+            }),
+            MenuAction::AddMarker(tick, name) => self.edit(cx, |ws| {
+                let markers = &mut ws.session.project.markers;
+                let at = markers.partition_point(|m| m.tick <= tick);
+                markers.insert(at, tempo_engine::project::Marker { tick, name });
+            }),
+            MenuAction::DeleteMarker(i) => self.edit(cx, |ws| {
+                if i < ws.session.project.markers.len() {
+                    ws.session.project.markers.remove(i);
+                }
+            }),
+            MenuAction::Save => {
+                self.save(cx);
+            }
+            MenuAction::Export => self.export(cx),
         }
         cx.notify();
     }
@@ -100,13 +210,20 @@ impl Workspace {
             .enumerate()
             .map(|(i, (label, action))| {
                 let action = action.clone();
+                let inert = matches!(action, MenuAction::Nothing);
                 div()
-                    .px_2()
-                    .py_1()
-                    .rounded(px(3.))
-                    .text_size(px(12.))
+                    .h(px(28.))
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(6.))
+                    .text_size(px(12.5))
                     .whitespace_nowrap()
-                    .hover(|s| s.bg(rgb(0x3d6fd6)))
+                    .text_color(rgb(if inert { TEXT_3 } else { TEXT }))
+                    .when(!inert, |d| {
+                        d.cursor_pointer()
+                            .hover(|s| s.bg(rgb(ACCENT)).text_color(rgb(0xffffff)))
+                    })
                     .debug_selector(move || format!("menu-{i}"))
                     .child(label.clone())
                     .on_mouse_down(
@@ -121,14 +238,15 @@ impl Workspace {
         let list = div()
             .id("menu")
             .min_w(px(200.))
-            .max_h(px(420.))
+            .max_h(px(440.))
             .overflow_y_scroll()
-            .p_1()
-            .rounded(px(6.))
-            .bg(rgb(0x2c2c30))
+            .p(px(4.))
+            .rounded(px(10.))
+            .bg(rgb(0x1c1c22))
             .border_1()
-            .border_color(rgb(0x4a4a50))
+            .border_color(rgb(LINE_STRONG))
             .shadow_lg()
+            .font_family(SANS)
             .text_color(rgb(TEXT))
             .children(items)
             .on_mouse_down_out(cx.listener(|ws, _, _, cx| {

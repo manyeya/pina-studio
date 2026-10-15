@@ -187,12 +187,18 @@ fn split_at_the_playhead(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn mute_from_the_track_header(cx: &mut TestAppContext) {
+fn mute_solo_and_arm_from_the_track_header(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
-    // M sits 46 px in from the header's right edge, which is the lanes' left edge.
-    let m = spot(&ws, cx, 0, 1) - point(px(47.), px(0.));
-    cx.simulate_click(m, Modifiers::none());
-    assert!(ws.read_with(cx, |ws, _| ws.session.project.tracks[1].mute));
+    click_on(cx, "mute-1", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "solo-2", Modifiers::none(), MouseButton::Left);
+    let (mute, solo) = ws.read_with(cx, |ws, _| {
+        let t = &ws.session.project.tracks;
+        (t[1].mute, t[2].solo)
+    });
+    assert!(mute && solo);
+    // R arms a track for recording: it's the one recording goes to.
+    click_on(cx, "arm-2", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.track), 2);
 }
 
 #[gpui::test]
@@ -246,8 +252,11 @@ fn automation_points_are_added_dragged_and_deleted(cx: &mut TestAppContext) {
             ws.session.project.tracks[1].automation.volume.clone()
         })
     };
-    // Click near the top of Lead's lane at beat 2: a loud point.
-    let top = spot(&ws, cx, PPQ, 1) - point(px(0.), px(LANE_H / 2.0 - 8.));
+    // Click near the top of Lead's automation lane, under its track, at beat 2: a loud point.
+    let lane = cx
+        .debug_bounds("auto-lane-1")
+        .expect("automation lanes show");
+    let top = point(spot(&ws, cx, PPQ, 1).x, lane.origin.y + px(8.));
     cx.simulate_mouse_down(top, MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
     cx.simulate_mouse_up(top, MouseButton::Left, Modifiers::none());
@@ -369,8 +378,9 @@ fn a_plugin_that_wont_load_is_reported_and_removable(cx: &mut TestAppContext) {
         Modifiers::none(),
         MouseButton::Left,
     );
+    // No Plug-in, the effect, and the built-in EQ and compressor.
     let items = ws.read_with(cx, |ws, _| ws.menu.as_ref().unwrap().items.len());
-    assert_eq!(items, 2);
+    assert_eq!(items, 4);
     click_on(cx, "menu-1", Modifiers::none(), MouseButton::Left);
     let (inserts, status) = ws.read_with(cx, |ws, _| {
         (
@@ -435,6 +445,17 @@ fn agents_edit_the_open_project_through_its_socket(cx: &mut TestAppContext) {
         tempo_engine::project::Project::load(&dir).unwrap().tempo,
         100.0
     );
+    // The window shows where the agent was working.
+    let (what, track) = ws.read_with(cx, |ws, _| {
+        let a = ws.agent.last().unwrap();
+        (a.what.clone(), a.track)
+    });
+    assert_eq!((what.as_str(), track), ("set tempo", None));
+    ask(cx, r#"{"op": "set_track", "track": 1, "mute": true}"#).unwrap();
+    let a = ws
+        .read_with(cx, |ws, _| ws.agent_presence().cloned())
+        .unwrap();
+    assert_eq!((a.what.as_str(), a.track), ("set track · Lead", Some(1)));
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -636,4 +657,202 @@ fn the_score_shows_a_regions_notes_to_select_and_delete(cx: &mut TestAppContext)
             .len()),
         before - 1
     );
+}
+
+#[gpui::test]
+fn the_cycle_turns_on_and_is_swept_out_in_the_ruler(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let cycle = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.session.project.cycle);
+    // The transport's button, with nothing selected: four bars from the playhead's bar.
+    click_on(cx, "cycle", Modifiers::none(), MouseButton::Left);
+    let c = cycle(cx).unwrap();
+    assert_eq!((c.start, c.end, c.off), (0, BAR * 4, false));
+    click_on(cx, "cycle", Modifiers::none(), MouseButton::Left);
+    assert!(cycle(cx).unwrap().off);
+    // Sweeping the strip along the ruler's top sets it, from bar 2 to bar 4.
+    let ruler = cx.debug_bounds("ruler").unwrap();
+    let y = ruler.origin.y + px(4.);
+    drag(
+        cx,
+        point(spot(&ws, cx, BAR, 0).x, y),
+        point(spot(&ws, cx, BAR * 3, 0).x, y),
+    );
+    let c = cycle(cx).unwrap();
+    assert_eq!((c.start, c.end, c.off), (BAR, BAR * 3, false));
+    cx.simulate_keystrokes("cmd-z");
+    assert!(cycle(cx).unwrap().off);
+}
+
+#[gpui::test]
+fn markers_are_added_moved_named_and_deleted(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let markers = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            ws.session
+                .project
+                .markers
+                .iter()
+                .map(|m| (m.tick, m.name.clone()))
+                .collect::<Vec<_>>()
+        })
+    };
+    let row = cx.debug_bounds("markers").unwrap();
+    double_click(cx, point(spot(&ws, cx, BAR + PPQ, 0).x, row.center().y));
+    assert_eq!(markers(cx), [(BAR, "Intro".to_string())]);
+    // Dragged a bar on.
+    let at = cx.debug_bounds("marker-0").unwrap().center();
+    drag(cx, at, at + point(px(48. * 4.), px(0.)));
+    assert_eq!(markers(cx)[0].0, BAR * 2);
+    // Right-click: a name, or delete.
+    click_on(cx, "marker-0", Modifiers::none(), MouseButton::Right);
+    click_on(cx, "menu-3", Modifiers::none(), MouseButton::Left); // Chorus
+    assert_eq!(markers(cx)[0].1, "Chorus");
+    click_on(cx, "marker-0", Modifiers::none(), MouseButton::Right);
+    let last = ws.read_with(cx, |ws, _| ws.menu.as_ref().unwrap().items.len() - 1);
+    let name: &'static str = Box::leak(format!("menu-{last}").into_boxed_str());
+    click_on(cx, name, Modifiers::none(), MouseButton::Left);
+    assert!(markers(cx).is_empty());
+}
+
+#[gpui::test]
+fn the_pencil_draws_the_scissors_cut_and_the_eraser_erases(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let regions = |cx: &VisualTestContext, t: usize| {
+        ws.read_with(cx, |ws, _| {
+            ws.session.project.tracks[t]
+                .regions
+                .iter()
+                .map(|r| (r.start, r.length))
+                .collect::<Vec<_>>()
+        })
+    };
+    click_on(cx, "tool-Pencil", Modifiers::none(), MouseButton::Left);
+    // After the Lead region, in bar 6.
+    cx.simulate_click(spot(&ws, cx, BAR * 5 + PPQ, 1), Modifiers::none());
+    assert_eq!(regions(cx, 1).last(), Some(&(BAR * 5, BAR)));
+
+    click_on(cx, "tool-Scissors", Modifiers::none(), MouseButton::Left);
+    cx.simulate_click(spot(&ws, cx, BAR * 2, 0), Modifiers::none());
+    assert_eq!(regions(cx, 0), [(0, BAR * 2), (BAR * 2, BAR * 2)]);
+
+    click_on(cx, "tool-Eraser", Modifiers::none(), MouseButton::Left);
+    cx.simulate_click(spot(&ws, cx, BAR * 3, 0), Modifiers::none());
+    assert_eq!(regions(cx, 0), [(0, BAR * 2)]);
+}
+
+#[gpui::test]
+fn snap_follows_the_menu(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.grid()), PPQ); // at the default zoom
+    click_on(cx, "snap", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "menu-4", Modifiers::none(), MouseButton::Left); // 1/16
+    assert_eq!(ws.read_with(cx, |ws, _| ws.grid()), PPQ / 4);
+}
+
+#[gpui::test]
+fn the_mixer_shapes_a_channel_with_its_eq_and_compressor(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    cx.simulate_keystrokes("x");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Mixer);
+    // The Keys strip's EQ: clicking the thumbnail adds one, shown in the panel.
+    click_on(cx, "eq-Track(0)", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.session.project.tracks[0].eq.is_some()));
+    // Drag the second band's handle up: a boost.
+    let handle = cx.debug_bounds("eq-band-2").unwrap().center();
+    drag(cx, handle, handle - point(px(0.), px(20.)));
+    let eq = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].eq.unwrap());
+    assert!(eq.high_mid.gain_db > 3.0, "{eq:?}");
+    // A compressor from the add-effect menu, then its threshold turned down.
+    click_on(cx, "add-effect", Modifiers::none(), MouseButton::Left);
+    let items = ws.read_with(cx, |ws, _| ws.menu.as_ref().unwrap().items.clone());
+    let comp = items
+        .iter()
+        .position(|(label, _)| label.starts_with("Compressor"))
+        .unwrap();
+    let name: &'static str = Box::leak(format!("menu-{comp}").into_boxed_str());
+    click_on(cx, name, Modifiers::none(), MouseButton::Left);
+    let knob = cx.debug_bounds("comp-Threshold").unwrap().center();
+    drag(cx, knob, knob + point(px(0.), px(30.)));
+    let threshold = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[0].comp.unwrap().threshold_db
+    });
+    assert!(threshold < -18.0, "{threshold}");
+    // Both undo as edits.
+    cx.simulate_keystrokes("cmd-z cmd-z cmd-z cmd-z");
+    let (eq, comp) = ws.read_with(cx, |ws, _| {
+        (
+            ws.session.project.tracks[0].eq,
+            ws.session.project.tracks[0].comp,
+        )
+    });
+    assert_eq!((eq, comp), (None, None));
+}
+
+#[gpui::test]
+fn smart_controls_turn_the_channel_eq_on_a_built_in_instrument(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    // Keys plays the built-in synth, so its Smart Controls are its channel's: Low Cut first.
+    let knob = cx.debug_bounds("smart-0").unwrap().center();
+    drag(cx, knob, knob - point(px(0.), px(60.)));
+    let cut = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].eq.unwrap().low_cut);
+    assert!(cut > 40.0, "{cut}");
+}
+
+#[gpui::test]
+fn velocities_drag_and_the_roll_tools_edit_notes(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    cx.simulate_click(spot(&ws, cx, PPQ, 1), Modifiers::none()); // the Lead region
+    cx.simulate_keystrokes("p");
+    cx.run_until_parked();
+    let notes = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            ws.session
+                .project
+                .region((1, 0))
+                .content
+                .notes(0)
+                .unwrap()
+                .to_vec()
+        })
+    };
+    let before = notes(cx)[0].velocity;
+    let dot = cx.debug_bounds("velocity-0").unwrap().center();
+    drag(cx, dot, dot + point(px(0.), px(10.)));
+    let after = notes(cx)[0].velocity;
+    assert!(after < before, "{before} {after}");
+    // Legato holds each note to the next.
+    click_on(cx, "roll-Legato", Modifiers::none(), MouseButton::Left);
+    let n = notes(cx);
+    assert_eq!(n[0].start + n[0].length as i64, n[1].start);
+}
+
+#[gpui::test]
+fn pattern_mode_loops_the_selected_region_alone(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    click_on(cx, "pattern-mode", Modifiers::none(), MouseButton::Left);
+    assert!(!ws.read_with(cx, |ws, _| ws.pattern_mode)); // nothing selected
+    cx.simulate_click(spot(&ws, cx, PPQ, 1), Modifiers::none());
+    click_on(cx, "pattern-mode", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.pattern_mode));
+    // It plays, looping in the region, and the project itself has no cycle.
+    cx.simulate_keystrokes("space");
+    until(cx, &ws, |ws| ws.player.playing());
+    assert!(ws.read_with(cx, |ws, _| ws.session.project.cycle.is_none()));
+    until(cx, &ws, |ws| ws.playhead() > 0);
+    cx.simulate_keystrokes("space");
+}
+
+#[gpui::test]
+fn the_key_is_worked_out_or_chosen(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let key = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| ws.session.project.song_key().map(|k| k.name()))
+    };
+    assert_eq!(key(cx).as_deref(), Some("C major")); // the demo's chords
+    click_on(cx, "key", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "menu-10", Modifiers::none(), MouseButton::Left); // after the notes, C major on
+    assert_eq!(key(cx).as_deref(), Some("A major"));
+    click_on(cx, "key", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "menu-0", Modifiers::none(), MouseButton::Left); // back to the notes
+    assert_eq!(key(cx).as_deref(), Some("C major"));
 }

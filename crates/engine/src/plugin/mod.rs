@@ -168,6 +168,19 @@ fn com_ptr<C: Class, I: Interface>(obj: &ComWrapper<C>) -> *mut I {
     obj.as_com_ref::<I>().unwrap().as_ptr()
 }
 
+/// A plugin parameter: its id, name, and value from 0 to 1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PluginParam {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+}
+
+fn text16(chars: &[TChar]) -> String {
+    let end = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
+    String::from_utf16_lossy(&chars[..end])
+}
+
 /// A plugin's main-thread side: its controller and editor, and its saved state.
 pub struct Plugin {
     pub name: String,
@@ -364,6 +377,51 @@ impl Plugin {
             };
             Ok((plugin, processor))
         }
+    }
+
+    /// The parameters a person can turn: automatable, not hidden, not the bypass.
+    pub fn params(&self) -> Vec<PluginParam> {
+        use ParameterInfo_::ParameterFlags_::*;
+        unsafe {
+            (0..self.controller.getParameterCount())
+                .filter_map(|i| {
+                    let mut info: ParameterInfo = std::mem::zeroed();
+                    if self.controller.getParameterInfo(i, &mut info) != kResultOk {
+                        return None;
+                    }
+                    let flags = info.flags;
+                    let shown = flags & kCanAutomate != 0 && flags & (kIsHidden | kIsBypass) == 0;
+                    shown.then(|| PluginParam {
+                        id: info.id,
+                        name: text16(&info.title),
+                        value: self.controller.getParamNormalized(info.id),
+                    })
+                })
+                .collect()
+        }
+    }
+
+    /// Sets a parameter (0 to 1), in the controller and, through the edit queue, the processor.
+    pub fn set_param(&self, id: u32, value: f64) {
+        let value = value.clamp(0.0, 1.0);
+        unsafe { self.controller.setParamNormalized(id, value) };
+        self._handler.edit(id, value);
+    }
+
+    /// A parameter's value now, from 0 to 1.
+    pub fn param_value(&self, id: u32) -> f64 {
+        unsafe { self.controller.getParamNormalized(id) }
+    }
+
+    /// A parameter's value as the plugin would show it, like "2.40 kHz".
+    pub fn param_text(&self, id: u32, value: f64) -> String {
+        let mut s: String128 = [0; 128];
+        unsafe {
+            if self.controller.getParamStringByValue(id, value, &mut s) != kResultOk {
+                return format!("{:.0}%", value * 100.0);
+            }
+        }
+        text16(&s)
     }
 
     /// The plugin's settings, to save with the project and give back to `instantiate`.
@@ -634,6 +692,20 @@ mod tests {
             loudest = l.iter().fold(loudest, |m, x| m.max(x.abs()));
         }
         assert!(loudest > 1e-3, "{loudest}");
+
+        // Its parameters can be read and turned, as Smart Controls do.
+        let params = plugin.params();
+        assert!(!params.is_empty());
+        let p = &params[0];
+        let to = if p.value > 0.5 { 0.25 } else { 0.75 };
+        plugin.set_param(p.id, to);
+        assert!(
+            (plugin.param_value(p.id) - to).abs() < 0.02,
+            "{}",
+            plugin.param_value(p.id)
+        );
+        assert!(!plugin.param_text(p.id, to).is_empty());
+        plugin.set_param(p.id, p.value);
 
         let state = plugin.state().unwrap();
         drop(plugin);

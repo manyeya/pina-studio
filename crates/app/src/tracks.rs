@@ -1,39 +1,42 @@
-//! The tracks area: track headers on the left, the ruler and the lanes with their regions on the
-//! right. Regions move by dragging their body, and trim by dragging their edges.
+//! The tracks area: tools and track headers on the left; markers, the ruler (with the cycle) and
+//! the lanes with their regions on the right. Regions move by dragging their body, and trim by
+//! dragging their edges; the tools add, cut and erase them.
 
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Div, Hsla, MouseButton, MouseDownEvent, PathBuilder, Pixels,
-    Point, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
+    AnyElement, App, Bounds, Context, Div, FontWeight, Hsla, MouseButton, MouseDownEvent,
+    PathBuilder, Pixels, Point, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 use tempo_engine::{
     peaks::Peaks,
-    project::{At, AutoPoint, BEATS_PER_BAR, Content, Instrument, PPQ, Param, comp_segments},
+    project::{
+        At, AutoPoint, BEATS_PER_BAR, Content, Instrument, PPQ, Param, Region, comp_segments,
+    },
 };
 
 use crate::{
-    menu::{Menu, MenuAction},
+    menu::{MARKER_NAMES, Menu, MenuAction},
     strip,
     theme::*,
-    workspace::{Bottom, Drag, Edge, Workspace},
+    workspace::{Bottom, Drag, Edge, Snap, Tool, Workspace},
 };
 
 /// Space kept free above and below an automation line.
 const AUTO_PAD: f32 = 6.0;
 
-/// Where a parameter value sits in a lane, from its top: volume on the fader's scale, pan with
-/// left at the top.
+/// Where a parameter value sits in an automation lane, from its top: volume on the fader's
+/// scale, pan with left at the top.
 pub fn auto_to_y(param: Param, value: f32) -> f32 {
     let t = match param {
         Param::Volume => 1.0 - strip::fader_pos(value),
         Param::Pan => (value.clamp(-1.0, 1.0) + 1.0) / 2.0,
     };
-    AUTO_PAD + t * (LANE_H - 2.0 * AUTO_PAD)
+    AUTO_PAD + t * (AUTO_H - 2.0 * AUTO_PAD)
 }
 
 pub fn auto_from_y(param: Param, y: f32) -> f32 {
-    let t = ((y - AUTO_PAD) / (LANE_H - 2.0 * AUTO_PAD)).clamp(0.0, 1.0);
+    let t = ((y - AUTO_PAD) / (AUTO_H - 2.0 * AUTO_PAD)).clamp(0.0, 1.0);
     match param {
         Param::Volume => strip::fader_db(1.0 - t),
         Param::Pan => t * 2.0 - 1.0,
@@ -57,21 +60,58 @@ struct Wave {
     samples_per_px: f32,
 }
 
+/// What a region is called on screen.
+fn region_name(track: &str, region: &Region) -> String {
+    match &region.content {
+        Content::Takes { takes, comp } => {
+            match &comp_segments(comp, takes.len(), region.length)[..] {
+                [(_, _, take)] => format!("{track} · Take {}", take + 1),
+                _ => format!("{track} · Comp"),
+            }
+        }
+        Content::Audio { stretch, .. } if *stretch != 1.0 => {
+            format!("{track} · Flex ×{stretch:.2}")
+        }
+        Content::Audio { file, .. } => file
+            .file_stem()
+            .map_or(track.to_string(), |s| s.to_string_lossy().into_owned()),
+        Content::Pattern { .. } => format!("{track} · Pattern"),
+        Content::Midi { .. } => track.to_string(),
+    }
+}
+
+/// The instrument's name, under a track's.
+pub fn instrument_name(i: Option<&Instrument>) -> String {
+    match i {
+        None => "Audio".into(),
+        Some(Instrument::Synth) => "Sine Synth".into(),
+        Some(Instrument::Drums) => "Drum Kit".into(),
+        Some(Instrument::Vst3(r)) => r.class.clone(),
+    }
+}
+
 impl Workspace {
     pub fn tracks_area(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex_1()
-            .min_w(px(0.))
-            .h_full()
+            .min_h(px(0.))
             .flex()
             .flex_col()
             .child(
                 div()
-                    .h(px(RULER_H))
+                    .h(px(MARKERS_H + RULER_H))
                     .flex_none()
                     .flex()
-                    .child(self.corner(cx))
-                    .child(self.ruler(cx)),
+                    .child(self.toolbar(cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .child(self.markers(cx))
+                            .child(self.ruler(cx)),
+                    ),
             )
             .child(
                 div()
@@ -83,27 +123,124 @@ impl Workspace {
             )
     }
 
-    fn corner(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Over the track headers: the tools, the snap, and adding a track.
+    fn toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let tool = |i: Icon, t: Tool, on: bool, cx: &mut Context<Self>| {
+            icon_seg(i, on, 24.)
+                .debug_selector(move || format!("tool-{t:?}"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| {
+                        ws.tool = t;
+                        cx.notify();
+                    }),
+                )
+        };
+        let snap = match self.snap {
+            Snap::Smart => match self.grid() {
+                g if g == PPQ / 4 => "1/16",
+                g if g == PPQ => "Beat",
+                _ => "Bar",
+            },
+            s => s.label(),
+        };
         div()
             .w(px(HEADER_W))
-            .h_full()
             .flex_none()
+            .h_full()
             .flex()
             .items_center()
-            .justify_between()
-            .px_2()
-            .bg(rgb(PANEL))
+            .gap(px(6.))
+            .pl(px(10.))
+            .pr(px(8.))
+            .bg(rgb(SURFACE))
             .border_b_1()
             .border_r_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(LINE))
             .child(
-                div()
-                    .text_size(px(10.))
-                    .text_color(rgb(TEXT_DIM))
-                    .child("TRACKS"),
+                tray()
+                    .p(px(2.))
+                    .rounded(px(8.))
+                    .child(tool(
+                        Icon::Pointer,
+                        Tool::Pointer,
+                        self.tool == Tool::Pointer,
+                        cx,
+                    ))
+                    .child(tool(
+                        Icon::Pencil,
+                        Tool::Pencil,
+                        self.tool == Tool::Pencil,
+                        cx,
+                    ))
+                    .child(tool(
+                        Icon::Scissors,
+                        Tool::Scissors,
+                        self.tool == Tool::Scissors,
+                        cx,
+                    ))
+                    .child(tool(
+                        Icon::Eraser,
+                        Tool::Eraser,
+                        self.tool == Tool::Eraser,
+                        cx,
+                    )),
             )
             .child(
-                button("+", false)
+                div()
+                    .h(px(28.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(rgb(LINE))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(OFF)))
+                    .font_family(MONO)
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(TEXT_2))
+                    .child(icon(Icon::Magnet, 13.).text_color(rgb(TEXT_3)))
+                    .child(snap)
+                    .debug_selector(|| "snap".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                            let items = Snap::ALL
+                                .iter()
+                                .map(|&s| {
+                                    let label = if s == Snap::Smart {
+                                        "Smart (follows zoom)".to_string()
+                                    } else {
+                                        s.label().to_string()
+                                    };
+                                    (label, MenuAction::Snap(s))
+                                })
+                                .collect();
+                            ws.menu = Some(Menu {
+                                at: e.position,
+                                items,
+                            });
+                            cx.notify();
+                        }),
+                    ),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .size(px(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(rgb(LINE))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(OFF)))
+                    .text_color(rgb(TEXT_2))
+                    .child(icon(Icon::Plus, 14.).text_color(rgb(TEXT_2)))
                     .debug_selector(|| "new-track".into())
                     .on_mouse_down(
                         MouseButton::Left,
@@ -126,32 +263,164 @@ impl Workspace {
             )
     }
 
+    /// The song's sections: each marker runs to the next.
+    fn markers(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (ppt, sx) = (self.px_per_tick(), self.scroll_x);
+        let markers = &self.session.project.markers;
+        let playhead = self.playhead();
+        let bar = PPQ * BEATS_PER_BAR;
+        let chips: Vec<Div> = markers
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let end = markers
+                    .get(i + 1)
+                    .map_or(m.tick + bar * 8, |n| n.tick.max(m.tick + 1));
+                let current = (m.tick..end).contains(&playhead);
+                let (x, w) = (m.tick as f32 * ppt - sx, (end - m.tick) as f32 * ppt);
+                let tick = m.tick;
+                div()
+                    .absolute()
+                    .left(px(x + 1.))
+                    .top(px(3.))
+                    .w(px((w - 2.).max(4.)))
+                    .h(px(15.))
+                    .px(px(7.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(5.))
+                    .bg(rgb(if current { 0x23232b } else { 0x18181e }))
+                    .text_color(rgb(if current { TEXT } else { TEXT_3 }))
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .cursor_grab()
+                    .child(m.name.clone())
+                    .debug_selector(move || format!("marker-{i}"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            let x = f32::from(e.position.x);
+                            ws.begin_drag(
+                                Drag::Marker {
+                                    index: i,
+                                    x,
+                                    tick,
+                                    moved: false,
+                                },
+                                cx,
+                            );
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            let mut items: Vec<(String, MenuAction)> = MARKER_NAMES
+                                .iter()
+                                .map(|n| {
+                                    (
+                                        format!("Call it {n}"),
+                                        MenuAction::NameMarker(i, n.to_string()),
+                                    )
+                                })
+                                .collect();
+                            items.push(("Delete Marker".into(), MenuAction::DeleteMarker(i)));
+                            ws.menu = Some(Menu {
+                                at: e.position,
+                                items,
+                            });
+                            cx.notify();
+                        }),
+                    )
+            })
+            .collect();
+        let empty = markers.is_empty();
+        div()
+            .h(px(MARKERS_H))
+            .flex_none()
+            .relative()
+            .overflow_hidden()
+            .bg(rgb(WELL))
+            .border_b_1()
+            .border_color(rgb(LINE_SOFT))
+            .children(chips)
+            .when(empty, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .left(px(8.))
+                        .top(px(4.))
+                        .text_size(px(10.5))
+                        .text_color(rgb(TEXT_4))
+                        .child("Double-click to add a marker"),
+                )
+            })
+            .debug_selector(|| "markers".into())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                    if e.click_count != 2 {
+                        return;
+                    }
+                    let bar = (PPQ * BEATS_PER_BAR) as f64;
+                    let tick = ((ws.tick_at(f32::from(e.position.x)) / bar).floor() * bar) as u64;
+                    let n = ws.session.project.markers.len();
+                    let name = MARKER_NAMES
+                        .get(n)
+                        .map_or(format!("Marker {}", n + 1), |s| s.to_string());
+                    ws.choose(MenuAction::AddMarker(tick, name), cx);
+                }),
+            )
+            .on_scroll_wheel(self.on_scroll(cx))
+    }
+
     fn ruler(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let (ppt, scroll) = (self.px_per_tick(), self.scroll_x);
         let bar_px = ppt * (PPQ * BEATS_PER_BAR) as f32;
         let width = f32::from(self.lanes_bounds.get().size.width).max(2000.0);
         // Label every bar, or fewer when they'd crowd.
-        let every = (48.0 / bar_px).ceil().max(1.0) as u64;
+        let every = (40.0 / bar_px).ceil().max(1.0) as u64;
         let first = (scroll / bar_px) as u64;
         let last = ((scroll + width) / bar_px) as u64 + 1;
         let labels = (first..=last).filter(|b| b % every == 0).map(|b| {
             div()
                 .absolute()
                 .left(px(b as f32 * bar_px - scroll + 4.))
-                .top(px(2.))
+                .top(px(11.))
+                .font_family(MONO)
                 .text_size(px(10.))
-                .text_color(rgb(TEXT_DIM))
+                .line_height(px(12.))
+                .text_color(rgb(TEXT_3))
                 .child(format!("{}", b + 1))
         });
         let playhead = self.playhead() as f32 * ppt - scroll;
+        let cycle = self.session.project.cycle.map(|c| {
+            let (x0, x1) = (c.start as f32 * ppt - scroll, c.end as f32 * ppt - scroll);
+            div()
+                .absolute()
+                .left(px(x0))
+                .top(px(2.))
+                .w(px((x1 - x0).max(2.)))
+                .h(px(7.))
+                .rounded(px(3.))
+                .bg(if c.off {
+                    alpha(TEXT_4, 0.6)
+                } else {
+                    alpha(ACCENT, 0.9)
+                })
+        });
         div()
-            .flex_1()
-            .h_full()
+            .h(px(RULER_H))
+            .flex_none()
             .relative()
             .overflow_hidden()
-            .bg(rgb(PANEL))
+            .bg(rgb(WELL))
             .border_b_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(LINE))
+            .children(cycle)
             .child(
                 canvas(
                     |_, _, _| {},
@@ -164,12 +433,18 @@ impl Workspace {
                             if !bar && beat_px < 8.0 {
                                 continue;
                             }
-                            let x = b.origin.x + px(beat as f32 * beat_px - scroll);
-                            let h = if bar { b.size.height } else { px(6.) };
-                            let top = b.origin.y + b.size.height - h;
+                            let x = b.origin.x + px((beat as f32 * beat_px - scroll).round());
+                            let (top, color) = if bar {
+                                (px(11.), LINE_STRONG)
+                            } else {
+                                (px(20.), LINE)
+                            };
                             window.paint_quad(fill(
-                                Bounds::new(point(x, top), size(px(1.), h)),
-                                rgb(GRID_BAR),
+                                Bounds::new(
+                                    point(x, b.origin.y + top),
+                                    size(px(1.), b.size.height - top),
+                                ),
+                                rgb(color),
                             ));
                         }
                     },
@@ -179,20 +454,34 @@ impl Workspace {
             )
             .children(labels)
             .child(
-                div()
+                gpui::svg()
+                    .data(PLAYHEAD)
                     .absolute()
-                    .left(px(playhead - 5.))
-                    .bottom_0()
+                    .left(px(playhead - 5.5))
+                    .top(px(13.))
                     .w(px(11.))
-                    .h(px(10.))
-                    .rounded_t(px(2.))
-                    .bg(rgb(0xffffff)),
+                    .h(px(12.))
+                    .text_color(rgb(TEXT)),
             )
+            .debug_selector(|| "ruler".into())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                    ws.begin_drag(Drag::Locate, cx);
-                    ws.locate_at(f32::from(e.position.x), cx);
+                    // The strip along the top is the cycle's; the rest moves the playhead.
+                    let top = f32::from(ws.lanes_bounds.get().origin.y) - RULER_H;
+                    if f32::from(e.position.y) < top + 10.0 {
+                        let anchor = ws.snap(ws.tick_at(f32::from(e.position.x)));
+                        ws.begin_drag(
+                            Drag::Cycle {
+                                anchor,
+                                moved: false,
+                            },
+                            cx,
+                        );
+                    } else {
+                        ws.begin_drag(Drag::Locate, cx);
+                        ws.locate_at(f32::from(e.position.x), cx);
+                    }
                 }),
             )
             .on_scroll_wheel(self.on_scroll(cx))
@@ -200,121 +489,221 @@ impl Workspace {
 
     fn headers(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let tracks = &self.session.project.tracks;
-        let headers: Vec<Div> = tracks
-            .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let selected = i == self.track;
-                // The summing stack it plays into, if it's in one.
-                let stack = t.output.and_then(|b| {
-                    let aux = self
-                        .session
-                        .project
-                        .auxes
-                        .iter()
-                        .find(|a| a.bus == b && a.stack)?;
-                    Some(aux.name.clone())
-                });
+        let mut rows: Vec<Div> = Vec::new();
+        for (i, t) in tracks.iter().enumerate() {
+            let selected = i == self.track;
+            let color = self.color(i);
+            // The summing stack it plays into, if it's in one.
+            let stack = t.output.and_then(|b| {
+                let aux = self
+                    .session
+                    .project
+                    .auxes
+                    .iter()
+                    .find(|a| a.bus == b && a.stack)?;
+                Some(aux.name.clone())
+            });
+            let level = self.levels.get(&Some(t.id)).copied().unwrap_or_default();
+            let bar = |l: f32| {
+                let h = strip::fader_pos(20.0 * l.max(1e-9).log10()) * 30.0;
+                div()
+                    .relative()
+                    .w(px(3.))
+                    .h(px(30.))
+                    .rounded(px(2.))
+                    .bg(rgb(0x22222a))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .bottom_0()
+                            .w_full()
+                            .h(px(h))
+                            .bg(rgb(if l > 1.0 { METER_HIGH } else { METER_LOW })),
+                    )
+            };
+            let top = self.row_top(i);
+            rows.push(
                 div()
                     .absolute()
-                    .top(px(i as f32 * LANE_H - self.scroll_y))
+                    .top(px(top))
                     .left_0()
                     .w_full()
                     .h(px(LANE_H))
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .pr_2()
-                    .bg(rgb(if selected { HEADER_SELECTED } else { HEADER }))
+                    .gap(px(10.))
+                    .pl(px(12.))
+                    .pr(px(10.))
+                    .bg(rgb(if selected { HEADER_SELECTED } else { HEADERS }))
                     .border_b_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(LINE_SOFT))
+                    .debug_selector(move || format!("header-{i}"))
                     .child(
                         div()
-                            .w(px(5.))
-                            .h_full()
-                            .bg(rgb(track_color(t.instrument.is_some()))),
-                    )
-                    .child(
-                        div()
-                            .w(px(16.))
-                            .text_size(px(10.))
-                            .text_color(rgb(TEXT_DIM))
-                            .child(format!("{}", i + 1)),
+                            .size(px(30.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(8.))
+                            .bg(alpha(color, 0.14))
+                            .text_color(rgb(color))
+                            .child(icon(track_icon(t), 16.).text_color(rgb(color))),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.))
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .child(t.name.clone()),
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .line_height(px(16.))
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_color(rgb(if selected { 0xffffff } else { 0xe6e6ea }))
+                                    .child(t.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.))
+                                    .text_size(px(11.))
+                                    .line_height(px(14.))
+                                    .text_color(rgb(TEXT_3))
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .child(instrument_name(t.instrument.as_ref()))
+                                    .when_some(stack, |d, name| d.child(chip(name, VIOLET))),
+                            ),
                     )
-                    .when_some(stack, |d, name| {
-                        d.child(
-                            div()
-                                .px_1()
-                                .rounded(px(3.))
-                                .text_size(px(9.))
-                                .bg(Hsla::from(rgb(AUX)).opacity(0.35))
-                                .child(name),
-                        )
-                    })
-                    .when(self.show_automation, |d| {
-                        let id = t.id;
-                        let param = self.params.get(&id).copied().unwrap_or_default();
-                        let label = if param == Param::Volume {
-                            "Volume"
-                        } else {
-                            "Pan"
-                        };
-                        d.child(button(label, true).on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |ws, _, _, cx| {
-                                cx.stop_propagation();
-                                let p = ws.params.entry(id).or_default();
-                                *p = if *p == Param::Volume {
-                                    Param::Pan
-                                } else {
-                                    Param::Volume
-                                };
-                                cx.notify();
-                            }),
-                        ))
-                    })
-                    .child(toggle("M", t.mute, MUTE).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            cx.stop_propagation();
-                            ws.edit(cx, |ws| ws.session.project.tracks[i].mute ^= true);
-                        }),
-                    ))
-                    .child(toggle("S", t.solo, SOLO).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            cx.stop_propagation();
-                            ws.edit(cx, |ws| ws.session.project.tracks[i].solo ^= true);
-                        }),
-                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(3.))
+                            .child(
+                                toggle("M", t.mute, TEXT, BG, 20.)
+                                    .debug_selector(move || format!("mute-{i}"))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |ws, _, _, cx| {
+                                            cx.stop_propagation();
+                                            ws.edit(cx, |ws| {
+                                                ws.session.project.tracks[i].mute ^= true
+                                            });
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                toggle("S", t.solo, SOLO, BG, 20.)
+                                    .debug_selector(move || format!("solo-{i}"))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |ws, _, _, cx| {
+                                            cx.stop_propagation();
+                                            ws.edit(cx, |ws| {
+                                                ws.session.project.tracks[i].solo ^= true
+                                            });
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                toggle("R", selected, RECORD, 0xffffff, 20.)
+                                    .debug_selector(move || format!("arm-{i}"))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |ws, _, _, cx| {
+                                            cx.stop_propagation();
+                                            ws.select_track(i);
+                                            cx.notify();
+                                        }),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(2.))
+                            .child(bar(level.now[0]))
+                            .child(bar(level.now[1])),
+                    )
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |ws, _, _, cx| {
-                            ws.track = i;
+                            ws.select_track(i);
                             ws.region = None;
                             cx.notify();
                         }),
-                    )
-            })
-            .collect();
+                    ),
+            );
+            if self.show_automation {
+                let id = t.id;
+                let param = self.params.get(&id).copied().unwrap_or_default();
+                let points = t.automation.points(param).len();
+                rows.push(
+                    div()
+                        .absolute()
+                        .top(px(top + LANE_H))
+                        .left_0()
+                        .w_full()
+                        .h(px(AUTO_H))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .pl(px(52.))
+                        .pr(px(10.))
+                        .bg(rgb(0x16161b))
+                        .border_b_1()
+                        .border_color(rgb(LINE_SOFT))
+                        .child(
+                            dropdown(
+                                if param == Param::Volume {
+                                    "Volume"
+                                } else {
+                                    "Pan"
+                                },
+                                24.,
+                            )
+                            .debug_selector(move || format!("auto-param-{i}"))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    cx.stop_propagation();
+                                    let p = ws.params.entry(id).or_default();
+                                    *p = if *p == Param::Volume {
+                                        Param::Pan
+                                    } else {
+                                        Param::Volume
+                                    };
+                                    cx.notify();
+                                }),
+                            ),
+                        )
+                        .child(div().flex_1())
+                        .child(if points > 0 {
+                            chip("Read", METER_LOW)
+                        } else {
+                            chip("Off", TEXT_3)
+                        }),
+                );
+            }
+        }
         div()
             .w(px(HEADER_W))
             .flex_none()
             .h_full()
             .relative()
             .overflow_hidden()
-            .bg(rgb(PANEL_DARK))
+            .bg(rgb(HEADERS))
             .border_r_1()
-            .border_color(rgb(BORDER))
-            .children(headers)
+            .border_color(rgb(LINE))
+            .children(rows)
             .on_scroll_wheel(self.on_scroll(cx))
     }
 
@@ -322,65 +711,141 @@ impl Workspace {
         let (ppt, sx, sy) = (self.px_per_tick(), self.scroll_x, self.scroll_y);
         let tracks = self.session.project.tracks.len();
         let selected = self.track;
+        let row_h = self.row_h();
+        let automation = self.show_automation;
         let bounds = self.lanes_bounds.clone();
+        let cycle = self
+            .session
+            .project
+            .cycle
+            .filter(|c| !c.off)
+            .map(|c| (c.start as f32 * ppt - sx, c.end as f32 * ppt - sx));
         let grid = canvas(
             move |b, _, _| bounds.set(b),
             move |b, _, window, _| {
-                for i in 0..tracks {
-                    let y = b.origin.y + px(i as f32 * LANE_H - sy);
-                    let bg = if i == selected { LANE_SELECTED } else { LANE };
+                let w = f32::from(b.size.width);
+                let quad = |window: &mut Window, x: f32, y: f32, ww: f32, hh: f32, c: Hsla| {
                     window.paint_quad(fill(
-                        Bounds::new(point(b.origin.x, y), size(b.size.width, px(LANE_H))),
-                        rgb(bg),
+                        Bounds::new(
+                            point(b.origin.x + px(x), b.origin.y + px(y)),
+                            size(px(ww), px(hh)),
+                        ),
+                        c,
                     ));
-                    let line = Bounds::new(
-                        point(b.origin.x, y + px(LANE_H - 1.)),
-                        size(b.size.width, px(1.)),
+                };
+                // Every other four bars a shade lighter, as FL Studio does.
+                let group = ppt * (PPQ * BEATS_PER_BAR * 4) as f32;
+                let mut k = (sx / group).floor() as i64;
+                while (k as f32 * group - sx) < w {
+                    if k % 2 == 1 {
+                        quad(
+                            window,
+                            k as f32 * group - sx,
+                            0.0,
+                            group,
+                            f32::from(b.size.height),
+                            rgb(LANE_ALT).into(),
+                        );
+                    }
+                    k += 1;
+                }
+                if let Some((x0, x1)) = cycle {
+                    quad(
+                        window,
+                        x0,
+                        0.0,
+                        x1 - x0,
+                        f32::from(b.size.height),
+                        alpha(ACCENT, 0.04),
                     );
-                    window.paint_quad(fill(line, rgb(BORDER)));
+                }
+                for i in 0..tracks {
+                    let y = i as f32 * row_h - sy;
+                    if i == selected {
+                        quad(window, 0.0, y, w, LANE_H, alpha(0xffffff, 0.025));
+                    }
+                    if automation {
+                        quad(window, 0.0, y + LANE_H, w, AUTO_H, rgb(0x0b0b0e).into());
+                        quad(window, 0.0, y + LANE_H - 1.0, w, 1.0, rgb(LINE_SOFT).into());
+                    }
+                    quad(window, 0.0, y + row_h - 1.0, w, 1.0, rgb(LINE_SOFT).into());
                 }
                 let beat_px = ppt * PPQ as f32;
                 let first = (sx / beat_px) as u64;
-                let last = ((sx + f32::from(b.size.width)) / beat_px) as u64 + 1;
+                let last = ((sx + w) / beat_px) as u64 + 1;
                 for beat in first..=last {
                     let bar = beat % BEATS_PER_BAR == 0;
-                    if !bar && beat_px < 12.0 {
+                    if !bar && beat_px < 10.0 {
                         continue;
                     }
-                    let x = b.origin.x + px(beat as f32 * beat_px - sx);
-                    let color = if bar { GRID_BAR } else { GRID_BEAT };
-                    window.paint_quad(fill(
-                        Bounds::new(point(x, b.origin.y), size(px(1.), b.size.height)),
-                        rgb(color),
-                    ));
+                    let color = if beat % (BEATS_PER_BAR * 4) == 0 {
+                        0x2a2a32
+                    } else if bar {
+                        0x202027
+                    } else {
+                        0x16161b
+                    };
+                    let x = (beat as f32 * beat_px - sx).round();
+                    quad(
+                        window,
+                        x,
+                        0.0,
+                        1.0,
+                        f32::from(b.size.height),
+                        rgb(color).into(),
+                    );
                 }
             },
         )
         .absolute()
         .size_full();
 
-        // Clicking an empty lane selects its track.
+        // Clicking an empty lane selects its track; the pencil draws a region there.
         let rows: Vec<Div> = (0..tracks)
             .map(|i| {
                 div()
                     .absolute()
-                    .top(px(i as f32 * LANE_H - sy))
+                    .top(px(self.row_top(i)))
                     .left_0()
                     .w_full()
                     .h(px(LANE_H))
+                    .when(self.tool == Tool::Pencil, |d| d.cursor_crosshair())
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                            ws.track = i;
+                            ws.select_track(i);
                             ws.region = None;
-                            if ws.show_automation {
-                                ws.add_auto_point(i, e.position.map(f32::from), cx);
+                            if ws.tool == Tool::Pencil {
+                                ws.draw_region(i, f32::from(e.position.x), cx);
                             }
                             cx.notify();
                         }),
                     )
             })
             .collect();
+        let auto_rows: Vec<Div> = if automation {
+            (0..tracks)
+                .map(|i| {
+                    div()
+                        .absolute()
+                        .top(px(self.row_top(i) + LANE_H))
+                        .left_0()
+                        .w_full()
+                        .h(px(AUTO_H))
+                        .cursor_crosshair()
+                        .debug_selector(move || format!("auto-lane-{i}"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                ws.select_track(i);
+                                ws.add_auto_point(i, e.position.map(f32::from), cx);
+                            }),
+                        )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         let width = f32::from(self.lanes_bounds.get().size.width).max(2000.0);
         let mut regions = Vec::new();
@@ -396,7 +861,7 @@ impl Workspace {
         }
 
         let playhead = self.playhead() as f32 * ppt - sx;
-        let automation = if self.show_automation {
+        let lines = if automation {
             self.automation(cx)
         } else {
             Vec::new()
@@ -414,11 +879,11 @@ impl Workspace {
                 div()
                     .absolute()
                     .left(px(x))
-                    .top(px(t as f32 * LANE_H - sy + 1.))
+                    .top(px(self.row_top(t) + 4.))
                     .w(px((playhead - x).max(2.)))
-                    .h(px(LANE_H - 3.))
-                    .rounded(px(4.))
-                    .bg(Hsla::from(rgb(RECORD)).opacity(0.45))
+                    .h(px(LANE_H - 8.))
+                    .rounded(px(6.))
+                    .bg(alpha(RECORD, 0.3))
                     .border_1()
                     .border_color(rgb(RECORD)),
             )
@@ -429,19 +894,21 @@ impl Workspace {
             .h_full()
             .relative()
             .overflow_hidden()
-            .bg(rgb(BG))
+            .bg(rgb(LANE))
             .child(grid)
             .children(rows)
+            .children(auto_rows)
             .children(regions)
             .children(take)
-            .children(automation)
+            .children(lines)
+            .children(self.agent_marker())
             .when(tracks == 0, |d| {
                 d.child(
                     div()
                         .absolute()
                         .top(px(40.))
                         .left(px(40.))
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(rgb(TEXT_3))
                         .child("No tracks yet. Add one with + or ⌥⌘N."),
                 )
             })
@@ -452,9 +919,95 @@ impl Workspace {
                     .top_0()
                     .w(px(1.))
                     .h_full()
-                    .bg(rgb(0xffffff)),
+                    .bg(rgb(TEXT)),
             )
             .on_scroll_wheel(self.on_scroll(cx))
+    }
+
+    /// Where the agent is working, while it is: an outline round what it touched, and its cursor.
+    fn agent_marker(&self) -> Vec<AnyElement> {
+        let Some(a) = self.agent_presence() else {
+            return Vec::new();
+        };
+        let Some(t) = a.track.filter(|&t| t < self.session.project.tracks.len()) else {
+            return Vec::new();
+        };
+        let ppt = self.px_per_tick();
+        let top = self.row_top(t);
+        let width = f32::from(self.lanes_bounds.get().size.width).max(200.0);
+        let (x, w, y, h) = match a
+            .region
+            .and_then(|r| self.session.project.tracks[t].regions.get(r))
+        {
+            Some(r) => (
+                r.start as f32 * ppt - self.scroll_x - 1.0,
+                r.length as f32 * ppt + 2.0,
+                top + 2.0,
+                LANE_H - 4.0,
+            ),
+            None => (0.0, width, top, LANE_H),
+        };
+        let fade =
+            1.0 - (a.at.elapsed().as_secs_f32() / crate::workspace::PRESENCE.as_secs_f32()).powi(3);
+        let cx_ = (x + w - 34.0).clamp(4.0, width - 110.0);
+        let cy = y + h / 2.0;
+        vec![
+            div()
+                .absolute()
+                .left(px(x))
+                .top(px(y))
+                .w(px(w))
+                .h(px(h))
+                .rounded(px(8.))
+                .border_2()
+                .border_color(alpha(AGENT, fade))
+                .into_any_element(),
+            gpui::svg()
+                .data(CURSOR)
+                .absolute()
+                .left(px(cx_))
+                .top(px(cy - 4.))
+                .size(px(16.))
+                .text_color(alpha(AGENT, fade))
+                .into_any_element(),
+            div()
+                .absolute()
+                .left(px(cx_ + 12.))
+                .top(px(cy + 10.))
+                .px(px(8.))
+                .py(px(3.))
+                .rounded(px(7.))
+                .rounded_tl(px(2.))
+                .bg(alpha(AGENT, fade))
+                .text_color(rgb(BG))
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .whitespace_nowrap()
+                .child("tempo agent")
+                .into_any_element(),
+        ]
+    }
+
+    /// The pencil's click on an empty lane: a MIDI region over the bar clicked, on an instrument
+    /// track.
+    fn draw_region(&mut self, track: usize, x: f32, cx: &mut Context<Self>) {
+        if self.session.project.tracks[track].instrument.is_none() {
+            self.status = Some(
+                "Draw regions on instrument tracks; audio tracks record or import theirs.".into(),
+            );
+            return;
+        }
+        let bar = PPQ * BEATS_PER_BAR;
+        let start = self.tick_at(x) as u64 / bar * bar;
+        self.edit(cx, |ws| {
+            let regions = &mut ws.session.project.tracks[track].regions;
+            regions.push(Region {
+                start,
+                length: bar,
+                content: Content::Midi { notes: Vec::new() },
+            });
+            ws.region = Some((track, regions.len() - 1));
+        });
     }
 
     fn region_view(&self, at: At, cx: &mut Context<Self>) -> Div {
@@ -464,17 +1017,12 @@ impl Workspace {
         let ppt = self.px_per_tick();
         let x = region.start as f32 * ppt - self.scroll_x;
         let w = (region.length as f32 * ppt).max(3.0);
-        let y = at.0 as f32 * LANE_H - self.scroll_y + 1.0;
-        let color = Hsla::from(rgb(track_color(track.instrument.is_some())));
-        let color = if track.mute {
-            Hsla { s: 0.0, ..color }
-        } else {
-            color
-        };
+        let y = self.row_top(at.0) + 4.0;
+        let color = self.color(at.0);
         let selected = self.region == Some(at);
         let inside = self.inside(&region.content, region.length);
         let (start, end) = (region.start, region.start + region.length);
-        let live = !self.show_automation;
+        let ink = Hsla::from(rgb(color));
         let handle = |edge: Edge, cx: &mut Context<Self>| {
             let h = div()
                 .absolute()
@@ -489,101 +1037,148 @@ impl Workspace {
             };
             h.on_mouse_down(MouseButton::Left, grab(at, edge, start, end, cx))
         };
+        let pill = |left: bool| {
+            div()
+                .absolute()
+                .top(px((LANE_H - 8.0) / 2.0 - 8.0))
+                .when(left, |d| d.left(px(-1.)))
+                .when(!left, |d| d.right(px(-1.)))
+                .w(px(3.))
+                .h(px(16.))
+                .rounded(px(2.))
+                .bg(rgb(0xffffff))
+        };
 
         div()
             .absolute()
             .left(px(x))
             .top(px(y))
             .w(px(w))
-            .h(px(LANE_H - 3.))
-            .rounded(px(4.))
+            .h(px(LANE_H - 8.))
+            .rounded(px(6.))
             .overflow_hidden()
             .flex()
             .flex_col()
-            .bg(color.opacity(0.45))
+            .bg(alpha(color, if selected { 0.25 } else { 0.13 }))
             .border_1()
             .border_color(if selected {
-                gpui::white()
+                Hsla::from(rgb(0xffffff))
             } else {
-                color.opacity(0.9)
+                alpha(color, 0.33)
             })
+            .when(track.mute, |d| d.opacity(0.4))
+            .debug_selector(move || format!("region-{}-{}", at.0, at.1))
             .child(
                 div()
-                    .h(px(14.))
+                    .h(px(17.))
                     .flex_none()
-                    .px_1()
-                    .bg(color.opacity(0.85))
-                    .text_size(px(10.))
-                    .text_color(rgb(0x101010))
+                    .px(px(7.))
+                    .pt(px(2.))
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .whitespace_nowrap()
                     .overflow_hidden()
-                    .child(match &region.content {
-                        Content::Takes { takes, comp } => {
-                            match &comp_segments(comp, takes.len(), region.length)[..] {
-                                [(_, _, take)] => format!("{} · Take {}", track.name, take + 1),
-                                _ => format!("{} · Comp", track.name),
-                            }
-                        }
-                        Content::Audio { stretch, .. } if *stretch != 1.0 => {
-                            format!("{} · Flex ×{stretch:.2}", track.name)
-                        }
-                        _ => track.name.clone(),
-                    }),
+                    .text_color(rgb(if selected {
+                        0xffffff
+                    } else {
+                        tint(color, 0.55)
+                    }))
+                    .child(region_name(&track.name, region)),
             )
             .child(
-                div().flex_1().relative().child(
+                div().flex_1().relative().mx(px(1.)).mb(px(4.)).child(
                     canvas(
                         |_, _, _| {},
-                        move |b, _, window, _| paint_inside(&inside, b, ppt, color, window),
+                        move |b, _, window, _| paint_inside(&inside, b, ppt, ink, window),
                     )
                     .absolute()
                     .size_full(),
                 ),
             )
-            .when(live, |d| {
-                d.child(handle(Edge::Start, cx))
-                    .child(handle(Edge::End, cx))
-                    .cursor_grab()
-                    .on_mouse_down(MouseButton::Left, grab(at, Edge::Move, start, end, cx))
+            .when(selected, |d| d.child(pill(true)).child(pill(false)))
+            .child(handle(Edge::Start, cx))
+            .child(handle(Edge::End, cx))
+            .cursor(match self.tool {
+                Tool::Pointer | Tool::Pencil => gpui::CursorStyle::OpenHand,
+                Tool::Scissors => gpui::CursorStyle::IBeam,
+                Tool::Eraser => gpui::CursorStyle::OperationNotAllowed,
             })
-            .when(!live, |d| d.opacity(0.45))
+            .on_mouse_down(MouseButton::Left, grab(at, Edge::Move, start, end, cx))
     }
 
-    /// Each track's automation for its chosen parameter: a line, and points to drag.
+    /// Each track's automation for its chosen parameter, in the lane under it: a line over a
+    /// shaded area, and points to drag.
     fn automation(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let (ppt, sx, sy) = (self.px_per_tick(), self.scroll_x, self.scroll_y);
+        let (ppt, sx) = (self.px_per_tick(), self.scroll_x);
         let mut out = Vec::new();
         for (t, track) in self.session.project.tracks.iter().enumerate() {
             let param = self.params.get(&track.id).copied().unwrap_or_default();
             let points: Vec<AutoPoint> = track.automation.points(param).to_vec();
-            let count = points.len();
             let level = match param {
                 Param::Volume => track.volume_db,
                 Param::Pan => track.pan,
             };
-            let color = rgb(if param == Param::Volume {
-                AUTO_VOLUME
-            } else {
-                AUTO_PAN
-            });
-            let top = t as f32 * LANE_H - sy;
+            let color = self.color(t);
+            let top = self.row_top(t) + LANE_H;
+            let shown = points.clone();
+            out.push(
+                canvas(
+                    |_, _, _| {},
+                    move |b, _, window, _| {
+                        let y = |v: f32| b.origin.y + px(top + auto_to_y(param, v));
+                        let x = |tick: u64| b.origin.x + px(tick as f32 * ppt - sx);
+                        let (first, last) = match (shown.first(), shown.last()) {
+                            (Some(f), Some(l)) => (f.value, l.value),
+                            _ => (level, level),
+                        };
+                        let right = b.origin.x + b.size.width;
+                        let bottom = b.origin.y + px(top + AUTO_H - 1.0);
+                        let mut area = PathBuilder::fill();
+                        area.move_to(point(b.origin.x, bottom));
+                        area.line_to(point(b.origin.x, y(first)));
+                        for p in &shown {
+                            area.line_to(point(x(p.tick), y(p.value)));
+                        }
+                        area.line_to(point(right, y(last)));
+                        area.line_to(point(right, bottom));
+                        area.close();
+                        let faint = if shown.is_empty() { 0.35 } else { 1.0 };
+                        if let Ok(p) = area.build() {
+                            window.paint_path(p, alpha(color, 0.12 * faint));
+                        }
+                        let mut path = PathBuilder::stroke(px(1.5));
+                        path.move_to(point(b.origin.x, y(first)));
+                        for p in &shown {
+                            path.line_to(point(x(p.tick), y(p.value)));
+                        }
+                        path.line_to(point(right, y(last)));
+                        if let Ok(path) = path.build() {
+                            window.paint_path(path, alpha(color, faint));
+                        }
+                    },
+                )
+                .absolute()
+                .size_full()
+                .into_any_element(),
+            );
             for (i, p) in points.iter().enumerate() {
                 let x = p.tick as f32 * ppt - sx;
                 out.push(
                     div()
                         .absolute()
-                        .left(px(x - 4.))
-                        .top(px(top + auto_to_y(param, p.value) - 4.))
+                        .left(px(x - 4.5))
+                        .top(px(top + auto_to_y(param, p.value) - 4.5))
                         .size(px(9.))
                         .rounded(px(5.))
-                        .bg(color)
-                        .border_1()
-                        .border_color(rgb(0x101010))
+                        .bg(rgb(0x0b0b0e))
+                        .border_2()
+                        .border_color(rgb(color))
+                        .cursor_move()
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                                 cx.stop_propagation();
-                                ws.track = t;
+                                ws.select_track(t);
                                 if e.modifiers.alt {
                                     ws.edit(cx, |ws| {
                                         let a = &mut ws.session.project.tracks[t].automation;
@@ -603,31 +1198,6 @@ impl Workspace {
                         .into_any_element(),
                 );
             }
-            // Drawn under the points: added first.
-            let line = canvas(
-                |_, _, _| {},
-                move |b, _, window, _| {
-                    let y = |v: f32| b.origin.y + px(top + auto_to_y(param, v));
-                    let x = |tick: u64| b.origin.x + px(tick as f32 * ppt - sx);
-                    let (first, last) = match (points.first(), points.last()) {
-                        (Some(f), Some(l)) => (f.value, l.value),
-                        _ => (level, level),
-                    };
-                    let mut path = PathBuilder::stroke(px(1.5));
-                    path.move_to(point(b.origin.x, y(first)));
-                    for p in &points {
-                        path.line_to(point(x(p.tick), y(p.value)));
-                    }
-                    path.line_to(point(b.origin.x + b.size.width, y(last)));
-                    if let Ok(path) = path.build() {
-                        let faint = if points.is_empty() { 0.4 } else { 1.0 };
-                        window.paint_path(path, Hsla::from(color).opacity(faint));
-                    }
-                },
-            )
-            .absolute()
-            .size_full();
-            out.insert(out.len() - count, line.into_any_element());
         }
         out
     }
@@ -654,7 +1224,11 @@ impl Workspace {
     }
 }
 
-/// Starts dragging a region (`start` and `end` are its ticks when the drag starts).
+const PLAYHEAD: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 11 12"><path fill="#000" d="M1.5 0h8a1.5 1.5 0 0 1 1.5 1.5v4.6a1.5 1.5 0 0 1-.5 1.1L5.5 12 .5 7.2A1.5 1.5 0 0 1 0 6.1V1.5A1.5 1.5 0 0 1 1.5 0z"/></svg>"##;
+const CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#000" d="M1.5 1.2l12.8 7.4-5.6 1.5-2.6 5.4z"/></svg>"##;
+
+/// Starts dragging a region (`start` and `end` are its ticks when the drag starts), or does what
+/// the tool does to it.
 fn grab(
     at: At,
     edge: Edge,
@@ -664,12 +1238,29 @@ fn grab(
 ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
     cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
         cx.stop_propagation();
+        match ws.tool {
+            Tool::Eraser => {
+                ws.edit(cx, |ws| {
+                    ws.session.project.tracks[at.0].regions.remove(at.1);
+                    ws.region = None;
+                });
+                return;
+            }
+            Tool::Scissors => {
+                let tick = ws.snap(ws.tick_at(f32::from(e.position.x)));
+                ws.select_track(at.0);
+                ws.split_at(at, tick, cx);
+                return;
+            }
+            Tool::Pointer | Tool::Pencil => {}
+        }
         if ws.region != Some(at) {
             ws.note = None;
         }
         ws.region = Some(at);
-        ws.track = at.0;
-        // Double-clicking a MIDI region opens it in the piano roll, and a take folder its takes.
+        ws.select_track(at.0);
+        // Double-clicking a region opens it: MIDI in the piano roll, a pattern in the step
+        // sequencer, a take folder its takes.
         if e.click_count == 2 && edge == Edge::Move {
             let pane = match ws.session.project.region(at).content {
                 Content::Takes { .. } => Some(Bottom::Takes),
@@ -678,9 +1269,7 @@ fn grab(
                 Content::Audio { .. } => None,
             };
             if let Some(pane) = pane {
-                ws.bottom = Some(pane);
-                ws.focus_roll();
-                cx.notify();
+                ws.show_bottom(pane, cx);
                 return;
             }
         }
@@ -761,7 +1350,7 @@ impl Workspace {
     }
 }
 
-/// Draws a region's notes and waveforms in a lighter shade of its color.
+/// Draws a region's notes and waveforms in its track's color.
 pub fn paint_inside(
     inside: &Inside,
     b: Bounds<Pixels>,
@@ -769,41 +1358,44 @@ pub fn paint_inside(
     color: Hsla,
     window: &mut Window,
 ) {
-    let ink = Hsla {
-        l: (color.l + 0.3).min(0.92),
-        ..color
-    };
     let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
-    let mut bar = |x: f32, y: f32, bw: f32, bh: f32| {
+    let mut bar = |x: f32, y: f32, bw: f32, bh: f32, c: Hsla| {
         let at = point(b.origin.x + px(x), b.origin.y + px(y));
-        window.paint_quad(fill(Bounds::new(at, size(px(bw), px(bh))), ink));
+        window.paint_quad(fill(Bounds::new(at, size(px(bw), px(bh))), c).corner_radii(px(1.)));
     };
     if let Some(lo) = inside.notes.iter().map(|n| n.2).min() {
         let hi = inside.notes.iter().map(|n| n.2).max().unwrap();
         // At least an octave tall, centered on the notes.
         let span = (hi - lo).max(12) as f32 + 1.0;
         let top = (lo as f32 + hi as f32) / 2.0 + span / 2.0;
-        let row = (h - 4.0) / span;
+        let row = (h - 2.0) / span;
         for &(start, len, pitch) in &inside.notes {
-            let (x, nw) = (start as f32 * ppt, (len as f32 * ppt).max(1.0));
+            let (x, nw) = (start as f32 * ppt, (len as f32 * ppt - 1.0).max(1.5));
             if x + nw > 0.0 && x < w {
-                let y = 2.0 + (top - pitch as f32 - 0.5) * row;
-                bar(x.max(0.0), y, nw.min(w - x.max(0.0)), row.clamp(2.0, 4.0));
+                let y = 1.0 + (top - pitch as f32 - 0.5) * row;
+                bar(
+                    x.max(0.0),
+                    y,
+                    nw.min(w - x.max(0.0)),
+                    row.clamp(2.0, 3.0),
+                    color,
+                );
             }
         }
     }
     let mid = h / 2.0;
-    for wave in &inside.waves {
-        for x in wave.x0.max(0.0) as usize..wave.x1.min(w) as usize {
-            let from = wave.offset + (x as f32 - wave.x0) * wave.samples_per_px;
-            if from as usize >= wave.peaks.len_samples() {
+    let wave = color.opacity(0.85);
+    for wv in &inside.waves {
+        for x in wv.x0.max(0.0) as usize..wv.x1.min(w) as usize {
+            let from = wv.offset + (x as f32 - wv.x0) * wv.samples_per_px;
+            if from as usize >= wv.peaks.len_samples() {
                 break;
             }
-            let (lo, hi) = wave
+            let (lo, hi) = wv
                 .peaks
-                .range(from as usize, (from + wave.samples_per_px) as usize);
+                .range(from as usize, (from + wv.samples_per_px) as usize);
             let (y1, y2) = (mid - hi * mid, mid - lo * mid);
-            bar(x as f32, y1, 1.0, (y2 - y1).max(1.0));
+            bar(x as f32, y1, 1.0, (y2 - y1).max(1.0), wave);
         }
     }
 }

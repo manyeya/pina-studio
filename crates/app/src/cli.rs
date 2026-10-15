@@ -111,11 +111,17 @@ pub fn analyze(path: &Path) -> Result<Value, String> {
 /// Bounces the project (as the app has it, if open) to a WAV file.
 pub fn render(dir: &Path, out: &Path) -> Result<Value, String> {
     let p = project(dir)?;
+    bounce(&p, dir, out)?;
     let rate = p.sample_rate as f64;
-    let (mut engine, _plugins) = Engine::load(&p, dir, rate)?;
-    let frames = length(&p);
-    engine.bounce(out, frames)?;
-    Ok(json!({ "file": out, "seconds": frames as f64 / rate, "sample_rate": p.sample_rate }))
+    let seconds = length(&p) as f64 / rate;
+    Ok(json!({ "file": out, "seconds": seconds, "sample_rate": p.sample_rate }))
+}
+
+/// Bounces a project, whose files are in `dir`, to a WAV file.
+pub fn bounce(p: &Project, dir: &Path, out: &Path) -> Result<(), String> {
+    let rate = p.sample_rate as f64;
+    let (mut engine, _plugins) = Engine::load(p, dir, rate)?;
+    engine.bounce(out, length(p))
 }
 
 /// The plugins installed, scanning what's new.

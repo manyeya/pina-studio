@@ -15,7 +15,7 @@ use crate::{
 
 const CELL: f32 = 24.0;
 const ON: u8 = 100;
-const ACCENT: u8 = 127;
+const ACCENTED: u8 = 127;
 
 /// The rows a new pattern starts with.
 const STARTING_ROWS: [u8; 5] = [36, 38, 42, 46, 39];
@@ -76,14 +76,14 @@ impl Workspace {
                 let cell = &mut rows[row].cells[step];
                 *cell = match (*cell, accent) {
                     (0, false) => ON,
-                    (_, true) => ACCENT,
+                    (_, true) => ACCENTED,
                     _ => 0,
                 };
             }
         });
     }
 
-    pub fn steps_pane(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn steps_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let at = self.pattern();
         let mut labels = Vec::new();
         let mut grid = Vec::new();
@@ -93,6 +93,7 @@ impl Workspace {
                 unreachable!()
             };
             let steps = rows.iter().map(|r| r.cells.len()).max().unwrap_or(16);
+            let track_color = self.color(at.0);
             // The step under the playhead, while playing in the region.
             let tick = self.playhead();
             let now = (self.player.playing()
@@ -110,12 +111,12 @@ impl Workspace {
                 );
                 let cells = row.cells.iter().enumerate().map(|(k, &v)| {
                     let beat_start = k % 4 == 0;
-                    let off = if (k / 4) % 2 == 0 { 0x2e2e33 } else { 0x26262a };
+                    let off = if (k / 4) % 2 == 0 { 0x1d1d23 } else { 0x16161b };
                     let color = match v {
-                        0 if now == Some(k) => 0x45454c,
+                        0 if now == Some(k) => RAISED,
                         0 => off,
-                        v if v >= ACCENT => 0xffb340,
-                        _ => MIDI,
+                        v if v >= ACCENTED => tint(track_color, 0.55),
+                        _ => track_color,
                     };
                     div()
                         .w(px(CELL))
@@ -162,34 +163,20 @@ impl Workspace {
                 )
         });
         div()
-            .h(px(ROLL_H))
-            .flex_none()
+            .flex_1()
+            .min_h(px(0.))
             .flex()
-            .bg(rgb(PANEL_DARK))
-            .border_t_1()
-            .border_color(rgb(BORDER))
-            .when(self.show_inspector, |d| {
-                d.child(
-                    div()
-                        .w(px(INSPECTOR_W))
-                        .flex_none()
-                        .p_2()
-                        .border_r_1()
-                        .border_color(rgb(BORDER))
-                        .text_size(px(10.))
-                        .text_color(rgb(TEXT_DIM))
-                        .child("STEP SEQUENCER"),
-                )
-            })
+            .bg(rgb(LANE))
             .child(
                 div()
                     .w(px(HEADER_W))
                     .flex_none()
+                    .bg(rgb(SURFACE))
                     .py_2()
                     .flex()
                     .flex_col()
                     .border_r_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(LINE))
                     .children(labels)
                     .children(add.map(|b| div().p_2().child(b))),
             )
@@ -201,7 +188,7 @@ impl Workspace {
                     .overflow_y_scroll()
                     .children(grid)
                     .when(at.is_none(), |d| {
-                        d.child(div().text_color(rgb(TEXT_DIM)).child(
+                        d.child(div().text_color(rgb(TEXT_3)).child(
                             "Select a pattern region, or make one with ⌥⌘P on an instrument track.",
                         ))
                     }),

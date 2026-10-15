@@ -93,7 +93,7 @@ fn head(window: &mut Window, c: Point<Pixels>, hollow: bool, color: Hsla) {
 }
 
 impl Workspace {
-    pub fn score_pane(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn score_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let (ppt, sx) = (self.px_per_tick(), self.scroll_x);
         let at = self.region.filter(|&at| {
             matches!(
@@ -117,7 +117,7 @@ impl Workspace {
         }
         let selected = self.note;
         let ink = Hsla::from(rgb(0xe8e8ec));
-        let faint = Hsla::from(rgb(0x6a6a72));
+        let faint = Hsla::from(rgb(0x3a3a44));
         let shown = notes.clone();
         let staff = canvas(
             |_, _, _| {},
@@ -160,7 +160,7 @@ impl Workspace {
                 }
                 for &(i, start, length, pitch) in &shown {
                     let color = if selected == Some(i) {
-                        Hsla::from(rgb(0x5fb3ff))
+                        Hsla::from(rgb(ACCENT_TEXT))
                     } else {
                         ink
                     };
@@ -271,35 +271,21 @@ impl Workspace {
                 )
         });
         div()
-            .h(px(ROLL_H))
-            .flex_none()
+            .flex_1()
+            .min_h(px(0.))
             .flex()
-            .bg(rgb(PANEL_DARK))
-            .border_t_1()
-            .border_color(rgb(BORDER))
-            .when(self.show_inspector, |d| {
-                d.child(
-                    div()
-                        .w(px(INSPECTOR_W))
-                        .flex_none()
-                        .p_2()
-                        .border_r_1()
-                        .border_color(rgb(BORDER))
-                        .text_size(px(10.))
-                        .text_color(rgb(TEXT_DIM))
-                        .child("SCORE"),
-                )
-            })
+            .bg(rgb(LANE))
             .child(
                 div()
                     .w(px(HEADER_W))
                     .flex_none()
+                    .bg(rgb(SURFACE))
                     .h_full()
                     .relative()
                     .border_r_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(LINE))
                     .text_size(px(11.))
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(TEXT_3))
                     .child(
                         div()
                             .absolute()
@@ -330,7 +316,7 @@ impl Workspace {
                                 .absolute()
                                 .top(px(20.))
                                 .left(px(20.))
-                                .text_color(rgb(TEXT_DIM))
+                                .text_color(rgb(TEXT_3))
                                 .child("Select a MIDI region to see it as notation."),
                         )
                     })

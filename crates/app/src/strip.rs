@@ -1,30 +1,28 @@
-//! A channel strip, as in Logic's inspector and mixer: plugin slots, sends, pan, level, fader and
-//! meter, mute and solo, name; for a track, an aux, or the master (Stereo Out).
+//! A channel strip, as in Logic's inspector and mixer: the instrument or input, an EQ curve,
+//! effect slots (the built-in EQ and compressor, then plugins), sends, where it plays, pan,
+//! level, fader and meters, mute and solo, name; for a track, an aux, or the master.
 //!
-//! Clicking a plugin opens its editor; clicking an empty slot, or right-clicking any, picks a
-//! plugin. Sends drag up and down for level; right-click one to remove it.
+//! Clicking a plugin opens its editor; clicking an empty slot, or right-clicking any, picks one.
+//! Sends drag up and down for level; right-click one to remove it.
 
 use gpui::{
-    Context, Div, Hsla, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point, canvas, div, fill,
-    point, prelude::*, px, rgb, size,
+    Bounds, Context, Div, FontWeight, MouseButton, MouseDownEvent, Pixels, Point, canvas, div,
+    fill, point, prelude::*, px, rgb, size,
 };
 use tempo_engine::{
+    dsp::{LOW_CUT_OFF, eq_response},
     player::Which,
-    project::{Instrument, PluginRef},
+    project::{Comp, Eq, Instrument, PluginRef},
 };
 
 use crate::{
     menu::{Menu, MenuAction},
     theme::*,
-    workspace::{Drag, Workspace},
+    workspace::{CompField, Drag, View, Workspace},
 };
 
 /// Quieter than anything audible: the fader's floor.
 pub const SILENT: f32 = -144.0;
-/// Plugin rows: the instrument (or input) and three inserts.
-const SLOT_ROWS: usize = 4;
-/// Send rows: two sends and the one that adds a send.
-const SEND_ROWS: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Channel {
@@ -32,6 +30,37 @@ pub enum Channel {
     Aux(usize),
     Master,
 }
+
+/// The built-in processors every channel can have.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Builtin {
+    Eq,
+    Comp,
+}
+
+/// Where a strip is drawn: narrow in the inspector, or in a row of the mixer.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Layout {
+    Compact,
+    /// Which of the EQ, effect and send rows show, and how tall the fader stands.
+    Mixer {
+        rows: [bool; 3],
+        fader: f32,
+    },
+}
+
+impl Layout {
+    pub fn fader_h(self) -> f32 {
+        match self {
+            Layout::Compact => 136.0,
+            Layout::Mixer { fader, .. } => fader,
+        }
+    }
+}
+
+/// Mixer strips line up: this many effect and send rows each.
+pub const MIXER_INSERTS: usize = 4;
+pub const MIXER_SENDS: usize = 2;
 
 /// Fader position (0 to 1) for a gain in dB: an audio taper, 0 dB at about 0.7, +6 dB at the top.
 pub fn fader_pos(db: f32) -> f32 {
@@ -46,17 +75,100 @@ pub fn fader_db(pos: f32) -> f32 {
     }
 }
 
-/// Meter height (0 to 1) for a peak level: -60 dB to +6 dB.
-fn meter_pos(level: f32) -> f32 {
-    ((20.0 * level.max(1e-9).log10() + 60.0) / 66.0).clamp(0.0, 1.0)
+/// "80 Hz", "2.4 kHz".
+pub fn hz(f: f32) -> String {
+    if f >= 1000.0 {
+        format!("{:.1} kHz", f / 1000.0)
+    } else {
+        format!("{f:.0} Hz")
+    }
 }
 
-fn db_text(db: f32) -> String {
-    if db <= -100.0 {
-        "-∞".to_string()
+// Knob scales for the built-in EQ and compressor: value (0 to 1) to setting and back.
+pub fn low_cut_pos(hz: f32) -> f32 {
+    if hz <= LOW_CUT_OFF {
+        0.0
     } else {
-        format!("{db:.1}")
+        (hz / LOW_CUT_OFF).ln() / 50f32.ln()
     }
+}
+
+pub fn low_cut_hz(v: f32) -> f32 {
+    if v <= 0.005 {
+        0.0
+    } else {
+        (LOW_CUT_OFF * 50f32.powf(v)).round()
+    }
+}
+
+pub fn eq_gain_pos(db: f32) -> f32 {
+    (db + 12.0) / 24.0
+}
+
+pub fn eq_gain_db(v: f32) -> f32 {
+    ((v * 24.0 - 12.0) * 2.0).round() / 2.0
+}
+
+fn log_pos(v: f32, lo: f32, hi: f32) -> f32 {
+    (v / lo).ln() / (hi / lo).ln()
+}
+
+fn log_value(p: f32, lo: f32, hi: f32) -> f32 {
+    lo * (hi / lo).powf(p)
+}
+
+pub fn comp_pos(field: CompField, c: &Comp) -> f32 {
+    match field {
+        CompField::Threshold => (c.threshold_db + 60.0) / 60.0,
+        CompField::Ratio => log_pos(c.ratio, 1.0, 20.0),
+        CompField::Attack => log_pos(c.attack_ms, 0.1, 100.0),
+        CompField::Release => log_pos(c.release_ms, 10.0, 1000.0),
+        CompField::Makeup => c.makeup_db / 24.0,
+    }
+    .clamp(0.0, 1.0)
+}
+
+pub fn comp_set(field: CompField, c: &mut Comp, v: f32) {
+    match field {
+        CompField::Threshold => c.threshold_db = (v * 60.0 - 60.0).round(),
+        CompField::Ratio => c.ratio = (log_value(v, 1.0, 20.0) * 10.0).round() / 10.0,
+        CompField::Attack => c.attack_ms = (log_value(v, 0.1, 100.0) * 10.0).round() / 10.0,
+        CompField::Release => c.release_ms = log_value(v, 10.0, 1000.0).round(),
+        CompField::Makeup => c.makeup_db = (v * 48.0).round() / 2.0,
+    }
+}
+
+pub fn comp_text(field: CompField, c: &Comp) -> String {
+    match field {
+        CompField::Threshold => format!("{} dB", db_text(c.threshold_db)),
+        CompField::Ratio => format!("{:.1}:1", c.ratio),
+        CompField::Attack => format!("{} ms", trim(c.attack_ms)),
+        CompField::Release => format!("{} ms", trim(c.release_ms)),
+        CompField::Makeup => format!("{} dB", db_text(c.makeup_db)),
+    }
+}
+
+fn trim(v: f32) -> String {
+    if v >= 10.0 {
+        format!("{v:.0}")
+    } else {
+        format!("{v:.1}")
+    }
+}
+
+/// An EQ's gain at a frequency, in dB.
+pub fn eq_curve_at(eq: &Eq, freq: f32, rate: f64) -> f32 {
+    eq_response(eq, freq as f64, rate) as f32
+}
+
+/// An EQ's curve across `width` points, as gains in dB from 20 Hz to 20 kHz.
+pub fn eq_curve(eq: &Eq, rate: f64, width: usize) -> Vec<f32> {
+    (0..width)
+        .map(|i| {
+            let f = 20.0 * 1000f64.powf(i as f64 / (width - 1).max(1) as f64);
+            eq_response(eq, f, rate) as f32
+        })
+        .collect()
 }
 
 impl Workspace {
@@ -97,7 +209,16 @@ impl Workspace {
         }
     }
 
-    fn channel_id(&self, ch: Channel) -> Option<u64> {
+    pub fn inserts(&self, ch: Channel) -> &[PluginRef] {
+        let p = &self.session.project;
+        match ch {
+            Channel::Track(i) => &p.tracks[i].inserts,
+            Channel::Aux(i) => &p.auxes[i].inserts,
+            Channel::Master => &[],
+        }
+    }
+
+    pub fn channel_id(&self, ch: Channel) -> Option<u64> {
         let p = &self.session.project;
         match ch {
             Channel::Track(i) => Some(p.tracks[i].id),
@@ -106,8 +227,18 @@ impl Workspace {
         }
     }
 
+    /// A channel's name and color.
+    pub fn channel_look(&self, ch: Channel) -> (String, u32) {
+        let p = &self.session.project;
+        match ch {
+            Channel::Track(i) => (p.tracks[i].name.clone(), self.color(i)),
+            Channel::Aux(i) => (p.auxes[i].name.clone(), BUS),
+            Channel::Master => ("Stereo Out".into(), MASTER),
+        }
+    }
+
     /// Opens a plugin's editor, saying why not if it can't.
-    fn open_editor(&mut self, ch: Channel, which: Which, cx: &mut Context<Self>) {
+    pub fn open_editor(&mut self, ch: Channel, which: Which, cx: &mut Context<Self>) {
         let Some(id) = self.channel_id(ch) else {
             return;
         };
@@ -117,9 +248,9 @@ impl Workspace {
         }
     }
 
-    /// The plugins that can go in a slot: instruments for the instrument slot, effects for
-    /// inserts, by name.
-    fn plugin_menu(&self, ch: Channel, which: Which, at: Point<Pixels>) -> Menu {
+    /// The plugins that can go in a slot: instruments for the instrument slot, effects (and the
+    /// built-in ones a channel doesn't have yet) for inserts, by name.
+    pub fn plugin_menu(&self, ch: Channel, which: Which, at: Point<Pixels>) -> Menu {
         let instrument = which == Which::Instrument;
         let mut items = Vec::new();
         match (ch, which) {
@@ -169,6 +300,27 @@ impl Workspace {
             };
             items.push((format!("{} — {}", p.class, p.vendor), action));
         }
+        if !instrument {
+            let (eq, comp) = self.strip_dsp(ch);
+            if eq.is_none() {
+                items.push((
+                    "Channel EQ (built in)".into(),
+                    MenuAction::AddBuiltin {
+                        channel: ch,
+                        builtin: Builtin::Eq,
+                    },
+                ));
+            }
+            if comp.is_none() {
+                items.push((
+                    "Compressor (built in)".into(),
+                    MenuAction::AddBuiltin {
+                        channel: ch,
+                        builtin: Builtin::Comp,
+                    },
+                ));
+            }
+        }
         if self.plugins.is_none() {
             items.push(("Looking for plugins…".to_string(), MenuAction::Nothing));
         }
@@ -176,7 +328,7 @@ impl Workspace {
     }
 
     /// Where a track can play: the master, or any aux or stack.
-    fn output_menu(&self, track: usize, at: Point<Pixels>) -> Menu {
+    pub fn output_menu(&self, track: usize, at: Point<Pixels>) -> Menu {
         let mut items = vec![(
             "Stereo Out".to_string(),
             MenuAction::Output { track, bus: None },
@@ -194,7 +346,7 @@ impl Workspace {
     }
 
     /// The buses a track can send to: every aux, and a new one.
-    fn send_menu(&self, track: usize, at: Point<Pixels>) -> Menu {
+    pub fn send_menu(&self, track: usize, at: Point<Pixels>) -> Menu {
         let mut items: Vec<_> = self
             .session
             .project
@@ -213,24 +365,67 @@ impl Workspace {
         items.push(("New Aux".to_string(), MenuAction::Send { track, bus: None }));
         Menu { at, items }
     }
+
+    fn has_builtin_instrument(&self, ch: Channel) -> bool {
+        matches!(ch, Channel::Track(i) if matches!(self.session.project.tracks[i].instrument, Some(Instrument::Synth | Instrument::Drums)))
+    }
+
+    /// Shows a channel in the mixer, its effects in the side panel.
+    pub fn show_channel(&mut self, ch: Channel, cx: &mut Context<Self>) {
+        self.channel = ch;
+        if let Channel::Track(i) = ch {
+            self.track = i;
+        }
+        self.view = View::Mixer;
+        cx.notify();
+    }
 }
 
-/// A row in the strip's plugin or send area.
-fn row(label: String, used: bool) -> Div {
+/// A slot: an instrument, an effect, a send; with a dot of color before it, if given.
+fn slot(label: impl Into<gpui::SharedString>, used: bool, h: f32) -> Div {
+    dotted(label, used, h, None)
+}
+
+fn dotted(label: impl Into<gpui::SharedString>, used: bool, h: f32, dot: Option<u32>) -> Div {
     div()
         .flex_none()
-        .w(px(STRIP_W - 8.))
-        .h(px(17.))
-        .px_1()
-        .rounded(px(3.))
+        .h(px(h))
+        .px(px(6.))
         .flex()
         .items_center()
-        .text_size(px(10.))
+        .gap(px(5.))
+        .rounded(px(5.))
+        .text_size(px(10.5))
         .whitespace_nowrap()
         .overflow_hidden()
-        .bg(rgb(if used { 0x3e4a5a } else { 0x1c1c1e }))
-        .text_color(rgb(if used { TEXT } else { TEXT_DIM }))
-        .child(label)
+        .cursor_pointer()
+        .when(used, |d| {
+            d.bg(rgb(FIELD))
+                .text_color(rgb(TEXT_2))
+                .hover(|s| s.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+        })
+        .when(!used, |d| {
+            d.border_1()
+                .border_dashed()
+                .border_color(rgb(RAISED))
+                .text_color(rgb(TEXT_4))
+                .hover(|s| s.border_color(rgb(LINE_STRONG)).text_color(rgb(TEXT_3)))
+        })
+        .when_some(dot, |d, c| {
+            d.child(div().size(px(6.)).flex_none().rounded(px(3.)).bg(rgb(c)))
+        })
+        .child(
+            div()
+                .min_w(px(0.))
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(label.into()),
+        )
+}
+
+/// An empty row, keeping the mixer's strips lined up.
+fn blank(h: f32) -> Div {
+    div().flex_none().h(px(h))
 }
 
 /// A plugin slot: left-click opens the plugin (or picks one, if empty), right-click picks one.
@@ -239,10 +434,16 @@ fn plugin_slot(
     used: bool,
     ch: Channel,
     which: Which,
+    h: f32,
+    dot: Option<u32>,
     cx: &mut Context<Workspace>,
 ) -> Div {
-    row(label, used)
+    dotted(label, used, h, dot)
         .debug_selector(move || format!("slot-{ch:?}-{which:?}"))
+        .when(!used, |d| {
+            d.justify_center()
+                .child(icon(Icon::Plus, 11.).text_color(rgb(TEXT_4)))
+        })
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
@@ -265,99 +466,296 @@ fn plugin_slot(
         )
 }
 
-impl Workspace {
-    fn has_builtin_instrument(&self, ch: Channel) -> bool {
-        matches!(ch, Channel::Track(i) if matches!(self.session.project.tracks[i].instrument, Some(Instrument::Synth | Instrument::Drums)))
-    }
+/// A built-in processor's slot: click shows it in the mixer; right-click takes it out.
+fn builtin_slot(
+    label: &'static str,
+    ch: Channel,
+    b: Builtin,
+    h: f32,
+    color: u32,
+    cx: &mut Context<Workspace>,
+) -> Div {
+    dotted(label, true, h, Some(color))
+        .debug_selector(move || format!("builtin-{ch:?}-{b:?}"))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |ws, _, _, cx| {
+                cx.stop_propagation();
+                ws.show_channel(ch, cx);
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                ws.menu = Some(Menu {
+                    at: e.position,
+                    items: vec![(
+                        "Remove".into(),
+                        MenuAction::RemoveBuiltin {
+                            channel: ch,
+                            builtin: b,
+                        },
+                    )],
+                });
+                cx.notify();
+            }),
+        )
 }
 
-pub fn strip(ws: &Workspace, ch: Channel, cx: &mut Context<Workspace>) -> Div {
+/// A channel's EQ curve, small: the strip's thumbnail. Clicking it shows the channel's EQ.
+pub fn eq_thumbnail(
+    ws: &Workspace,
+    ch: Channel,
+    h: f32,
+    color: u32,
+    cx: &mut Context<Workspace>,
+) -> Div {
+    let eq = ws.strip_dsp(ch).0;
+    let rate = ws.session.project.sample_rate as f64;
+    let curve = eq.filter(|e| !e.bypass).map(|e| eq_curve(&e, rate, 48));
+    div()
+        .flex_none()
+        .h(px(h))
+        .rounded(px(6.))
+        .bg(rgb(WELL))
+        .overflow_hidden()
+        .cursor_pointer()
+        .debug_selector(move || format!("eq-{ch:?}"))
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |b, _, window, _| {
+                    let (w, hh) = (f32::from(b.size.width), f32::from(b.size.height));
+                    let mid = hh / 2.0;
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(b.origin.x, b.origin.y + px(mid)),
+                            size(b.size.width, px(1.)),
+                        ),
+                        rgb(LINE_SOFT),
+                    ));
+                    let Some(curve) = &curve else { return };
+                    let scale = (mid - 3.0) / 18.0;
+                    let y = |g: f32| {
+                        b.origin.y + px((mid - g.clamp(-18.0, 18.0) * scale).clamp(1.0, hh - 1.0))
+                    };
+                    let x = |i: usize| b.origin.x + px(i as f32 * w / (curve.len() - 1) as f32);
+                    let mut area = gpui::PathBuilder::fill();
+                    area.move_to(point(b.origin.x, b.origin.y + b.size.height));
+                    for (i, &g) in curve.iter().enumerate() {
+                        area.line_to(point(x(i), y(g)));
+                    }
+                    area.line_to(point(b.origin.x + b.size.width, b.origin.y + b.size.height));
+                    area.close();
+                    if let Ok(p) = area.build() {
+                        window.paint_path(p, alpha(color, 0.14));
+                    }
+                    let mut line = gpui::PathBuilder::stroke(px(1.5));
+                    line.move_to(point(x(0), y(curve[0])));
+                    for (i, &g) in curve.iter().enumerate().skip(1) {
+                        line.line_to(point(x(i), y(g)));
+                    }
+                    if let Ok(p) = line.build() {
+                        window.paint_path(p, rgb(color));
+                    }
+                },
+            )
+            .size_full(),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |ws, _, _, cx| {
+                cx.stop_propagation();
+                if ws.strip_dsp(ch).0.is_none() {
+                    ws.edit(cx, |ws| *ws.strip_dsp_mut(ch).0 = Some(Eq::default()));
+                }
+                ws.show_channel(ch, cx);
+            }),
+        )
+}
+
+/// A stereo meter, on the fader's scale: green, then yellow from -6 dB, red over 0 dB; a line
+/// where the peak was a moment ago.
+pub fn meter(level: [f32; 2], held: [f32; 2], w: f32, gap: f32) -> impl IntoElement {
+    let pos = |l: f32| fader_pos(20.0 * l.max(1e-9).log10());
+    canvas(
+        |_, _, _| {},
+        move |b, _, window, _| {
+            let h = f32::from(b.size.height);
+            let bottom = b.origin.y + b.size.height;
+            for side in 0..2 {
+                let x = b.origin.x + px(side as f32 * (w + gap));
+                let bar = |from: f32, to: f32| {
+                    Bounds::new(
+                        point(x, bottom - px(to * h)),
+                        size(px(w), px((to - from) * h)),
+                    )
+                };
+                window.paint_quad(fill(bar(0.0, 1.0), rgb(0x0a0a0d)).corner_radii(px(2.)));
+                let m = pos(level[side]);
+                for (from, to, color) in [
+                    (0.0, fader_pos(-6.0), METER_LOW),
+                    (fader_pos(-6.0), fader_pos(0.0), METER_MID),
+                    (fader_pos(0.0), 1.0, METER_HIGH),
+                ] {
+                    let top = m.min(to);
+                    if top > from {
+                        window.paint_quad(fill(bar(from, top), rgb(color)));
+                    }
+                }
+                let p = pos(held[side]);
+                if p > 0.02 {
+                    let color = if p >= fader_pos(0.0) {
+                        METER_HIGH
+                    } else {
+                        TEXT
+                    };
+                    window.paint_quad(fill(bar(p - 2.0 / h, p), rgb(color)));
+                }
+            }
+        },
+    )
+    .w(px(w * 2.0 + gap))
+    .h_full()
+    .flex_none()
+}
+
+pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Workspace>) -> Div {
     let project = &ws.session.project;
-    let (name, color, pan, mute, solo, id) = match ch {
+    let mixer = matches!(layout, Layout::Mixer { .. });
+    let rows = match layout {
+        Layout::Mixer { rows, .. } => rows,
+        Layout::Compact => [true; 3],
+    };
+    let (name, color) = ws.channel_look(ch);
+    let (pan, mute, solo, id) = match ch {
         Channel::Track(i) => {
             let t = &project.tracks[i];
-            let color = track_color(t.instrument.is_some());
-            (
-                t.name.clone(),
-                color,
-                Some(t.pan),
-                Some(t.mute),
-                Some(t.solo),
-                Some(t.id),
-            )
+            (Some(t.pan), Some(t.mute), Some(t.solo), Some(t.id))
         }
         Channel::Aux(i) => {
             let a = &project.auxes[i];
-            (
-                a.name.clone(),
-                AUX,
-                Some(a.pan),
-                Some(a.mute),
-                None,
-                Some(a.id),
-            )
+            (Some(a.pan), Some(a.mute), None, Some(a.id))
         }
-        Channel::Master => ("Stereo Out".to_string(), 0x6b6b72, None, None, None, None),
+        Channel::Master => (None, None, None, None),
     };
     let volume = ws.volume(ch);
-    let level = id.map_or(ws.master_level, |id| {
-        ws.levels.get(&id).copied().unwrap_or(0.0)
-    });
+    let level = ws.levels.get(&id).copied().unwrap_or_default();
     let pos = fader_pos(volume);
+    let selected = if mixer { ws.channel == ch } else { false };
+    let slot_h = 22.;
 
-    // Plugin rows: the instrument (or what feeds the strip), the inserts, and one empty slot.
-    let mut slots = Vec::new();
-    match ch {
+    // The instrument, or what feeds the strip.
+    let source = match ch {
         Channel::Track(i) => {
             let t = &project.tracks[i];
-            slots.push(match &t.instrument {
-                None => row("Audio In".into(), false),
-                Some(Instrument::Synth) => {
-                    plugin_slot("Sine Synth".into(), true, ch, Which::Instrument, cx)
-                }
+            let dot = Some(color);
+            match &t.instrument {
+                None => dotted("Audio In", true, 24., dot).cursor_default(),
+                Some(Instrument::Synth) => plugin_slot(
+                    "Sine Synth".into(),
+                    true,
+                    ch,
+                    Which::Instrument,
+                    24.,
+                    dot,
+                    cx,
+                ),
                 Some(Instrument::Drums) => {
-                    plugin_slot("Drum Kit".into(), true, ch, Which::Instrument, cx)
+                    plugin_slot("Drum Kit".into(), true, ch, Which::Instrument, 24., dot, cx)
                 }
                 Some(Instrument::Vst3(r)) => {
-                    plugin_slot(r.class.clone(), true, ch, Which::Instrument, cx)
+                    plugin_slot(r.class.clone(), true, ch, Which::Instrument, 24., dot, cx)
                 }
-            });
+            }
         }
-        Channel::Aux(i) => slots.push(row(format!("Bus {}", project.auxes[i].bus), false)),
-        Channel::Master => {}
-    }
-    let inserts = match ch {
-        Channel::Track(i) => &project.tracks[i].inserts[..],
-        Channel::Aux(i) => &project.auxes[i].inserts[..],
-        Channel::Master => &[][..],
+        Channel::Aux(i) => {
+            slot(format!("Bus {}", project.auxes[i].bus), true, 24.).cursor_default()
+        }
+        Channel::Master => slot("Output 1–2", true, 24.).cursor_default(),
     };
-    for (n, r) in inserts.iter().enumerate() {
-        slots.push(plugin_slot(r.class.clone(), true, ch, Which::Insert(n), cx));
+
+    // Effect slots: the built-ins it has, its plugins, and an empty one to add another.
+    let (eq, comp) = ws.strip_dsp(ch);
+    let mut effects = Vec::new();
+    if eq.is_some() {
+        effects.push(builtin_slot(
+            "Channel EQ",
+            ch,
+            Builtin::Eq,
+            slot_h,
+            if eq.is_some_and(|e| e.bypass) {
+                TEXT_4
+            } else {
+                color
+            },
+            cx,
+        ));
     }
-    if ch != Channel::Master {
-        slots.push(plugin_slot(
+    if comp.is_some() {
+        effects.push(builtin_slot(
+            "Compressor",
+            ch,
+            Builtin::Comp,
+            slot_h,
+            if comp.is_some_and(|c| c.bypass) {
+                TEXT_4
+            } else {
+                color
+            },
+            cx,
+        ));
+    }
+    let inserts = ws.inserts(ch);
+    for (n, r) in inserts.iter().enumerate() {
+        effects.push(plugin_slot(
+            r.class.clone(),
+            true,
+            ch,
+            Which::Insert(n),
+            slot_h,
+            Some(TEXT_4),
+            cx,
+        ));
+    }
+    let has_room = ch != Channel::Master || eq.is_none() || comp.is_none();
+    if has_room {
+        effects.push(plugin_slot(
             String::new(),
             false,
             ch,
             Which::Insert(inserts.len()),
+            slot_h,
+            None,
             cx,
         ));
     }
-    slots.truncate(SLOT_ROWS);
-    while slots.len() < SLOT_ROWS {
-        slots.push(row(String::new(), false).opacity(0.0));
+    if mixer {
+        effects.truncate(MIXER_INSERTS);
+        while effects.len() < MIXER_INSERTS {
+            effects.push(blank(slot_h));
+        }
     }
 
-    // Send rows, for tracks.
+    // Sends, for tracks.
     let mut sends = Vec::new();
     if let Channel::Track(track) = ch {
         let list = &project.tracks[track].sends;
-        for (index, s) in list.iter().enumerate().take(SEND_ROWS - 1) {
+        for (index, s) in list.iter().enumerate() {
             let level = s.level_db;
+            let bus = project
+                .auxes
+                .iter()
+                .find(|a| a.bus == s.bus)
+                .map_or(format!("Bus {}", s.bus), |a| a.name.clone());
             sends.push(
-                row(format!("Bus {}  {}", s.bus, db_text(level)), true)
-                    .debug_selector(move || format!("send-{track}-{index}"))
+                slot(bus, true, slot_h)
+                    .justify_between()
+                    .pr(px(3.))
                     .cursor_ns_resize()
+                    .child(knob(fader_pos(level), 16., TEXT, false))
+                    .debug_selector(move || format!("send-{track}-{index}"))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
@@ -391,30 +789,39 @@ pub fn strip(ws: &Workspace, ch: Channel, cx: &mut Context<Workspace>) -> Div {
                     ),
             );
         }
-        sends.push(
-            row("+ Send".into(), false)
-                .debug_selector(move || format!("add-send-{track}"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        ws.menu = Some(ws.send_menu(track, e.position));
-                        cx.notify();
-                    }),
-                ),
-        );
+        if !mixer || sends.len() < MIXER_SENDS {
+            sends.push(
+                slot("Send", false, slot_h)
+                    .justify_center()
+                    .debug_selector(move || format!("add-send-{track}"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            ws.menu = Some(ws.send_menu(track, e.position));
+                            cx.notify();
+                        }),
+                    ),
+            );
+        }
     }
-    while sends.len() < SEND_ROWS {
-        sends.push(row(String::new(), false).opacity(0.0));
+    if mixer {
+        sends.truncate(MIXER_SENDS);
+        while sends.len() < MIXER_SENDS {
+            sends.push(blank(slot_h));
+        }
     }
-    // Where it plays.
+
+    // Where it plays, in the mixer.
     let output = match ch {
         Channel::Track(track) => {
             let bus = project.tracks[track].output;
             let to = bus.and_then(|b| project.auxes.iter().find(|a| a.bus == b));
             let label = to.map_or("Stereo Out".to_string(), |a| a.name.clone());
-            row(format!("→ {label}"), bus.is_some())
-                .debug_selector(move || format!("output-{track}"))
+            pill(label)
+                .cursor_pointer()
+                .hover(|s| s.border_color(rgb(LINE_STRONG)))
+                .debug_selector(move || format!("mixer-output-{track}"))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
@@ -424,38 +831,171 @@ pub fn strip(ws: &Workspace, ch: Channel, cx: &mut Context<Workspace>) -> Div {
                     }),
                 )
         }
-        _ => row(String::new(), false).opacity(0.0),
+        Channel::Aux(_) => pill("Stereo Out".into()),
+        Channel::Master => pill("Out 1–2".into()),
     };
 
+    let pan_row = div()
+        .flex_none()
+        .h(px(if mixer { 36. } else { 28. }))
+        .flex()
+        .items_center()
+        .justify_between()
+        .px(px(2.))
+        .child(match pan {
+            Some(pan) => div()
+                .cursor_ns_resize()
+                .child(knob(pan, if mixer { 32. } else { 26. }, TEXT, true))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        if e.modifiers.alt {
+                            ws.edit(cx, |ws| ws.set_pan(ch, 0.0));
+                        } else {
+                            let y = f32::from(e.position.y);
+                            ws.begin_drag(
+                                Drag::Pan {
+                                    channel: ch,
+                                    y,
+                                    pan,
+                                },
+                                cx,
+                            );
+                        }
+                    }),
+                )
+                .into_any_element(),
+            None => div().into_any_element(),
+        })
+        .child(
+            div()
+                .font_family(MONO)
+                .text_size(px(11.))
+                .text_color(rgb(TEXT_3))
+                .child(match pan {
+                    Some(p) if p.abs() < 0.005 => "C".to_string(),
+                    Some(p) => format!("{}{:.0}", if p < 0.0 { "L" } else { "R" }, p.abs() * 64.0),
+                    None => String::new(),
+                }),
+        );
+
+    let peak_db = 20.0 * level.held[0].max(level.held[1]).max(1e-9).log10();
+    let readout = |text: String, color: u32| {
+        div()
+            .flex_1()
+            .h(px(18.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.))
+            .bg(rgb(WELL))
+            .font_family(MONO)
+            .text_size(px(10.5))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(color))
+            .child(text)
+    };
+    let readouts = div()
+        .flex_none()
+        .flex()
+        .gap(px(4.))
+        .child(readout(db_text(volume), TEXT_2))
+        .child(readout(
+            db_text(if peak_db < -100.0 { SILENT } else { peak_db }),
+            if peak_db > 0.0 {
+                METER_HIGH
+            } else if peak_db > -6.0 {
+                METER_MID
+            } else {
+                TEXT_2
+            },
+        ));
+
+    let fader_h = layout.fader_h();
+    let (track_x, cap_w, scale_x, meter_x) = if mixer {
+        (13.0, 30.0, 31.0, 54.0)
+    } else {
+        (38.0, 26.0, 0.0, 66.0)
+    };
+    let usable = fader_h - 16.0;
+    let at = |p: f32| 8.0 + (1.0 - p) * usable;
+    let labels = [6.0f32, 0.0, -6.0, -12.0, -24.0, -40.0].map(|db| {
+        div()
+            .absolute()
+            .left(px(scale_x))
+            .top(px(at(fader_pos(db)) - 5.0))
+            .w(px(20.))
+            .when(mixer, |d| d.flex().justify_center())
+            .when(!mixer, |d| d.flex().justify_end())
+            .font_family(MONO)
+            .text_size(px(9.))
+            .line_height(px(10.))
+            .text_color(rgb(TEXT_3))
+            .child(if db > 0.0 {
+                format!("+{db:.0}")
+            } else {
+                format!("{:.0}", db.abs())
+            })
+    });
     let fader = div()
+        .flex_none()
         .relative()
-        .w(px(34.))
-        .h(px(FADER_H))
+        .h(px(fader_h))
         .cursor_ns_resize()
         .child(
             div()
                 .absolute()
-                .left(px(15.))
-                .top_0()
+                .left(px(track_x))
+                .top(px(8.))
                 .w(px(4.))
-                .h_full()
+                .h(px(usable))
                 .rounded(px(2.))
-                .bg(rgb(0x121214)),
+                .bg(rgb(0x0a0a0d)),
+        )
+        .children(labels)
+        .child(
+            div()
+                .absolute()
+                .left(px(meter_x))
+                .top(px(8.))
+                .h(px(usable))
+                .child(meter(
+                    level.now,
+                    level.held,
+                    if mixer { 5. } else { 4. },
+                    2.,
+                )),
         )
         .child(
             div()
                 .absolute()
-                .left(px(3.))
-                .top(px((1.0 - pos) * FADER_H - 7.0))
-                .w(px(28.))
-                .h(px(14.))
-                .rounded(px(3.))
-                .bg(rgb(0xa2a2aa))
+                .left(px(track_x + 2.0 - cap_w / 2.0))
+                .top(px(at(pos) - if mixer { 10. } else { 7. }))
+                .w(px(cap_w))
+                .h(px(if mixer { 20. } else { 14. }))
+                .rounded(px(if mixer { 5. } else { 4. }))
+                .bg(rgb(0x3a3a44))
                 .border_1()
-                .border_color(rgb(0x5a5a62))
+                .border_color(rgb(0x4e4e5a))
+                .shadow_md()
                 .flex()
+                .flex_col()
                 .items_center()
-                .child(div().w_full().h(px(1.)).bg(rgb(0x2a2a2e))),
+                .justify_center()
+                .gap(px(2.))
+                .when(mixer, |d| {
+                    d.child(div().w(px(18.)).h(px(1.)).bg(rgb(TEXT_3)))
+                })
+                .child(
+                    div()
+                        .w(px(if mixer { 18. } else { 16. }))
+                        .h(px(1.))
+                        .bg(rgb(TEXT)),
+                )
+                .when(mixer, |d| {
+                    d.child(div().w(px(18.)).h(px(1.)).bg(rgb(TEXT_3)))
+                }),
         )
         .on_mouse_down(
             MouseButton::Left,
@@ -470,6 +1010,7 @@ pub fn strip(ws: &Workspace, ch: Channel, cx: &mut Context<Workspace>) -> Div {
                             channel: ch,
                             y,
                             pos,
+                            height: usable,
                         },
                         cx,
                     );
@@ -477,102 +1018,17 @@ pub fn strip(ws: &Workspace, ch: Channel, cx: &mut Context<Workspace>) -> Div {
             }),
         );
 
-    let m = meter_pos(level);
-    let meter = div().w(px(6.)).h(px(FADER_H)).child(
-        canvas(
-            |_, _, _| {},
-            move |b, _, window, _| {
-                window.paint_quad(fill(b, rgb(0x121214)));
-                let (h, bottom) = (f32::from(b.size.height), b.origin.y + b.size.height);
-                let segments = [
-                    (0.0, 54.0 / 66.0, METER_LOW),
-                    (54.0 / 66.0, 60.0 / 66.0, METER_MID),
-                    (60.0 / 66.0, 1.0, METER_HIGH),
-                ];
-                for (from, to, color) in segments {
-                    let top = m.min(to);
-                    if top > from {
-                        let y = bottom - px(top * h);
-                        let hh = px((top - from) * h);
-                        window.paint_quad(fill(
-                            gpui::Bounds::new(point(b.origin.x, y), size(b.size.width, hh)),
-                            rgb(color),
-                        ));
-                    }
-                }
-            },
-        )
-        .size_full(),
-    );
-
-    let selected = matches!(ch, Channel::Track(i) if i == ws.track);
-    div()
-        .debug_selector(move || format!("strip-{ch:?}"))
-        .w(px(STRIP_W))
+    let buttons = div()
         .flex_none()
+        .h(px(22.))
         .flex()
-        .flex_col()
-        .items_center()
-        .gap_1()
-        .py_1()
-        .rounded(px(4.))
-        .bg(rgb(if selected { 0x36363c } else { PANEL }))
-        .when_some(
-            if let Channel::Track(i) = ch {
-                Some(i)
-            } else {
-                None
-            },
-            |d, i| {
-                d.on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        ws.track = i;
-                        cx.notify();
-                    }),
-                )
-            },
-        )
-        .children(slots)
-        .child(div().h(px(4.)))
-        .children(sends)
-        .child(output)
-        .child(match pan {
-            Some(pan) => div().cursor_ns_resize().child(knob(pan)).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    if e.modifiers.alt {
-                        ws.edit(cx, |ws| ws.set_pan(ch, 0.0));
-                    } else {
-                        let y = f32::from(e.position.y);
-                        ws.begin_drag(
-                            Drag::Pan {
-                                channel: ch,
-                                y,
-                                pan,
-                            },
-                            cx,
-                        );
-                    }
-                }),
-            ),
-            None => div().h(px(28.)),
-        })
-        .child(
-            div()
-                .font_family(MONO)
-                .text_size(px(10.))
-                .child(db_text(volume)),
-        )
-        .child(div().flex().gap_1().child(fader).child(meter))
-        .child(
-            div()
-                .flex()
-                .gap_1()
-                .h(px(16.))
-                .when_some(mute, |d, on| {
-                    d.child(toggle("M", on, MUTE).on_mouse_down(
+        .gap(px(3.))
+        .when_some(mute, |d, on| {
+            d.child(
+                toggle("M", on, TEXT, BG, 22.)
+                    .flex_1()
+                    .debug_selector(move || format!("strip-mute-{ch:?}"))
+                    .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |ws, _, _, cx| {
                             cx.stop_propagation();
@@ -582,68 +1038,195 @@ pub fn strip(ws: &Workspace, ch: Channel, cx: &mut Context<Workspace>) -> Div {
                                 Channel::Master => {}
                             });
                         }),
-                    ))
-                })
-                .when_some(
-                    solo.zip(if let Channel::Track(i) = ch {
-                        Some(i)
-                    } else {
-                        None
+                    ),
+            )
+        })
+        .when_some(
+            solo.zip(if let Channel::Track(i) = ch {
+                Some(i)
+            } else {
+                None
+            }),
+            |d, (on, i)| {
+                d.child(toggle("S", on, SOLO, BG, 22.).flex_1().on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| {
+                        cx.stop_propagation();
+                        ws.edit(cx, |ws| ws.session.project.tracks[i].solo ^= true);
                     }),
-                    |d, (on, i)| {
-                        d.child(toggle("S", on, SOLO).on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |ws, _, _, cx| {
-                                cx.stop_propagation();
-                                ws.edit(cx, |ws| ws.session.project.tracks[i].solo ^= true);
-                            }),
-                        ))
-                    },
-                ),
+                ))
+            },
         )
-        .child(
-            div()
-                .w(px(STRIP_W - 8.))
-                .h(px(18.))
-                .px_1()
-                .rounded(px(3.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(10.))
-                .whitespace_nowrap()
-                .overflow_hidden()
-                .bg(Hsla::from(rgb(color)).opacity(0.9))
-                .text_color(rgb(0x101010))
-                .child(name),
+        .when(mixer, |d| {
+            d.when_some(
+                if let Channel::Track(i) = ch {
+                    Some(i)
+                } else {
+                    None
+                },
+                |d, i| {
+                    d.child(
+                        toggle("R", ws.track == i, RECORD, 0xffffff, 22.)
+                            .flex_1()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    cx.stop_propagation();
+                                    ws.select_track(i);
+                                    cx.notify();
+                                }),
+                            ),
+                    )
+                },
+            )
+        });
+
+    let plate = div()
+        .flex_none()
+        .h(px(if mixer { 28. } else { 22. }))
+        .px(px(4.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(if mixer { 7. } else { 6. }))
+        .text_size(px(if mixer { 12. } else { 11. }))
+        .font_weight(FontWeight::SEMIBOLD)
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .bg(if selected {
+            rgb(color).into()
+        } else {
+            alpha(color, 0.14)
+        })
+        .text_color(rgb(if selected { BG } else { tint(color, 0.5) }))
+        .child(name);
+
+    let reduction = ws.reductions.get(&id).copied().unwrap_or(0.0);
+    let header = mixer.then(|| {
+        let (i, number) = match ch {
+            Channel::Track(i) => (track_icon(&project.tracks[i]), format!("{}", i + 1)),
+            Channel::Aux(i) => (Icon::Bus, format!("B{}", i + 1)),
+            Channel::Master => (Icon::Output, String::new()),
+        };
+        div()
+            .flex_none()
+            .h(px(28.))
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .size(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(7.))
+                    .bg(alpha(color, 0.14))
+                    .text_color(rgb(color))
+                    .child(icon(i, 14.).text_color(rgb(color))),
+            )
+            .when(reduction > 0.3, |d| {
+                d.child(
+                    div()
+                        .font_family(MONO)
+                        .text_size(px(9.5))
+                        .text_color(rgb(METER_MID))
+                        .child(format!("GR {:.0}", reduction)),
+                )
+            })
+            .child(
+                div()
+                    .font_family(MONO)
+                    .text_size(px(11.))
+                    .text_color(rgb(TEXT_3))
+                    .child(number),
+            )
+    });
+
+    div()
+        .debug_selector(move || format!("strip-{ch:?}"))
+        .when(mixer, |d| d.w(px(90.)).flex_none())
+        .when(!mixer, |d| d.flex_1().min_w(px(0.)))
+        .flex()
+        .flex_col()
+        .gap(px(if mixer { 8. } else { 6. }))
+        .p(px(if mixer { 8. } else { 7. }))
+        .rounded(px(if mixer { 12. } else { 10. }))
+        .border_1()
+        .bg(rgb(if selected {
+            0x1c1c23
+        } else if mixer {
+            0x141418
+        } else {
+            STRIP
+        }))
+        .border_color(rgb(if selected { 0x3a3a44 } else { 0x1e1e24 }))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |ws, _, _, cx| {
+                ws.channel = ch;
+                if let Channel::Track(i) = ch {
+                    ws.track = i;
+                }
+                cx.notify();
+            }),
         )
+        .children(header)
+        .when(rows[0], |d| {
+            d.child(eq_thumbnail(
+                ws,
+                ch,
+                if mixer { 44. } else { 34. },
+                color,
+                cx,
+            ))
+        })
+        .child(source)
+        .when(rows[1], |d| {
+            d.child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .children(effects),
+            )
+        })
+        .when(rows[2] && (mixer || !sends.is_empty()), |d| {
+            d.child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .children(sends),
+            )
+        })
+        .when(mixer, |d| d.child(output))
+        .child(pan_row)
+        .child(readouts)
+        .child(fader)
+        .child(buttons)
+        .child(plate)
 }
 
-/// A pan knob, its pointer turned up to 135° either way.
-fn knob(pan: f32) -> impl IntoElement {
-    canvas(
-        |_, _, _| {},
-        move |b, _, window, _| {
-            let c = b.center();
-            let r = b.size.width.min(b.size.height) / 2.0 - px(1.);
-            let mut disc = PathBuilder::fill();
-            disc.move_to(point(c.x + r, c.y));
-            disc.arc_to(point(r, r), px(0.), false, false, point(c.x - r, c.y));
-            disc.arc_to(point(r, r), px(0.), false, false, point(c.x + r, c.y));
-            disc.close();
-            if let Ok(p) = disc.build() {
-                window.paint_path(p, rgb(0x46464d));
-            }
-            let a = pan * 135f32.to_radians();
-            let mut pointer = PathBuilder::stroke(px(2.));
-            pointer.move_to(c);
-            pointer.line_to(point(c.x + r * a.sin(), c.y - r * a.cos()));
-            if let Ok(p) = pointer.build() {
-                window.paint_path(p, rgb(0xf0f0f0));
-            }
-        },
-    )
-    .size(px(28.))
+/// A rounded outline around a little text: where a strip plays.
+fn pill(label: String) -> Div {
+    div()
+        .flex_none()
+        .h(px(22.))
+        .px(px(6.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(11.))
+        .border_1()
+        .border_color(rgb(RAISED))
+        .text_size(px(10.5))
+        .text_color(rgb(TEXT_3))
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .child(label)
 }
 
 #[cfg(test)]
@@ -657,5 +1240,25 @@ mod tests {
         }
         assert!((fader_pos(0.0) - 0.708).abs() < 1e-3);
         assert_eq!(fader_db(0.0), SILENT);
+    }
+
+    #[test]
+    fn knob_scales_round_trip() {
+        assert_eq!(low_cut_hz(low_cut_pos(80.0)), 80.0);
+        assert_eq!(low_cut_hz(0.0), 0.0);
+        assert_eq!(eq_gain_db(eq_gain_pos(3.5)), 3.5);
+        let mut c = Comp::default();
+        for field in [
+            CompField::Threshold,
+            CompField::Ratio,
+            CompField::Attack,
+            CompField::Release,
+            CompField::Makeup,
+        ] {
+            let before = comp_text(field, &c);
+            let v = comp_pos(field, &c);
+            comp_set(field, &mut c, v);
+            assert_eq!(comp_text(field, &c), before, "{field:?}");
+        }
     }
 }

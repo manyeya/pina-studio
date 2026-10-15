@@ -14,16 +14,19 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
+    time::Instant,
 };
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::{
     drums::Drums,
+    dsp::{CompParams, CompState, EqFilters, EqState},
     peaks::Peaks,
     plugin::{AUDIO_MODULE, Module, Note, Plugin, Processor},
     project::{
-        AutoPoint, Content, Instrument, PluginRef, Project, Region, comp_segments, value_at,
+        AutoPoint, Comp, Content, Eq, Instrument, PluginRef, Project, Region, comp_segments,
+        value_at,
     },
     synth::Synth,
 };
@@ -126,6 +129,10 @@ pub struct Arrangement {
     buses: Vec<[Vec<f32>; 2]>,
     /// How far ahead of what's heard the engine reads, so plugins' latency doesn't make it late.
     lookahead: u64,
+    /// The master's built-in EQ and compressor.
+    master_strip: StripDsp,
+    /// Where playback loops, in samples, while the cycle is on.
+    cycle: Option<(u64, u64)>,
 }
 
 impl Arrangement {
@@ -137,6 +144,43 @@ impl Arrangement {
             auxes: Vec::new(),
             buses: Vec::new(),
             lookahead: 0,
+            master_strip: StripDsp::default(),
+            cycle: None,
+        }
+    }
+}
+
+/// A channel's built-in EQ and compressor at a rate, unless absent or bypassed.
+fn strip_dsp(eq: Option<&Eq>, comp: Option<&Comp>, rate: f64) -> StripDsp {
+    StripDsp {
+        eq: eq.filter(|e| !e.bypass).map(|e| EqFilters::new(e, rate)),
+        comp: comp.filter(|c| !c.bypass).map(|c| CompParams::new(c, rate)),
+    }
+}
+
+/// What a channel's built-in EQ and compressor do.
+#[derive(Default)]
+struct StripDsp {
+    eq: Option<EqFilters>,
+    comp: Option<CompParams>,
+}
+
+/// Their memory, kept with the lane (or the engine, for the master) through edits.
+#[derive(Default)]
+struct StripState {
+    eq: EqState,
+    comp: CompState,
+}
+
+impl StripState {
+    /// Runs a block through the EQ and compressor in place; returns the gain reduction, in dB.
+    fn process(&mut self, dsp: &StripDsp, l: &mut [f32], r: &mut [f32]) -> f32 {
+        if let Some(eq) = &dsp.eq {
+            self.eq.process(eq, l, r);
+        }
+        match &dsp.comp {
+            Some(c) => self.comp.process(c, l, r),
+            None => 0.0,
         }
     }
 }
@@ -192,6 +236,7 @@ fn gather(
 struct AuxPlan {
     slot: usize,
     gain: [f32; 2],
+    dsp: StripDsp,
     /// Delay compensation after its inserts.
     delay: usize,
 }
@@ -285,6 +330,7 @@ struct Plan {
     /// Delay compensation before the sends, and on the direct path after them.
     delay: usize,
     direct: usize,
+    dsp: StripDsp,
 }
 
 impl Plan {
@@ -332,6 +378,7 @@ pub struct Lane {
     /// change waiting for its sample.
     cell: Option<(usize, u64)>,
     queued: Option<(Option<usize>, u64)>,
+    strip: StripState,
 }
 
 /// The main-thread halves of a lane's plugins.
@@ -401,6 +448,7 @@ pub fn make_lane(
         post: Delay::new(),
         cell: None,
         queued: None,
+        strip: StripState::default(),
     };
     Ok((lane, plugins, latency))
 }
@@ -505,6 +553,7 @@ pub fn compile(
                 .and_then(|bus| project.auxes.iter().position(|a| a.bus == bus)),
             // Through an aux, the aux's own compensation lines it up.
             direct: if t.output.is_some() { 0 } else { pdc.direct },
+            dsp: strip_dsp(t.eq.as_ref(), t.comp.as_ref(), rate),
         });
     }
     let auxes = project
@@ -517,6 +566,7 @@ pub fn compile(
             AuxPlan {
                 slot,
                 gain: balance(g, a.pan),
+                dsp: strip_dsp(a.eq.as_ref(), a.comp.as_ref(), rate),
                 delay,
             }
         })
@@ -530,6 +580,15 @@ pub fn compile(
             .collect(),
         auxes,
         lookahead: pdc.lookahead,
+        master_strip: strip_dsp(
+            project.master_eq.as_ref(),
+            project.master_comp.as_ref(),
+            rate,
+        ),
+        cycle: project
+            .cycle
+            .filter(|c| !c.off && c.end > c.start)
+            .map(|c| (project.samples(c.start, rate), project.samples(c.end, rate))),
     };
     (arrangement, problems)
 }
@@ -638,10 +697,20 @@ pub enum Garbage {
 pub struct Shared {
     position: AtomicU64,
     playing: AtomicBool,
-    /// The loudest sample (as f32 bits) per lane since last read, and the master's last.
+    /// The loudest sample (as f32 bits) per lane since last read, left then right; the master's
+    /// last.
     meters: Vec<AtomicU32>,
+    /// The most each lane's compressor (and the master's, last) turned down since last read, in
+    /// dB as f32 bits.
+    reduction: Vec<AtomicU32>,
     /// The lane live notes go to, or `usize::MAX` for none.
     armed: AtomicUsize,
+    /// The busiest block since last read, as the share of its time spent working (f32 bits).
+    load: AtomicU32,
+    /// Frames the output device asks for at a time.
+    buffer: AtomicU32,
+    /// Click on every beat while playing.
+    metronome: AtomicBool,
 }
 
 impl Shared {
@@ -649,9 +718,43 @@ impl Shared {
         Shared {
             position: AtomicU64::new(0),
             playing: AtomicBool::new(false),
-            meters: (0..=SLOTS).map(|_| AtomicU32::new(0)).collect(),
+            meters: (0..(SLOTS + 1) * 2).map(|_| AtomicU32::new(0)).collect(),
+            reduction: (0..=SLOTS).map(|_| AtomicU32::new(0)).collect(),
             armed: AtomicUsize::new(usize::MAX),
+            load: AtomicU32::new(0),
+            buffer: AtomicU32::new(0),
+            metronome: AtomicBool::new(false),
         }
+    }
+
+    /// Records a block's peaks and gain reduction on a lane (or `MASTER`).
+    fn report(&self, slot: usize, peak: [f32; 2], reduction: f32) {
+        self.meters[slot * 2].fetch_max(peak[0].to_bits(), Ordering::Relaxed);
+        self.meters[slot * 2 + 1].fetch_max(peak[1].to_bits(), Ordering::Relaxed);
+        self.reduction[slot].fetch_max(reduction.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The gain reduction on a lane (or `MASTER`) since the last call, in dB.
+    pub fn take_reduction(&self, slot: usize) -> f32 {
+        f32::from_bits(self.reduction[slot].swap(0, Ordering::Relaxed))
+    }
+
+    /// The busiest the audio thread has been since the last call: 1 is all of its time.
+    pub fn take_load(&self) -> f32 {
+        f32::from_bits(self.load.swap(0, Ordering::Relaxed))
+    }
+
+    /// The output device's buffer, in frames; 0 before it's asked for one.
+    pub fn buffer(&self) -> u32 {
+        self.buffer.load(Ordering::Relaxed)
+    }
+
+    pub fn set_metronome(&self, on: bool) {
+        self.metronome.store(on, Ordering::Relaxed);
+    }
+
+    pub fn metronome(&self) -> bool {
+        self.metronome.load(Ordering::Relaxed)
     }
 
     pub fn position(&self) -> u64 {
@@ -668,9 +771,10 @@ impl Shared {
             .store(slot.unwrap_or(usize::MAX), Ordering::Relaxed);
     }
 
-    /// The peak level on a lane (or `MASTER`) since the last call.
-    pub fn take_meter(&self, slot: usize) -> f32 {
-        f32::from_bits(self.meters[slot].swap(0, Ordering::Relaxed))
+    /// The peak level on a lane (or `MASTER`) since the last call, left and right.
+    pub fn take_meter(&self, slot: usize) -> [f32; 2] {
+        let take = |i: usize| f32::from_bits(self.meters[i].swap(0, Ordering::Relaxed));
+        [take(slot * 2), take(slot * 2 + 1)]
     }
 }
 
@@ -710,6 +814,9 @@ pub struct Engine {
     /// Notes asked for by `Msg::Note`, for the next block.
     pending: [(usize, Note); LIVE_NOTES],
     pending_len: usize,
+    master_strip: StripState,
+    /// The metronome's click sounding: samples left, and its pitch.
+    click: (u32, f32),
 }
 
 impl Engine {
@@ -725,6 +832,8 @@ impl Engine {
             link: None,
             pending: [(0, Note::default()); LIVE_NOTES],
             pending_len: 0,
+            master_strip: StripState::default(),
+            click: (0, 0.0),
         }
     }
 
@@ -859,10 +968,45 @@ impl Engine {
         }
     }
 
+    /// Tells the engine how many frames the output device asks for at a time, to report.
+    pub fn note_buffer(&self, frames: usize) {
+        if let Some(link) = &self.link {
+            link.shared.buffer.store(frames as u32, Ordering::Relaxed);
+        }
+    }
+
     /// Writes the next `frames` (at most `MAX_BLOCK`) of the mix into `out` and, if playing, moves
-    /// the playhead on. Instruments and effects run while stopped too, so tails ring out.
-    /// Allocation-free: safe on the audio thread.
+    /// the playhead on, back to the cycle's start when it reaches its end. Instruments and effects
+    /// run while stopped too, so tails ring out. Allocation-free: safe on the audio thread.
     pub fn process(&mut self, out: [&mut [f32]; 2], frames: usize) {
+        let began = Instant::now();
+        let [l, r] = out;
+        // ponytail: what plugins' lookahead read past the cycle's end is dropped, not wrapped.
+        let wrap = match self.arrangement.cycle {
+            Some((start, end)) if self.playing && self.position < end => {
+                let left = (end - self.position) as usize;
+                (left < frames).then_some((left, start))
+            }
+            _ => None,
+        };
+        match wrap {
+            Some((left, start)) => {
+                self.block([&mut l[..left], &mut r[..left]], left);
+                self.position = start;
+                self.release = true;
+                self.block([&mut l[left..], &mut r[left..]], frames - left);
+            }
+            None => self.block([l, r], frames),
+        }
+        if let Some(link) = &self.link {
+            let load = began.elapsed().as_secs_f64() * self.rate / frames.max(1) as f64;
+            link.shared
+                .load
+                .fetch_max((load as f32).to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    fn block(&mut self, out: [&mut [f32]; 2], frames: usize) {
         self.receive();
         // Live notes go to the armed lane, and back to the main thread as played.
         // ponytail: they land at the start of the block, up to MAX_BLOCK samples late; use
@@ -1021,6 +1165,7 @@ impl Engine {
                     p.process([&mut *l, &mut *r], frames, notes);
                 }
             }
+            let reduction = lane.strip.process(&plan.dsp, l, r);
             for p in &mut lane.inserts {
                 p.set_transport(playing, from, tempo);
                 p.process([&mut *l, &mut *r], frames, &[]);
@@ -1037,12 +1182,12 @@ impl Engine {
                 (g1[0] - g0[0]) / frames as f32,
                 (g1[1] - g0[1]) / frames as f32,
             ];
-            let mut peak = 0f32;
+            let mut peak = [0f32; 2];
             for i in 0..frames {
                 let k = i as f32;
                 l[i] *= g0[0] + step[0] * k;
                 r[i] *= g0[1] + step[1] * k;
-                peak = peak.max(l[i].abs()).max(r[i].abs());
+                peak = [peak[0].max(l[i].abs()), peak[1].max(r[i].abs())];
             }
             // Post-fader sends.
             for &(aux, level) in &plan.sends {
@@ -1065,7 +1210,7 @@ impl Engine {
                 dest_r[i] += r[i];
             }
             if let Some(s) = shared {
-                s.meters[plan.slot].fetch_max(peak.to_bits(), Ordering::Relaxed);
+                s.report(plan.slot, peak, reduction);
             }
         }
 
@@ -1075,41 +1220,61 @@ impl Engine {
             };
             l.copy_from_slice(&arrangement.buses[aux][0][..frames]);
             r.copy_from_slice(&arrangement.buses[aux][1][..frames]);
+            let reduction = lane.strip.process(&plan.dsp, l, r);
             for p in &mut lane.inserts {
                 p.set_transport(playing, from, tempo);
                 p.process([&mut *l, &mut *r], frames, &[]);
             }
             lane.post.process(l, r, plan.delay);
-            let mut peak = 0f32;
+            let mut peak = [0f32; 2];
             for i in 0..frames {
                 let (a, b) = (l[i] * plan.gain[0], r[i] * plan.gain[1]);
                 out_l[i] += a;
                 out_r[i] += b;
-                peak = peak.max(a.abs()).max(b.abs());
+                peak = [peak[0].max(a.abs()), peak[1].max(b.abs())];
             }
             if let Some(s) = shared {
-                s.meters[plan.slot].fetch_max(peak.to_bits(), Ordering::Relaxed);
+                s.report(plan.slot, peak, reduction);
             }
         }
 
-        let mut peak = 0f32;
-        for s in out_l[..frames].iter_mut().chain(out_r[..frames].iter_mut()) {
-            *s *= arrangement.master;
-            peak = peak.max(s.abs());
+        let reduction = self.master_strip.process(
+            &arrangement.master_strip,
+            &mut out_l[..frames],
+            &mut out_r[..frames],
+        );
+        let mut peak = [0f32; 2];
+        for (side, buf) in [&mut *out_l, &mut *out_r].into_iter().enumerate() {
+            for s in buf[..frames].iter_mut() {
+                *s *= arrangement.master;
+                peak[side] = peak[side].max(s.abs());
+            }
+        }
+        let metronome = shared.is_some_and(Shared::metronome);
+        if playing && metronome {
+            click(
+                &mut self.click,
+                heard,
+                self.rate * 60.0 / tempo,
+                self.rate,
+                [&mut out_l[..frames], &mut out_r[..frames]],
+            );
         }
         if playing {
             self.position = heard + frames as u64;
         }
         if let Some(s) = shared {
-            s.meters[MASTER].fetch_max(peak.to_bits(), Ordering::Relaxed);
+            s.report(MASTER, peak, reduction);
             s.position.store(self.position, Ordering::Relaxed);
             s.playing.store(self.playing, Ordering::Relaxed);
         }
     }
 
-    /// Plays `frames` from the start into memory.
+    /// Plays `frames` from the start into memory, straight through.
     pub fn render(&mut self, frames: u64) -> [Vec<f32>; 2] {
         let mut out = [vec![0f32; frames as usize], vec![0f32; frames as usize]];
+        // A bounce plays the song through once, cycle or not.
+        self.arrangement.cycle = None;
         self.locate(0);
         self.play();
         for at in (0..frames as usize).step_by(MAX_BLOCK) {
@@ -1132,6 +1297,8 @@ impl Engine {
         };
         let mut wav = hound::WavWriter::create(path, spec).map_err(err)?;
         let (mut l, mut r) = (vec![0f32; MAX_BLOCK], vec![0f32; MAX_BLOCK]);
+        // A bounce plays the song through once, cycle or not.
+        self.arrangement.cycle = None;
         self.locate(0);
         self.play();
         let mut left = frames;
@@ -1171,6 +1338,7 @@ impl Engine {
             .build_output_stream(
                 config,
                 move |out: &mut [f32], _| {
+                    self.note_buffer(out.len() / ch);
                     for chunk in out.chunks_mut(MAX_BLOCK * ch) {
                         let frames = chunk.len() / ch;
                         self.process([&mut l, &mut r], frames);
@@ -1187,6 +1355,29 @@ impl Engine {
             .map_err(|e| e.to_string())?;
         stream.play().map_err(|e| e.to_string())?;
         Ok(stream)
+    }
+}
+
+/// The metronome: a short blip on every beat from `heard`, higher on the bar, added to `out`.
+/// `click` is the blip still sounding: samples left and its pitch.
+fn click(click: &mut (u32, f32), heard: u64, beat: f64, rate: f64, [l, r]: [&mut [f32]; 2]) {
+    const LENGTH: f64 = 0.03;
+    let length = (LENGTH * rate) as u32;
+    let mut next = (heard as f64 / beat).ceil();
+    for i in 0..l.len() {
+        let t = heard + i as u64;
+        if t as f64 >= next * beat - 0.5 {
+            let bar = (next as u64).is_multiple_of(crate::project::BEATS_PER_BAR);
+            *click = (length, if bar { 1_760.0 } else { 1_320.0 });
+            next += 1.0;
+        }
+        if click.0 > 0 {
+            let age = (length - click.0) as f32 / rate as f32;
+            let s = (std::f32::consts::TAU * click.1 * age).sin() * (-age * 140.0).exp() * 0.3;
+            l[i] += s;
+            r[i] += s;
+            click.0 -= 1;
+        }
     }
 }
 
@@ -1742,7 +1933,7 @@ mod tests {
         assert!(peak(&run(&mut engine, MAX_BLOCK)[0]) > 0.0);
         assert!(shared.playing());
         assert_eq!(shared.position(), MAX_BLOCK as u64);
-        assert!(shared.take_meter(7) > 0.0 && shared.take_meter(MASTER) > 0.0);
+        assert!(shared.take_meter(7)[0] > 0.0 && shared.take_meter(MASTER)[1] > 0.0);
         // The empty arrangement it started with comes back.
         assert!(matches!(garbage.pop(), Ok(Garbage::Arrangement(_))));
 
@@ -1790,5 +1981,84 @@ mod tests {
         let wav = hound::WavReader::open(dir.join("out.wav")).unwrap();
         assert_eq!((wav.spec().channels, wav.duration()), (2, 30_000));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_cycle_loops_playback() {
+        let mut p = project(vec![synth_track("a", vec![note(0, PPQ * 4, 69)], PPQ * 4)]);
+        p.cycle = Some(crate::project::Cycle {
+            start: PPQ,
+            end: PPQ * 2,
+            off: false,
+        });
+        let (mut engine, _) = Engine::load(&p, Path::new("."), RATE).unwrap();
+        engine.locate(BEAT as u64);
+        engine.play();
+        run(&mut engine, BEAT + 1000);
+        assert_eq!(engine.position(), BEAT as u64 + 1000);
+        // Before the cycle, it plays on into it; switched off, it plays straight through.
+        p.cycle.as_mut().unwrap().off = true;
+        let (mut engine, _) = Engine::load(&p, Path::new("."), RATE).unwrap();
+        engine.locate(BEAT as u64);
+        engine.play();
+        run(&mut engine, BEAT + 1000);
+        assert_eq!(engine.position(), 2 * BEAT as u64 + 1000);
+    }
+
+    #[test]
+    fn the_channel_eq_and_compressor_shape_the_sound() {
+        let t = synth_track("a", vec![note(0, PPQ * 2, 69)], PPQ * 2);
+        let dry = peak(&render(&project(vec![t.clone()]), Path::new("."), BEAT)[0][BEAT / 2..]);
+        let mut boosted = t.clone();
+        boosted.eq = Some(Eq {
+            low_mid: crate::project::Band {
+                freq: 440.0,
+                gain_db: 6.0,
+                q: 1.0,
+            },
+            ..Eq::default()
+        });
+        let louder =
+            peak(&render(&project(vec![boosted.clone()]), Path::new("."), BEAT)[0][BEAT / 2..]);
+        assert!((louder / dry - 2.0).abs() < 0.05, "{dry} {louder}");
+        // Bypassed, it's as if it weren't there.
+        boosted.eq.as_mut().unwrap().bypass = true;
+        let same = peak(&render(&project(vec![boosted]), Path::new("."), BEAT)[0][BEAT / 2..]);
+        assert!((same - dry).abs() < 1e-6);
+
+        let mut squashed = t;
+        squashed.comp = Some(Comp {
+            threshold_db: -40.0,
+            ratio: 20.0,
+            ..Comp::default()
+        });
+        let quieter = peak(&render(&project(vec![squashed]), Path::new("."), BEAT)[0][BEAT / 2..]);
+        assert!(quieter < dry / 4.0, "{dry} {quieter}");
+    }
+
+    #[test]
+    fn the_metronome_clicks_on_the_beat_while_playing() {
+        let (mut tx, rx) = rtrb::RingBuffer::new(16);
+        let (gtx, _garbage) = rtrb::RingBuffer::new(16);
+        let (_live, live_rx) = rtrb::RingBuffer::new(16);
+        let (played_tx, _played) = rtrb::RingBuffer::new(16);
+        let shared = Arc::new(Shared::new());
+        let link = Link {
+            rx,
+            garbage: gtx,
+            shared: shared.clone(),
+            live: live_rx,
+            played: played_tx,
+        };
+        let mut engine = Engine::live(RATE, link);
+        assert!(tx.push(Msg::Play).is_ok());
+        assert_eq!(peak(&run(&mut engine, MAX_BLOCK)[0]), 0.0);
+        shared.set_metronome(true);
+        // The next beat, at 120 bpm, is half a second in.
+        let [l, _] = run(&mut engine, BEAT);
+        let at = BEAT - MAX_BLOCK;
+        assert_eq!(peak(&l[..at - 1]), 0.0);
+        assert!(peak(&l[at..at + 500]) > 0.1);
+        assert!(shared.take_load() > 0.0);
     }
 }

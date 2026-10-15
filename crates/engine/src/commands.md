@@ -72,6 +72,23 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `set_aux` `{"aux": 0, "name": "Reverb", "volume_db": -3, "pan": 0, "mute": false}`
 - `set_automation` `{"track": 0, "param": "volume", "points": [{"tick": 0, "value": -12}, {"tick": 3840, "value": 0}]}`:
   `volume` in dB or `pan`; values change in straight lines between points. No points turns it off.
+- `set_eq` `{"channel": {"track": 1}, "eq": {"low_cut": 80, "low_mid": {"freq": 400, "gain_db": -2.5, "q": 1}, "high_mid": {"freq": 2500, "gain_db": 3.5, "q": 1}, "high_shelf": {"freq": 10000, "gain_db": 4}}}`:
+  the channel's built-in EQ, before its inserts: a low cut (Hz; 20 or less is off), two bells and
+  a high shelf. Leave out what you don't change; `"bypass": true` keeps it but stops it; no `eq`
+  takes it out. `channel` is `{"track": i}`, `{"aux": i}` or `"master"`.
+- `set_comp` `{"channel": {"track": 1}, "comp": {"threshold_db": -18, "ratio": 4, "attack_ms": 10, "release_ms": 120, "makeup_db": 3}}`:
+  the built-in compressor, after the EQ. Same rules as `set_eq`.
+- `edit_notes` `{"track": 1, "region": 0, "edit": {"kind": "quantize", "grid": 240, "strength": 1, "swing": 50}}`:
+  changes a MIDI region's notes in one go (or one note, with `"note": 3`). `kind` is `quantize`
+  (`strength` 0-1, `swing` 50 straight to 75), `humanize` (`timing` ticks, `velocity`, `seed`),
+  `legato`, `chop` (`grid`), `arpeggiate` (`grid`), `transpose` (`semitones`) or `velocity` (`by`).
+- `add_marker` `{"tick": 15360, "name": "Chorus"}`: names a place in the song; answers with its
+  index, markers being numbered in time order.
+- `set_marker` `{"marker": 0, "name": "Verse 2", "tick": 7680}`, `delete_marker` `{"marker": 0}`
+- `set_key` `{"key": "A minor"}`: the song's key, which the piano roll shows as a scale. Without
+  `key`, tempo works it out from the notes.
+- `set_cycle` `{"start": 0, "end": 15360, "on": true}`: playback loops over that range (ticks);
+  `"on": false` keeps the range without looping.
 
 ## Listening
 

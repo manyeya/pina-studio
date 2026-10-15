@@ -6,9 +6,12 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::project::{
-    AUDIO_DIR, AutoPoint, AuxSend, Cell, Content, Instrument, Note, PPQ, PatternRow, PluginRef,
-    Project, Region, Track,
+use crate::{
+    music::{Key, NoteEdit},
+    project::{
+        AUDIO_DIR, AutoPoint, AuxSend, Cell, Comp, Content, Cycle, Eq, Instrument, Marker, Note,
+        PPQ, PatternRow, PluginRef, Project, Region, Track,
+    },
 };
 
 /// What `tempo describe` prints: every command, for people and agents.
@@ -194,6 +197,58 @@ pub enum Command {
         param: AutoParam,
         points: Vec<AutoPoint>,
     },
+    /// Names a place in the song; answers with the marker's index, in time order.
+    AddMarker {
+        tick: u64,
+        name: String,
+    },
+    SetMarker {
+        marker: usize,
+        #[serde(default)]
+        tick: Option<u64>,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    DeleteMarker {
+        marker: usize,
+    },
+    /// The song's key, like "A minor"; without one, tempo works it out from the notes.
+    SetKey {
+        #[serde(default)]
+        key: Option<String>,
+    },
+    /// Loops playback from `start` to `end` (ticks); `on: false` keeps the range without looping.
+    SetCycle {
+        start: u64,
+        end: u64,
+        #[serde(default = "yes")]
+        on: bool,
+    },
+    /// A channel's built-in EQ (low cut, two bells, high shelf); without `eq`, takes it out.
+    SetEq {
+        channel: ChannelRef,
+        #[serde(default)]
+        eq: Option<Eq>,
+    },
+    /// A channel's built-in compressor, after its EQ; without `comp`, takes it out.
+    SetComp {
+        channel: ChannelRef,
+        #[serde(default)]
+        comp: Option<Comp>,
+    },
+    /// Quantizes, humanizes, makes legato, chops, arpeggiates, transposes or changes the
+    /// velocity of a MIDI region's notes (or one of them, with `note`).
+    EditNotes {
+        track: usize,
+        region: usize,
+        edit: NoteEdit,
+        #[serde(default)]
+        note: Option<usize>,
+    },
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -201,6 +256,7 @@ pub enum Command {
 pub enum ChannelRef {
     Track(usize),
     Aux(usize),
+    Master,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -323,6 +379,9 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
             let list = match channel {
                 ChannelRef::Track(i) => &mut track(p, i)?.inserts,
                 ChannelRef::Aux(i) => &mut aux(p, i)?.inserts,
+                ChannelRef::Master => {
+                    return Err("the master has no insert slots: use set_eq and set_comp".into());
+                }
             };
             match plugin {
                 Some(plugin) if index < list.len() => list[index] = plugin,
@@ -615,8 +674,85 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
                 AutoParam::Pan => a.pan = points,
             }
         }
+        Command::AddMarker { tick, name } => {
+            let at = p.markers.partition_point(|m| m.tick <= tick);
+            p.markers.insert(at, Marker { tick, name });
+            return Ok(json!({ "marker": at }));
+        }
+        Command::SetMarker { marker, tick, name } => {
+            let n = p.markers.len();
+            let m = p
+                .markers
+                .get_mut(marker)
+                .ok_or_else(|| format!("no marker {marker}: there are {n}"))?;
+            if let Some(name) = name {
+                m.name = name;
+            }
+            if let Some(tick) = tick {
+                m.tick = tick;
+                p.markers.sort_by_key(|m| m.tick);
+            }
+        }
+        Command::DeleteMarker { marker } => {
+            if marker >= p.markers.len() {
+                return Err(format!("no marker {marker}: there are {}", p.markers.len()));
+            }
+            p.markers.remove(marker);
+        }
+        Command::SetKey { key } => match key {
+            None => p.key = None,
+            Some(k) => {
+                let parsed = Key::parse(&k)
+                    .ok_or_else(|| format!("{k:?} isn't a key: try \"A minor\" or \"Eb major\""))?;
+                p.key = Some(parsed.name());
+            }
+        },
+        Command::SetCycle { start, end, on } => {
+            if end <= start {
+                return Err("a cycle's end must be after its start".into());
+            }
+            p.cycle = Some(Cycle {
+                start,
+                end,
+                off: !on,
+            });
+        }
+        Command::SetEq { channel, eq } => *strip(p, channel)?.0 = eq,
+        Command::SetComp { channel, comp } => *strip(p, channel)?.1 = comp,
+        Command::EditNotes {
+            track: t,
+            region: r,
+            edit,
+            note,
+        } => {
+            region_at(p, t, r)?;
+            let only = "only MIDI regions have notes: that's audio, a pattern or a take folder";
+            let notes = p.notes_mut((t, r)).ok_or(only)?;
+            if note.is_some_and(|i| i >= notes.len()) {
+                return Err(format!("that region has {} notes", notes.len()));
+            }
+            edit.apply(notes, note);
+        }
     }
     Ok(json!({}))
+}
+
+/// A channel's built-in EQ and compressor.
+pub fn strip(
+    p: &mut Project,
+    channel: ChannelRef,
+) -> Result<(&mut Option<Eq>, &mut Option<Comp>), String> {
+    Ok(match channel {
+        ChannelRef::Track(i) => {
+            let t = track(p, i)?;
+            (&mut t.eq, &mut t.comp)
+        }
+        ChannelRef::Aux(i) => {
+            let a = aux(p, i)?;
+            (&mut a.eq, &mut a.comp)
+        }
+        ChannelRef::Master => (&mut p.master_eq, &mut p.master_comp),
+    })
 }
 
 /// Brings a WAV file into the project: one already under `dir` is used where it is, one elsewhere
@@ -786,6 +922,14 @@ mod tests {
             "remove_send",
             "set_aux",
             "set_automation",
+            "add_marker",
+            "set_marker",
+            "delete_marker",
+            "set_key",
+            "set_cycle",
+            "set_eq",
+            "set_comp",
+            "edit_notes",
         ];
         for op in samples {
             assert!(

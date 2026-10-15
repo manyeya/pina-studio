@@ -86,7 +86,7 @@ impl Workspace {
         });
     }
 
-    pub fn loops_pane(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn loops_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let project = &self.session.project;
         let now = self.player.position();
         let mut names = Vec::new();
@@ -103,7 +103,7 @@ impl Workspace {
                     .overflow_hidden()
                     .child(t.name.clone()),
             );
-            let color = Hsla::from(rgb(track_color(t.instrument.is_some())));
+            let color = Hsla::from(rgb(self.color(track)));
             let live = self.live.get(&t.id).copied();
             let cells = (0..SCENES).map(|scene| {
                 let cell = t.cells.iter().find(|c| c.scene == scene);
@@ -136,15 +136,15 @@ impl Workspace {
                     .bg(match (cell, playing) {
                         (Some(_), true) => color.opacity(0.85),
                         (Some(_), false) => color.opacity(0.35),
-                        (None, _) => Hsla::from(rgb(0x26262a)),
+                        (None, _) => Hsla::from(rgb(CARD)),
                     })
                     .border_1()
                     .border_color(if waiting {
-                        Hsla::from(rgb(SOLO))
+                        Hsla::from(rgb(ACCENT))
                     } else {
-                        Hsla::from(rgb(BORDER))
+                        Hsla::from(rgb(LINE))
                     })
-                    .text_color(rgb(if playing { 0x101010 } else { TEXT }))
+                    .text_color(rgb(if playing { BG } else { TEXT_2 }))
                     .debug_selector(move || format!("cell-{track}-{scene}"))
                     .children(label)
                     .on_mouse_down(
@@ -167,44 +167,29 @@ impl Workspace {
         }
         let scenes = (0..SCENES).map(|scene| {
             div().w(px(CELL_W)).child(
-                button(
-                    ["▶ 1", "▶ 2", "▶ 3", "▶ 4", "▶ 5", "▶ 6", "▶ 7", "▶ 8"][scene],
-                    false,
-                )
-                .debug_selector(move || format!("scene-{scene}"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| ws.launch_scene(scene, cx)),
-                ),
+                button(format!("Scene {}", scene + 1), false)
+                    .child(icon(Icon::Play, 11.).text_color(rgb(TEXT_3)))
+                    .flex_row_reverse()
+                    .debug_selector(move || format!("scene-{scene}"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| ws.launch_scene(scene, cx)),
+                    ),
             )
         });
         div()
-            .h(px(ROLL_H))
-            .flex_none()
+            .flex_1()
+            .min_h(px(0.))
             .flex()
-            .bg(rgb(PANEL_DARK))
-            .border_t_1()
-            .border_color(rgb(BORDER))
-            .when(self.show_inspector, |d| {
-                d.child(
-                    div()
-                        .w(px(INSPECTOR_W))
-                        .flex_none()
-                        .p_2()
-                        .border_r_1()
-                        .border_color(rgb(BORDER))
-                        .text_size(px(10.))
-                        .text_color(rgb(TEXT_DIM))
-                        .child("LIVE LOOPS"),
-                )
-            })
+            .bg(rgb(LANE))
             .child(
                 div()
                     .w(px(HEADER_W))
                     .flex_none()
+                    .bg(rgb(SURFACE))
                     .py_2()
                     .border_r_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(LINE))
                     .children(names),
             )
             .child(

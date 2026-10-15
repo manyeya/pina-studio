@@ -52,6 +52,11 @@ impl ComponentHandler {
             edits: Mutex::new(edits),
         }
     }
+
+    /// Passes an edit made from tempo itself to the processor.
+    pub fn edit(&self, id: ParamID, value: ParamValue) {
+        let _ = self.edits.lock().unwrap().push((id, value));
+    }
 }
 
 impl Class for ComponentHandler {

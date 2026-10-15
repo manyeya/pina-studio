@@ -26,10 +26,115 @@ pub struct Project {
     pub sample_rate: u32,
     #[serde(default)]
     pub master_volume_db: f32,
+    /// The master's built-in EQ and compressor, after everything is summed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_eq: Option<Eq>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_comp: Option<Comp>,
     pub tracks: Vec<Track>,
     /// Aux channels: tracks send to them by bus number, and they play into the master.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub auxes: Vec<Aux>,
+    /// Named places in the song, in time order: Verse, Chorus.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<Marker>,
+    /// The song's key, as "A minor" or "Eb major"; without one it's worked out from the notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The stretch playback loops over, while it's on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle: Option<Cycle>,
+}
+
+/// A named place on the timeline.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Marker {
+    pub tick: u64,
+    pub name: String,
+}
+
+/// Where playback loops, in ticks: from `start` back to it at `end`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Cycle {
+    pub start: u64,
+    pub end: u64,
+    /// Kept but not looping.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub off: bool,
+}
+
+/// One band of an EQ: its frequency (Hz), gain (dB) and width (Q).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Band {
+    pub freq: f32,
+    #[serde(default)]
+    pub gain_db: f32,
+    #[serde(default = "q")]
+    pub q: f32,
+}
+
+fn q() -> f32 {
+    1.0
+}
+
+/// A channel's built-in EQ, as Logic's Channel EQ: a low cut, two bells and a high shelf.
+/// Anything left out of its JSON is as `Eq::default()` has it: flat.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(default)]
+pub struct Eq {
+    /// The low cut's corner, in Hz; 20 or less is off.
+    #[serde(default)]
+    pub low_cut: f32,
+    pub low_mid: Band,
+    pub high_mid: Band,
+    pub high_shelf: Band,
+    /// Kept but not heard.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bypass: bool,
+}
+
+impl Default for Eq {
+    fn default() -> Self {
+        let band = |freq, q| Band {
+            freq,
+            gain_db: 0.0,
+            q,
+        };
+        Eq {
+            low_cut: 0.0,
+            low_mid: band(400.0, 1.0),
+            high_mid: band(2_500.0, 1.0),
+            high_shelf: band(10_000.0, std::f32::consts::FRAC_1_SQRT_2),
+            bypass: false,
+        }
+    }
+}
+
+/// A channel's built-in compressor, after its EQ.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(default)]
+pub struct Comp {
+    pub threshold_db: f32,
+    pub ratio: f32,
+    pub attack_ms: f32,
+    pub release_ms: f32,
+    #[serde(default)]
+    pub makeup_db: f32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bypass: bool,
+}
+
+impl Default for Comp {
+    fn default() -> Self {
+        Comp {
+            threshold_db: -18.0,
+            ratio: 4.0,
+            attack_ms: 10.0,
+            release_ms: 120.0,
+            makeup_db: 0.0,
+            bypass: false,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -42,6 +147,11 @@ pub struct Track {
     /// Software instrument tracks have one; audio tracks don't.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instrument: Option<Instrument>,
+    /// The built-in EQ and compressor, before the inserts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eq: Option<Eq>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comp: Option<Comp>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inserts: Vec<PluginRef>,
     #[serde(default)]
@@ -93,6 +203,10 @@ pub struct Aux {
     /// The bus it listens to.
     pub bus: u32,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eq: Option<Eq>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comp: Option<Comp>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inserts: Vec<PluginRef>,
     #[serde(default)]
@@ -399,8 +513,13 @@ impl Project {
             tempo: 120.0,
             sample_rate,
             master_volume_db: 0.0,
+            master_eq: None,
+            master_comp: None,
             tracks: Vec::new(),
             auxes: Vec::new(),
+            markers: Vec::new(),
+            key: None,
+            cycle: None,
         }
     }
 
@@ -461,6 +580,26 @@ impl Project {
             ..Default::default()
         });
         bus
+    }
+
+    /// The song's key: the one set, or else the one its notes suggest (drums aside).
+    pub fn song_key(&self) -> Option<crate::music::Key> {
+        if let Some(k) = self.key.as_deref().and_then(crate::music::Key::parse) {
+            return Some(k);
+        }
+        let mut notes = Vec::new();
+        for t in self
+            .tracks
+            .iter()
+            .filter(|t| !matches!(t.instrument, Some(Instrument::Drums)))
+        {
+            for r in &t.regions {
+                if let Some(list) = r.content.notes(r.length) {
+                    notes.extend(list.iter().map(|n| (n.pitch, n.length)));
+                }
+            }
+        }
+        crate::music::detect(notes)
     }
 
     /// Ticks to samples at `rate`.

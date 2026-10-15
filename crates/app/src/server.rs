@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
     sync::mpsc,
     thread,
+    time::Instant,
 };
 
 use futures::StreamExt;
@@ -16,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempo_engine::commands::{self, Command};
 
-use crate::workspace::Workspace;
+use crate::workspace::{AgentEdit, Workspace};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "request", rename_all = "snake_case")]
@@ -124,14 +125,51 @@ fn answer(
 }
 
 impl Workspace {
+    /// Remembers what an agent did, and where: the track and region it named, or made.
+    fn note_agent(&mut self, asked: &Value, answer: &Value) {
+        let index = |v: &Value| v.as_u64().map(|n| n as usize);
+        let made = answer.get("region").and_then(Value::as_array);
+        let track = made
+            .and_then(|r| index(&r[0]))
+            .or_else(|| answer.get("track").and_then(index))
+            .or_else(|| asked.get("track").and_then(index))
+            .or_else(|| asked.pointer("/channel/track").and_then(index));
+        let region = made
+            .and_then(|r| r.get(1).and_then(index))
+            .or_else(|| asked.get("region").and_then(index));
+        let op = asked
+            .get("op")
+            .and_then(Value::as_str)
+            .unwrap_or("edit")
+            .replace('_', " ");
+        let what = match track.and_then(|t| self.session.project.tracks.get(t)) {
+            Some(t) => match region {
+                Some(r) => format!("{op} · {}, region {}", t.name, r + 1),
+                None => format!("{op} · {}", t.name),
+            },
+            None => op,
+        };
+        self.agent.push(AgentEdit {
+            at: Instant::now(),
+            what,
+            track,
+            region,
+        });
+        if self.agent.len() > 200 {
+            self.agent.remove(0);
+        }
+    }
+
     pub fn handle(&mut self, request: Request, cx: &mut Context<Self>) -> Reply {
         let ok = Ok(json!({}));
         match request {
             Request::Edit { command } => {
                 self.session.checkpoint();
                 let dir = self.session.dir.clone();
+                let asked = serde_json::to_value(&command).unwrap_or_default();
                 match commands::apply(&mut self.session.project, &dir, command) {
                     Ok(mut v) => {
+                        self.note_agent(&asked, &v);
                         self.changed(cx);
                         // The edit stands, but the engine couldn't do all of it.
                         if let (Some(problem), Some(map)) = (&self.status, v.as_object_mut()) {

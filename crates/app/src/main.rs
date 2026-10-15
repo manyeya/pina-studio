@@ -1,7 +1,10 @@
 mod cli;
+mod editor;
+mod inspector;
 mod liveloops;
 mod mcp;
 mod menu;
+mod mixer;
 mod pianoroll;
 mod record;
 mod score;
@@ -12,6 +15,7 @@ mod takes;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod topbar;
 mod tracks;
 mod workspace;
 
@@ -106,10 +110,16 @@ fn open(dir: &Path) -> Result<(), String> {
     let session = Session::open(dir)?;
     let player = Player::start(&session.project, dir)?;
     gpui_platform::application().run(move |cx: &mut App| {
+        if let Err(e) = cx.text_system().add_fonts(theme::fonts()) {
+            eprintln!("fonts: {e}");
+        }
         bind_keys(cx);
         cx.set_menus([
             Menu::new("tempo").items([MenuItem::action("Quit tempo", Quit)]),
-            Menu::new("File").items([MenuItem::action("Save", Save)]),
+            Menu::new("File").items([
+                MenuItem::action("Save", Save),
+                MenuItem::action("Export to WAV", Export),
+            ]),
             Menu::new("Edit").items([
                 MenuItem::action("Undo", Undo),
                 MenuItem::action("Redo", Redo),
@@ -138,10 +148,13 @@ fn open(dir: &Path) -> Result<(), String> {
                 MenuItem::action("Play or Stop", PlayStop),
                 MenuItem::action("Go to Beginning", GoToStart),
                 MenuItem::action("Record", Record),
+                MenuItem::separator(),
+                MenuItem::action("Cycle", ToggleCycle),
+                MenuItem::action("Metronome", ToggleMetronome),
             ]),
             Menu::new("Window").items([MenuItem::action("Musical Typing", ToggleTyping)]),
         ]);
-        let bounds = Bounds::centered(None, size(px(1400.), px(860.)), cx);
+        let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             ..Default::default()

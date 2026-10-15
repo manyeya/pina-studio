@@ -52,7 +52,7 @@ impl Workspace {
         tick.clamp(r.start, r.start + r.length) - r.start
     }
 
-    pub fn takes_pane(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn takes_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let (ppt, sx) = (self.px_per_tick(), self.scroll_x);
         let at = self.take_folder();
         let mut labels = Vec::new();
@@ -63,7 +63,7 @@ impl Workspace {
             let Content::Takes { takes, comp } = &region.content else {
                 unreachable!()
             };
-            let color = Hsla::from(rgb(track_color(track.instrument.is_some())));
+            let color = Hsla::from(rgb(self.color(at.0)));
             let segments = comp_segments(comp, takes.len(), region.length);
             let left = region.start as f32 * ppt - sx;
             let swipe = match self.drag {
@@ -137,34 +137,20 @@ impl Workspace {
             }
         }
         div()
-            .h(px(ROLL_H))
-            .flex_none()
+            .flex_1()
+            .min_h(px(0.))
             .flex()
-            .bg(rgb(PANEL_DARK))
-            .border_t_1()
-            .border_color(rgb(BORDER))
-            .when(self.show_inspector, |d| {
-                d.child(
-                    div()
-                        .w(px(INSPECTOR_W))
-                        .flex_none()
-                        .p_2()
-                        .border_r_1()
-                        .border_color(rgb(BORDER))
-                        .text_size(px(10.))
-                        .text_color(rgb(TEXT_DIM))
-                        .child("TAKES"),
-                )
-            })
+            .bg(rgb(LANE))
             .child(
                 div()
                     .w(px(HEADER_W))
                     .flex_none()
+                    .bg(rgb(SURFACE))
                     .h_full()
                     .flex()
                     .flex_col()
                     .border_r_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(LINE))
                     .children(labels)
                     .when_some(at, |d, at| {
                         d.child(
@@ -198,7 +184,7 @@ impl Workspace {
                                 .absolute()
                                 .top(px(20.))
                                 .left(px(20.))
-                                .text_color(rgb(TEXT_DIM))
+                                .text_color(rgb(TEXT_3))
                                 .child("Select a take folder: record over a region to make one."),
                         )
                     })

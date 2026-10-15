@@ -1,19 +1,26 @@
-//! The main window, over one open project: control bar, inspector, tracks area and mixer. Every
-//! edit checkpoints the session (for undo), changes the project, and syncs the player.
+//! The main window, over one open project: the control bar; then either the arrangement (the
+//! inspector, the tracks, and an editor under them) or the mixer; and a status bar. Every edit
+//! checkpoints the session (for undo), changes the project, and syncs the player.
 
-use std::{cell::Cell, collections::HashMap, rc::Rc};
+use std::{
+    borrow::Cow,
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 pub use crate::record::Recording;
 
 use gpui::{
-    App, Bounds, Context, DispatchPhase, Div, FocusHandle, FontWeight, KeyBinding, KeyDownEvent,
-    KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    PromptLevel, ScrollDelta, ScrollWheelEvent, Window, actions, canvas, div, prelude::*, px, rgb,
+    App, Bounds, Context, DispatchPhase, FocusHandle, FontWeight, KeyBinding, KeyDownEvent,
+    KeyUpEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, PromptLevel, ScrollDelta,
+    ScrollWheelEvent, Window, actions, canvas, div, prelude::*, px, rgb,
 };
 use tempo_engine::{
     engine::LiveNote,
     player::Player,
-    project::{At, BEATS_PER_BAR, Instrument, PPQ, Param, Track},
+    project::{At, BEATS_PER_BAR, Comp, Cycle, Eq, Instrument, PPQ, Param, Project, Track},
     scan::{self, PluginInfo},
     session::Session,
 };
@@ -21,7 +28,7 @@ use tempo_engine::{
 use crate::{
     menu::Menu,
     strip::{self, Channel},
-    theme::{self, *},
+    theme::*,
 };
 
 actions!(
@@ -49,6 +56,9 @@ actions!(
         NewPattern,
         ToggleLoops,
         ToggleScore,
+        ToggleCycle,
+        ToggleMetronome,
+        Export,
     ]
 );
 
@@ -70,11 +80,14 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("l", ToggleLoops, Some("Arrange")),
         KeyBinding::new("n", ToggleScore, Some("Arrange")),
         KeyBinding::new("a", ToggleAutomation, Some("Arrange")),
+        KeyBinding::new("c", ToggleCycle, Some("Arrange")),
+        KeyBinding::new("k", ToggleMetronome, Some("Arrange")),
         KeyBinding::new("r", Record, None),
         KeyBinding::new("cmd-k", ToggleTyping, None),
         KeyBinding::new("cmd-shift-d", CreateStack, None),
         KeyBinding::new("cmd-alt-p", NewPattern, None),
         KeyBinding::new("cmd-s", Save, None),
+        KeyBinding::new("cmd-b", Export, None),
         KeyBinding::new("cmd-alt-n", NewTrack, None),
         KeyBinding::new("cmd-right", ZoomIn, None),
         KeyBinding::new("cmd-left", ZoomOut, None),
@@ -90,6 +103,38 @@ pub enum Edge {
     End,
     /// The end, flexing the audio rather than trimming it.
     Stretch,
+}
+
+/// What a vertical drag turns: a knob, as a value from 0 to 1.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Target {
+    /// A parameter of a track's instrument plugin.
+    Param {
+        track: u64,
+        param: u32,
+    },
+    LowCut(Channel),
+    /// A bell or the shelf of a channel's EQ: 1 the low mid, 2 the high mid, 3 the shelf.
+    Gain(Channel, usize),
+    Comp(Channel, CompField),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CompField {
+    Threshold,
+    Ratio,
+    Attack,
+    Release,
+    Makeup,
+}
+
+/// What a sideways drag sets: a slider, as a value from 0 to 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Slider {
+    Strength,
+    Swing,
+    Zoom,
+    Send { track: usize, index: usize },
 }
 
 /// A mouse drag in progress. Edits checkpoint when they start, so a drag is one undo step.
@@ -108,6 +153,7 @@ pub enum Drag {
         channel: Channel,
         y: f32,
         pos: f32,
+        height: f32,
     },
     Pan {
         channel: Channel,
@@ -137,6 +183,13 @@ pub enum Drag {
         length: u64,
         moved: bool,
     },
+    /// A note's velocity, in the lane under the piano roll.
+    Velocity {
+        at: At,
+        index: usize,
+        y: f32,
+        velocity: u8,
+    },
     /// An automation point.
     Auto {
         track: usize,
@@ -156,17 +209,177 @@ pub enum Drag {
         from: u64,
         to: u64,
     },
+    /// Sweeping out the cycle in the ruler, from the tick where it began.
+    Cycle {
+        anchor: u64,
+        moved: bool,
+    },
+    /// A marker, from the x where it was picked up.
+    Marker {
+        index: usize,
+        x: f32,
+        tick: u64,
+        moved: bool,
+    },
+    /// A knob turned by dragging up and down.
+    Knob {
+        target: Target,
+        y: f32,
+        value: f32,
+    },
+    Slider {
+        slider: Slider,
+        left: f32,
+        width: f32,
+    },
+    /// A band's handle on the EQ graph.
+    EqBand {
+        channel: Channel,
+        band: usize,
+    },
 }
 
 /// What the pane under the tracks shows.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Bottom {
-    Mixer,
     PianoRoll,
-    Takes,
     Steps,
-    Loops,
     Score,
+    Takes,
+    Loops,
+}
+
+/// The arrangement, or the mixer in its place.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum View {
+    Arrange,
+    Mixer,
+}
+
+/// What clicking in the lanes and the piano roll does.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Tool {
+    Pointer,
+    Pencil,
+    Scissors,
+    Eraser,
+}
+
+/// What edits snap to.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Snap {
+    /// Finer as you zoom in.
+    Smart,
+    Bar,
+    Beat,
+    Eighth,
+    Sixteenth,
+    Off,
+}
+
+impl Snap {
+    pub const ALL: [Snap; 6] = [
+        Snap::Smart,
+        Snap::Bar,
+        Snap::Beat,
+        Snap::Eighth,
+        Snap::Sixteenth,
+        Snap::Off,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Snap::Smart => "Smart",
+            Snap::Bar => "Bar",
+            Snap::Beat => "Beat",
+            Snap::Eighth => "1/8",
+            Snap::Sixteenth => "1/16",
+            Snap::Off => "Off",
+        }
+    }
+}
+
+/// The side panel's tabs.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Side {
+    Inspector,
+    Browser,
+    Agent,
+}
+
+/// Which channels the mixer shows.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Channels {
+    All,
+    Tracks,
+    Buses,
+}
+
+/// An edit an agent made through the socket.
+#[derive(Clone, Debug)]
+pub struct AgentEdit {
+    pub at: Instant,
+    /// What it did, in words: "set notes · Bass, region 1".
+    pub what: String,
+    pub track: Option<usize>,
+    pub region: Option<usize>,
+}
+
+impl AgentEdit {
+    /// How long ago, in words: "now", "12s", "3m".
+    pub fn ago(&self) -> String {
+        let s = self.at.elapsed().as_secs();
+        match s {
+            0..=4 => "now".into(),
+            5..=59 => format!("{s}s ago"),
+            _ => format!("{}m ago", s / 60),
+        }
+    }
+}
+
+/// How long an agent's outline stays on what it touched.
+pub const PRESENCE: Duration = Duration::from_secs(12);
+
+/// The piano roll's settings for its quantize and tools.
+#[derive(Clone, Copy, Debug)]
+pub struct RollSettings {
+    /// Ticks.
+    pub grid: u64,
+    pub strength: f32,
+    /// 50 straight to 75.
+    pub swing: f32,
+    /// The track whose notes show faintly behind, by id.
+    pub ghost: Option<u64>,
+    /// Shading the rows out of the song's key.
+    pub scale: bool,
+}
+
+/// A level meter's reading: falling back gently, and its peak held a moment.
+#[derive(Clone, Copy, Default)]
+pub struct Level {
+    pub now: [f32; 2],
+    pub held: [f32; 2],
+    since: Option<Instant>,
+}
+
+impl Level {
+    fn update(&mut self, peak: [f32; 2]) {
+        for (now, peak) in self.now.iter_mut().zip(peak) {
+            *now = peak.max(*now * 0.85);
+        }
+        let loudest = self.now[0].max(self.now[1]);
+        let expired = self
+            .since
+            .is_none_or(|t| t.elapsed() > Duration::from_millis(1500));
+        if expired || loudest >= self.held[0].max(self.held[1]) {
+            self.held = self.now;
+            self.since = Some(Instant::now());
+        }
+    }
+
+    pub fn moving(&self) -> bool {
+        self.now.iter().chain(&self.held).any(|&l| l > 1e-4)
+    }
 }
 
 pub struct Workspace {
@@ -180,13 +393,25 @@ pub struct Workspace {
     pub px_per_beat: f32,
     pub scroll_x: f32,
     pub scroll_y: f32,
+    pub view: View,
     pub bottom: Option<Bottom>,
     pub show_inspector: bool,
+    pub side: Side,
+    pub tool: Tool,
+    pub snap: Snap,
+    /// Playing the selected region alone, looped, as FL Studio's pattern mode.
+    pub pattern_mode: bool,
+    /// The channel the mixer's side panel shows.
+    pub channel: Channel,
+    pub channels: Channels,
+    /// The mixer's rows: EQ, inserts and sends.
+    pub mixer_rows: [bool; 3],
     /// The selected note in the piano roll, by index in the selected region.
     pub note: Option<usize>,
     /// The piano roll's vertical scroll, and where its grid was drawn last frame.
     pub roll_scroll_y: f32,
     pub roll_bounds: Rc<Cell<Bounds<Pixels>>>,
+    pub roll: RollSettings,
     pub show_automation: bool,
     /// Which parameter each track's automation shows, by track id.
     pub params: HashMap<u64, Param>,
@@ -201,16 +426,31 @@ pub struct Workspace {
     /// The plugins installed, once the scan is done.
     pub plugins: Option<Vec<PluginInfo>>,
     pub drag: Option<Drag>,
-    /// Meter readings, falling back slowly, by track id.
-    pub levels: HashMap<u64, f32>,
-    pub master_level: f32,
+    /// Meter readings by track or aux id; None is the master.
+    pub levels: HashMap<Option<u64>, Level>,
+    /// Compressor gain reduction, in dB, by channel id; None is the master.
+    pub reductions: HashMap<Option<u64>, f32>,
+    /// How busy the audio thread is: 1 is all of its time.
+    pub load: f32,
     pub status: Option<String>,
-    /// Where the lanes were drawn last frame, for turning pointer positions into ticks.
+    /// What agents have done, newest last.
+    pub agent: Vec<AgentEdit>,
+    /// The parameters Smart Controls shows for each track's instrument plugin, by track id.
+    pub smart: HashMap<u64, (String, Vec<(u32, String)>)>,
+    pub exporting: bool,
+    /// Where the lanes and the EQ graph were drawn last frame, for turning pointer positions into
+    /// ticks and frequencies.
     pub lanes_bounds: Rc<Cell<Bounds<Pixels>>>,
+    pub eq_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// The window's size, for what fits.
+    pub viewport_h: f32,
+    pub viewport_w: f32,
+    /// Where each slider was drawn last frame.
+    pub slider_bounds: Rc<RefCell<HashMap<Slider, Bounds<Pixels>>>>,
     title: String,
 }
 
-fn pt(p: Point<Pixels>) -> Point<f32> {
+pub fn pt(p: Point<Pixels>) -> Point<f32> {
     p.map(f32::from)
 }
 
@@ -238,11 +478,26 @@ impl Workspace {
             px_per_beat: 48.0,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            view: View::Arrange,
             bottom: None,
             show_inspector: true,
+            side: Side::Inspector,
+            tool: Tool::Pointer,
+            snap: Snap::Smart,
+            pattern_mode: false,
+            channel: Channel::Track(0),
+            channels: Channels::All,
+            mixer_rows: [true; 3],
             note: None,
             roll_scroll_y: crate::pianoroll::scroll_to(72),
             roll_bounds: Rc::new(Cell::new(Bounds::default())),
+            roll: RollSettings {
+                grid: PPQ / 4,
+                strength: 1.0,
+                swing: 50.0,
+                ghost: None,
+                scale: true,
+            },
             show_automation: false,
             params: HashMap::new(),
             recording: None,
@@ -253,9 +508,17 @@ impl Workspace {
             live: HashMap::new(),
             drag: None,
             levels: HashMap::new(),
-            master_level: 0.0,
+            reductions: HashMap::new(),
+            load: 0.0,
             status,
+            agent: Vec::new(),
+            smart: HashMap::new(),
+            exporting: false,
             lanes_bounds: Rc::new(Cell::new(Bounds::default())),
+            eq_bounds: Rc::new(Cell::new(Bounds::default())),
+            slider_bounds: Rc::new(RefCell::new(HashMap::new())),
+            viewport_h: 900.0,
+            viewport_w: 1440.0,
             title: String::new(),
         }
     }
@@ -270,12 +533,29 @@ impl Workspace {
         ((x - left + self.scroll_x) / self.px_per_tick()).max(0.0) as f64
     }
 
-    /// The editing grid, in ticks: finer as you zoom in.
+    /// A track's row: its lane, and its automation lane under it while automation shows.
+    pub fn row_h(&self) -> f32 {
+        LANE_H + if self.show_automation { AUTO_H } else { 0.0 }
+    }
+
+    /// Where track `i`'s row begins, from the top of the lanes, scrolled.
+    pub fn row_top(&self, i: usize) -> f32 {
+        i as f32 * self.row_h() - self.scroll_y
+    }
+
+    /// The editing grid, in ticks.
     pub fn grid(&self) -> u64 {
-        match self.px_per_beat {
-            z if z >= 96.0 => PPQ / 4,
-            z if z >= 20.0 => PPQ,
-            _ => PPQ * BEATS_PER_BAR,
+        match self.snap {
+            Snap::Smart => match self.px_per_beat {
+                z if z >= 96.0 => PPQ / 4,
+                z if z >= 20.0 => PPQ,
+                _ => PPQ * BEATS_PER_BAR,
+            },
+            Snap::Bar => PPQ * BEATS_PER_BAR,
+            Snap::Beat => PPQ,
+            Snap::Eighth => PPQ / 2,
+            Snap::Sixteenth => PPQ / 4,
+            Snap::Off => 1,
         }
     }
 
@@ -294,6 +574,39 @@ impl Workspace {
         self.session.project.ticks(self.player.position())
     }
 
+    /// The color a track's regions, header and strip use.
+    pub fn color(&self, track: usize) -> u32 {
+        self.session
+            .project
+            .tracks
+            .get(track)
+            .map_or(ACCENT, |t| track_color(t, track))
+    }
+
+    /// What the engine plays: the project, or in pattern mode just the selected region, looped.
+    fn engine_project(&self) -> Cow<'_, Project> {
+        let project = &self.session.project;
+        let Some((t, r)) = self.region.filter(|_| self.pattern_mode) else {
+            return Cow::Borrowed(project);
+        };
+        let mut p = project.clone();
+        let region = &project.tracks[t].regions[r];
+        p.cycle = Some(Cycle {
+            start: region.start,
+            end: region.start + region.length,
+            off: false,
+        });
+        for (i, track) in p.tracks.iter_mut().enumerate() {
+            track.solo = false;
+            track.mute = i != t;
+            if i == t {
+                let keep = track.regions[r].clone();
+                track.regions = vec![keep];
+            }
+        }
+        Cow::Owned(p)
+    }
+
     /// After an edit (or undo): keeps the selection valid and brings the engine up to date.
     pub fn changed(&mut self, cx: &mut Context<Self>) {
         let tracks = &self.session.project.tracks;
@@ -310,7 +623,16 @@ impl Workspace {
         if self.note.is_some_and(|i| notes.is_none_or(|n| i >= n)) {
             self.note = None;
         }
-        self.status = self.player.sync(&self.session.project).err();
+        let valid = match self.channel {
+            Channel::Track(i) => i < self.session.project.tracks.len(),
+            Channel::Aux(i) => i < self.session.project.auxes.len(),
+            Channel::Master => true,
+        };
+        if !valid {
+            self.channel = Channel::Master;
+        }
+        let project = self.engine_project().into_owned();
+        self.status = self.player.sync(&project).err();
         cx.notify();
     }
 
@@ -321,8 +643,28 @@ impl Workspace {
         self.changed(cx);
     }
 
+    /// Selects a track: in the arrangement, the inspector and the mixer.
+    pub fn select_track(&mut self, i: usize) {
+        self.track = i;
+        self.channel = Channel::Track(i);
+    }
+
     pub fn begin_drag(&mut self, drag: Drag, cx: &mut Context<Self>) {
-        if !matches!(drag, Drag::Locate | Drag::Key { .. } | Drag::Comp { .. }) {
+        let edits = !matches!(
+            drag,
+            Drag::Locate
+                | Drag::Key { .. }
+                | Drag::Comp { .. }
+                | Drag::Slider {
+                    slider: Slider::Strength | Slider::Swing | Slider::Zoom,
+                    ..
+                }
+                | Drag::Knob {
+                    target: Target::Param { .. },
+                    ..
+                }
+        );
+        if edits {
             self.session.checkpoint();
         }
         self.drag = Some(drag);
@@ -331,9 +673,12 @@ impl Workspace {
 
     fn drag_to(&mut self, p: Point<f32>, cx: &mut Context<Self>) {
         let ppt = self.px_per_tick();
-        let tracks = self.session.project.tracks.len();
         if let Some(
-            Drag::Region { moved, .. } | Drag::Note { moved, .. } | Drag::Auto { moved, .. },
+            Drag::Region { moved, .. }
+            | Drag::Note { moved, .. }
+            | Drag::Auto { moved, .. }
+            | Drag::Cycle { moved, .. }
+            | Drag::Marker { moved, .. },
         ) = &mut self.drag
         {
             *moved = true;
@@ -352,14 +697,15 @@ impl Workspace {
                 match edge {
                     Edge::Move => {
                         let start = self.snap(start as f64 + dt);
-                        let rows = ((p.y - from.y) / LANE_H).round() as isize;
-                        let to = (track as isize + rows).clamp(0, tracks as isize - 1) as usize;
+                        let tracks = self.session.project.tracks.len() as isize;
+                        let rows = ((p.y - from.y) / self.row_h()).round() as isize;
+                        let to = (track as isize + rows).clamp(0, tracks - 1) as usize;
                         let now = self.session.project.move_region(at, to, start);
                         if let Some(Drag::Region { at, .. }) = &mut self.drag {
                             *at = now;
                         }
                         self.region = Some(now);
-                        self.track = now.0;
+                        self.select_track(now.0);
                     }
                     Edge::Start => {
                         let start = self.snap(start as f64 + dt);
@@ -378,8 +724,13 @@ impl Workspace {
                     }
                 }
             }
-            Some(Drag::Fader { channel, y, pos }) => {
-                let db = strip::fader_db((pos - (p.y - y) / FADER_H).clamp(0.0, 1.0));
+            Some(Drag::Fader {
+                channel,
+                y,
+                pos,
+                height,
+            }) => {
+                let db = strip::fader_db((pos - (p.y - y) / height).clamp(0.0, 1.0));
                 self.set_volume(channel, db);
             }
             Some(Drag::Pan { channel, y, pan }) => {
@@ -411,6 +762,24 @@ impl Workspace {
             }) => {
                 self.drag_note(at, index, edge, p - from, (start, pitch, length));
             }
+            Some(Drag::Velocity {
+                at,
+                index,
+                y,
+                velocity,
+            }) => {
+                let v = (velocity as f32 - (p.y - y) * 127.0 / crate::pianoroll::VELOCITY_H)
+                    .round()
+                    .clamp(1.0, 127.0) as u8;
+                if let Some(n) = self
+                    .session
+                    .project
+                    .notes_mut(at)
+                    .and_then(|n| n.get_mut(index))
+                {
+                    n.velocity = v;
+                }
+            }
             Some(Drag::Auto {
                 track,
                 param,
@@ -431,6 +800,45 @@ impl Workspace {
                 cx.notify();
                 return;
             }
+            Some(Drag::Cycle { anchor, .. }) => {
+                let here = self.snap(self.tick_at(p.x));
+                let (start, end) = (anchor.min(here), anchor.max(here));
+                if end > start {
+                    self.session.project.cycle = Some(Cycle {
+                        start,
+                        end,
+                        off: false,
+                    });
+                }
+            }
+            Some(Drag::Marker { index, x, tick, .. }) => {
+                let to = self.snap(tick as f64 + ((p.x - x) / ppt) as f64);
+                let markers = &mut self.session.project.markers;
+                if let Some(m) = markers.get_mut(index) {
+                    m.tick = to;
+                }
+            }
+            Some(Drag::Knob { target, y, value }) => {
+                let v = (value - (p.y - y) / 150.0).clamp(0.0, 1.0);
+                self.set_target(target, v);
+                if matches!(target, Target::Param { .. }) {
+                    cx.notify();
+                    return;
+                }
+            }
+            Some(Drag::Slider {
+                slider,
+                left,
+                width,
+            }) => {
+                let v = ((p.x - left) / width.max(1.0)).clamp(0.0, 1.0);
+                self.set_slider(slider, v);
+                if !matches!(slider, Slider::Send { .. }) {
+                    cx.notify();
+                    return;
+                }
+            }
+            Some(Drag::EqBand { channel, band }) => self.drag_band(channel, band, p),
             Some(Drag::Key { .. }) | None => return,
         }
         self.changed(cx);
@@ -440,10 +848,45 @@ impl Workspace {
         if let Some(
             Drag::Region { moved: false, .. }
             | Drag::Note { moved: false, .. }
-            | Drag::Auto { moved: false, .. },
+            | Drag::Auto { moved: false, .. }
+            | Drag::Marker { moved: false, .. },
         ) = self.drag
         {
             self.session.cancel()
+        }
+        if let Some(Drag::Marker {
+            index,
+            moved: false,
+            ..
+        }) = self.drag
+            && let Some(m) = self.session.project.markers.get(index)
+        {
+            let at = self.session.project.samples(m.tick, self.player.rate());
+            self.player.locate(at);
+        }
+        if let Some(Drag::Marker { moved: true, .. }) = self.drag {
+            self.session.project.markers.sort_by_key(|m| m.tick);
+        }
+        // A click in the cycle strip, without sweeping, turns the cycle on or off.
+        if let Some(Drag::Cycle {
+            anchor,
+            moved: false,
+        }) = self.drag
+        {
+            let bar = PPQ * BEATS_PER_BAR;
+            let cycle = &mut self.session.project.cycle;
+            match cycle {
+                Some(c) => c.off = !c.off,
+                None => {
+                    let start = anchor / bar * bar;
+                    *cycle = Some(Cycle {
+                        start,
+                        end: start + bar * 4,
+                        off: false,
+                    });
+                }
+            }
+            self.changed(cx);
         }
         if let Some(Drag::Comp { at, take, from, to }) = self.drag {
             self.drag = None;
@@ -487,6 +930,12 @@ impl Workspace {
         cx.notify();
     }
 
+    pub fn locate_tick(&mut self, tick: u64, cx: &mut Context<Self>) {
+        let at = self.session.project.samples(tick, self.player.rate());
+        self.player.locate(at);
+        cx.notify();
+    }
+
     fn scroll(&mut self, e: &ScrollWheelEvent, cx: &mut Context<Self>) {
         let d = match e.delta {
             ScrollDelta::Pixels(p) => p.map(f32::from),
@@ -495,16 +944,21 @@ impl Workspace {
         if e.modifiers.platform {
             // Zoom around the pointer.
             let x = f32::from(e.position.x) - f32::from(self.lanes_bounds.get().origin.x);
-            let tick = (x + self.scroll_x) / self.px_per_tick();
-            self.px_per_beat = (self.px_per_beat * (1.0 + d.y * 0.01)).clamp(4.0, 800.0);
-            self.scroll_x = (tick * self.px_per_tick() - x).max(0.0);
+            self.zoom_around(self.px_per_beat * (1.0 + d.y * 0.01), x);
         } else {
             let height = f32::from(self.lanes_bounds.get().size.height);
-            let content = self.session.project.tracks.len() as f32 * LANE_H;
+            let content = self.session.project.tracks.len() as f32 * self.row_h();
             self.scroll_x = (self.scroll_x - d.x).max(0.0);
             self.scroll_y = (self.scroll_y - d.y).clamp(0.0, (content - height + LANE_H).max(0.0));
         }
         cx.notify();
+    }
+
+    /// Zooms to `px_per_beat`, keeping what's `x` pixels into the lanes where it is.
+    pub fn zoom_around(&mut self, px_per_beat: f32, x: f32) {
+        let tick = (x + self.scroll_x) / self.px_per_tick();
+        self.px_per_beat = px_per_beat.clamp(4.0, 800.0);
+        self.scroll_x = (tick * self.px_per_tick() - x).max(0.0);
     }
 
     pub fn on_scroll(
@@ -514,7 +968,7 @@ impl Workspace {
         cx.listener(|this, e, _, cx| this.scroll(e, cx))
     }
 
-    fn play_stop(&mut self, cx: &mut Context<Self>) {
+    pub fn play_stop(&mut self, cx: &mut Context<Self>) {
         if self.player.playing() || self.recording.is_some() {
             self.stop(cx);
         } else {
@@ -530,10 +984,55 @@ impl Workspace {
         cx.notify();
     }
 
-    fn go_to_start(&mut self, cx: &mut Context<Self>) {
+    pub fn go_to_start(&mut self, cx: &mut Context<Self>) {
         self.player.locate(0);
         self.scroll_x = 0.0;
         cx.notify();
+    }
+
+    /// Turns the cycle on or off; with none yet, cycles the selected region (or four bars from
+    /// the playhead's bar).
+    pub fn toggle_cycle(&mut self, cx: &mut Context<Self>) {
+        let bar = PPQ * BEATS_PER_BAR;
+        let (start, end) = match self.region {
+            Some(at) => {
+                let r = self.session.project.region(at);
+                (r.start, r.start + r.length)
+            }
+            None => {
+                let start = self.playhead() / bar * bar;
+                (start, start + bar * 4)
+            }
+        };
+        self.edit(cx, |ws| match &mut ws.session.project.cycle {
+            Some(c) => c.off = !c.off,
+            none => {
+                *none = Some(Cycle {
+                    start,
+                    end,
+                    off: false,
+                })
+            }
+        });
+    }
+
+    pub fn toggle_metronome(&mut self, cx: &mut Context<Self>) {
+        self.player.set_metronome(!self.player.metronome());
+        cx.notify();
+    }
+
+    pub fn set_pattern_mode(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on && self.region.is_none() {
+            self.status = Some("Select a region to play it as a pattern.".into());
+            cx.notify();
+            return;
+        }
+        self.pattern_mode = on;
+        if on && let Some(at) = self.region {
+            let start = self.session.project.region(at).start;
+            self.locate_tick(start, cx);
+        }
+        self.changed(cx);
     }
 
     fn undo(&mut self, cx: &mut Context<Self>) {
@@ -580,6 +1079,10 @@ impl Workspace {
         let (Some(at), tick) = (self.region, self.playhead()) else {
             return;
         };
+        self.split_at(at, tick, cx);
+    }
+
+    pub fn split_at(&mut self, at: At, tick: u64, cx: &mut Context<Self>) {
         self.session.checkpoint();
         match self.session.project.split_region(at, tick) {
             Some(second) => {
@@ -607,12 +1110,13 @@ impl Workspace {
                 ..Default::default()
             };
             ws.session.project.add_track(at, track);
-            ws.track = at;
+            ws.select_track(at);
             ws.region = None;
         });
     }
 
     pub fn toggle_bottom(&mut self, pane: Bottom, cx: &mut Context<Self>) {
+        self.view = View::Arrange;
         self.bottom = if self.bottom == Some(pane) {
             None
         } else {
@@ -621,6 +1125,23 @@ impl Workspace {
         if self.bottom == Some(Bottom::PianoRoll) {
             self.focus_roll();
         }
+        cx.notify();
+    }
+
+    pub fn show_bottom(&mut self, pane: Bottom, cx: &mut Context<Self>) {
+        self.view = View::Arrange;
+        self.bottom = Some(pane);
+        if pane == Bottom::PianoRoll {
+            self.focus_roll();
+        }
+        cx.notify();
+    }
+
+    pub fn toggle_mixer(&mut self, cx: &mut Context<Self>) {
+        self.view = match self.view {
+            View::Mixer => View::Arrange,
+            View::Arrange => View::Mixer,
+        };
         cx.notify();
     }
 
@@ -665,10 +1186,9 @@ impl Workspace {
         }
     }
 
-    /// The parameter value at a window y position in a track's lane.
+    /// The parameter value at a window y position in a track's automation lane.
     pub fn auto_value(&self, track: usize, param: Param, y: f32) -> f32 {
-        let top =
-            f32::from(self.lanes_bounds.get().origin.y) + track as f32 * LANE_H - self.scroll_y;
+        let top = f32::from(self.lanes_bounds.get().origin.y) + self.row_top(track) + LANE_H;
         crate::tracks::auto_from_y(param, y - top)
     }
 
@@ -713,6 +1233,142 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A channel's built-in EQ and compressor.
+    pub fn strip_dsp(&self, ch: Channel) -> (Option<Eq>, Option<Comp>) {
+        let p = &self.session.project;
+        match ch {
+            Channel::Track(i) => (p.tracks[i].eq, p.tracks[i].comp),
+            Channel::Aux(i) => (p.auxes[i].eq, p.auxes[i].comp),
+            Channel::Master => (p.master_eq, p.master_comp),
+        }
+    }
+
+    pub fn strip_dsp_mut(&mut self, ch: Channel) -> (&mut Option<Eq>, &mut Option<Comp>) {
+        let p = &mut self.session.project;
+        match ch {
+            Channel::Track(i) => {
+                let t = &mut p.tracks[i];
+                (&mut t.eq, &mut t.comp)
+            }
+            Channel::Aux(i) => {
+                let a = &mut p.auxes[i];
+                (&mut a.eq, &mut a.comp)
+            }
+            Channel::Master => (&mut p.master_eq, &mut p.master_comp),
+        }
+    }
+
+    /// A knob's value now, from 0 to 1.
+    pub fn target(&self, target: Target) -> f32 {
+        use crate::strip::{eq_gain_pos, low_cut_pos};
+        match target {
+            Target::Param { track, param } => {
+                self.player
+                    .param_value(track, tempo_engine::player::Which::Instrument, param)
+                    as f32
+            }
+            Target::LowCut(ch) => low_cut_pos(self.strip_dsp(ch).0.map_or(0.0, |e| e.low_cut)),
+            Target::Gain(ch, band) => {
+                let eq = self.strip_dsp(ch).0.unwrap_or_default();
+                eq_gain_pos(match band {
+                    1 => eq.low_mid.gain_db,
+                    2 => eq.high_mid.gain_db,
+                    _ => eq.high_shelf.gain_db,
+                })
+            }
+            Target::Comp(ch, field) => {
+                crate::strip::comp_pos(field, &self.strip_dsp(ch).1.unwrap_or_default())
+            }
+        }
+    }
+
+    /// Turns a knob to `v` (0 to 1); a channel's EQ or compressor appears if it had none.
+    pub fn set_target(&mut self, target: Target, v: f32) {
+        use crate::strip::{comp_set, eq_gain_db, low_cut_hz};
+        match target {
+            Target::Param { track, param } => {
+                let which = tempo_engine::player::Which::Instrument;
+                self.player.set_param(track, which, param, v as f64);
+            }
+            Target::LowCut(ch) => {
+                self.strip_dsp_mut(ch).0.get_or_insert_default().low_cut = low_cut_hz(v)
+            }
+            Target::Gain(ch, band) => {
+                let eq = self.strip_dsp_mut(ch).0.get_or_insert_default();
+                let b = match band {
+                    1 => &mut eq.low_mid,
+                    2 => &mut eq.high_mid,
+                    _ => &mut eq.high_shelf,
+                };
+                b.gain_db = eq_gain_db(v);
+            }
+            Target::Comp(ch, field) => {
+                comp_set(field, self.strip_dsp_mut(ch).1.get_or_insert_default(), v)
+            }
+        }
+    }
+
+    pub fn slider(&self, slider: Slider) -> f32 {
+        match slider {
+            Slider::Strength => self.roll.strength,
+            Slider::Swing => (self.roll.swing - 50.0) / 25.0,
+            Slider::Zoom => (self.px_per_beat / 4.0).ln() / 200f32.ln(),
+            Slider::Send { track, index } => {
+                let db = self.session.project.tracks[track].sends[index].level_db;
+                strip::fader_pos(db)
+            }
+        }
+    }
+
+    pub fn set_slider(&mut self, slider: Slider, v: f32) {
+        match slider {
+            Slider::Strength => self.roll.strength = (v * 100.0).round() / 100.0,
+            Slider::Swing => self.roll.swing = (50.0 + v * 25.0).round(),
+            Slider::Zoom => {
+                let width = f32::from(self.lanes_bounds.get().size.width);
+                self.zoom_around(4.0 * 200f32.powf(v), width / 2.0)
+            }
+            Slider::Send { track, index } => {
+                self.session.project.tracks[track].sends[index].level_db = strip::fader_db(v)
+            }
+        }
+    }
+
+    /// Starts dragging a slider, setting it to where it was clicked.
+    pub fn start_slider(&mut self, slider: Slider, p: Point<f32>, cx: &mut Context<Self>) {
+        let Some(b) = self.slider_bounds.borrow().get(&slider).copied() else {
+            return;
+        };
+        let (left, width) = (f32::from(b.origin.x), f32::from(b.size.width));
+        self.begin_drag(
+            Drag::Slider {
+                slider,
+                left,
+                width,
+            },
+            cx,
+        );
+        self.drag_to(p, cx);
+    }
+
+    /// Moves a band's handle on the EQ graph to where the pointer is.
+    fn drag_band(&mut self, ch: Channel, band: usize, p: Point<f32>) {
+        let b = self.eq_bounds.get();
+        let (x, y) = (
+            ((p.x - f32::from(b.origin.x)) / f32::from(b.size.width)).clamp(0.0, 1.0),
+            ((p.y - f32::from(b.origin.y)) / f32::from(b.size.height)).clamp(0.0, 1.0),
+        );
+        let freq = crate::mixer::graph_freq(x);
+        let gain = crate::mixer::graph_gain(y);
+        let eq = self.strip_dsp_mut(ch).0.get_or_insert_default();
+        match band {
+            0 => eq.low_cut = freq.min(1_000.0),
+            1 => (eq.low_mid.freq, eq.low_mid.gain_db) = (freq, gain),
+            2 => (eq.high_mid.freq, eq.high_mid.gain_db) = (freq, gain),
+            _ => (eq.high_shelf.freq, eq.high_shelf.gain_db) = (freq.max(1_000.0), gain),
+        }
+    }
+
     pub fn save(&mut self, cx: &mut Context<Self>) -> bool {
         let result = self
             .player
@@ -724,6 +1380,44 @@ impl Workspace {
         });
         cx.notify();
         result.is_ok()
+    }
+
+    /// Bounces the project to `Bounces/<name>.wav` in its folder, in the background.
+    pub fn export(&mut self, cx: &mut Context<Self>) {
+        if self.exporting {
+            return;
+        }
+        let mut project = self.session.project.clone();
+        if let Err(e) = self.player.save_states(&mut project) {
+            self.status = Some(e);
+            cx.notify();
+            return;
+        }
+        let dir = self.session.dir.clone();
+        let name = dir
+            .file_name()
+            .map_or("Untitled".into(), |n| n.to_string_lossy().into_owned());
+        let out = dir.join("Bounces").join(format!("{name}.wav"));
+        self.exporting = true;
+        self.status = Some("Exporting…".into());
+        cx.notify();
+        let job = cx.background_spawn(async move {
+            std::fs::create_dir_all(out.parent().unwrap()).map_err(|e| e.to_string())?;
+            crate::cli::bounce(&project, &dir, &out).map(|()| out)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            this.update(cx, |ws, cx| {
+                ws.exporting = false;
+                ws.status = Some(match result {
+                    Ok(out) => format!("Exported {}", out.display()),
+                    Err(e) => format!("Couldn't export: {e}"),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Quits, asking first if there are unsaved changes.
@@ -782,13 +1476,26 @@ impl Workspace {
         .size_full()
     }
 
-    /// Reads the meters, letting them fall back gently.
+    /// Reads the meters and compressors, letting them fall back gently, and the CPU load.
     fn read_meters(&mut self) {
-        for t in &self.session.project.tracks {
-            let l = self.levels.entry(t.id).or_default();
-            *l = self.player.meter(t.id).max(*l * 0.85);
+        let ids: Vec<u64> = self
+            .session
+            .project
+            .tracks
+            .iter()
+            .map(|t| t.id)
+            .chain(self.session.project.auxes.iter().map(|a| a.id))
+            .collect();
+        for id in ids.iter().map(|&id| Some(id)).chain([None]) {
+            let peak = match id {
+                Some(id) => self.player.meter(id),
+                None => self.player.master_meter(),
+            };
+            self.levels.entry(id).or_default().update(peak);
+            let gr = self.reductions.entry(id).or_default();
+            *gr = self.player.reduction(id).max(*gr * 0.9);
         }
-        self.master_level = self.player.master_meter().max(self.master_level * 0.85);
+        self.load = self.player.load().max(self.load * 0.97);
     }
 
     /// Keeps the playhead on screen while playing, a page at a time, as Logic does.
@@ -800,251 +1507,85 @@ impl Workspace {
         }
     }
 
-    fn control_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let playing = self.player.playing();
-        let project = &self.session.project;
-        let ticks = self.playhead();
-        let beat = ticks / PPQ;
-        let position = format!(
-            "{:>3} {} {} {:>3}",
-            beat / BEATS_PER_BAR + 1,
-            beat % BEATS_PER_BAR + 1,
-            ticks % PPQ / (PPQ / 4) + 1,
-            ticks % (PPQ / 4) + 1
-        );
-        let transport = |icon: Icon, on: bool| {
-            div()
-                .w(px(34.))
-                .h(px(26.))
-                .rounded(px(5.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(rgb(if on { PLAYING } else { BUTTON }))
-                .child(theme::icon(icon, rgb(if on { 0x10220f } else { TEXT })))
-        };
-        let lcd_field = |value: String, label: &'static str| {
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .child(div().text_size(px(19.)).child(value))
-                .child(
-                    div()
-                        .text_size(px(8.))
-                        .text_color(rgb(TEXT_DIM))
-                        .child(label),
-                )
-        };
-        let name = self
-            .session
-            .dir
-            .file_name()
-            .map_or("Untitled".into(), |n| n.to_string_lossy().into_owned());
+    /// The agent's most recent edit, while its outline still shows.
+    pub fn agent_presence(&self) -> Option<&AgentEdit> {
+        self.agent.last().filter(|a| a.at.elapsed() < PRESENCE)
+    }
 
+    fn status_bar(&self) -> impl IntoElement {
+        let hint = match (self.view, self.tool, self.bottom) {
+            (View::Mixer, ..) => "Click a slot to open it · drag a fader, ⌥-click to reset",
+            (_, Tool::Pencil, _) => {
+                "Click an empty lane for a new region · in the piano roll, a note"
+            }
+            (_, Tool::Scissors, _) => "Click a region or note to cut it there",
+            (_, Tool::Eraser, _) => "Click a region or note to delete it",
+            (_, _, Some(Bottom::PianoRoll)) => {
+                "Double-click to add a note · drag to move · drag its end to resize"
+            }
+            _ => {
+                "Drag to move · drag an edge to trim · ⌥-drag an audio end to flex · ⌘-scroll to zoom"
+            }
+        };
+        let (text, color) = match &self.status {
+            Some(s) => (s.clone(), TEXT_2),
+            None => (hint.to_string(), TEXT_3),
+        };
+        let rate = self.player.rate();
+        let buffer = self.player.buffer();
+        let format = if buffer > 0 {
+            format!(
+                "{:.0} kHz · {buffer} smp · {:.1} ms",
+                rate / 1000.0,
+                buffer as f64 / rate * 1000.0
+            )
+        } else {
+            format!("{:.0} kHz", rate / 1000.0)
+        };
+        let agent = self
+            .agent
+            .last()
+            .filter(|a| a.at.elapsed() < Duration::from_secs(60));
         div()
-            .h(px(CONTROL_BAR_H))
+            .h(px(STATUS_H))
             .flex_none()
             .flex()
             .items_center()
-            .gap_3()
-            .px_3()
-            .bg(rgb(PANEL))
-            .border_b_1()
-            .border_color(rgb(BORDER))
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(button("Inspector", self.show_inspector).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| {
-                            ws.show_inspector = !ws.show_inspector;
-                            cx.notify();
-                        }),
-                    ))
-                    .child(
-                        button("Mixer", self.bottom == Some(Bottom::Mixer)).on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|ws, _, _, cx| ws.toggle_bottom(Bottom::Mixer, cx)),
-                        ),
-                    )
-                    .child(
-                        button("Piano Roll", self.bottom == Some(Bottom::PianoRoll)).on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|ws, _, _, cx| ws.toggle_bottom(Bottom::PianoRoll, cx)),
-                        ),
-                    )
-                    .child(button("Automation", self.show_automation).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| {
-                            ws.show_automation = !ws.show_automation;
-                            cx.notify();
-                        }),
-                    )),
-            )
-            .child(div().flex_1())
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(transport(Icon::ToStart, false).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| ws.go_to_start(cx)),
-                    ))
-                    .child(
-                        transport(Icon::Stop, false).on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|ws, _, _, cx| ws.stop(cx)),
-                        ),
-                    )
-                    .child(transport(Icon::Play, playing).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| {
-                            ws.player.play();
-                            cx.notify();
-                        }),
-                    ))
-                    .child(
-                        div()
-                            .w(px(34.))
-                            .h(px(26.))
-                            .rounded(px(5.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(rgb(if self.recording.is_some() {
-                                RECORD
-                            } else {
-                                BUTTON
-                            }))
-                            .child(theme::icon(
-                                Icon::Record,
-                                rgb(if self.recording.is_some() {
-                                    0xffffff
-                                } else {
-                                    RECORD
-                                }),
-                            ))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|ws, _, _, cx| ws.record(cx)),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_5()
-                    .px_4()
-                    .py_1()
-                    .rounded(px(6.))
-                    .bg(rgb(LCD))
-                    .font_family(MONO)
-                    .text_color(rgb(LCD_TEXT))
-                    .child(lcd_field(position, "BAR  BEAT  DIV  TICK"))
-                    .child(
-                        lcd_field(format!("{:.0}", project.tempo), "TEMPO")
-                            .cursor_ns_resize()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                                    let bpm = ws.session.project.tempo;
-                                    ws.begin_drag(
-                                        Drag::Tempo {
-                                            y: pt(e.position).y,
-                                            bpm,
-                                        },
-                                        cx,
-                                    );
-                                }),
-                            ),
-                    )
-                    .child(lcd_field("4/4".into(), "TIME")),
-            )
-            .child(div().flex_1())
-            .child(
-                button("Musical Typing", self.typing.is_some()).on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|ws, _, _, cx| ws.toggle_typing(cx)),
-                ),
-            )
-            .child(div().text_size(px(12.)).text_color(rgb(TEXT_DIM)).child(
-                if self.session.edited {
-                    format!("{name} — Edited")
-                } else {
-                    name
-                },
-            ))
-    }
-
-    fn inspector(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let label = |s: &'static str| {
-            div()
-                .text_size(px(10.))
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(TEXT_DIM))
-                .child(s)
-        };
-        let has_track = !self.session.project.tracks.is_empty();
-        div()
-            .w(px(INSPECTOR_W))
-            .flex_none()
-            .h_full()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_2()
-            .bg(rgb(PANEL_DARK))
-            .border_r_1()
-            .border_color(rgb(BORDER))
-            .child(label("CHANNEL STRIPS"))
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .when(has_track, |d| {
-                        d.child(strip::strip(self, Channel::Track(self.track), cx))
-                    })
-                    .child(strip::strip(self, Channel::Master, cx)),
-            )
-    }
-
-    fn mixer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let project = &self.session.project;
-        let channels: Vec<Channel> = (0..project.tracks.len())
-            .map(Channel::Track)
-            .chain((0..project.auxes.len()).map(Channel::Aux))
-            .collect();
-        let strips: Vec<Div> = channels
-            .into_iter()
-            .map(|ch| strip::strip(self, ch, cx))
-            .collect();
-        div()
-            .h(px(MIXER_H))
-            .flex_none()
-            .flex()
-            .bg(rgb(PANEL_DARK))
+            .gap(px(16.))
+            .px(px(12.))
+            .bg(rgb(BG))
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(LINE_SOFT))
+            .text_size(px(11.))
+            .text_color(rgb(TEXT_3))
             .child(
                 div()
-                    .id("mixer")
                     .flex_1()
-                    .flex()
-                    .gap_1()
-                    .p_1()
-                    .overflow_x_scroll()
-                    .children(strips),
+                    .min_w(px(0.))
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_color(rgb(color))
+                    .child(text),
             )
-            .child(
-                div()
-                    .p_1()
-                    .border_l_1()
-                    .border_color(rgb(BORDER))
-                    .child(strip::strip(self, Channel::Master, cx)),
-            )
+            .when_some(agent, |d, a| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .text_color(rgb(AGENT_TEXT))
+                        .whitespace_nowrap()
+                        .child(div().size(px(6.)).rounded(px(3.)).bg(rgb(AGENT)))
+                        .child(format!("Agent: {} · {}", a.what, a.ago())),
+                )
+            })
+            .child(format!("CPU {:.0}%", (self.load * 100.0).min(999.0)))
+            .child(div().font_family(MONO).child(format))
+            .child(if self.session.edited {
+                "Edited"
+            } else {
+                "Saved"
+            })
     }
 
     /// Finds the installed plugins in the background, for the plugin menus.
@@ -1070,6 +1611,8 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.viewport_h = f32::from(window.viewport_size().height);
+        self.viewport_w = f32::from(window.viewport_size().width);
         self.player.collect();
         self.read_meters();
         self.capture(cx);
@@ -1082,8 +1625,9 @@ impl Render for Workspace {
         // ponytail: redraws every frame while anything moves; fine until the UI gets heavy.
         let busy = playing
             || self.recording.is_some()
-            || self.master_level > 1e-4
-            || self.levels.values().any(|&l| l > 1e-4);
+            || self.levels.values().any(Level::moving)
+            || self.reductions.values().any(|&g| g > 0.01)
+            || self.agent_presence().is_some();
         if busy || self.drag.is_some() {
             window.request_animation_frame();
         }
@@ -1105,14 +1649,15 @@ impl Render for Workspace {
             self.title = title;
         }
 
-        let status = self.status.clone();
         div()
             .size_full()
             .flex()
             .flex_col()
             .bg(rgb(BG))
+            .font_family(SANS)
             .text_color(rgb(TEXT))
             .text_size(px(12.))
+            .font_weight(FontWeight::NORMAL)
             .track_focus(&self.focus)
             .key_context(if self.typing.is_some() {
                 "Typing"
@@ -1163,10 +1708,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &Save, _, cx| {
                 ws.save(cx);
             }))
+            .on_action(cx.listener(|ws, _: &Export, _, cx| ws.export(cx)))
+            .on_action(cx.listener(|ws, _: &ToggleCycle, _, cx| ws.toggle_cycle(cx)))
+            .on_action(cx.listener(|ws, _: &ToggleMetronome, _, cx| ws.toggle_metronome(cx)))
             .on_action(cx.listener(|ws, _: &Quit, window, cx| ws.quit(window, cx)))
-            .on_action(
-                cx.listener(|ws, _: &ToggleMixer, _, cx| ws.toggle_bottom(Bottom::Mixer, cx)),
-            )
+            .on_action(cx.listener(|ws, _: &ToggleMixer, _, cx| ws.toggle_mixer(cx)))
             .on_action(cx.listener(|ws, _: &ToggleInspector, _, cx| {
                 ws.show_inspector = !ws.show_inspector;
                 cx.notify();
@@ -1177,43 +1723,23 @@ impl Render for Workspace {
                     .flex_1()
                     .min_h(px(0.))
                     .flex()
-                    .when(self.show_inspector, |d| d.child(self.inspector(cx)))
-                    .child(self.tracks_area(cx)),
+                    .when(self.view == View::Mixer, |d| d.child(self.mixer_view(cx)))
+                    .when(self.view == View::Arrange, |d| {
+                        d.when(self.show_inspector, |d| d.child(self.inspector(cx)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .flex()
+                                    .flex_col()
+                                    .child(self.tracks_area(cx))
+                                    .when_some(self.bottom, |d, pane| {
+                                        d.child(self.editor(pane, cx))
+                                    }),
+                            )
+                    }),
             )
-            .when(self.bottom == Some(Bottom::Mixer), |d| {
-                d.child(self.mixer(cx))
-            })
-            .when(self.bottom == Some(Bottom::PianoRoll), |d| {
-                d.child(self.piano_roll(cx))
-            })
-            .when(self.bottom == Some(Bottom::Takes), |d| {
-                d.child(self.takes_pane(cx))
-            })
-            .when(self.bottom == Some(Bottom::Steps), |d| {
-                d.child(self.steps_pane(cx))
-            })
-            .when(self.bottom == Some(Bottom::Score), |d| {
-                d.child(self.score_pane(cx))
-            })
-            .when(self.bottom == Some(Bottom::Loops), |d| {
-                d.child(self.loops_pane(cx))
-            })
-            .when_some(status, |d, s| {
-                d.child(
-                    div()
-                        .h(px(22.))
-                        .flex_none()
-                        .px_3()
-                        .flex()
-                        .items_center()
-                        .text_size(px(11.))
-                        .text_color(rgb(TEXT_DIM))
-                        .bg(rgb(PANEL))
-                        .border_t_1()
-                        .border_color(rgb(BORDER))
-                        .child(s),
-                )
-            })
+            .child(self.status_bar())
             .when(self.drag.is_some(), |d| d.child(self.drag_listener(cx)))
             .children(self.menu_view(cx))
     }
