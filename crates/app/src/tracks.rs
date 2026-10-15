@@ -4,18 +4,40 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, Bounds, Context, Div, Hsla, MouseButton, MouseDownEvent, Pixels, Window, canvas, div,
-    fill, point, prelude::*, px, rgb, size,
+    AnyElement, App, Bounds, Context, Div, Hsla, MouseButton, MouseDownEvent, PathBuilder, Pixels,
+    Point, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 use tempo_engine::{
     peaks::Peaks,
-    project::{At, BEATS_PER_BAR, Content, PPQ},
+    project::{At, AutoPoint, BEATS_PER_BAR, Content, PPQ, Param},
 };
 
 use crate::{
+    strip,
     theme::*,
-    workspace::{Drag, Edge, Workspace},
+    workspace::{Bottom, Drag, Edge, Workspace},
 };
+
+/// Space kept free above and below an automation line.
+const AUTO_PAD: f32 = 6.0;
+
+/// Where a parameter value sits in a lane, from its top: volume on the fader's scale, pan with
+/// left at the top.
+pub fn auto_to_y(param: Param, value: f32) -> f32 {
+    let t = match param {
+        Param::Volume => 1.0 - strip::fader_pos(value),
+        Param::Pan => (value.clamp(-1.0, 1.0) + 1.0) / 2.0,
+    };
+    AUTO_PAD + t * (LANE_H - 2.0 * AUTO_PAD)
+}
+
+pub fn auto_from_y(param: Param, y: f32) -> f32 {
+    let t = ((y - AUTO_PAD) / (LANE_H - 2.0 * AUTO_PAD)).clamp(0.0, 1.0);
+    match param {
+        Param::Volume => strip::fader_db(1.0 - t),
+        Param::Pan => t * 2.0 - 1.0,
+    }
+}
 
 /// What a region shows inside.
 enum Inside {
@@ -192,6 +214,28 @@ impl Workspace {
                             .overflow_hidden()
                             .child(t.name.clone()),
                     )
+                    .when(self.show_automation, |d| {
+                        let id = t.id;
+                        let param = self.params.get(&id).copied().unwrap_or_default();
+                        let label = if param == Param::Volume {
+                            "Volume"
+                        } else {
+                            "Pan"
+                        };
+                        d.child(button(label, true).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| {
+                                cx.stop_propagation();
+                                let p = ws.params.entry(id).or_default();
+                                *p = if *p == Param::Volume {
+                                    Param::Pan
+                                } else {
+                                    Param::Volume
+                                };
+                                cx.notify();
+                            }),
+                        ))
+                    })
                     .child(toggle("M", t.mute, MUTE).on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |ws, _, _, cx| {
@@ -281,9 +325,12 @@ impl Workspace {
                     .h(px(LANE_H))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                             ws.track = i;
                             ws.region = None;
+                            if ws.show_automation {
+                                ws.add_auto_point(i, e.position.map(f32::from), cx);
+                            }
                             cx.notify();
                         }),
                     )
@@ -304,6 +351,33 @@ impl Workspace {
         }
 
         let playhead = self.playhead() as f32 * ppt - sx;
+        let automation = if self.show_automation {
+            self.automation(cx)
+        } else {
+            Vec::new()
+        };
+        // The take being recorded, growing with the playhead.
+        let take = self.recording.as_ref().and_then(|rec| {
+            let t = self
+                .session
+                .project
+                .tracks
+                .iter()
+                .position(|t| t.id == rec.track())?;
+            let x = rec.start() as f32 * ppt - sx;
+            Some(
+                div()
+                    .absolute()
+                    .left(px(x))
+                    .top(px(t as f32 * LANE_H - sy + 1.))
+                    .w(px((playhead - x).max(2.)))
+                    .h(px(LANE_H - 3.))
+                    .rounded(px(4.))
+                    .bg(Hsla::from(rgb(RECORD)).opacity(0.45))
+                    .border_1()
+                    .border_color(rgb(RECORD)),
+            )
+        });
         div()
             .flex_1()
             .min_w(px(0.))
@@ -314,6 +388,8 @@ impl Workspace {
             .child(grid)
             .children(rows)
             .children(regions)
+            .children(take)
+            .children(automation)
             .when(tracks == 0, |d| {
                 d.child(
                     div()
@@ -369,6 +445,7 @@ impl Workspace {
             },
         };
         let (start, end) = (region.start, region.start + region.length);
+        let live = !self.show_automation;
         let handle = |edge: Edge, cx: &mut Context<Self>| {
             let h = div()
                 .absolute()
@@ -423,10 +500,117 @@ impl Workspace {
                     .size_full(),
                 ),
             )
-            .child(handle(Edge::Start, cx))
-            .child(handle(Edge::End, cx))
-            .cursor_grab()
-            .on_mouse_down(MouseButton::Left, grab(at, Edge::Move, start, end, cx))
+            .when(live, |d| {
+                d.child(handle(Edge::Start, cx))
+                    .child(handle(Edge::End, cx))
+                    .cursor_grab()
+                    .on_mouse_down(MouseButton::Left, grab(at, Edge::Move, start, end, cx))
+            })
+            .when(!live, |d| d.opacity(0.45))
+    }
+
+    /// Each track's automation for its chosen parameter: a line, and points to drag.
+    fn automation(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let (ppt, sx, sy) = (self.px_per_tick(), self.scroll_x, self.scroll_y);
+        let mut out = Vec::new();
+        for (t, track) in self.session.project.tracks.iter().enumerate() {
+            let param = self.params.get(&track.id).copied().unwrap_or_default();
+            let points: Vec<AutoPoint> = track.automation.points(param).to_vec();
+            let count = points.len();
+            let level = match param {
+                Param::Volume => track.volume_db,
+                Param::Pan => track.pan,
+            };
+            let color = rgb(if param == Param::Volume {
+                AUTO_VOLUME
+            } else {
+                AUTO_PAN
+            });
+            let top = t as f32 * LANE_H - sy;
+            for (i, p) in points.iter().enumerate() {
+                let x = p.tick as f32 * ppt - sx;
+                out.push(
+                    div()
+                        .absolute()
+                        .left(px(x - 4.))
+                        .top(px(top + auto_to_y(param, p.value) - 4.))
+                        .size(px(9.))
+                        .rounded(px(5.))
+                        .bg(color)
+                        .border_1()
+                        .border_color(rgb(0x101010))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                ws.track = t;
+                                if e.modifiers.alt {
+                                    ws.edit(cx, |ws| {
+                                        let a = &mut ws.session.project.tracks[t].automation;
+                                        a.points_mut(param).remove(i);
+                                    });
+                                } else {
+                                    let drag = Drag::Auto {
+                                        track: t,
+                                        param,
+                                        index: i,
+                                        moved: false,
+                                    };
+                                    ws.begin_drag(drag, cx);
+                                }
+                            }),
+                        )
+                        .into_any_element(),
+                );
+            }
+            // Drawn under the points: added first.
+            let line = canvas(
+                |_, _, _| {},
+                move |b, _, window, _| {
+                    let y = |v: f32| b.origin.y + px(top + auto_to_y(param, v));
+                    let x = |tick: u64| b.origin.x + px(tick as f32 * ppt - sx);
+                    let (first, last) = match (points.first(), points.last()) {
+                        (Some(f), Some(l)) => (f.value, l.value),
+                        _ => (level, level),
+                    };
+                    let mut path = PathBuilder::stroke(px(1.5));
+                    path.move_to(point(b.origin.x, y(first)));
+                    for p in &points {
+                        path.line_to(point(x(p.tick), y(p.value)));
+                    }
+                    path.line_to(point(b.origin.x + b.size.width, y(last)));
+                    if let Ok(path) = path.build() {
+                        let faint = if points.is_empty() { 0.4 } else { 1.0 };
+                        window.paint_path(path, Hsla::from(color).opacity(faint));
+                    }
+                },
+            )
+            .absolute()
+            .size_full();
+            out.insert(out.len() - count, line.into_any_element());
+        }
+        out
+    }
+
+    /// Adds an automation point where the pointer is, and starts dragging it.
+    pub fn add_auto_point(&mut self, track: usize, p: Point<f32>, cx: &mut Context<Self>) {
+        let id = self.session.project.tracks[track].id;
+        let param = self.params.get(&id).copied().unwrap_or_default();
+        let point = AutoPoint {
+            tick: self.snap(self.tick_at(p.x)),
+            value: self.auto_value(track, param, p.y),
+        };
+        self.session.checkpoint();
+        let index = self.session.project.tracks[track]
+            .automation
+            .add(param, point);
+        self.drag = Some(Drag::Auto {
+            track,
+            param,
+            index,
+            moved: true,
+        });
+        self.changed(cx);
     }
 }
 
@@ -440,8 +624,18 @@ fn grab(
 ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
     cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
         cx.stop_propagation();
+        if ws.region != Some(at) {
+            ws.note = None;
+        }
         ws.region = Some(at);
         ws.track = at.0;
+        // Double-clicking a MIDI region opens it in the piano roll, as in Logic.
+        if e.click_count == 2 && edge == Edge::Move && ws.session.project.notes_mut(at).is_some() {
+            ws.bottom = Some(Bottom::PianoRoll);
+            ws.focus_roll();
+            cx.notify();
+            return;
+        }
         let from = e.position.map(f32::from);
         let drag = Drag::Region {
             at,
@@ -502,5 +696,22 @@ fn paint_inside(inside: &Inside, b: Bounds<Pixels>, ppt: f32, color: Hsla, windo
             }
         }
         Inside::Nothing => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn automation_values_and_lane_heights_round_trip() {
+        for (param, v) in [
+            (Param::Volume, -12.0),
+            (Param::Volume, 6.0),
+            (Param::Pan, -0.5),
+        ] {
+            assert!((auto_from_y(param, auto_to_y(param, v)) - v).abs() < 1e-3);
+        }
+        assert_eq!(auto_to_y(Param::Pan, -1.0), AUTO_PAD); // left at the top
     }
 }

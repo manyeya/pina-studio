@@ -50,6 +50,87 @@ pub struct Track {
     pub solo: bool,
     #[serde(default)]
     pub regions: Vec<Region>,
+    /// Volume and pan over time. A parameter with points follows them instead of its fader.
+    #[serde(default, skip_serializing_if = "Automation::is_empty")]
+    pub automation: Automation,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Automation {
+    /// In dB.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volume: Vec<AutoPoint>,
+    /// -1 to 1.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pan: Vec<AutoPoint>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct AutoPoint {
+    pub tick: u64,
+    pub value: f32,
+}
+
+/// An automatable parameter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum Param {
+    #[default]
+    Volume,
+    Pan,
+}
+
+impl Automation {
+    pub fn is_empty(&self) -> bool {
+        self.volume.is_empty() && self.pan.is_empty()
+    }
+
+    pub fn points(&self, param: Param) -> &[AutoPoint] {
+        match param {
+            Param::Volume => &self.volume,
+            Param::Pan => &self.pan,
+        }
+    }
+
+    pub fn points_mut(&mut self, param: Param) -> &mut Vec<AutoPoint> {
+        match param {
+            Param::Volume => &mut self.volume,
+            Param::Pan => &mut self.pan,
+        }
+    }
+
+    /// Adds a point in time order and returns its index.
+    pub fn add(&mut self, param: Param, point: AutoPoint) -> usize {
+        let points = self.points_mut(param);
+        let i = points.partition_point(|p| p.tick <= point.tick);
+        points.insert(i, point);
+        i
+    }
+
+    /// Moves a point, but not past its neighbours.
+    pub fn set(&mut self, param: Param, i: usize, tick: u64, value: f32) {
+        let points = self.points_mut(param);
+        let lo = if i > 0 { points[i - 1].tick } else { 0 };
+        let hi = points.get(i + 1).map_or(u64::MAX, |p| p.tick);
+        points[i] = AutoPoint {
+            tick: tick.clamp(lo, hi),
+            value,
+        };
+    }
+}
+
+/// A parameter's value at a tick: straight lines between points, level before the first and
+/// after the last. None without points.
+pub fn value_at(points: &[AutoPoint], tick: f64) -> Option<f32> {
+    let i = points.partition_point(|p| (p.tick as f64) <= tick);
+    match (i.checked_sub(1).map(|i| points[i]), points.get(i)) {
+        (None, None) => None,
+        (Some(a), None) => Some(a.value),
+        (None, Some(b)) => Some(b.value),
+        (Some(a), Some(b)) => {
+            let t = ((tick - a.tick as f64) / (b.tick - a.tick) as f64) as f32;
+            Some(a.value + (b.value - a.value) * t)
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -174,6 +255,14 @@ impl Project {
 
     pub fn region(&self, at: At) -> &Region {
         &self.tracks[at.0].regions[at.1]
+    }
+
+    /// A MIDI region's notes, if it is one.
+    pub fn notes_mut(&mut self, at: At) -> Option<&mut Vec<Note>> {
+        match &mut self.tracks.get_mut(at.0)?.regions.get_mut(at.1)?.content {
+            Content::Midi { notes } => Some(notes),
+            Content::Audio { .. } => None,
+        }
     }
 
     /// Adds a track at `index` and returns its id.
@@ -392,6 +481,42 @@ mod tests {
         let r = p.region((0, 0));
         assert_eq!((r.start, r.length), (1440, 1440));
         assert!(matches!(r.content, Content::Audio { offset: 0, .. }));
+    }
+
+    #[test]
+    fn automation_points_stay_in_order_and_interpolate() {
+        let mut a = Automation::default();
+        assert_eq!(value_at(a.points(Param::Volume), 0.0), None);
+        a.add(
+            Param::Volume,
+            AutoPoint {
+                tick: 960,
+                value: -12.0,
+            },
+        );
+        a.add(
+            Param::Volume,
+            AutoPoint {
+                tick: 0,
+                value: 0.0,
+            },
+        );
+        assert_eq!(
+            a.add(
+                Param::Volume,
+                AutoPoint {
+                    tick: 480,
+                    value: -6.0
+                }
+            ),
+            1
+        );
+        let v = a.points(Param::Volume);
+        assert_eq!(value_at(v, 240.0), Some(-3.0));
+        assert_eq!(value_at(v, 5000.0), Some(-12.0));
+        a.set(Param::Volume, 1, 2000, 0.0); // can't pass the point after it
+        assert_eq!(a.points(Param::Volume)[1].tick, 960);
+        assert!(a.points(Param::Pan).is_empty());
     }
 
     #[test]

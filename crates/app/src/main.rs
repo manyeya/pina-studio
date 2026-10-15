@@ -1,4 +1,8 @@
+mod pianoroll;
+mod record;
 mod strip;
+#[cfg(test)]
+mod tests;
 mod theme;
 mod tracks;
 mod workspace;
@@ -68,6 +72,8 @@ fn open(dir: &Path) -> Result<(), String> {
             ]),
             Menu::new("View").items([
                 MenuItem::action("Mixer", ToggleMixer),
+                MenuItem::action("Piano Roll", TogglePianoRoll),
+                MenuItem::action("Automation", ToggleAutomation),
                 MenuItem::action("Inspector", ToggleInspector),
                 MenuItem::separator(),
                 MenuItem::action("Zoom In", ZoomIn),
@@ -76,7 +82,9 @@ fn open(dir: &Path) -> Result<(), String> {
             Menu::new("Transport").items([
                 MenuItem::action("Play or Stop", PlayStop),
                 MenuItem::action("Go to Beginning", GoToStart),
+                MenuItem::action("Record", Record),
             ]),
+            Menu::new("Window").items([MenuItem::action("Musical Typing", ToggleTyping)]),
         ]);
         let bounds = Bounds::centered(None, size(px(1400.), px(860.)), cx);
         let options = WindowOptions {

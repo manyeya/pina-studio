@@ -8,8 +8,11 @@ A DAW in the shape of Logic Pro, written in Rust: gpui for the UI, VST3 plugins.
   (`engine.rs`), the built-in synth, and VST3 hosting (`plugin/`).
 - `crates/engine` also has the live `player.rs` (keeps the engine in step with edits) and
   `session.rs` (an open project and its undo history).
+- `crates/engine` also has MIDI input (`midi.rs`) and audio recording (`record.rs`).
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
-  `tracks.rs` (headers, ruler, regions), `strip.rs` (channel strips), `theme.rs`.
+  `tracks.rs` (headers, ruler, regions, automation), `pianoroll.rs`, `record.rs` (recording
+  takes), `strip.rs` (channel strips), `theme.rs`, and `tests.rs`, which drives the window
+  headless with simulated mouse and keys.
 
 ## Run
 
@@ -21,11 +24,22 @@ A DAW in the shape of Logic Pro, written in Rust: gpui for the UI, VST3 plugins.
 `play` sets the output device to the project's sample rate, as Logic does. `play_vst` loads a
 plugin, opens its editor and plays an arpeggio through it.
 
-In the app, as in Logic: space plays and stops, return goes to the start, ⌘T splits the selected
-region at the playhead, delete deletes it, ⌘Z and ⇧⌘Z undo and redo, ⌥⌘N adds a track, ⌘⌫ deletes
-the selected one, X shows the mixer, I the inspector, ⌘S saves. Drag regions to move them (across
-tracks too) and their edges to trim; drag faders, pan knobs and the tempo; option-click a fader or
-knob to reset it; click or drag in the ruler to move the playhead; ⌘-scroll zooms.
+In the app, as in Logic:
+
+- Space plays and stops, return goes to the start, R records onto the selected track (MIDI from
+  any MIDI keyboard or musical typing on an instrument track, the default input on an audio
+  track).
+- ⌘T splits the selected region at the playhead, delete deletes it, ⌘Z and ⇧⌘Z undo and redo,
+  ⌥⌘N adds a track and ⌘⌫ deletes the selected one, ⌘S saves.
+- X shows the mixer, P the piano roll (or double-click a MIDI region), A automation, I the
+  inspector; ⌘K turns on musical typing (A to K play a C major scale from C3, W E T Y U the
+  sharps, Z and X change octave).
+- Drag regions to move them (across tracks too) and their edges to trim. In the piano roll,
+  double-click to add a note, drag it to move it, drag its right edge to resize it.
+- With automation showing, click a lane to add a point, drag points, option-click to delete
+  one; each track header switches between volume and pan.
+- Drag faders, pan knobs and the tempo; option-click a fader or knob to reset it. Click or drag
+  in the ruler to move the playhead; ⌘-scroll zooms.
 
 Builds need only the Command Line Tools: gpui compiles its Metal shaders at launch.
 

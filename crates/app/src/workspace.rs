@@ -3,14 +3,17 @@
 
 use std::{cell::Cell, collections::HashMap, rc::Rc};
 
+pub use crate::record::Recording;
+
 use gpui::{
-    App, Bounds, Context, DispatchPhase, Div, FocusHandle, FontWeight, KeyBinding, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, PromptLevel, ScrollDelta,
-    ScrollWheelEvent, Window, actions, canvas, div, prelude::*, px, rgb,
+    App, Bounds, Context, DispatchPhase, Div, FocusHandle, FontWeight, KeyBinding, KeyDownEvent,
+    KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    PromptLevel, ScrollDelta, ScrollWheelEvent, Window, actions, canvas, div, prelude::*, px, rgb,
 };
 use tempo_engine::{
+    engine::LiveNote,
     player::Player,
-    project::{At, BEATS_PER_BAR, Instrument, PPQ, Track},
+    project::{At, BEATS_PER_BAR, Instrument, PPQ, Param, Track},
     session::Session,
 };
 
@@ -36,6 +39,10 @@ actions!(
         ZoomIn,
         ZoomOut,
         Quit,
+        TogglePianoRoll,
+        ToggleAutomation,
+        Record,
+        ToggleTyping,
     ]
 );
 
@@ -50,8 +57,13 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("delete", Delete, None),
         KeyBinding::new("cmd-backspace", DeleteTrack, None),
         KeyBinding::new("cmd-t", Split, None),
-        KeyBinding::new("x", ToggleMixer, None),
-        KeyBinding::new("i", ToggleInspector, None),
+        // Letters are notes while musical typing is on, so these only work in the arrangement.
+        KeyBinding::new("x", ToggleMixer, Some("Arrange")),
+        KeyBinding::new("i", ToggleInspector, Some("Arrange")),
+        KeyBinding::new("p", TogglePianoRoll, Some("Arrange")),
+        KeyBinding::new("a", ToggleAutomation, Some("Arrange")),
+        KeyBinding::new("r", Record, None),
+        KeyBinding::new("cmd-k", ToggleTyping, None),
         KeyBinding::new("cmd-s", Save, None),
         KeyBinding::new("cmd-alt-n", NewTrack, None),
         KeyBinding::new("cmd-right", ZoomIn, None),
@@ -95,6 +107,36 @@ pub enum Drag {
         bpm: f64,
     },
     Locate,
+    /// A note in the piano roll: `start`, `pitch` and `length` are where it began.
+    Note {
+        at: At,
+        index: usize,
+        edge: Edge,
+        from: Point<f32>,
+        start: i64,
+        pitch: u8,
+        length: u64,
+        moved: bool,
+    },
+    /// An automation point.
+    Auto {
+        track: usize,
+        param: Param,
+        index: usize,
+        moved: bool,
+    },
+    /// A piano roll key held down, sounding.
+    Key {
+        track: u64,
+        pitch: u8,
+    },
+}
+
+/// What the pane under the tracks shows.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Bottom {
+    Mixer,
+    PianoRoll,
 }
 
 pub struct Workspace {
@@ -108,13 +150,25 @@ pub struct Workspace {
     pub px_per_beat: f32,
     pub scroll_x: f32,
     pub scroll_y: f32,
-    show_mixer: bool,
-    show_inspector: bool,
-    drag: Option<Drag>,
+    pub bottom: Option<Bottom>,
+    pub show_inspector: bool,
+    /// The selected note in the piano roll, by index in the selected region.
+    pub note: Option<usize>,
+    /// The piano roll's vertical scroll, and where its grid was drawn last frame.
+    pub roll_scroll_y: f32,
+    pub roll_bounds: Rc<Cell<Bounds<Pixels>>>,
+    pub show_automation: bool,
+    /// Which parameter each track's automation shows, by track id.
+    pub params: HashMap<u64, Param>,
+    pub recording: Option<Recording>,
+    /// Musical typing's octave shift, when it's on; and the notes its held keys play.
+    pub typing: Option<i8>,
+    typed: HashMap<String, u8>,
+    pub drag: Option<Drag>,
     /// Meter readings, falling back slowly, by track id.
     pub levels: HashMap<u64, f32>,
     pub master_level: f32,
-    status: Option<String>,
+    pub status: Option<String>,
     /// Where the lanes were drawn last frame, for turning pointer positions into ticks.
     pub lanes_bounds: Rc<Cell<Bounds<Pixels>>>,
     title: String,
@@ -148,8 +202,16 @@ impl Workspace {
             px_per_beat: 48.0,
             scroll_x: 0.0,
             scroll_y: 0.0,
-            show_mixer: false,
+            bottom: None,
             show_inspector: true,
+            note: None,
+            roll_scroll_y: crate::pianoroll::scroll_to(72),
+            roll_bounds: Rc::new(Cell::new(Bounds::default())),
+            show_automation: false,
+            params: HashMap::new(),
+            recording: None,
+            typing: None,
+            typed: HashMap::new(),
             drag: None,
             levels: HashMap::new(),
             master_level: 0.0,
@@ -178,6 +240,12 @@ impl Workspace {
         }
     }
 
+    /// The grid line at or before a tick: the cell it's in.
+    pub fn snap_down(&self, tick: f64) -> u64 {
+        let g = self.grid() as f64;
+        ((tick / g).floor() * g).max(0.0) as u64
+    }
+
     pub fn snap(&self, tick: f64) -> u64 {
         let g = self.grid() as f64;
         ((tick / g).round() * g).max(0.0) as u64
@@ -196,6 +264,13 @@ impl Workspace {
         {
             self.region = None;
         }
+        let notes = self
+            .region
+            .and_then(|at| self.session.project.notes_mut(at))
+            .map(|n| n.len());
+        if self.note.is_some_and(|i| notes.is_none_or(|n| i >= n)) {
+            self.note = None;
+        }
         self.status = self.player.sync(&self.session.project).err();
         cx.notify();
     }
@@ -208,7 +283,7 @@ impl Workspace {
     }
 
     pub fn begin_drag(&mut self, drag: Drag, cx: &mut Context<Self>) {
-        if !matches!(drag, Drag::Locate) {
+        if !matches!(drag, Drag::Locate | Drag::Key { .. }) {
             self.session.checkpoint();
         }
         self.drag = Some(drag);
@@ -218,7 +293,10 @@ impl Workspace {
     fn drag_to(&mut self, p: Point<f32>, cx: &mut Context<Self>) {
         let ppt = self.px_per_tick();
         let tracks = self.session.project.tracks.len();
-        if let Some(Drag::Region { moved, .. }) = &mut self.drag {
+        if let Some(
+            Drag::Region { moved, .. } | Drag::Note { moved, .. } | Drag::Auto { moved, .. },
+        ) = &mut self.drag
+        {
             *moved = true;
         }
         match self.drag {
@@ -269,14 +347,60 @@ impl Workspace {
                     (bpm + ((y - p.y) / 4.0) as f64).round().clamp(20.0, 400.0);
             }
             Some(Drag::Locate) => self.locate_at(p.x, cx),
-            None => return,
+            Some(Drag::Note {
+                at,
+                index,
+                edge,
+                from,
+                start,
+                pitch,
+                length,
+                ..
+            }) => {
+                self.drag_note(at, index, edge, p - from, (start, pitch, length));
+            }
+            Some(Drag::Auto {
+                track,
+                param,
+                index,
+                ..
+            }) => {
+                let tick = self.snap(self.tick_at(p.x));
+                let value = self.auto_value(track, param, p.y);
+                self.session.project.tracks[track]
+                    .automation
+                    .set(param, index, tick, value);
+            }
+            Some(Drag::Key { .. }) | None => return,
         }
         self.changed(cx);
     }
 
     fn end_drag(&mut self, cx: &mut Context<Self>) {
-        if let Some(Drag::Region { moved: false, .. }) = self.drag {
-            self.session.cancel();
+        if let Some(
+            Drag::Region { moved: false, .. }
+            | Drag::Note { moved: false, .. }
+            | Drag::Auto { moved: false, .. },
+        ) = self.drag
+        {
+            self.session.cancel()
+        }
+        // Release whatever note the drag was sounding.
+        match self.drag {
+            Some(Drag::Key { track, pitch }) => self.player.preview(track, pitch, 0),
+            Some(Drag::Note { at, index, .. }) => {
+                let track = self.session.project.tracks[at.0].id;
+                if let Some(n) = self
+                    .session
+                    .project
+                    .notes_mut(at)
+                    .and_then(|n| n.get(index))
+                {
+                    let pitch = n.pitch;
+                    self.player.preview(track, pitch, 0);
+                }
+            }
+            _ => {}
         }
         self.drag = None;
         cx.notify();
@@ -319,11 +443,18 @@ impl Workspace {
     }
 
     fn play_stop(&mut self, cx: &mut Context<Self>) {
-        if self.player.playing() {
-            self.player.stop();
+        if self.player.playing() || self.recording.is_some() {
+            self.stop(cx);
         } else {
             self.player.play();
         }
+        cx.notify();
+    }
+
+    /// Stops playing, and recording if it was.
+    pub fn stop(&mut self, cx: &mut Context<Self>) {
+        self.player.stop();
+        self.finish_recording(cx);
         cx.notify();
     }
 
@@ -346,6 +477,14 @@ impl Workspace {
     }
 
     fn delete(&mut self, cx: &mut Context<Self>) {
+        if let (Some(at), Some(i), Some(Bottom::PianoRoll)) = (self.region, self.note, self.bottom)
+        {
+            self.edit(cx, |ws| {
+                ws.session.project.notes_mut(at).unwrap().remove(i);
+                ws.note = None;
+            });
+            return;
+        }
         let Some((t, r)) = self.region else { return };
         self.edit(cx, |ws| {
             ws.session.project.tracks[t].regions.remove(r);
@@ -392,6 +531,100 @@ impl Workspace {
             ws.track = at;
             ws.region = None;
         });
+    }
+
+    pub fn toggle_bottom(&mut self, pane: Bottom, cx: &mut Context<Self>) {
+        self.bottom = if self.bottom == Some(pane) {
+            None
+        } else {
+            Some(pane)
+        };
+        if self.bottom == Some(Bottom::PianoRoll) {
+            self.focus_roll();
+        }
+        cx.notify();
+    }
+
+    fn toggle_typing(&mut self, cx: &mut Context<Self>) {
+        self.typing = if self.typing.is_some() { None } else { Some(0) };
+        cx.notify();
+    }
+
+    /// Musical typing, as in Logic: A to K are white keys from C, W E T Y U O P the black ones;
+    /// Z and X shift the octave.
+    fn type_key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
+        let Some(octave) = self.typing else { return };
+        let key = e.keystroke.key.as_str();
+        if e.keystroke.modifiers.modified() {
+            return;
+        }
+        match key {
+            "z" => self.typing = Some((octave - 1).max(-4)),
+            "x" => self.typing = Some((octave + 1).min(4)),
+            _ => {
+                const KEYS: &str = "awsedftgyhujkolp;'";
+                let Some(i) = KEYS.find(key).filter(|_| key.len() == 1) else {
+                    return;
+                };
+                if !e.is_held {
+                    let pitch = (60 + i as i32 + octave as i32 * 12).clamp(0, 127) as u8;
+                    self.typed.insert(key.to_string(), pitch);
+                    self.player.send_live(LiveNote {
+                        pitch,
+                        velocity: 100,
+                    });
+                }
+            }
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn release_key(&mut self, e: &KeyUpEvent, _: &mut Context<Self>) {
+        if let Some(pitch) = self.typed.remove(e.keystroke.key.as_str()) {
+            self.player.send_live(LiveNote { pitch, velocity: 0 });
+        }
+    }
+
+    /// The parameter value at a window y position in a track's lane.
+    pub fn auto_value(&self, track: usize, param: Param, y: f32) -> f32 {
+        let top =
+            f32::from(self.lanes_bounds.get().origin.y) + track as f32 * LANE_H - self.scroll_y;
+        crate::tracks::auto_from_y(param, y - top)
+    }
+
+    /// Moves or resizes a note in the piano roll by `d` pixels from where the drag began.
+    fn drag_note(&mut self, at: At, index: usize, edge: Edge, d: Point<f32>, was: (i64, u8, u64)) {
+        let (start, pitch, length) = was;
+        let dt = (d.x / self.px_per_tick()) as f64;
+        let region_start = self.session.project.region(at).start as i64;
+        let grid = self.grid() as i64;
+        let snapped = |t: f64| self.snap(t.max(0.0)) as i64;
+        let new_start = snapped((region_start + start) as f64 + dt) - region_start;
+        let new_end = snapped((region_start + start) as f64 + length as f64 + dt) - region_start;
+        let track = self.session.project.tracks[at.0].id;
+        let Some(n) = self
+            .session
+            .project
+            .notes_mut(at)
+            .and_then(|n| n.get_mut(index))
+        else {
+            return;
+        };
+        match edge {
+            Edge::Move => {
+                n.start = new_start;
+                let rows = (d.y / crate::pianoroll::KEY_H).round() as i32;
+                let new = (pitch as i32 - rows).clamp(0, 127) as u8;
+                if new != n.pitch {
+                    let old = n.pitch;
+                    n.pitch = new;
+                    self.player.preview(track, old, 0);
+                    self.player.preview(track, new, 100);
+                }
+            }
+            Edge::End | Edge::Start => n.length = (new_end - n.start).max(grid) as u64,
+        }
     }
 
     fn zoom(&mut self, by: f32, cx: &mut Context<Self>) {
@@ -546,10 +779,22 @@ impl Workspace {
                             cx.notify();
                         }),
                     ))
-                    .child(button("Mixer", self.show_mixer).on_mouse_down(
+                    .child(
+                        button("Mixer", self.bottom == Some(Bottom::Mixer)).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, _, _, cx| ws.toggle_bottom(Bottom::Mixer, cx)),
+                        ),
+                    )
+                    .child(
+                        button("Piano Roll", self.bottom == Some(Bottom::PianoRoll)).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, _, _, cx| ws.toggle_bottom(Bottom::PianoRoll, cx)),
+                        ),
+                    )
+                    .child(button("Automation", self.show_automation).on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, _, _, cx| {
-                            ws.show_mixer = !ws.show_mixer;
+                            ws.show_automation = !ws.show_automation;
                             cx.notify();
                         }),
                     )),
@@ -563,13 +808,12 @@ impl Workspace {
                         MouseButton::Left,
                         cx.listener(|ws, _, _, cx| ws.go_to_start(cx)),
                     ))
-                    .child(transport(Icon::Stop, false).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| {
-                            ws.player.stop();
-                            cx.notify();
-                        }),
-                    ))
+                    .child(
+                        transport(Icon::Stop, false).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, _, _, cx| ws.stop(cx)),
+                        ),
+                    )
                     .child(transport(Icon::Play, playing).on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, _, _, cx| {
@@ -577,7 +821,32 @@ impl Workspace {
                             cx.notify();
                         }),
                     ))
-                    .child(transport(Icon::Record, false).opacity(0.4)),
+                    .child(
+                        div()
+                            .w(px(34.))
+                            .h(px(26.))
+                            .rounded(px(5.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(rgb(if self.recording.is_some() {
+                                RECORD
+                            } else {
+                                BUTTON
+                            }))
+                            .child(theme::icon(
+                                Icon::Record,
+                                rgb(if self.recording.is_some() {
+                                    0xffffff
+                                } else {
+                                    RECORD
+                                }),
+                            ))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|ws, _, _, cx| ws.record(cx)),
+                            ),
+                    ),
             )
             .child(
                 div()
@@ -611,6 +880,12 @@ impl Workspace {
                     .child(lcd_field("4/4".into(), "TIME")),
             )
             .child(div().flex_1())
+            .child(
+                button("Musical Typing", self.typing.is_some()).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|ws, _, _, cx| ws.toggle_typing(cx)),
+                ),
+            )
             .child(div().text_size(px(12.)).text_color(rgb(TEXT_DIM)).child(
                 if self.session.edited {
                     format!("{name} — Edited")
@@ -687,12 +962,18 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.player.collect();
         self.read_meters();
+        self.capture(cx);
+        let armed = self.session.project.tracks.get(self.track).map(|t| t.id);
+        self.player.arm(armed);
         let playing = self.player.playing();
         if playing {
             self.follow_playhead();
         }
         // ponytail: redraws every frame while anything moves; fine until the UI gets heavy.
-        let busy = playing || self.master_level > 1e-4 || self.levels.values().any(|&l| l > 1e-4);
+        let busy = playing
+            || self.recording.is_some()
+            || self.master_level > 1e-4
+            || self.levels.values().any(|&l| l > 1e-4);
         if busy || self.drag.is_some() {
             window.request_animation_frame();
         }
@@ -723,6 +1004,24 @@ impl Render for Workspace {
             .text_color(rgb(TEXT))
             .text_size(px(12.))
             .track_focus(&self.focus)
+            .key_context(if self.typing.is_some() {
+                "Typing"
+            } else {
+                "Arrange"
+            })
+            .on_key_down(cx.listener(|ws, e: &KeyDownEvent, _, cx| ws.type_key(e, cx)))
+            .on_key_up(cx.listener(|ws, e: &KeyUpEvent, _, cx| ws.release_key(e, cx)))
+            .on_action(
+                cx.listener(|ws, _: &TogglePianoRoll, _, cx| {
+                    ws.toggle_bottom(Bottom::PianoRoll, cx)
+                }),
+            )
+            .on_action(cx.listener(|ws, _: &ToggleAutomation, _, cx| {
+                ws.show_automation = !ws.show_automation;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|ws, _: &Record, _, cx| ws.record(cx)))
+            .on_action(cx.listener(|ws, _: &ToggleTyping, _, cx| ws.toggle_typing(cx)))
             .on_action(cx.listener(|ws, _: &PlayStop, _, cx| ws.play_stop(cx)))
             .on_action(cx.listener(|ws, _: &GoToStart, _, cx| ws.go_to_start(cx)))
             .on_action(cx.listener(|ws, _: &Undo, _, cx| ws.undo(cx)))
@@ -737,10 +1036,9 @@ impl Render for Workspace {
                 ws.save(cx);
             }))
             .on_action(cx.listener(|ws, _: &Quit, window, cx| ws.quit(window, cx)))
-            .on_action(cx.listener(|ws, _: &ToggleMixer, _, cx| {
-                ws.show_mixer = !ws.show_mixer;
-                cx.notify();
-            }))
+            .on_action(
+                cx.listener(|ws, _: &ToggleMixer, _, cx| ws.toggle_bottom(Bottom::Mixer, cx)),
+            )
             .on_action(cx.listener(|ws, _: &ToggleInspector, _, cx| {
                 ws.show_inspector = !ws.show_inspector;
                 cx.notify();
@@ -754,7 +1052,12 @@ impl Render for Workspace {
                     .when(self.show_inspector, |d| d.child(self.inspector(cx)))
                     .child(self.tracks_area(cx)),
             )
-            .when(self.show_mixer, |d| d.child(self.mixer(cx)))
+            .when(self.bottom == Some(Bottom::Mixer), |d| {
+                d.child(self.mixer(cx))
+            })
+            .when(self.bottom == Some(Bottom::PianoRoll), |d| {
+                d.child(self.piano_roll(cx))
+            })
             .when_some(status, |d, s| {
                 d.child(
                     div()

@@ -1,7 +1,9 @@
 pub mod engine;
+pub mod midi;
 pub mod peaks;
 pub mod player;
 pub mod plugin;
 pub mod project;
+pub mod record;
 pub mod session;
 pub mod synth;
