@@ -14,6 +14,7 @@ Time is in ticks: 960 to a quarter note, so in 4/4 bar `b` beat `k` starts at
 order `tempo show` lists them. Levels are in dB (0 is unity, -144 silent); pan is -1 (left) to 1
 (right). A note is `{"start": ticks from the region's start, "length": ticks, "pitch": 0-127,
 "velocity": 1-127}`; middle C is 60. An instrument is `"synth"` (the built-in sine) or
+`"drums"` (the built-in kit, on the General MIDI drum notes) or
 `{"vst3": {"path": "/path/to/Plugin.vst3", "class": "Plugin Name"}}` (see `tempo plugins`).
 
 Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]}`,
@@ -34,6 +35,11 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   leaving out `plugin` removes the one there.
 - `add_midi_region` `{"track": 0, "start": 0, "length": 3840, "notes": [{"start": 0, "length": 960, "pitch": 60, "velocity": 100}]}`
 - `set_notes` `{"track": 0, "region": 0, "notes": […]}`: replaces all of a region's notes.
+- `add_pattern_region` `{"track": 0, "start": 0, "length": 3840, "step": 240, "rows": [{"pitch": 36, "cells": [110, 0, 0, 0, 100, 0, 0, 0, 110, 0, 0, 0, 100, 0, 0, 0]}]}`:
+  a step-sequencer pattern: each row a note, each cell a step's velocity (0 rests), looping over
+  the region. `step` is ticks per step (240, a sixteenth, by default). On a `"drums"` track:
+  36 kick, 38 snare, 37 side stick, 39 clap, 42 closed hat, 46 open hat, 41/45/48 toms, 49 crash.
+- `set_pattern` `{"track": 0, "region": 0, "rows": […]}`: replaces a pattern's rows.
 - `add_audio_region` `{"track": 2, "file": "/path/take.wav", "start": 0, "offset": 0, "length": 7680}`:
   a WAV at the project's sample rate, copied into `Audio Files`; `offset` (samples into the file)
   and `length` (ticks; the rest of the file by default) are optional.

@@ -124,11 +124,15 @@ impl Workspace {
         let mut items = Vec::new();
         match (ch, which) {
             (Channel::Track(track), Which::Instrument) => {
-                let action = MenuAction::Instrument {
-                    track,
-                    instrument: Instrument::Synth,
-                };
-                items.push(("Sine Synth".to_string(), action));
+                for (name, instrument) in [
+                    ("Sine Synth", Instrument::Synth),
+                    ("Drum Kit", Instrument::Drums),
+                ] {
+                    items.push((
+                        name.to_string(),
+                        MenuAction::Instrument { track, instrument },
+                    ));
+                }
             }
             (_, Which::Insert(index)) => {
                 let action = MenuAction::Insert {
@@ -263,7 +267,7 @@ fn plugin_slot(
 
 impl Workspace {
     fn has_builtin_instrument(&self, ch: Channel) -> bool {
-        matches!(ch, Channel::Track(i) if self.session.project.tracks[i].instrument == Some(Instrument::Synth))
+        matches!(ch, Channel::Track(i) if matches!(self.session.project.tracks[i].instrument, Some(Instrument::Synth | Instrument::Drums)))
     }
 }
 
@@ -310,6 +314,9 @@ pub fn strip(ws: &Workspace, ch: Channel, cx: &mut Context<Workspace>) -> Div {
                 None => row("Audio In".into(), false),
                 Some(Instrument::Synth) => {
                     plugin_slot("Sine Synth".into(), true, ch, Which::Instrument, cx)
+                }
+                Some(Instrument::Drums) => {
+                    plugin_slot("Drum Kit".into(), true, ch, Which::Instrument, cx)
                 }
                 Some(Instrument::Vst3(r)) => {
                     plugin_slot(r.class.clone(), true, ch, Which::Instrument, cx)

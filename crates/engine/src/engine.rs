@@ -19,6 +19,7 @@ use std::{
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::{
+    drums::Drums,
     peaks::Peaks,
     plugin::{AUDIO_MODULE, Module, Note, Plugin, Processor},
     project::{AutoPoint, Content, Instrument, PluginRef, Project, comp_segments, value_at},
@@ -246,6 +247,7 @@ pub struct Played {
 enum Source {
     Audio,
     Synth(Synth),
+    Drums(Box<Drums>),
     Plugin(Processor),
 }
 
@@ -302,6 +304,7 @@ pub fn make_lane(
     let source = match instrument {
         None => Source::Audio,
         Some(Instrument::Synth) => Source::Synth(Synth::new(rate)),
+        Some(Instrument::Drums) => Source::Drums(Box::new(Drums::new(rate))),
         Some(Instrument::Vst3(r)) => {
             let (plugin, processor) = instantiate(r)?;
             plugins.instrument = Some(plugin);
@@ -350,7 +353,8 @@ pub fn compile(
             // into the region).
             let mut emit = |content: &Content, at: i64, from: u64, to: u64| match content {
                 // Notes starting in their part of the region play, for their full length.
-                Content::Midi { notes } => {
+                Content::Midi { .. } | Content::Pattern { .. } => {
+                    let notes = content.notes((to as i64 - at).max(0) as u64).unwrap();
                     for n in notes
                         .iter()
                         .filter(|n| (from as i64..to as i64).contains(&(at + n.start)))
@@ -823,6 +827,7 @@ impl Engine {
             match &mut lane.source {
                 Source::Audio => {}
                 Source::Synth(s) => s.process([&mut *l, &mut *r], frames, notes),
+                Source::Drums(d) => d.process([&mut *l, &mut *r], frames, notes),
                 Source::Plugin(p) => {
                     p.set_transport(playing, from, tempo);
                     p.process([&mut *l, &mut *r], frames, notes);
@@ -1316,6 +1321,47 @@ mod tests {
         assert!(arrangement.plans[0].clips.is_empty());
         assert_eq!(arrangement.plans[1].events.len(), 2);
         assert!(Engine::load(&p, Path::new("."), RATE).is_err()); // a bounce does fail
+    }
+
+    #[test]
+    fn a_pattern_loops_over_its_region() {
+        use crate::project::PatternRow;
+        // Kick on steps 1 and 3 of four sixteenths, over a beat and a half: it comes round again.
+        let rows = vec![PatternRow {
+            pitch: 36,
+            cells: vec![100, 0, 90, 0],
+        }];
+        let region = Region {
+            start: 0,
+            length: PPQ * 3 / 2,
+            content: Content::Pattern {
+                step: PPQ / 4,
+                rows,
+            },
+        };
+        let track = Track {
+            name: "d".into(),
+            instrument: Some(Instrument::Drums),
+            regions: vec![region],
+            ..Default::default()
+        };
+        let mut files = AudioFiles::new(Path::new("."), RATE);
+        let (arrangement, _) = compile(
+            &project(vec![track.clone()]),
+            RATE,
+            &[(0, 0)],
+            &[],
+            &mut files,
+        );
+        let ons: Vec<u64> = arrangement.plans[0]
+            .events
+            .iter()
+            .filter(|e| e.velocity > 0.0)
+            .map(|e| e.at)
+            .collect();
+        let sixteenth = BEAT as u64 / 4;
+        assert_eq!(ons, [0, 2 * sixteenth, 4 * sixteenth]);
+        assert!(peak(&render(&project(vec![track]), Path::new("."), BEAT)[0]) > 0.1); // the kit plays it
     }
 
     #[test]

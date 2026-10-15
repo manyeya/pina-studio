@@ -9,10 +9,11 @@ use gpui::{
 };
 use tempo_engine::{
     peaks::Peaks,
-    project::{At, AutoPoint, BEATS_PER_BAR, Content, PPQ, Param, comp_segments},
+    project::{At, AutoPoint, BEATS_PER_BAR, Content, Instrument, PPQ, Param, comp_segments},
 };
 
 use crate::{
+    menu::{Menu, MenuAction},
     strip,
     theme::*,
     workspace::{Bottom, Drag, Edge, Workspace},
@@ -101,10 +102,28 @@ impl Workspace {
                     .text_color(rgb(TEXT_DIM))
                     .child("TRACKS"),
             )
-            .child(button("+", false).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|ws, _, _, cx| ws.new_track(cx)),
-            ))
+            .child(
+                button("+", false)
+                    .debug_selector(|| "new-track".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                            let item = |name: &str, instrument| {
+                                (name.to_string(), MenuAction::NewTrack { instrument })
+                            };
+                            let items = vec![
+                                item("Software Instrument", Some(Instrument::Synth)),
+                                item("Drum Kit", Some(Instrument::Drums)),
+                                item("Audio", None),
+                            ];
+                            ws.menu = Some(Menu {
+                                at: e.position,
+                                items,
+                            });
+                            cx.notify();
+                        }),
+                    ),
+            )
     }
 
     fn ruler(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -649,13 +668,14 @@ fn grab(
         ws.track = at.0;
         // Double-clicking a MIDI region opens it in the piano roll, and a take folder its takes.
         if e.click_count == 2 && edge == Edge::Move {
-            let folder = matches!(ws.session.project.region(at).content, Content::Takes { .. });
-            if folder || ws.session.project.notes_mut(at).is_some() {
-                ws.bottom = Some(if folder {
-                    Bottom::Takes
-                } else {
-                    Bottom::PianoRoll
-                });
+            let pane = match ws.session.project.region(at).content {
+                Content::Takes { .. } => Some(Bottom::Takes),
+                Content::Pattern { .. } => Some(Bottom::Steps),
+                Content::Midi { .. } => Some(Bottom::PianoRoll),
+                Content::Audio { .. } => None,
+            };
+            if let Some(pane) = pane {
+                ws.bottom = Some(pane);
                 ws.focus_roll();
                 cx.notify();
                 return;
@@ -696,7 +716,8 @@ impl Workspace {
         let project = &self.session.project;
         let ppt = self.px_per_tick();
         match content {
-            Content::Midi { notes } => {
+            Content::Midi { .. } | Content::Pattern { .. } => {
+                let notes = content.notes((to as i64 - at).max(0) as u64).unwrap();
                 let shown = notes
                     .iter()
                     .filter(|n| (from as i64..to as i64).contains(&(at + n.start)));

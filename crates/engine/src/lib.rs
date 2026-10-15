@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod commands;
+pub mod drums;
 pub mod engine;
 pub mod midi;
 pub mod peaks;

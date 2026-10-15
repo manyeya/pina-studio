@@ -3,6 +3,7 @@
 //! people and agents can read, diff and edit it.
 
 use std::{
+    borrow::Cow,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -176,6 +177,8 @@ pub fn value_at(points: &[AutoPoint], tick: f64) -> Option<f32> {
 pub enum Instrument {
     /// The built-in sine synth.
     Synth,
+    /// The built-in drum kit, on the General MIDI drum notes.
+    Drums,
     Vst3(PluginRef),
 }
 
@@ -219,6 +222,13 @@ pub enum Content {
         #[serde(default)]
         offset: u64,
     },
+    /// A step pattern, as Logic's step sequencer makes: rows of steps, looped over the region.
+    Pattern {
+        /// Ticks per step: 240 is a sixteenth.
+        #[serde(default = "sixteenth")]
+        step: u64,
+        rows: Vec<PatternRow>,
+    },
     /// A take folder: every take recorded over the region, and the comp of them that plays.
     Takes {
         takes: Vec<Take>,
@@ -226,6 +236,41 @@ pub enum Content {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         comp: Vec<CompPiece>,
     },
+}
+
+fn sixteenth() -> u64 {
+    PPQ / 4
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PatternRow {
+    pub pitch: u8,
+    /// A velocity per step; 0 is a rest.
+    pub cells: Vec<u8>,
+}
+
+/// The notes a pattern plays over `length` ticks, its steps repeating.
+pub fn pattern_notes(step: u64, rows: &[PatternRow], length: u64) -> Vec<Note> {
+    let steps = rows.iter().map(|r| r.cells.len()).max().unwrap_or(0) as u64;
+    let mut notes = Vec::new();
+    if steps == 0 || step == 0 {
+        return notes;
+    }
+    for k in 0..length.div_ceil(step) {
+        for row in rows {
+            let velocity = row.cells.get((k % steps) as usize).copied().unwrap_or(0);
+            if velocity > 0 {
+                let (start, length) = ((k * step) as i64, (step * 3 / 4).max(1));
+                notes.push(Note {
+                    start,
+                    length,
+                    pitch: row.pitch,
+                    velocity: velocity.min(127),
+                });
+            }
+        }
+    }
+    notes
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -245,9 +290,18 @@ pub struct CompPiece {
 }
 
 impl Content {
+    /// The notes MIDI content plays over `length` ticks: its notes, or a pattern's steps.
+    pub fn notes(&self, length: u64) -> Option<Cow<'_, [Note]>> {
+        match self {
+            Content::Midi { notes } => Some(Cow::Borrowed(notes)),
+            Content::Pattern { step, rows } => Some(Cow::Owned(pattern_notes(*step, rows, length))),
+            _ => None,
+        }
+    }
+
     pub fn is_midi(&self) -> bool {
         match self {
-            Content::Midi { .. } => true,
+            Content::Midi { .. } | Content::Pattern { .. } => true,
             Content::Audio { .. } => false,
             Content::Takes { takes, .. } => takes.first().is_some_and(|t| t.content.is_midi()),
         }
@@ -413,7 +467,7 @@ impl Project {
     pub fn notes_mut(&mut self, at: At) -> Option<&mut Vec<Note>> {
         match &mut self.tracks.get_mut(at.0)?.regions.get_mut(at.1)?.content {
             Content::Midi { notes } => Some(notes),
-            Content::Audio { .. } | Content::Takes { .. } => None,
+            Content::Audio { .. } | Content::Takes { .. } | Content::Pattern { .. } => None,
         }
     }
 
@@ -508,7 +562,7 @@ impl Project {
             let mut notes = Vec::new();
             for &(a, b, t) in &segments {
                 let take = &takes[t];
-                if let Content::Midi { notes: n } = &take.content {
+                if let Some(n) = take.content.notes((b as i64 - take.start).max(0) as u64) {
                     let inside = |n: &&Note| (a as i64..b as i64).contains(&(take.start + n.start));
                     notes.extend(n.iter().filter(inside).map(|n| Note {
                         start: take.start + n.start,
@@ -592,6 +646,8 @@ impl Project {
                 }
             }
             Content::Audio { offset, .. } => *offset = (*offset as i64 + moved).max(0) as u64,
+            // A pattern starts over from the region's start.
+            Content::Pattern { .. } => {}
             // Takes keep their place on the timeline; the comp keeps its, from the new start.
             Content::Takes { takes, comp } => {
                 let delta = start as i64 - old as i64;
@@ -646,6 +702,7 @@ impl Project {
                 }
             }
             (_, Content::Audio { offset, .. }) => *offset += skip,
+            (Content::Pattern { .. }, _) => {}
             (
                 Content::Takes { takes, comp: left },
                 Content::Takes {

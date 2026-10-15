@@ -46,6 +46,7 @@ actions!(
         Record,
         ToggleTyping,
         CreateStack,
+        NewPattern,
     ]
 );
 
@@ -68,6 +69,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("r", Record, None),
         KeyBinding::new("cmd-k", ToggleTyping, None),
         KeyBinding::new("cmd-shift-d", CreateStack, None),
+        KeyBinding::new("cmd-alt-p", NewPattern, None),
         KeyBinding::new("cmd-s", Save, None),
         KeyBinding::new("cmd-alt-n", NewTrack, None),
         KeyBinding::new("cmd-right", ZoomIn, None),
@@ -156,6 +158,7 @@ pub enum Bottom {
     Mixer,
     PianoRoll,
     Takes,
+    Steps,
 }
 
 pub struct Workspace {
@@ -561,13 +564,20 @@ impl Workspace {
         }
     }
 
-    pub fn new_track(&mut self, cx: &mut Context<Self>) {
+    /// Adds a track after the selected one: an instrument track (the synth, the drum kit) or,
+    /// without an instrument, an audio track.
+    pub fn new_track(&mut self, instrument: Option<Instrument>, cx: &mut Context<Self>) {
         let n = self.session.project.tracks.len();
         let at = if n == 0 { 0 } else { self.track + 1 };
+        let name = match &instrument {
+            Some(Instrument::Drums) => format!("Drums {}", n + 1),
+            Some(_) => format!("Inst {}", n + 1),
+            None => format!("Audio {}", n + 1),
+        };
         self.edit(cx, |ws| {
             let track = Track {
-                name: format!("Inst {}", n + 1),
-                instrument: Some(Instrument::Synth),
+                name,
+                instrument,
                 ..Default::default()
             };
             ws.session.project.add_track(at, track);
@@ -1093,6 +1103,7 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|ws, _: &Record, _, cx| ws.record(cx)))
+            .on_action(cx.listener(|ws, _: &NewPattern, _, cx| ws.new_pattern(cx)))
             .on_action(cx.listener(|ws, _: &CreateStack, _, cx| {
                 // A summing stack of the selected track, as Logic's ⇧⌘D makes of the selection.
                 if ws.track < ws.session.project.tracks.len() {
@@ -1110,7 +1121,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &Delete, _, cx| ws.delete(cx)))
             .on_action(cx.listener(|ws, _: &DeleteTrack, _, cx| ws.delete_track(cx)))
             .on_action(cx.listener(|ws, _: &Split, _, cx| ws.split(cx)))
-            .on_action(cx.listener(|ws, _: &NewTrack, _, cx| ws.new_track(cx)))
+            .on_action(
+                cx.listener(|ws, _: &NewTrack, _, cx| ws.new_track(Some(Instrument::Synth), cx)),
+            )
             .on_action(cx.listener(|ws, _: &ZoomIn, _, cx| ws.zoom(1.25, cx)))
             .on_action(cx.listener(|ws, _: &ZoomOut, _, cx| ws.zoom(0.8, cx)))
             .on_action(cx.listener(|ws, _: &Save, _, cx| {
@@ -1141,6 +1154,9 @@ impl Render for Workspace {
             })
             .when(self.bottom == Some(Bottom::Takes), |d| {
                 d.child(self.takes_pane(cx))
+            })
+            .when(self.bottom == Some(Bottom::Steps), |d| {
+                d.child(self.steps_pane(cx))
             })
             .when_some(status, |d, s| {
                 d.child(

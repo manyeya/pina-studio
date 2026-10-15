@@ -1,7 +1,7 @@
 //! A pop-up list of choices, like the plugin and bus menus on Logic's channel strips.
 
 use gpui::{Context, MouseButton, Pixels, Point, anchored, deferred, div, prelude::*, px, rgb};
-use tempo_engine::project::{AuxSend, Instrument, PluginRef};
+use tempo_engine::project::{At, AuxSend, Content, Instrument, PatternRow, PluginRef};
 
 use crate::{strip::Channel, theme::*, workspace::Workspace};
 
@@ -32,6 +32,15 @@ pub enum MenuAction {
     Output {
         track: usize,
         bus: Option<u32>,
+    },
+    /// Adds a row for a sound to a pattern.
+    AddRow {
+        at: At,
+        pitch: u8,
+    },
+    /// Adds a track after the selected one: an instrument track, or an audio track.
+    NewTrack {
+        instrument: Option<Instrument>,
     },
 }
 
@@ -68,6 +77,17 @@ impl Workspace {
             MenuAction::Output { track, bus } => self.edit(cx, |ws| {
                 ws.session.project.tracks[track].output = bus;
             }),
+            MenuAction::AddRow { at, pitch } => self.edit(cx, |ws| {
+                let r = &mut ws.session.project.tracks[at.0].regions[at.1];
+                if let Content::Pattern { rows, .. } = &mut r.content {
+                    let steps = rows.iter().map(|r| r.cells.len()).max().unwrap_or(16);
+                    rows.push(PatternRow {
+                        pitch,
+                        cells: vec![0; steps],
+                    });
+                }
+            }),
+            MenuAction::NewTrack { instrument } => self.new_track(instrument, cx),
         }
         cx.notify();
     }

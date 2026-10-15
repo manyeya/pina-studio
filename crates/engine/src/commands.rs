@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::project::{
-    AUDIO_DIR, AutoPoint, AuxSend, Content, Instrument, Note, PluginRef, Project, Region, Track,
+    AUDIO_DIR, AutoPoint, AuxSend, Content, Instrument, Note, PPQ, PatternRow, PluginRef, Project,
+    Region, Track,
 };
 
 /// What `tempo describe` prints: every command, for people and agents.
@@ -69,6 +70,22 @@ pub enum Command {
         track: usize,
         region: usize,
         notes: Vec<Note>,
+    },
+    /// A step pattern region, its rows of steps looping over its length.
+    AddPatternRegion {
+        track: usize,
+        start: u64,
+        length: u64,
+        /// Ticks per step: a sixteenth by default.
+        #[serde(default)]
+        step: Option<u64>,
+        rows: Vec<PatternRow>,
+    },
+    /// Replaces a pattern region's rows.
+    SetPattern {
+        track: usize,
+        region: usize,
+        rows: Vec<PatternRow>,
     },
     /// A WAV file, copied into the project's `Audio Files` if it's elsewhere.
     AddAudioRegion {
@@ -329,6 +346,41 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
             let only = "only MIDI regions have notes: that's audio, or a take folder";
             *p.notes_mut((t, r)).ok_or(only)? = notes;
         }
+        Command::AddPatternRegion {
+            track: t,
+            start,
+            length,
+            step,
+            rows,
+        } => {
+            let tr = track(p, t)?;
+            if tr.instrument.is_none() {
+                return Err(format!(
+                    "track {t} is an audio track: patterns go on instrument tracks"
+                ));
+            }
+            let content = Content::Pattern {
+                step: step.unwrap_or(PPQ / 4).max(1),
+                rows,
+            };
+            tr.regions.push(Region {
+                start,
+                length: length.max(1),
+                content,
+            });
+            return Ok(json!({ "region": [t, tr.regions.len() - 1] }));
+        }
+        Command::SetPattern {
+            track: t,
+            region: r,
+            rows: new,
+        } => {
+            region_at(p, t, r)?;
+            match &mut p.tracks[t].regions[r].content {
+                Content::Pattern { rows, .. } => *rows = new,
+                _ => return Err("that isn't a pattern region".into()),
+            }
+        }
         Command::AddAudioRegion {
             track: t,
             file,
@@ -544,7 +596,27 @@ fn import(dir: &Path, file: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::PPQ;
+    #[test]
+    fn a_drum_pattern() {
+        let mut p = Project::new(48_000);
+        run(
+            &mut p,
+            r#"{"op": "add_track", "name": "Drums", "instrument": "drums"}"#,
+        )
+        .unwrap();
+        let r = run(
+            &mut p,
+            r#"{"op": "add_pattern_region", "track": 0, "start": 0, "length": 3840,
+                "rows": [{"pitch": 36, "cells": [100, 0, 0, 0, 100, 0, 0, 0]}]}"#,
+        );
+        assert_eq!(r, Ok(json!({"region": [0, 0]})));
+        let set = r#"{"op": "set_pattern", "track": 0, "region": 0, "rows": [{"pitch": 38, "cells": [0, 0, 0, 0, 90]}]}"#;
+        run(&mut p, set).unwrap();
+        let notes = p.region((0, 0)).content.notes(3840).unwrap();
+        // Five-step loop, a snare on step 5: sixteenths 4, 9 and 14 in a bar of 16.
+        let starts: Vec<i64> = notes.iter().map(|n| n.start).collect();
+        assert_eq!(starts, [960, 2160, 3360]);
+    }
 
     fn run(p: &mut Project, json: &str) -> Result<Value, String> {
         let cmd: Command = serde_json::from_str(json).map_err(|e| e.to_string())?;
@@ -652,6 +724,8 @@ mod tests {
             "set_insert",
             "add_midi_region",
             "set_notes",
+            "add_pattern_region",
+            "set_pattern",
             "add_audio_region",
             "move_region",
             "trim_region",

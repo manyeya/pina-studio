@@ -4,6 +4,7 @@ mod menu;
 mod pianoroll;
 mod record;
 mod server;
+mod steps;
 mod strip;
 mod takes;
 #[cfg(test)]
@@ -111,6 +112,7 @@ fn open(dir: &Path) -> Result<(), String> {
                 MenuItem::action("New Track", NewTrack),
                 MenuItem::action("Delete Track", DeleteTrack),
                 MenuItem::action("Create Track Stack", CreateStack),
+                MenuItem::action("New Pattern Region", NewPattern),
             ]),
             Menu::new("View").items([
                 MenuItem::action("Mixer", ToggleMixer),

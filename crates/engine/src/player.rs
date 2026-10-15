@@ -30,15 +30,16 @@ struct Slot {
     plugins: LanePlugins,
 }
 
-/// Which plugins make a lane's sound, settings aside: the instrument (`Some(None)` for the
-/// built-in synth) and the inserts.
-type Sound = (Option<Option<(PathBuf, String)>>, Vec<(PathBuf, String)>);
+/// What makes a lane's sound, settings aside: its instrument ("synth", "drums" or a plugin) and
+/// its inserts.
+type Sound = (Option<String>, Vec<(PathBuf, String)>);
 
 fn sound(instrument: Option<&Instrument>, inserts: &[PluginRef]) -> Sound {
     let key = |r: &PluginRef| (r.path.clone(), r.class.clone());
     let instrument = instrument.map(|i| match i {
-        Instrument::Synth => None,
-        Instrument::Vst3(r) => Some(key(r)),
+        Instrument::Synth => "synth".to_string(),
+        Instrument::Drums => "drums".to_string(),
+        Instrument::Vst3(r) => format!("{}#{}", r.path.display(), r.class),
     });
     (instrument, inserts.iter().map(key).collect())
 }

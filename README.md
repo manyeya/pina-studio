@@ -8,11 +8,11 @@ A DAW in the shape of Logic Pro, written in Rust: gpui for the UI, VST3 plugins.
   (`engine.rs`), the built-in synth, and VST3 hosting (`plugin/`).
 - `crates/engine` also has the live `player.rs` (keeps the engine in step with edits) and
   `session.rs` (an open project and its undo history).
-- `crates/engine` also has MIDI input (`midi.rs`), audio recording (`record.rs`), the plugin
+- `crates/engine` also has the built-in drum kit (`drums.rs`), MIDI input (`midi.rs`), audio recording (`record.rs`), the plugin
   scan (`scan.rs`), edits as data (`commands.rs`, described in `commands.md`) and measuring
   audio (`analysis.rs`).
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
-  `tracks.rs` (headers, ruler, regions, automation), `pianoroll.rs`, `takes.rs` (take folders), `record.rs` (recording
+  `tracks.rs` (headers, ruler, regions, automation), `pianoroll.rs`, `takes.rs` (take folders), `steps.rs` (the step sequencer), `record.rs` (recording
   takes), `strip.rs` (channel strips), `menu.rs` (plugin and bus menus), `theme.rs`,
   `server.rs` (the project's socket), `cli.rs` (the commands for agents), `mcp.rs`, and `tests.rs`, which drives the window
   headless with simulated mouse and keys.
@@ -46,6 +46,10 @@ In the app, as in Logic:
   one; each track header switches between volume and pan.
 - Drag faders, pan knobs and the tempo; option-click a fader or knob to reset it. Click or drag
   in the ruler to move the playhead; ⌘-scroll zooms.
+- The "+" over the track headers adds a software instrument (the sine synth), a drum kit (built
+  in, on the General MIDI drum notes) or an audio track. ⌥⌘P makes a step pattern region on the
+  selected instrument track; double-click one for the step sequencer: click steps on, option-click
+  for an accent, "+ Sound" for more rows. Patterns loop over their region.
 - ⇧⌘D makes a summing stack of the selected track: a stack channel (in the mixer) it plays
   into, its name shown on the track. A strip's "→" row routes a track into any stack or aux, or
   back to Stereo Out.

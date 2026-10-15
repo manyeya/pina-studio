@@ -502,3 +502,45 @@ fn a_track_stack_and_routing_another_track_into_it(cx: &mut TestAppContext) {
     let p = ws.read_with(cx, |ws, _| ws.session.project.clone());
     assert!(p.auxes.is_empty() && p.tracks.iter().all(|t| t.output.is_none()));
 }
+
+#[gpui::test]
+fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "menu-1", Modifiers::none(), MouseButton::Left); // Drum Kit
+    let (track, instrument) = ws.read_with(cx, |ws, _| {
+        (
+            ws.track,
+            ws.session.project.tracks[ws.track].instrument.clone(),
+        )
+    });
+    assert_eq!(instrument, Some(tempo_engine::project::Instrument::Drums));
+
+    cx.simulate_keystrokes("cmd-alt-p");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.bottom), Some(Bottom::Steps));
+    click_on(cx, "step-0-0", Modifiers::none(), MouseButton::Left); // kick on 1
+    click_on(cx, "step-0-8", Modifiers::none(), MouseButton::Left); // and 3
+    click_on(
+        cx,
+        "step-1-4",
+        Modifiers {
+            alt: true,
+            ..Modifiers::none()
+        },
+        MouseButton::Left,
+    ); // snare accent
+    click_on(cx, "add-sound", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "menu-9", Modifiers::none(), MouseButton::Left); // Crash
+    let rows = ws.read_with(cx, |ws, _| {
+        match &ws.session.project.tracks[track].regions[0].content {
+            Content::Pattern { rows, .. } => rows.clone(),
+            _ => panic!("not a pattern"),
+        }
+    });
+    assert_eq!(
+        (rows[0].pitch, rows[0].cells[0], rows[0].cells[8]),
+        (36, 100, 100)
+    );
+    assert_eq!((rows[1].pitch, rows[1].cells[4]), (38, 127));
+    assert_eq!((rows.len(), rows[5].pitch), (6, 49));
+}
