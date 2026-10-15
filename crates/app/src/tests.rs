@@ -119,7 +119,7 @@ fn keys_notes(ws: &Entity<Workspace>, cx: &VisualTestContext, region: usize) -> 
     ws.read_with(cx, |ws, _| {
         match &ws.session.project.tracks[0].regions[region].content {
             Content::Midi { notes } => notes.iter().map(|n| (n.start, n.pitch)).collect(),
-            Content::Audio { .. } => unreachable!(),
+            _ => unreachable!(),
         }
     })
 }
@@ -287,6 +287,10 @@ fn automation_points_are_added_dragged_and_deleted(cx: &mut TestAppContext) {
 fn musical_typing_records_a_midi_region(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     cx.simulate_click(spot(&ws, cx, PPQ, 0), Modifiers::none()); // select Keys
+    // Past the end of the Keys region, so the take is a region of its own.
+    let ruler = spot(&ws, cx, BAR * 5, 0) - point(px(0.), px(LANE_H / 2.0 + 10.));
+    cx.simulate_click(ruler, Modifiers::none());
+    until(cx, &ws, |ws| ws.playhead() == BAR * 5);
     cx.simulate_keystrokes("cmd-k r");
     until(cx, &ws, |ws| ws.player.playing());
     cx.simulate_keystrokes("a"); // C3
@@ -432,4 +436,41 @@ fn agents_edit_the_open_project_through_its_socket(cx: &mut TestAppContext) {
         100.0
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[gpui::test]
+fn recording_over_a_region_makes_takes_to_comp_and_flatten(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    cx.simulate_click(spot(&ws, cx, PPQ, 0), Modifiers::none()); // select Keys
+    cx.simulate_keystrokes("cmd-k r");
+    until(cx, &ws, |ws| ws.player.playing());
+    cx.simulate_keystrokes("a");
+    until(
+        cx,
+        &ws,
+        |ws| matches!(&ws.recording, Some(Recording::Midi { held, notes, .. }) if !held.is_empty() || !notes.is_empty()),
+    );
+    cx.simulate_keystrokes("r cmd-k");
+    let takes = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            match &ws.session.project.tracks[0].regions[0].content {
+                Content::Takes { takes, comp } => Some((takes.len(), comp.clone())),
+                _ => None,
+            }
+        })
+    };
+    assert_eq!(takes(cx).map(|t| t.0), Some(2)); // the region and the new take
+
+    double_click(cx, spot(&ws, cx, PPQ * 6, 0));
+    assert_eq!(ws.read_with(cx, |ws, _| ws.bottom), Some(Bottom::Takes));
+    // Swipe across the first take for the second bar.
+    let y = cx.debug_bounds("take-0").unwrap().center().y;
+    let (from, to) = (spot(&ws, cx, BAR, 0).x, spot(&ws, cx, BAR * 2, 0).x);
+    drag(cx, point(from, y), point(to, y));
+    let comp = takes(cx).unwrap().1;
+    let pieces: Vec<(u64, usize)> = comp.iter().map(|p| (p.from, p.take)).collect();
+    assert_eq!(pieces, [(0, 1), (BAR, 0), (BAR * 2, 1)]);
+
+    click_on(cx, "flatten", Modifiers::none(), MouseButton::Left);
+    assert_eq!(takes(cx), None);
 }

@@ -213,6 +213,80 @@ pub enum Content {
         #[serde(default)]
         offset: u64,
     },
+    /// A take folder: every take recorded over the region, and the comp of them that plays.
+    Takes {
+        takes: Vec<Take>,
+        /// Which take plays from where, each piece until the next. Empty plays the newest take.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        comp: Vec<CompPiece>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Take {
+    /// Where the take begins, in ticks from the region's start; before it, it has nothing.
+    pub start: i64,
+    /// MIDI or audio, never another folder.
+    #[serde(flatten)]
+    pub content: Content,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct CompPiece {
+    /// Ticks from the region's start.
+    pub from: u64,
+    pub take: usize,
+}
+
+impl Content {
+    pub fn is_midi(&self) -> bool {
+        match self {
+            Content::Midi { .. } => true,
+            Content::Audio { .. } => false,
+            Content::Takes { takes, .. } => takes.first().is_some_and(|t| t.content.is_midi()),
+        }
+    }
+}
+
+/// A comp as `(from, to, take)` pieces covering `0..length`, in order. With no comp, the newest
+/// take plays throughout.
+pub fn comp_segments(comp: &[CompPiece], takes: usize, length: u64) -> Vec<(u64, u64, usize)> {
+    if takes == 0 || length == 0 {
+        return Vec::new();
+    }
+    let mut pieces: Vec<CompPiece> = comp
+        .iter()
+        .copied()
+        .filter(|p| p.take < takes && p.from < length)
+        .collect();
+    pieces.sort_by_key(|p| p.from);
+    match pieces.first_mut() {
+        Some(first) => first.from = 0,
+        None => pieces.push(CompPiece {
+            from: 0,
+            take: takes - 1,
+        }),
+    }
+    let mut out: Vec<(u64, u64, usize)> = Vec::new();
+    for (i, p) in pieces.iter().enumerate() {
+        let to = pieces.get(i + 1).map_or(length, |n| n.from);
+        match out.last_mut() {
+            Some(last) if last.2 == p.take => last.1 = to,
+            _ if to > p.from => out.push((p.from, to, p.take)),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn pieces(segments: impl IntoIterator<Item = (u64, u64, usize)>) -> Vec<CompPiece> {
+    let mut out: Vec<CompPiece> = Vec::new();
+    for (from, _, take) in segments {
+        if out.last().is_none_or(|p| p.take != take) {
+            out.push(CompPiece { from, take });
+        }
+    }
+    out
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -320,8 +394,137 @@ impl Project {
     pub fn notes_mut(&mut self, at: At) -> Option<&mut Vec<Note>> {
         match &mut self.tracks.get_mut(at.0)?.regions.get_mut(at.1)?.content {
             Content::Midi { notes } => Some(notes),
-            Content::Audio { .. } => None,
+            Content::Audio { .. } | Content::Takes { .. } => None,
         }
+    }
+
+    /// Puts what was just recorded on a track, from `start` to `end`: as a take, if it began
+    /// inside a region of its kind there (which becomes a take folder, the new take playing), or
+    /// else as a region of its own. Returns where it went.
+    pub fn add_take(&mut self, track: usize, start: u64, end: u64, content: Content) -> At {
+        let regions = &mut self.tracks[track].regions;
+        let over = regions.iter().position(|r| {
+            r.content.is_midi() == content.is_midi()
+                && (r.start..r.start + r.length).contains(&start)
+        });
+        let Some(i) = over else {
+            regions.push(Region {
+                start,
+                length: (end - start).max(1),
+                content,
+            });
+            return (track, regions.len() - 1);
+        };
+        let r = &mut regions[i];
+        if !matches!(r.content, Content::Takes { .. }) {
+            let old = std::mem::replace(
+                &mut r.content,
+                Content::Takes {
+                    takes: Vec::new(),
+                    comp: Vec::new(),
+                },
+            );
+            if let Content::Takes { takes, .. } = &mut r.content {
+                takes.push(Take {
+                    start: 0,
+                    content: old,
+                });
+            }
+        }
+        let Content::Takes { takes, comp } = &mut r.content else {
+            unreachable!()
+        };
+        takes.push(Take {
+            start: (start - r.start) as i64,
+            content,
+        });
+        comp.clear();
+        r.length = r.length.max(end - r.start);
+        (track, i)
+    }
+
+    /// Comps a take folder: `take` plays from `from` to `to` (ticks from the region's start).
+    pub fn comp(&mut self, at: At, from: u64, to: u64, take: usize) -> Result<(), String> {
+        let r = &mut self.tracks[at.0].regions[at.1];
+        let length = r.length;
+        let Content::Takes { takes, comp } = &mut r.content else {
+            return Err("that region isn't a take folder".into());
+        };
+        if take >= takes.len() {
+            return Err(format!(
+                "the folder has no take {take}: it has {}",
+                takes.len()
+            ));
+        }
+        let (from, to) = (from.min(length), to.min(length));
+        if from >= to {
+            return Err("comp a range: `from` before `to`, inside the region".into());
+        }
+        let now = comp_segments(comp, takes.len(), length);
+        let left = now
+            .iter()
+            .filter(|s| s.0 < from)
+            .map(|&(a, b, t)| (a, b.min(from), t));
+        let right = now
+            .iter()
+            .filter(|s| s.1 > to)
+            .map(|&(a, b, t)| (a.max(to), b, t));
+        let mut all: Vec<_> = left.chain([(from, to, take)]).chain(right).collect();
+        all.sort_by_key(|s| s.0);
+        *comp = pieces(all);
+        Ok(())
+    }
+
+    /// Replaces a take folder with what its comp plays: one MIDI region, or an audio region per
+    /// piece. Returns where they went.
+    pub fn flatten(&mut self, at: At) -> Vec<At> {
+        let r = self.region(at).clone();
+        let Content::Takes { takes, comp } = &r.content else {
+            return vec![at];
+        };
+        let rate = self.sample_rate as f64;
+        let segments = comp_segments(comp, takes.len(), r.length);
+        let mut out = Vec::new();
+        if r.content.is_midi() {
+            let mut notes = Vec::new();
+            for &(a, b, t) in &segments {
+                let take = &takes[t];
+                if let Content::Midi { notes: n } = &take.content {
+                    let inside = |n: &&Note| (a as i64..b as i64).contains(&(take.start + n.start));
+                    notes.extend(n.iter().filter(inside).map(|n| Note {
+                        start: take.start + n.start,
+                        ..*n
+                    }));
+                }
+            }
+            out.push(Region {
+                start: r.start,
+                length: r.length,
+                content: Content::Midi { notes },
+            });
+        } else {
+            for &(a, b, t) in &segments {
+                let take = &takes[t];
+                let from = (a as i64).max(take.start);
+                if let (Content::Audio { file, offset }, true) = (&take.content, from < b as i64) {
+                    let skip = self.samples((from - take.start) as u64, rate);
+                    let content = Content::Audio {
+                        file: file.clone(),
+                        offset: offset + skip,
+                    };
+                    out.push(Region {
+                        start: r.start + from as u64,
+                        length: b - from as u64,
+                        content,
+                    });
+                }
+            }
+        }
+        let regions = &mut self.tracks[at.0].regions;
+        regions.remove(at.1);
+        let first = regions.len();
+        regions.extend(out);
+        (first..regions.len()).map(|i| (at.0, i)).collect()
     }
 
     /// Adds a track at `index` and returns its id.
@@ -335,7 +538,7 @@ impl Project {
     /// Moves a region to `start` on `track`, or keeps it on its own track if `track` can't play
     /// it (MIDI goes on instrument tracks, audio on audio tracks). Returns where it is now.
     pub fn move_region(&mut self, at: At, track: usize, start: u64) -> At {
-        let midi = matches!(self.region(at).content, Content::Midi { .. });
+        let midi = self.region(at).content.is_midi();
         let track = if self.tracks[track].instrument.is_some() == midi {
             track
         } else {
@@ -370,6 +573,26 @@ impl Project {
                 }
             }
             Content::Audio { offset, .. } => *offset = (*offset as i64 + moved).max(0) as u64,
+            // Takes keep their place on the timeline; the comp keeps its, from the new start.
+            Content::Takes { takes, comp } => {
+                let delta = start as i64 - old as i64;
+                let segments = comp_segments(comp, takes.len(), end - old);
+                for t in takes {
+                    t.start -= delta;
+                }
+                let shifted =
+                    segments
+                        .into_iter()
+                        .filter(|s| s.1 as i64 > delta)
+                        .map(|(a, b, t)| {
+                            (
+                                (a as i64 - delta).max(0) as u64,
+                                (b as i64 - delta) as u64,
+                                t,
+                            )
+                        });
+                *comp = pieces(shifted);
+            }
         }
         r.start = start;
         r.length = end - start;
@@ -404,6 +627,21 @@ impl Project {
                 }
             }
             (_, Content::Audio { offset, .. }) => *offset += skip,
+            (
+                Content::Takes { takes, comp: left },
+                Content::Takes {
+                    takes: moved,
+                    comp: right,
+                },
+            ) => {
+                let segments = comp_segments(left, takes.len(), first + second.length);
+                *left = pieces(segments.iter().copied().filter(|s| s.0 < first));
+                let after = segments.into_iter().filter(|s| s.1 > first);
+                *right = pieces(after.map(|(a, b, t)| (a.max(first) - first, b - first, t)));
+                for t in moved {
+                    t.start -= first as i64;
+                }
+            }
             _ => unreachable!(),
         }
         self.tracks[at.0].regions.push(second);
@@ -576,6 +814,117 @@ mod tests {
         a.set(Param::Volume, 1, 2000, 0.0); // can't pass the point after it
         assert_eq!(a.points(Param::Volume)[1].tick, 960);
         assert!(a.points(Param::Pan).is_empty());
+    }
+
+    fn take(start: i64, pitch: u8) -> Take {
+        let notes = vec![Note {
+            start: 0,
+            length: 240,
+            pitch,
+            velocity: 100,
+        }];
+        Take {
+            start,
+            content: Content::Midi { notes },
+        }
+    }
+
+    fn folder(p: &Project, at: At) -> (Vec<i64>, Vec<(u64, u64, usize)>) {
+        let r = p.region(at);
+        let Content::Takes { takes, comp } = &r.content else {
+            panic!("not a folder")
+        };
+        (
+            takes.iter().map(|t| t.start).collect(),
+            comp_segments(comp, takes.len(), r.length),
+        )
+    }
+
+    #[test]
+    fn recording_over_a_region_makes_a_take_folder() {
+        let mut p = project(vec![midi(960, 1920, &[(0, 60)])], true);
+        let notes = vec![Note {
+            start: 0,
+            length: 240,
+            pitch: 64,
+            velocity: 90,
+        }];
+        let at = p.add_take(0, 1440, 3360, Content::Midi { notes });
+        assert_eq!(at, (0, 0));
+        let r = p.region(at);
+        assert_eq!((r.start, r.length), (960, 2400)); // grown to the end of the new take
+        assert_eq!(folder(&p, at), (vec![0, 480], vec![(0, 2400, 1)])); // the newest plays
+        // Recording somewhere else makes a plain region.
+        assert_eq!(
+            p.add_take(0, 7680, 8640, Content::Midi { notes: vec![] }),
+            (0, 1)
+        );
+    }
+
+    #[test]
+    fn comping_overlays_ranges_and_merges_neighbours() {
+        let takes = vec![take(0, 60), take(0, 62), take(0, 64)];
+        let region = Region {
+            start: 0,
+            length: 3840,
+            content: Content::Takes {
+                takes,
+                comp: vec![],
+            },
+        };
+        let mut p = project(vec![region], true);
+        p.comp((0, 0), 960, 1920, 0).unwrap();
+        assert_eq!(
+            folder(&p, (0, 0)).1,
+            [(0, 960, 2), (960, 1920, 0), (1920, 3840, 2)]
+        );
+        p.comp((0, 0), 1920, 2880, 0).unwrap();
+        assert_eq!(
+            folder(&p, (0, 0)).1,
+            [(0, 960, 2), (960, 2880, 0), (2880, 3840, 2)]
+        );
+        p.comp((0, 0), 0, 3840, 1).unwrap();
+        assert_eq!(folder(&p, (0, 0)).1, [(0, 3840, 1)]);
+        assert!(p.comp((0, 0), 0, 960, 7).is_err());
+    }
+
+    #[test]
+    fn take_folders_split_trim_and_flatten() {
+        // Take 1 starts at 480 with a note 600 in (at 1080), where the comp plays take 1.
+        let mut late = take(480, 62);
+        let Content::Midi { notes } = &mut late.content else {
+            unreachable!()
+        };
+        notes[0].start = 600;
+        let takes = vec![take(0, 60), late];
+        let comp = vec![
+            CompPiece { from: 0, take: 0 },
+            CompPiece { from: 960, take: 1 },
+        ];
+        let region = Region {
+            start: 0,
+            length: 1920,
+            content: Content::Takes { takes, comp },
+        };
+        let mut p = project(vec![region], true);
+        let at = p.split_region((0, 0), 1440).unwrap();
+        assert_eq!(folder(&p, (0, 0)).1, [(0, 960, 0), (960, 1440, 1)]);
+        assert_eq!(folder(&p, at), (vec![-1440, -960], vec![(0, 480, 1)]));
+
+        p.trim_start((0, 0), 480); // takes stay put on the timeline
+        assert_eq!(
+            folder(&p, (0, 0)),
+            (vec![-480, 0], vec![(0, 480, 0), (480, 960, 1)])
+        );
+
+        // Flattening keeps what the comp plays: take 1's note (1080, now 600 after the trim), not
+        // take 0's (now -480, before the region).
+        let flat = p.flatten((0, 0));
+        let Content::Midi { notes } = &p.region(flat[0]).content else {
+            panic!()
+        };
+        let kept: Vec<(i64, u8)> = notes.iter().map(|n| (n.start, n.pitch)).collect();
+        assert_eq!(kept, [(600, 62)]);
     }
 
     #[test]

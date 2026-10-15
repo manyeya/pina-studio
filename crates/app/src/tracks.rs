@@ -9,7 +9,7 @@ use gpui::{
 };
 use tempo_engine::{
     peaks::Peaks,
-    project::{At, AutoPoint, BEATS_PER_BAR, Content, PPQ, Param},
+    project::{At, AutoPoint, BEATS_PER_BAR, Content, PPQ, Param, comp_segments},
 };
 
 use crate::{
@@ -40,14 +40,20 @@ pub fn auto_from_y(param: Param, y: f32) -> f32 {
 }
 
 /// What a region shows inside.
-enum Inside {
-    Notes(Vec<(i64, u64, u8)>),
-    Wave {
-        peaks: Arc<Peaks>,
-        offset: u64,
-        samples_per_px: f32,
-    },
-    Nothing,
+#[derive(Default)]
+pub struct Inside {
+    /// Start (ticks from the region's start), length and pitch.
+    notes: Vec<(i64, u64, u8)>,
+    waves: Vec<Wave>,
+}
+
+/// A stretch of waveform: from `x0` to `x1` pixels into the region, `offset` the sample at `x0`.
+struct Wave {
+    x0: f32,
+    x1: f32,
+    peaks: Arc<Peaks>,
+    offset: f32,
+    samples_per_px: f32,
 }
 
 impl Workspace {
@@ -427,23 +433,7 @@ impl Workspace {
             color
         };
         let selected = self.region == Some(at);
-        let inside = match &region.content {
-            Content::Midi { notes } => {
-                Inside::Notes(notes.iter().map(|n| (n.start, n.length, n.pitch)).collect())
-            }
-            Content::Audio { file, offset } => match self.player.peaks(file) {
-                Some(peaks) => {
-                    let samples_per_tick =
-                        project.sample_rate as f32 * 60.0 / (project.tempo as f32 * PPQ as f32);
-                    Inside::Wave {
-                        peaks,
-                        offset: *offset,
-                        samples_per_px: samples_per_tick / ppt,
-                    }
-                }
-                None => Inside::Nothing,
-            },
-        };
+        let inside = self.inside(&region.content, region.length);
         let (start, end) = (region.start, region.start + region.length);
         let live = !self.show_automation;
         let handle = |edge: Edge, cx: &mut Context<Self>| {
@@ -488,7 +478,15 @@ impl Workspace {
                     .text_color(rgb(0x101010))
                     .whitespace_nowrap()
                     .overflow_hidden()
-                    .child(track.name.clone()),
+                    .child(match &region.content {
+                        Content::Takes { takes, comp } => {
+                            match &comp_segments(comp, takes.len(), region.length)[..] {
+                                [(_, _, take)] => format!("{} · Take {}", track.name, take + 1),
+                                _ => format!("{} · Comp", track.name),
+                            }
+                        }
+                        _ => track.name.clone(),
+                    }),
             )
             .child(
                 div().flex_1().relative().child(
@@ -629,12 +627,19 @@ fn grab(
         }
         ws.region = Some(at);
         ws.track = at.0;
-        // Double-clicking a MIDI region opens it in the piano roll, as in Logic.
-        if e.click_count == 2 && edge == Edge::Move && ws.session.project.notes_mut(at).is_some() {
-            ws.bottom = Some(Bottom::PianoRoll);
-            ws.focus_roll();
-            cx.notify();
-            return;
+        // Double-clicking a MIDI region opens it in the piano roll, and a take folder its takes.
+        if e.click_count == 2 && edge == Edge::Move {
+            let folder = matches!(ws.session.project.region(at).content, Content::Takes { .. });
+            if folder || ws.session.project.notes_mut(at).is_some() {
+                ws.bottom = Some(if folder {
+                    Bottom::Takes
+                } else {
+                    Bottom::PianoRoll
+                });
+                ws.focus_roll();
+                cx.notify();
+                return;
+            }
         }
         let from = e.position.map(f32::from);
         let drag = Drag::Region {
@@ -650,8 +655,63 @@ fn grab(
     })
 }
 
-/// Draws a region's notes or waveform in a lighter shade of its color.
-fn paint_inside(inside: &Inside, b: Bounds<Pixels>, ppt: f32, color: Hsla, window: &mut Window) {
+impl Workspace {
+    /// What a region's content shows, `length` ticks of it.
+    pub fn inside(&self, content: &Content, length: u64) -> Inside {
+        let mut inside = Inside::default();
+        match content {
+            Content::Takes { takes, comp } => {
+                for (from, to, t) in comp_segments(comp, takes.len(), length) {
+                    self.add_inside(&mut inside, &takes[t].content, takes[t].start, from, to);
+                }
+            }
+            content => self.add_inside(&mut inside, content, 0, 0, length),
+        }
+        inside
+    }
+
+    /// Adds what `content`, beginning `at` ticks into a region, shows from `from` to `to` ticks
+    /// into it.
+    pub fn add_inside(&self, inside: &mut Inside, content: &Content, at: i64, from: u64, to: u64) {
+        let project = &self.session.project;
+        let ppt = self.px_per_tick();
+        match content {
+            Content::Midi { notes } => {
+                let shown = notes
+                    .iter()
+                    .filter(|n| (from as i64..to as i64).contains(&(at + n.start)));
+                inside
+                    .notes
+                    .extend(shown.map(|n| (at + n.start, n.length, n.pitch)));
+            }
+            Content::Audio { file, offset } => {
+                let begin = (from as i64).max(at);
+                let Some(peaks) = self.player.peaks(file).filter(|_| begin < to as i64) else {
+                    return;
+                };
+                let samples_per_tick =
+                    project.sample_rate as f32 * 60.0 / (project.tempo as f32 * PPQ as f32);
+                inside.waves.push(Wave {
+                    x0: begin as f32 * ppt,
+                    x1: to as f32 * ppt,
+                    peaks,
+                    offset: *offset as f32 + (begin - at) as f32 * samples_per_tick,
+                    samples_per_px: samples_per_tick / ppt,
+                });
+            }
+            Content::Takes { .. } => {}
+        }
+    }
+}
+
+/// Draws a region's notes and waveforms in a lighter shade of its color.
+pub fn paint_inside(
+    inside: &Inside,
+    b: Bounds<Pixels>,
+    ppt: f32,
+    color: Hsla,
+    window: &mut Window,
+) {
     let ink = Hsla {
         l: (color.l + 0.3).min(0.92),
         ..color
@@ -661,41 +721,33 @@ fn paint_inside(inside: &Inside, b: Bounds<Pixels>, ppt: f32, color: Hsla, windo
         let at = point(b.origin.x + px(x), b.origin.y + px(y));
         window.paint_quad(fill(Bounds::new(at, size(px(bw), px(bh))), ink));
     };
-    match inside {
-        Inside::Notes(notes) => {
-            let Some(lo) = notes.iter().map(|n| n.2).min() else {
-                return;
-            };
-            let hi = notes.iter().map(|n| n.2).max().unwrap();
-            // At least an octave tall, centered on the notes.
-            let span = (hi - lo).max(12) as f32 + 1.0;
-            let top = (lo as f32 + hi as f32) / 2.0 + span / 2.0;
-            let row = (h - 4.0) / span;
-            for &(start, len, pitch) in notes {
-                let (x, nw) = (start as f32 * ppt, (len as f32 * ppt).max(1.0));
-                if x + nw > 0.0 && x < w {
-                    let y = 2.0 + (top - pitch as f32 - 0.5) * row;
-                    bar(x.max(0.0), y, nw.min(w - x.max(0.0)), row.clamp(2.0, 4.0));
-                }
+    if let Some(lo) = inside.notes.iter().map(|n| n.2).min() {
+        let hi = inside.notes.iter().map(|n| n.2).max().unwrap();
+        // At least an octave tall, centered on the notes.
+        let span = (hi - lo).max(12) as f32 + 1.0;
+        let top = (lo as f32 + hi as f32) / 2.0 + span / 2.0;
+        let row = (h - 4.0) / span;
+        for &(start, len, pitch) in &inside.notes {
+            let (x, nw) = (start as f32 * ppt, (len as f32 * ppt).max(1.0));
+            if x + nw > 0.0 && x < w {
+                let y = 2.0 + (top - pitch as f32 - 0.5) * row;
+                bar(x.max(0.0), y, nw.min(w - x.max(0.0)), row.clamp(2.0, 4.0));
             }
         }
-        Inside::Wave {
-            peaks,
-            offset,
-            samples_per_px,
-        } => {
-            let mid = h / 2.0;
-            for x in 0..w as usize {
-                let from = *offset as f32 + x as f32 * samples_per_px;
-                if from as usize >= peaks.len_samples() {
-                    break;
-                }
-                let (lo, hi) = peaks.range(from as usize, (from + samples_per_px) as usize);
-                let (y1, y2) = (mid - hi * mid, mid - lo * mid);
-                bar(x as f32, y1, 1.0, (y2 - y1).max(1.0));
+    }
+    let mid = h / 2.0;
+    for wave in &inside.waves {
+        for x in wave.x0.max(0.0) as usize..wave.x1.min(w) as usize {
+            let from = wave.offset + (x as f32 - wave.x0) * wave.samples_per_px;
+            if from as usize >= wave.peaks.len_samples() {
+                break;
             }
+            let (lo, hi) = wave
+                .peaks
+                .range(from as usize, (from + wave.samples_per_px) as usize);
+            let (y1, y2) = (mid - hi * mid, mid - lo * mid);
+            bar(x as f32, y1, 1.0, (y2 - y1).max(1.0));
         }
-        Inside::Nothing => {}
     }
 }
 

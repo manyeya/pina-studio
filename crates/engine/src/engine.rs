@@ -21,7 +21,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crate::{
     peaks::Peaks,
     plugin::{AUDIO_MODULE, Module, Note, Plugin, Processor},
-    project::{AutoPoint, Content, Instrument, PluginRef, Project, value_at},
+    project::{AutoPoint, Content, Instrument, PluginRef, Project, comp_segments, value_at},
     synth::Synth,
 };
 
@@ -344,40 +344,58 @@ pub fn compile(
     for (i, (t, &(slot, _))) in project.tracks.iter().zip(tracks).enumerate() {
         let (mut clips, mut events) = (Vec::new(), Vec::new());
         for region in &t.regions {
-            let start = project.samples(region.start, rate);
-            let end = project.samples(region.start + region.length, rate);
-            match &region.content {
-                // Notes starting inside the region play, for their full length.
+            // Plays `content`, which begins `at` ticks into the region, from `from` to `to` (ticks
+            // into the region).
+            let mut emit = |content: &Content, at: i64, from: u64, to: u64| match content {
+                // Notes starting in their part of the region play, for their full length.
                 Content::Midi { notes } => {
                     for n in notes
                         .iter()
-                        .filter(|n| (0..region.length as i64).contains(&n.start))
+                        .filter(|n| (from as i64..to as i64).contains(&(at + n.start)))
                     {
-                        let on = region.start + n.start as u64;
+                        let on = region.start + (at + n.start) as u64;
                         let velocity = n.velocity as f32 / 127.0;
-                        let at = project.samples(on, rate);
+                        let (pitch, start) = (n.pitch, project.samples(on, rate));
                         events.push(Event {
-                            at,
-                            pitch: n.pitch,
+                            at: start,
+                            pitch,
                             velocity,
                         });
                         let off = project.samples(on + n.length, rate);
                         events.push(Event {
                             at: off,
-                            pitch: n.pitch,
+                            pitch,
                             velocity: 0.0,
                         });
                     }
                 }
-                Content::Audio { file, offset } => match files.get(file) {
-                    Ok(data) => clips.push(Clip {
-                        start,
-                        len: end - start,
-                        offset: *offset,
-                        data,
-                    }),
-                    Err(e) => problems.push(e),
-                },
+                Content::Audio { file, offset } => {
+                    let begin = (from as i64).max(at);
+                    if begin >= to as i64 {
+                        return;
+                    }
+                    let skip = project.samples((begin - at) as u64, rate);
+                    let start = project.samples(region.start + begin as u64, rate);
+                    let end = project.samples(region.start + to, rate);
+                    match files.get(file) {
+                        Ok(data) => clips.push(Clip {
+                            start,
+                            len: end - start,
+                            offset: offset + skip,
+                            data,
+                        }),
+                        Err(e) => problems.push(e),
+                    }
+                }
+                Content::Takes { .. } => {}
+            };
+            match &region.content {
+                Content::Takes { takes, comp } => {
+                    for (from, to, take) in comp_segments(comp, takes.len(), region.length) {
+                        emit(&takes[take].content, takes[take].start, from, to);
+                    }
+                }
+                content => emit(content, 0, 0, region.length),
             }
         }
         // Offs first at the same sample, so back-to-back notes of one pitch both sound.
@@ -1271,6 +1289,45 @@ mod tests {
         assert!(arrangement.plans[0].clips.is_empty());
         assert_eq!(arrangement.plans[1].events.len(), 2);
         assert!(Engine::load(&p, Path::new("."), RATE).is_err()); // a bounce does fail
+    }
+
+    #[test]
+    fn a_take_folder_plays_its_comp() {
+        use crate::project::{CompPiece, Take};
+        // Two takes, an octave apart; the comp plays the first for a beat, then the second.
+        let take = |pitch| Take {
+            start: 0,
+            content: Content::Midi {
+                notes: vec![note(0, PPQ / 2, pitch), note(PPQ as i64, PPQ / 2, pitch)],
+            },
+        };
+        let comp = vec![
+            CompPiece { from: 0, take: 0 },
+            CompPiece { from: PPQ, take: 1 },
+        ];
+        let region = Region {
+            start: 0,
+            length: PPQ * 2,
+            content: Content::Takes {
+                takes: vec![take(57), take(69)],
+                comp,
+            },
+        };
+        let track = Track {
+            name: "t".into(),
+            instrument: Some(Instrument::Synth),
+            regions: vec![region],
+            ..Default::default()
+        };
+        let mut files = AudioFiles::new(Path::new("."), RATE);
+        let (arrangement, _) = compile(&project(vec![track]), RATE, &[(0, 0)], &[], &mut files);
+        let ons: Vec<(u64, u8)> = arrangement.plans[0]
+            .events
+            .iter()
+            .filter(|e| e.velocity > 0.0)
+            .map(|e| (e.at, e.pitch))
+            .collect();
+        assert_eq!(ons, [(0, 57), (BEAT as u64, 69)]);
     }
 
     #[test]

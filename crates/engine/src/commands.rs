@@ -105,6 +105,19 @@ pub enum Command {
         track: usize,
         region: usize,
     },
+    /// Comps a take folder: take `take` plays from `from` to `to`, ticks from the region's start.
+    Comp {
+        track: usize,
+        region: usize,
+        from: u64,
+        to: u64,
+        take: usize,
+    },
+    /// Replaces a take folder with what its comp plays.
+    Flatten {
+        track: usize,
+        region: usize,
+    },
     /// Sends a track to a bus; without one, to a new aux.
     AddSend {
         track: usize,
@@ -301,7 +314,8 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
             notes,
         } => {
             region_at(p, t, r)?;
-            *p.notes_mut((t, r)).ok_or("that's an audio region")? = notes;
+            let only = "only MIDI regions have notes: that's audio, or a take folder";
+            *p.notes_mut((t, r)).ok_or(only)? = notes;
         }
         Command::AddAudioRegion {
             track: t,
@@ -377,6 +391,25 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
                 .split_region((t, r), at)
                 .ok_or("that tick isn't inside the region")?;
             return Ok(json!({ "region": [second.0, second.1] }));
+        }
+        Command::Comp {
+            track: t,
+            region: r,
+            from,
+            to,
+            take,
+        } => {
+            region_at(p, t, r)?;
+            p.comp((t, r), from, to, take)?;
+        }
+        Command::Flatten {
+            track: t,
+            region: r,
+        } => {
+            region_at(p, t, r)?;
+            let regions: Vec<[usize; 2]> =
+                p.flatten((t, r)).into_iter().map(|(a, b)| [a, b]).collect();
+            return Ok(json!({ "regions": regions }));
         }
         Command::DeleteRegion {
             track: t,
@@ -591,6 +624,8 @@ mod tests {
             "trim_region",
             "split_region",
             "delete_region",
+            "comp",
+            "flatten",
             "add_send",
             "set_send",
             "remove_send",

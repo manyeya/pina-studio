@@ -208,10 +208,14 @@ impl Workspace {
         else {
             return;
         };
+        // Over a region of its kind, the take joins it in a take folder, as in Logic.
         self.edit(cx, |ws| {
-            let regions = &mut ws.session.project.tracks[t].regions;
-            regions.push(region);
-            ws.region = Some((t, regions.len() - 1));
+            let end = region.start + region.length;
+            let at = ws
+                .session
+                .project
+                .add_take(t, region.start, end, region.content);
+            ws.region = Some(at);
             ws.note = None;
         });
     }

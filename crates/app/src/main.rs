@@ -5,6 +5,7 @@ mod pianoroll;
 mod record;
 mod server;
 mod strip;
+mod takes;
 #[cfg(test)]
 mod tests;
 mod theme;

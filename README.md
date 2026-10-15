@@ -12,7 +12,7 @@ A DAW in the shape of Logic Pro, written in Rust: gpui for the UI, VST3 plugins.
   scan (`scan.rs`), edits as data (`commands.rs`, described in `commands.md`) and measuring
   audio (`analysis.rs`).
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
-  `tracks.rs` (headers, ruler, regions, automation), `pianoroll.rs`, `record.rs` (recording
+  `tracks.rs` (headers, ruler, regions, automation), `pianoroll.rs`, `takes.rs` (take folders), `record.rs` (recording
   takes), `strip.rs` (channel strips), `menu.rs` (plugin and bus menus), `theme.rs`,
   `server.rs` (the project's socket), `cli.rs` (the commands for agents), `mcp.rs`, and `tests.rs`, which drives the window
   headless with simulated mouse and keys.
@@ -39,6 +39,9 @@ In the app, as in Logic:
   sharps, Z and X change octave).
 - Drag regions to move them (across tracks too) and their edges to trim. In the piano roll,
   double-click to add a note, drag it to move it, drag its right edge to resize it.
+- Recording over a region of the same kind makes a take folder, as in Logic. Double-click it to
+  see its takes; swipe across a take to comp that stretch from it, click one to use all of it,
+  and Flatten to turn the comp back into plain regions.
 - With automation showing, click a lane to add a point, drag points, option-click to delete
   one; each track header switches between volume and pan.
 - Drag faders, pan knobs and the tempo; option-click a fader or knob to reset it. Click or drag

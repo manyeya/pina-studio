@@ -43,6 +43,11 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   stays where it is on the timeline.
 - `split_region` `{"track": 0, "region": 0, "at": 1920}`: answers with the second half.
 - `delete_region` `{"track": 0, "region": 1}`
+- `comp` `{"track": 0, "region": 0, "from": 0, "to": 1920, "take": 1}`: in a take folder (a
+  region with `"takes"`, made by recording over a region), take 1 plays for that range (ticks
+  from the region's start). Takes are numbered from 0, oldest first; with no comp the newest plays.
+- `flatten` `{"track": 0, "region": 0}`: replaces a take folder with what its comp plays: one
+  MIDI region, or an audio region per piece.
 - `add_send` `{"track": 0, "bus": 1, "level_db": -6}`: post-fader. Without `bus`, makes a new aux
   and sends to it.
 - `set_send` `{"track": 0, "send": 0, "level_db": -12}`

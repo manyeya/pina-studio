@@ -139,13 +139,21 @@ pub enum Drag {
         track: u64,
         pitch: u8,
     },
+    /// A swipe across a take, comping it: ticks from the region's start.
+    Comp {
+        at: At,
+        take: usize,
+        from: u64,
+        to: u64,
+    },
 }
 
 /// What the pane under the tracks shows.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Bottom {
     Mixer,
     PianoRoll,
+    Takes,
 }
 
 pub struct Workspace {
@@ -298,7 +306,7 @@ impl Workspace {
     }
 
     pub fn begin_drag(&mut self, drag: Drag, cx: &mut Context<Self>) {
-        if !matches!(drag, Drag::Locate | Drag::Key { .. }) {
+        if !matches!(drag, Drag::Locate | Drag::Key { .. } | Drag::Comp { .. }) {
             self.session.checkpoint();
         }
         self.drag = Some(drag);
@@ -392,6 +400,14 @@ impl Workspace {
                     .automation
                     .set(param, index, tick, value);
             }
+            Some(Drag::Comp { at, .. }) => {
+                let tick = self.region_tick(at, p.x);
+                if let Some(Drag::Comp { to, .. }) = &mut self.drag {
+                    *to = tick;
+                }
+                cx.notify();
+                return;
+            }
             Some(Drag::Key { .. }) | None => return,
         }
         self.changed(cx);
@@ -405,6 +421,10 @@ impl Workspace {
         ) = self.drag
         {
             self.session.cancel()
+        }
+        if let Some(Drag::Comp { at, take, from, to }) = self.drag {
+            self.drag = None;
+            self.finish_comp(at, take, from, to, cx);
         }
         // Release whatever note the drag was sounding.
         match self.drag {
@@ -1107,6 +1127,9 @@ impl Render for Workspace {
             })
             .when(self.bottom == Some(Bottom::PianoRoll), |d| {
                 d.child(self.piano_roll(cx))
+            })
+            .when(self.bottom == Some(Bottom::Takes), |d| {
+                d.child(self.takes_pane(cx))
             })
             .when_some(status, |d, s| {
                 d.child(
