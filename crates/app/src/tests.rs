@@ -474,3 +474,31 @@ fn recording_over_a_region_makes_takes_to_comp_and_flatten(cx: &mut TestAppConte
     click_on(cx, "flatten", Modifiers::none(), MouseButton::Left);
     assert_eq!(takes(cx), None);
 }
+
+#[gpui::test]
+fn a_track_stack_and_routing_another_track_into_it(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    cx.simulate_click(spot(&ws, cx, PPQ, 1), Modifiers::none()); // select Lead
+    cx.simulate_keystrokes("cmd-shift-d");
+    let (stack, output) = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        (
+            (p.auxes[0].stack, p.auxes[0].name.clone()),
+            p.tracks[1].output,
+        )
+    });
+    assert_eq!(stack, (true, "Stack 1".to_string()));
+    assert_eq!(output, Some(1));
+
+    // Keys joins it from its strip's output menu.
+    cx.simulate_click(spot(&ws, cx, PPQ, 0), Modifiers::none());
+    click_on(cx, "output-0", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "menu-1", Modifiers::none(), MouseButton::Left); // after Stereo Out: the stack
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[0].output),
+        Some(1)
+    );
+    cx.simulate_keystrokes("cmd-z cmd-z");
+    let p = ws.read_with(cx, |ws, _| ws.session.project.clone());
+    assert!(p.auxes.is_empty() && p.tracks.iter().all(|t| t.output.is_none()));
+}

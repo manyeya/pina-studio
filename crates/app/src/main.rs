@@ -110,6 +110,7 @@ fn open(dir: &Path) -> Result<(), String> {
             Menu::new("Track").items([
                 MenuItem::action("New Track", NewTrack),
                 MenuItem::action("Delete Track", DeleteTrack),
+                MenuItem::action("Create Track Stack", CreateStack),
             ]),
             Menu::new("View").items([
                 MenuItem::action("Mixer", ToggleMixer),

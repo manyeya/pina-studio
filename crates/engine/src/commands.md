@@ -52,6 +52,10 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   and sends to it.
 - `set_send` `{"track": 0, "send": 0, "level_db": -12}`
 - `remove_send` `{"track": 0, "send": 0}`
+- `set_output` `{"track": 0, "bus": 2}`: the track plays into that aux or stack instead of the
+  master; without `bus`, back to the master.
+- `add_stack` `{"tracks": [0, 1], "name": "Drums"}`: a summing stack, a channel (an aux, listed
+  with the others) those tracks play into. Answers with its bus.
 - `set_aux` `{"aux": 0, "name": "Reverb", "volume_db": -3, "pan": 0, "mute": false}`
 - `set_automation` `{"track": 0, "param": "volume", "points": [{"tick": 0, "value": -12}, {"tick": 3840, "value": 0}]}`:
   `volume` in dB or `pan`; values change in straight lines between points. No points turns it off.

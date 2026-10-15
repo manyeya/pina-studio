@@ -186,6 +186,16 @@ impl Workspace {
             .enumerate()
             .map(|(i, t)| {
                 let selected = i == self.track;
+                // The summing stack it plays into, if it's in one.
+                let stack = t.output.and_then(|b| {
+                    let aux = self
+                        .session
+                        .project
+                        .auxes
+                        .iter()
+                        .find(|a| a.bus == b && a.stack)?;
+                    Some(aux.name.clone())
+                });
                 div()
                     .absolute()
                     .top(px(i as f32 * LANE_H - self.scroll_y))
@@ -220,6 +230,16 @@ impl Workspace {
                             .overflow_hidden()
                             .child(t.name.clone()),
                     )
+                    .when_some(stack, |d, name| {
+                        d.child(
+                            div()
+                                .px_1()
+                                .rounded(px(3.))
+                                .text_size(px(9.))
+                                .bg(Hsla::from(rgb(AUX)).opacity(0.35))
+                                .child(name),
+                        )
+                    })
                     .when(self.show_automation, |d| {
                         let id = t.id;
                         let param = self.params.get(&id).copied().unwrap_or_default();

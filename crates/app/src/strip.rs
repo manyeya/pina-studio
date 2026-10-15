@@ -171,6 +171,24 @@ impl Workspace {
         Menu { at, items }
     }
 
+    /// Where a track can play: the master, or any aux or stack.
+    fn output_menu(&self, track: usize, at: Point<Pixels>) -> Menu {
+        let mut items = vec![(
+            "Stereo Out".to_string(),
+            MenuAction::Output { track, bus: None },
+        )];
+        items.extend(self.session.project.auxes.iter().map(|a| {
+            (
+                format!("Bus {} ({})", a.bus, a.name),
+                MenuAction::Output {
+                    track,
+                    bus: Some(a.bus),
+                },
+            )
+        }));
+        Menu { at, items }
+    }
+
     /// The buses a track can send to: every aux, and a new one.
     fn send_menu(&self, track: usize, at: Point<Pixels>) -> Menu {
         let mut items: Vec<_> = self
@@ -382,6 +400,25 @@ pub fn strip(ws: &Workspace, ch: Channel, cx: &mut Context<Workspace>) -> Div {
     while sends.len() < SEND_ROWS {
         sends.push(row(String::new(), false).opacity(0.0));
     }
+    // Where it plays.
+    let output = match ch {
+        Channel::Track(track) => {
+            let bus = project.tracks[track].output;
+            let to = bus.and_then(|b| project.auxes.iter().find(|a| a.bus == b));
+            let label = to.map_or("Stereo Out".to_string(), |a| a.name.clone());
+            row(format!("→ {label}"), bus.is_some())
+                .debug_selector(move || format!("output-{track}"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        ws.menu = Some(ws.output_menu(track, e.position));
+                        cx.notify();
+                    }),
+                )
+        }
+        _ => row(String::new(), false).opacity(0.0),
+    };
 
     let fader = div()
         .relative()
@@ -492,6 +529,7 @@ pub fn strip(ws: &Workspace, ch: Channel, cx: &mut Context<Workspace>) -> Div {
         .children(slots)
         .child(div().h(px(4.)))
         .children(sends)
+        .child(output)
         .child(match pan {
             Some(pan) => div().cursor_ns_resize().child(knob(pan)).on_mouse_down(
                 MouseButton::Left,

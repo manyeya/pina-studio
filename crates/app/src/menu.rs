@@ -28,6 +28,11 @@ pub enum MenuAction {
         track: usize,
         bus: Option<u32>,
     },
+    /// Plays a track into a bus, or the master.
+    Output {
+        track: usize,
+        bus: Option<u32>,
+    },
 }
 
 impl Workspace {
@@ -59,6 +64,9 @@ impl Workspace {
                 project.tracks[track]
                     .sends
                     .push(AuxSend { bus, level_db: 0.0 });
+            }),
+            MenuAction::Output { track, bus } => self.edit(cx, |ws| {
+                ws.session.project.tracks[track].output = bus;
             }),
         }
         cx.notify();

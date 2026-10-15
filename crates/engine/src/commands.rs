@@ -131,6 +131,18 @@ pub enum Command {
         send: usize,
         level_db: f32,
     },
+    /// Where a track plays: into an aux or stack's bus, or (without one) the master.
+    SetOutput {
+        track: usize,
+        #[serde(default)]
+        bus: Option<u32>,
+    },
+    /// Makes a summing stack of these tracks: a channel they all play into.
+    AddStack {
+        tracks: Vec<usize>,
+        #[serde(default)]
+        name: Option<String>,
+    },
     RemoveSend {
         track: usize,
         send: usize,
@@ -445,6 +457,27 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
                 .ok_or(format!("track {t} has no send {send}"))?;
             s.level_db = level_db;
         }
+        Command::SetOutput { track: t, bus } => {
+            if let Some(b) = bus
+                && !p.auxes.iter().any(|a| a.bus == b)
+            {
+                return Err(format!("no aux on bus {b}"));
+            }
+            track(p, t)?.output = bus;
+        }
+        Command::AddStack { tracks, name } => {
+            if tracks.is_empty() {
+                return Err("a stack needs tracks".into());
+            }
+            for &t in &tracks {
+                track(p, t)?;
+            }
+            let bus = p.add_stack(&tracks);
+            if let Some(name) = name {
+                p.auxes.last_mut().unwrap().name = name;
+            }
+            return Ok(json!({ "bus": bus }));
+        }
         Command::RemoveSend { track: t, send } => {
             let sends = &mut track(p, t)?.sends;
             if send >= sends.len() {
@@ -628,6 +661,8 @@ mod tests {
             "flatten",
             "add_send",
             "set_send",
+            "set_output",
+            "add_stack",
             "remove_send",
             "set_aux",
             "set_automation",

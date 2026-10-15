@@ -37,7 +37,7 @@ pub const RULER_H: f32 = 28.0;
 pub const LANE_H: f32 = 64.0;
 pub const STRIP_W: f32 = 82.0;
 pub const FADER_H: f32 = 150.0;
-pub const MIXER_H: f32 = 420.0;
+pub const MIXER_H: f32 = 440.0;
 pub const ROLL_H: f32 = 300.0;
 
 pub const MONO: &str = "Menlo";

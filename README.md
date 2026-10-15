@@ -46,6 +46,9 @@ In the app, as in Logic:
   one; each track header switches between volume and pan.
 - Drag faders, pan knobs and the tempo; option-click a fader or knob to reset it. Click or drag
   in the ruler to move the playhead; ⌘-scroll zooms.
+- ⇧⌘D makes a summing stack of the selected track: a stack channel (in the mixer) it plays
+  into, its name shown on the track. A strip's "→" row routes a track into any stack or aux, or
+  back to Stereo Out.
 - On a channel strip, click a plugin to open its editor; click an empty slot, or right-click any,
   to choose a plugin. "+ Send" sends the track to a bus, making an aux for a new one; drag a send
   for its level, right-click it to remove it.

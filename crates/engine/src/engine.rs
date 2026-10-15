@@ -211,6 +211,8 @@ struct Plan {
     pans: Vec<AutoPoint>,
     /// Aux index and level.
     sends: Vec<(usize, f32)>,
+    /// The aux it plays into instead of the master.
+    output: Option<usize>,
     /// Delay compensation before the sends, and on the direct path after them.
     delay: usize,
     direct: usize,
@@ -433,7 +435,11 @@ pub fn compile(
                 })
                 .collect(),
             delay: pdc.tracks[i],
-            direct: pdc.direct,
+            output: t
+                .output
+                .and_then(|bus| project.auxes.iter().position(|a| a.bus == bus)),
+            // Through an aux, the aux's own compensation lines it up.
+            direct: if t.output.is_some() { 0 } else { pdc.direct },
         });
     }
     let auxes = project
@@ -854,9 +860,16 @@ impl Engine {
                 }
             }
             lane.post.process(l, r, plan.direct);
+            let (dest_l, dest_r) = match plan.output {
+                Some(aux) => {
+                    let [bl, br] = &mut arrangement.buses[aux];
+                    (&mut bl[..frames], &mut br[..frames])
+                }
+                None => (&mut out_l[..frames], &mut out_r[..frames]),
+            };
             for i in 0..frames {
-                out_l[i] += l[i];
-                out_r[i] += r[i];
+                dest_l[i] += l[i];
+                dest_r[i] += r[i];
             }
             if let Some(s) = shared {
                 s.meters[plan.slot].fetch_max(peak.to_bits(), Ordering::Relaxed);
@@ -1171,6 +1184,20 @@ mod tests {
         p.auxes[0].mute = false;
         p.tracks[0].volume_db = -144.0; // post-fader: the send goes quiet too
         assert!(peak(&render(&p, Path::new("."), BEAT)[0]) < 1e-6);
+    }
+
+    #[test]
+    fn a_track_routed_to_a_stack_plays_through_it() {
+        let track = synth_track("a", vec![note(0, PPQ, 69)], PPQ);
+        let [alone, _] = render(&project(vec![track.clone()]), Path::new("."), BEAT);
+        let mut p = project(vec![track]);
+        p.add_stack(&[0]);
+        p.auxes[0].volume_db = -20.0 * 2f32.log10(); // half
+        let [l, _] = render(&p, Path::new("."), BEAT);
+        assert!(peak(&alone) > 0.1);
+        assert!((peak(&l) / peak(&alone) - 0.5).abs() < 1e-4);
+        p.auxes[0].mute = true; // the stack's channel carries it all
+        assert_eq!(peak(&render(&p, Path::new("."), BEAT)[0]), 0.0);
     }
 
     #[test]

@@ -60,6 +60,9 @@ pub struct Track {
     /// Post-fader sends to aux buses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sends: Vec<AuxSend>,
+    /// The bus the track plays into instead of the master: an aux, or a summing stack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -85,6 +88,9 @@ pub struct Aux {
     pub pan: f32,
     #[serde(default)]
     pub mute: bool,
+    /// A summing stack: the channel its member tracks play into, shown with them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stack: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -354,6 +360,19 @@ impl Project {
 
     /// Adds an aux on the next free bus, as Logic does when a send picks a new bus; returns the
     /// bus.
+    /// Makes a summing stack of these tracks: a stack channel they all play into. Returns its bus.
+    pub fn add_stack(&mut self, tracks: &[usize]) -> u32 {
+        let bus = self.add_aux();
+        let n = self.auxes.iter().filter(|a| a.stack).count() + 1;
+        let stack = self.auxes.last_mut().unwrap();
+        stack.stack = true;
+        stack.name = format!("Stack {n}");
+        for &t in tracks {
+            self.tracks[t].output = Some(bus);
+        }
+        bus
+    }
+
     pub fn add_aux(&mut self) -> u32 {
         let bus = self.auxes.iter().map(|a| a.bus).max().unwrap_or(0) + 1;
         self.auxes.push(Aux {

@@ -45,6 +45,7 @@ actions!(
         ToggleAutomation,
         Record,
         ToggleTyping,
+        CreateStack,
     ]
 );
 
@@ -66,6 +67,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("a", ToggleAutomation, Some("Arrange")),
         KeyBinding::new("r", Record, None),
         KeyBinding::new("cmd-k", ToggleTyping, None),
+        KeyBinding::new("cmd-shift-d", CreateStack, None),
         KeyBinding::new("cmd-s", Save, None),
         KeyBinding::new("cmd-alt-n", NewTrack, None),
         KeyBinding::new("cmd-right", ZoomIn, None),
@@ -1091,6 +1093,15 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|ws, _: &Record, _, cx| ws.record(cx)))
+            .on_action(cx.listener(|ws, _: &CreateStack, _, cx| {
+                // A summing stack of the selected track, as Logic's ⇧⌘D makes of the selection.
+                if ws.track < ws.session.project.tracks.len() {
+                    let t = ws.track;
+                    ws.edit(cx, |ws| {
+                        ws.session.project.add_stack(&[t]);
+                    });
+                }
+            }))
             .on_action(cx.listener(|ws, _: &ToggleTyping, _, cx| ws.toggle_typing(cx)))
             .on_action(cx.listener(|ws, _: &PlayStop, _, cx| ws.play_stop(cx)))
             .on_action(cx.listener(|ws, _: &GoToStart, _, cx| ws.go_to_start(cx)))
