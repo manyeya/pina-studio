@@ -225,6 +225,40 @@
           }
         }
       ]
+    },
+    {
+      "name": "Drums",
+      "volume_db": -4,
+      "regions": [
+        {
+          "start": 0,
+          "length": 3840,
+          "audio": {
+            "file": "Audio Files/drums.wav"
+          }
+        },
+        {
+          "start": 3840,
+          "length": 3840,
+          "audio": {
+            "file": "Audio Files/drums.wav"
+          }
+        },
+        {
+          "start": 7680,
+          "length": 3840,
+          "audio": {
+            "file": "Audio Files/drums.wav"
+          }
+        },
+        {
+          "start": 11520,
+          "length": 3840,
+          "audio": {
+            "file": "Audio Files/drums.wav"
+          }
+        }
+      ]
     }
   ]
 }

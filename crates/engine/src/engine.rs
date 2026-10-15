@@ -1,18 +1,27 @@
-//! Plays a project: each track becomes a lane (its regions as note events and audio clips, its
-//! instrument, inserts and gain) and the engine mixes the lanes a block at a time. The same engine
-//! runs live, from the audio callback, and offline, for a bounce.
+//! Plays a project. Each track has a lane: its instrument and inserts, which keep their state.
+//! What the lanes play (note events, audio clips, gains) is an arrangement, compiled from the
+//! project on the main thread and swapped in whole after each edit. The engine mixes a block at
+//! a time, live from the audio callback or offline for a bounce.
+//!
+//! Live, the main thread talks to the engine only through queues (`Msg` in, `Garbage` out) and
+//! reads what it reports from `Shared`. Anything the engine lets go goes back as garbage, so the
+//! audio thread never frees memory.
 
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+    },
 };
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::{
+    peaks::Peaks,
     plugin::{AUDIO_MODULE, Module, Note, Plugin, Processor},
-    project::{Content, Instrument, PluginRef, Project},
+    project::{Content, Instrument, PluginRef, Project, Track},
     synth::Synth,
 };
 
@@ -20,12 +29,52 @@ use crate::{
 pub const MAX_BLOCK: usize = 512;
 /// Most note events one lane takes in one block; more are dropped.
 const BLOCK_NOTES: usize = 256;
+/// Lanes the live engine holds.
+pub const SLOTS: usize = 256;
+/// The master meter's index in `Shared::meters`.
+pub const MASTER: usize = SLOTS;
 
 /// An audio file in memory, one or two channels.
 // ponytail: whole files in RAM; stream from disk when sessions outgrow memory.
 pub struct AudioData {
     channels: Vec<Vec<f32>>,
 }
+
+/// The audio files a project uses, each loaded once, with its waveform overview.
+pub struct AudioFiles {
+    dir: PathBuf,
+    rate: f64,
+    files: HashMap<PathBuf, (Arc<AudioData>, Arc<Peaks>)>,
+}
+
+impl AudioFiles {
+    pub fn new(dir: &Path, rate: f64) -> Self {
+        AudioFiles {
+            dir: dir.to_path_buf(),
+            rate,
+            files: HashMap::new(),
+        }
+    }
+
+    fn get(&mut self, file: &Path) -> Result<Arc<AudioData>, String> {
+        if let Some((data, _)) = self.files.get(file) {
+            return Ok(data.clone());
+        }
+        let data = Arc::new(load_wav(&self.dir.join(file), self.rate)?);
+        // ponytail: the overview shows the first channel.
+        let peaks = Arc::new(Peaks::from_samples(&data.channels[0]));
+        self.files.insert(file.to_path_buf(), (data.clone(), peaks));
+        Ok(data)
+    }
+
+    /// The overview of a file the engine has loaded.
+    pub fn peaks(&self, file: &Path) -> Option<Arc<Peaks>> {
+        self.files.get(file).map(|(_, p)| p.clone())
+    }
+}
+
+/// Loaded plugin bundles, by path.
+pub type Modules = HashMap<PathBuf, Module>;
 
 struct Clip {
     /// Timeline position and length, and where in the file it starts, all in samples.
@@ -43,6 +92,23 @@ struct Event {
     velocity: f32,
 }
 
+/// What every lane plays, and how loud.
+pub struct Arrangement {
+    tempo: f64,
+    master: f32,
+    plans: Vec<Plan>,
+}
+
+/// What one lane plays.
+struct Plan {
+    slot: usize,
+    /// Sorted by time, offs before ons at the same sample.
+    events: Vec<Event>,
+    /// Sorted by start.
+    clips: Vec<Clip>,
+    gain: [f32; 2],
+}
+
 #[allow(clippy::large_enum_variant)] // one per track
 enum Source {
     Audio,
@@ -50,146 +116,254 @@ enum Source {
     Plugin(Processor),
 }
 
-/// A track, ready to play.
-struct Lane {
+/// A track's instrument and inserts: what makes its sound.
+pub struct Lane {
     source: Source,
-    /// Sorted by start.
-    clips: Vec<Clip>,
-    /// Sorted by time, offs before ons at the same sample.
-    events: Vec<Event>,
     inserts: Vec<Processor>,
-    gain: [f32; 2],
-    /// Notes this lane's instrument is holding, to release on stop or locate.
+    /// Notes the instrument is holding, to release on stop or locate.
     held: [bool; 128],
-}
-
-pub struct Engine {
-    rate: f64,
-    tempo: f64,
-    lanes: Vec<Lane>,
-    master: f32,
-    position: u64,
-    playing: bool,
-    /// Release every held note at the start of the next block.
-    release: bool,
-    scratch: [Vec<f32>; 2],
 }
 
 fn db(db: f32) -> f32 {
     10f32.powf(db / 20.0)
 }
 
-impl Engine {
-    /// Builds the engine for `project` (whose files are in `dir`) at `rate`. The plugins it returns
-    /// are the main-thread halves of the engine's plugin processors: keep them as long as it.
-    pub fn load(project: &Project, dir: &Path, rate: f64) -> Result<(Engine, Vec<Plugin>), String> {
-        let mut modules: HashMap<PathBuf, Module> = HashMap::new();
-        let mut plugins = Vec::new();
-        let mut instantiate = |r: &PluginRef| -> Result<Processor, String> {
-            if !modules.contains_key(&r.path) {
-                modules.insert(r.path.clone(), Module::load(&r.path)?);
-            }
-            let module = &modules[&r.path];
-            let classes = module.classes();
-            let class = classes
-                .iter()
-                .find(|c| c.category == AUDIO_MODULE && c.name == r.class)
-                .ok_or_else(|| format!("{}: no plugin named {:?}", r.path.display(), r.class))?;
-            let (plugin, processor) = Plugin::instantiate(module, class, rate, MAX_BLOCK)?;
-            plugins.push(plugin);
-            Ok(processor)
-        };
+/// Builds a track's lane at `rate`, and the main-thread halves of its plugins, which must live as
+/// long as it.
+pub fn make_lane(
+    track: &Track,
+    rate: f64,
+    modules: &mut Modules,
+) -> Result<(Lane, Vec<Plugin>), String> {
+    let mut plugins = Vec::new();
+    let mut instantiate = |r: &PluginRef| -> Result<Processor, String> {
+        if !modules.contains_key(&r.path) {
+            modules.insert(r.path.clone(), Module::load(&r.path)?);
+        }
+        let module = &modules[&r.path];
+        let classes = module.classes();
+        let class = classes
+            .iter()
+            .find(|c| c.category == AUDIO_MODULE && c.name == r.class)
+            .ok_or_else(|| format!("{}: no plugin named {:?}", r.path.display(), r.class))?;
+        let (plugin, processor) = Plugin::instantiate(module, class, rate, MAX_BLOCK)?;
+        plugins.push(plugin);
+        Ok(processor)
+    };
+    let source = match &track.instrument {
+        None => Source::Audio,
+        Some(Instrument::Synth) => Source::Synth(Synth::new(rate)),
+        Some(Instrument::Vst3(r)) => Source::Plugin(instantiate(r)?),
+    };
+    let inserts = track
+        .inserts
+        .iter()
+        .map(&mut instantiate)
+        .collect::<Result<_, _>>()?;
+    let lane = Lane {
+        source,
+        inserts,
+        held: [false; 128],
+    };
+    Ok((lane, plugins))
+}
 
-        let mut files: HashMap<&Path, Arc<AudioData>> = HashMap::new();
-        let any_solo = project.tracks.iter().any(|t| t.solo);
-        let mut lanes = Vec::new();
-        for t in &project.tracks {
-            let source = match &t.instrument {
-                None => Source::Audio,
-                Some(Instrument::Synth) => Source::Synth(Synth::new(rate)),
-                Some(Instrument::Vst3(r)) => Source::Plugin(instantiate(r)?),
-            };
-            let inserts = t
-                .inserts
-                .iter()
-                .map(&mut instantiate)
-                .collect::<Result<_, _>>()?;
-
-            let (mut clips, mut events) = (Vec::new(), Vec::new());
-            for region in &t.regions {
-                let start = project.samples(region.start, rate);
-                let end = project.samples(region.start + region.length, rate);
-                match &region.content {
-                    // Notes stop at the region's end, and notes starting after it don't play.
-                    Content::Midi { notes } => {
-                        for n in notes.iter().filter(|n| n.start < region.length) {
-                            let at = project.samples(region.start + n.start, rate);
-                            let off = project
-                                .samples(region.start + n.start + n.length, rate)
-                                .min(end);
-                            events.push(Event {
-                                at,
-                                pitch: n.pitch,
-                                velocity: n.velocity as f32 / 127.0,
-                            });
-                            events.push(Event {
-                                at: off,
-                                pitch: n.pitch,
-                                velocity: 0.0,
-                            });
-                        }
-                    }
-                    Content::Audio { file, offset } => {
-                        let data = match files.get(file.as_path()) {
-                            Some(d) => d.clone(),
-                            None => {
-                                let d = Arc::new(load_wav(&dir.join(file), rate)?);
-                                files.insert(file, d.clone());
-                                d
-                            }
-                        };
-                        clips.push(Clip {
-                            start,
-                            len: end - start,
-                            offset: *offset,
-                            data,
+/// Compiles what `project` plays at `rate`, track `i` on lane `slots[i]`.
+pub fn compile(
+    project: &Project,
+    rate: f64,
+    slots: &[usize],
+    files: &mut AudioFiles,
+) -> Result<Arrangement, String> {
+    let any_solo = project.tracks.iter().any(|t| t.solo);
+    let mut plans = Vec::new();
+    for (t, &slot) in project.tracks.iter().zip(slots) {
+        let (mut clips, mut events) = (Vec::new(), Vec::new());
+        for region in &t.regions {
+            let start = project.samples(region.start, rate);
+            let end = project.samples(region.start + region.length, rate);
+            match &region.content {
+                // Notes starting inside the region play, for their full length.
+                Content::Midi { notes } => {
+                    for n in notes
+                        .iter()
+                        .filter(|n| (0..region.length as i64).contains(&n.start))
+                    {
+                        let on = region.start + n.start as u64;
+                        let velocity = n.velocity as f32 / 127.0;
+                        let at = project.samples(on, rate);
+                        events.push(Event {
+                            at,
+                            pitch: n.pitch,
+                            velocity,
+                        });
+                        let off = project.samples(on + n.length, rate);
+                        events.push(Event {
+                            at: off,
+                            pitch: n.pitch,
+                            velocity: 0.0,
                         });
                     }
                 }
+                Content::Audio { file, offset } => clips.push(Clip {
+                    start,
+                    len: end - start,
+                    offset: *offset,
+                    data: files.get(file)?,
+                }),
             }
-            // Offs first at the same sample, so back-to-back notes of one pitch both sound.
-            events.sort_by_key(|e| (e.at, e.velocity > 0.0));
-            clips.sort_by_key(|c| c.start);
-
-            let g = if t.mute || (any_solo && !t.solo) {
-                0.0
-            } else {
-                db(t.volume_db)
-            };
-            // Balance: panning turns the other side down.
-            let pan = t.pan.clamp(-1.0, 1.0);
-            let gain = [g * (1.0 - pan).min(1.0), g * (1.0 + pan).min(1.0)];
-            lanes.push(Lane {
-                source,
-                clips,
-                events,
-                inserts,
-                gain,
-                held: [false; 128],
-            });
         }
+        // Offs first at the same sample, so back-to-back notes of one pitch both sound.
+        events.sort_by_key(|e| (e.at, e.velocity > 0.0));
+        clips.sort_by_key(|c| c.start);
+        let g = if t.mute || (any_solo && !t.solo) {
+            0.0
+        } else {
+            db(t.volume_db)
+        };
+        // Balance: panning turns the other side down.
+        let pan = t.pan.clamp(-1.0, 1.0);
+        let gain = [g * (1.0 - pan).min(1.0), g * (1.0 + pan).min(1.0)];
+        plans.push(Plan {
+            slot,
+            events,
+            clips,
+            gain,
+        });
+    }
+    Ok(Arrangement {
+        tempo: project.tempo,
+        master: db(project.master_volume_db),
+        plans,
+    })
+}
 
-        let engine = Engine {
+/// From the main thread to the live engine.
+pub enum Msg {
+    Arrange(Box<Arrangement>),
+    Insert(usize, Box<Lane>),
+    Remove(usize),
+    Play,
+    Stop,
+    Locate(u64),
+}
+
+/// What the live engine lets go of, for the main thread to drop.
+pub enum Garbage {
+    Arrangement(Box<Arrangement>),
+    Lane(Box<Lane>),
+}
+
+/// What the live engine reports.
+pub struct Shared {
+    position: AtomicU64,
+    playing: AtomicBool,
+    /// The loudest sample (as f32 bits) per lane since last read, and the master's last.
+    meters: Vec<AtomicU32>,
+}
+
+impl Shared {
+    pub fn new() -> Self {
+        Shared {
+            position: AtomicU64::new(0),
+            playing: AtomicBool::new(false),
+            meters: (0..=SLOTS).map(|_| AtomicU32::new(0)).collect(),
+        }
+    }
+
+    pub fn position(&self) -> u64 {
+        self.position.load(Ordering::Relaxed)
+    }
+
+    pub fn playing(&self) -> bool {
+        self.playing.load(Ordering::Relaxed)
+    }
+
+    /// The peak level on a lane (or `MASTER`) since the last call.
+    pub fn take_meter(&self, slot: usize) -> f32 {
+        f32::from_bits(self.meters[slot].swap(0, Ordering::Relaxed))
+    }
+}
+
+impl Default for Shared {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+struct Link {
+    rx: rtrb::Consumer<Msg>,
+    garbage: rtrb::Producer<Garbage>,
+    shared: Arc<Shared>,
+}
+
+/// Hands garbage back, or leaks it if the main thread has stopped collecting: freeing it here
+/// could stall the audio thread.
+fn trash(q: &mut rtrb::Producer<Garbage>, g: Garbage) {
+    if let Err(rtrb::PushError::Full(g)) = q.push(g) {
+        std::mem::forget(g);
+    }
+}
+
+pub struct Engine {
+    rate: f64,
+    arrangement: Box<Arrangement>,
+    lanes: Vec<Option<Box<Lane>>>,
+    position: u64,
+    playing: bool,
+    /// Release every held note at the start of the next block.
+    release: bool,
+    scratch: [Vec<f32>; 2],
+    link: Option<Link>,
+}
+
+impl Engine {
+    fn new(rate: f64, arrangement: Arrangement, lanes: Vec<Option<Box<Lane>>>) -> Self {
+        Engine {
             rate,
-            tempo: project.tempo,
+            arrangement: Box::new(arrangement),
             lanes,
-            master: db(project.master_volume_db),
             position: 0,
             playing: false,
             release: false,
             scratch: [vec![0.0; MAX_BLOCK], vec![0.0; MAX_BLOCK]],
+            link: None,
+        }
+    }
+
+    /// The engine for `project` (whose files are in `dir`) at `rate`, for offline use. The plugins
+    /// it returns are the main-thread halves of its plugin processors: keep them as long as it.
+    pub fn load(project: &Project, dir: &Path, rate: f64) -> Result<(Engine, Vec<Plugin>), String> {
+        let (mut modules, mut plugins, mut lanes) = (Modules::new(), Vec::new(), Vec::new());
+        for t in &project.tracks {
+            let (lane, p) = make_lane(t, rate, &mut modules)?;
+            lanes.push(Some(Box::new(lane)));
+            plugins.extend(p);
+        }
+        let slots: Vec<usize> = (0..lanes.len()).collect();
+        let arrangement = compile(project, rate, &slots, &mut AudioFiles::new(dir, rate))?;
+        Ok((Engine::new(rate, arrangement, lanes), plugins))
+    }
+
+    /// An empty engine, filled and driven through `rx`.
+    pub fn live(
+        rate: f64,
+        rx: rtrb::Consumer<Msg>,
+        garbage: rtrb::Producer<Garbage>,
+        shared: Arc<Shared>,
+    ) -> Self {
+        let empty = Arrangement {
+            tempo: 120.0,
+            master: 1.0,
+            plans: Vec::new(),
         };
-        Ok((engine, plugins))
+        let mut e = Engine::new(rate, empty, (0..SLOTS).map(|_| None).collect());
+        e.link = Some(Link {
+            rx,
+            garbage,
+            shared,
+        });
+        e
     }
 
     pub fn rate(&self) -> f64 {
@@ -214,20 +388,56 @@ impl Engine {
         self.release = true;
     }
 
+    fn receive(&mut self) {
+        let Some(link) = &mut self.link else { return };
+        while let Ok(msg) = link.rx.pop() {
+            match msg {
+                Msg::Arrange(a) => {
+                    let old = std::mem::replace(&mut self.arrangement, a);
+                    trash(&mut link.garbage, Garbage::Arrangement(old));
+                }
+                Msg::Insert(slot, lane) => {
+                    if let Some(old) = self.lanes[slot].replace(lane) {
+                        trash(&mut link.garbage, Garbage::Lane(old));
+                    }
+                }
+                Msg::Remove(slot) => {
+                    if let Some(old) = self.lanes[slot].take() {
+                        trash(&mut link.garbage, Garbage::Lane(old));
+                    }
+                }
+                Msg::Play => self.playing = true,
+                Msg::Stop => {
+                    self.playing = false;
+                    self.release = true;
+                }
+                Msg::Locate(at) => {
+                    self.position = at;
+                    self.release = true;
+                }
+            }
+        }
+    }
+
     /// Writes the next `frames` (at most `MAX_BLOCK`) of the mix into `out` and, if playing, moves
     /// the playhead on. Instruments and effects run while stopped too, so tails ring out.
     /// Allocation-free: safe on the audio thread.
     pub fn process(&mut self, out: [&mut [f32]; 2], frames: usize) {
+        self.receive();
         let [out_l, out_r] = out;
         out_l[..frames].fill(0.0);
         out_r[..frames].fill(0.0);
         let (from, to) = (self.position, self.position + frames as u64);
         let release = std::mem::take(&mut self.release);
-        let (playing, position, tempo) = (self.playing, self.position, self.tempo);
+        let (playing, position, tempo) = (self.playing, self.position, self.arrangement.tempo);
+        let shared = self.link.as_ref().map(|l| &*l.shared);
         let [l, r] = &mut self.scratch;
         let (l, r) = (&mut l[..frames], &mut r[..frames]);
 
-        for lane in &mut self.lanes {
+        for plan in &self.arrangement.plans {
+            let Some(lane) = self.lanes[plan.slot].as_deref_mut() else {
+                continue;
+            };
             l.fill(0.0);
             r.fill(0.0);
             let mut notes = [Note::default(); BLOCK_NOTES];
@@ -244,8 +454,8 @@ impl Engine {
                 }
             }
             if playing {
-                let first = lane.events.partition_point(|e| e.at < from);
-                for e in lane.events[first..].iter().take_while(|e| e.at < to) {
+                let first = plan.events.partition_point(|e| e.at < from);
+                for e in plan.events[first..].iter().take_while(|e| e.at < to) {
                     if n == BLOCK_NOTES {
                         break;
                     }
@@ -259,7 +469,7 @@ impl Engine {
                 }
                 // ponytail: walks the lane's clips from the first every block; index them by time
                 // if a track gets thousands of regions.
-                for c in lane.clips.iter().take_while(|c| c.start < to) {
+                for c in plan.clips.iter().take_while(|c| c.start < to) {
                     let (a, b) = (from.max(c.start), to.min(c.start + c.len));
                     for (ch, dst) in [&mut *l, &mut *r].into_iter().enumerate() {
                         let src = &c.data.channels[ch.min(c.data.channels.len() - 1)];
@@ -283,16 +493,30 @@ impl Engine {
                 p.set_transport(playing, position, tempo);
                 p.process([&mut *l, &mut *r], frames, &[]);
             }
+            let mut peak = 0f32;
             for i in 0..frames {
-                out_l[i] += l[i] * lane.gain[0];
-                out_r[i] += r[i] * lane.gain[1];
+                let (a, b) = (l[i] * plan.gain[0], r[i] * plan.gain[1]);
+                out_l[i] += a;
+                out_r[i] += b;
+                peak = peak.max(a.abs()).max(b.abs());
+            }
+            if let Some(s) = shared {
+                s.meters[plan.slot].fetch_max(peak.to_bits(), Ordering::Relaxed);
             }
         }
-        for s in out_l.iter_mut().chain(out_r.iter_mut()).take(frames * 2) {
-            *s *= self.master;
+
+        let mut peak = 0f32;
+        for s in out_l[..frames].iter_mut().chain(out_r[..frames].iter_mut()) {
+            *s *= self.arrangement.master;
+            peak = peak.max(s.abs());
         }
         if playing {
             self.position = to;
+        }
+        if let Some(s) = shared {
+            s.meters[MASTER].fetch_max(peak.to_bits(), Ordering::Relaxed);
+            s.position.store(self.position, Ordering::Relaxed);
+            s.playing.store(self.playing, Ordering::Relaxed);
         }
     }
 
@@ -400,7 +624,7 @@ fn load_wav(path: &Path, rate: f64) -> Result<AudioData, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{Note as MidiNote, PPQ, Region, Track};
+    use crate::project::{Note as MidiNote, PPQ, Region};
 
     const RATE: f64 = 48_000.0;
     const BEAT: usize = 24_000; // samples per beat at 120 bpm
@@ -410,20 +634,16 @@ mod tests {
         Track {
             name: name.into(),
             instrument: Some(Instrument::Synth),
-            inserts: vec![],
-            volume_db: 0.0,
-            pan: 0.0,
-            mute: false,
-            solo: false,
             regions: vec![Region {
                 start: 0,
                 length,
                 content: Content::Midi { notes },
             }],
+            ..Default::default()
         }
     }
 
-    fn note(start: u64, length: u64, pitch: u8) -> MidiNote {
+    fn note(start: i64, length: u64, pitch: u8) -> MidiNote {
         MidiNote {
             start,
             length,
@@ -432,9 +652,7 @@ mod tests {
         }
     }
 
-    fn render(project: &Project, dir: &Path, frames: usize) -> [Vec<f32>; 2] {
-        let (mut engine, _) = Engine::load(project, dir, RATE).unwrap();
-        engine.play();
+    fn run(engine: &mut Engine, frames: usize) -> [Vec<f32>; 2] {
         let mut out = [vec![0f32; frames], vec![0f32; frames]];
         for at in (0..frames).step_by(MAX_BLOCK) {
             let n = MAX_BLOCK.min(frames - at);
@@ -442,6 +660,12 @@ mod tests {
             engine.process([&mut l[at..], &mut r[at..]], n);
         }
         out
+    }
+
+    fn render(project: &Project, dir: &Path, frames: usize) -> [Vec<f32>; 2] {
+        let (mut engine, _) = Engine::load(project, dir, RATE).unwrap();
+        engine.play();
+        run(&mut engine, frames)
     }
 
     fn project(tracks: Vec<Track>) -> Project {
@@ -462,13 +686,11 @@ mod tests {
     }
 
     #[test]
-    fn notes_start_on_their_beat_and_stop_at_the_region_end() {
-        // A note from beat 2 that runs past the region, which ends at beat 3.
-        let p = project(vec![synth_track(
-            "a",
-            vec![note(PPQ, PPQ * 4, 69)],
-            PPQ * 2,
-        )]);
+    fn notes_start_on_their_beat_and_play_past_the_region_end() {
+        // A beat-long note from beat 2 in a region that ends halfway through it, and a note
+        // starting after the region ends, which doesn't play.
+        let notes = vec![note(PPQ as i64, PPQ, 69), note(PPQ as i64 * 3, PPQ, 69)];
+        let p = project(vec![synth_track("a", notes, PPQ * 3 / 2)]);
         let [l, _] = render(&p, Path::new("."), BEAT * 4);
         assert_eq!(peak(&l[..BEAT + 1]), 0.0);
         assert!(peak(&l[BEAT..BEAT + 1000]) > 0.1);
@@ -535,9 +757,9 @@ mod tests {
             },
         };
         let track = Track {
-            instrument: None,
+            name: "audio".into(),
             regions: vec![region],
-            ..synth_track("audio", vec![], 0)
+            ..Default::default()
         };
         let [l, r] = render(&project(vec![track]), &dir, BEAT * 2);
         let start = BEAT / 2;
@@ -552,19 +774,41 @@ mod tests {
     fn stopping_releases_held_notes() {
         let p = project(vec![synth_track("a", vec![note(0, PPQ * 8, 69)], PPQ * 8)]);
         let (mut engine, _) = Engine::load(&p, Path::new("."), RATE).unwrap();
-        let (mut l, mut r) = (vec![0f32; MAX_BLOCK], vec![0f32; MAX_BLOCK]);
         engine.play();
-        for _ in 0..10 {
-            engine.process([&mut l, &mut r], MAX_BLOCK);
-        }
-        assert!(peak(&l) > 0.1);
+        assert!(peak(&run(&mut engine, MAX_BLOCK * 10)[0]) > 0.1);
         engine.stop();
-        for _ in 0..RELEASE / MAX_BLOCK + 1 {
-            engine.process([&mut l, &mut r], MAX_BLOCK);
-        }
-        engine.process([&mut l, &mut r], MAX_BLOCK);
-        assert_eq!(peak(&l), 0.0);
+        run(&mut engine, RELEASE + MAX_BLOCK);
+        assert_eq!(peak(&run(&mut engine, MAX_BLOCK)[0]), 0.0);
         assert_eq!(engine.position(), (MAX_BLOCK * 10) as u64);
+    }
+
+    #[test]
+    fn the_live_engine_follows_its_messages() {
+        let (mut tx, rx) = rtrb::RingBuffer::new(16);
+        let (gtx, mut garbage) = rtrb::RingBuffer::new(16);
+        let shared = Arc::new(Shared::new());
+        let mut engine = Engine::live(RATE, rx, gtx, shared.clone());
+        let p = project(vec![synth_track("a", vec![note(0, PPQ * 8, 69)], PPQ * 8)]);
+        let (lane, _) = make_lane(&p.tracks[0], RATE, &mut Modules::new()).unwrap();
+        let mut files = AudioFiles::new(Path::new("."), RATE);
+        let arrangement = compile(&p, RATE, &[7], &mut files).unwrap();
+        for m in [
+            Msg::Insert(7, Box::new(lane)),
+            Msg::Arrange(Box::new(arrangement)),
+            Msg::Play,
+        ] {
+            assert!(tx.push(m).is_ok());
+        }
+        assert!(peak(&run(&mut engine, MAX_BLOCK)[0]) > 0.0);
+        assert!(shared.playing());
+        assert_eq!(shared.position(), MAX_BLOCK as u64);
+        assert!(shared.take_meter(7) > 0.0 && shared.take_meter(MASTER) > 0.0);
+        // The empty arrangement it started with comes back.
+        assert!(matches!(garbage.pop(), Ok(Garbage::Arrangement(_))));
+
+        assert!(tx.push(Msg::Remove(7)).is_ok());
+        assert_eq!(peak(&run(&mut engine, MAX_BLOCK)[0]), 0.0);
+        assert!(matches!(garbage.pop(), Ok(Garbage::Lane(_))));
     }
 
     #[test]

@@ -2,12 +2,17 @@
 //! `project.json` plus the audio it uses under `Audio Files/`. The JSON is the source of truth, so
 //! people and agents can read, diff and edit it.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use serde::{Deserialize, Serialize};
 
 /// Ticks per quarter note, as in Logic.
 pub const PPQ: u64 = 960;
+/// Beats to a bar: 4/4 throughout, for now.
+pub const BEATS_PER_BAR: u64 = 4;
 
 pub const FILE: &str = "project.json";
 pub const AUDIO_DIR: &str = "Audio Files";
@@ -22,8 +27,12 @@ pub struct Project {
     pub tracks: Vec<Track>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Track {
+    /// Identifies the track while the project is open, so the engine keeps its instrument and
+    /// plugins through edits and undo. Not saved.
+    #[serde(skip)]
+    pub id: u64,
     pub name: String,
     /// Software instrument tracks have one; audio tracks don't.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,11 +94,21 @@ pub enum Content {
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct Note {
-    /// Ticks from the start of the region.
-    pub start: u64,
+    /// Ticks from the start of the region. Notes outside the region (after trimming it) are kept
+    /// but don't play, so extending it again brings them back.
+    pub start: i64,
+    /// Notes play their full length, even past the region's end, as in Logic.
     pub length: u64,
     pub pitch: u8,
     pub velocity: u8,
+}
+
+/// Where a region is: its track and its index there.
+pub type At = (usize, usize);
+
+fn next_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 impl Project {
@@ -106,7 +125,7 @@ impl Project {
         let path = dir.join(FILE);
         let json =
             std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let p: Project =
+        let mut p: Project =
             serde_json::from_str(&json).map_err(|e| format!("{}: {e}", path.display()))?;
         if !p.tempo.is_finite() || p.tempo <= 0.0 || p.sample_rate == 0 {
             return Err(format!(
@@ -114,6 +133,7 @@ impl Project {
                 path.display()
             ));
         }
+        p.assign_ids();
         Ok(p)
     }
 
@@ -124,10 +144,22 @@ impl Project {
         std::fs::write(&path, json + "\n").map_err(|e| format!("{}: {e}", path.display()))
     }
 
+    /// Gives every track that has none an id.
+    pub fn assign_ids(&mut self) {
+        for t in self.tracks.iter_mut().filter(|t| t.id == 0) {
+            t.id = next_id();
+        }
+    }
+
     /// Ticks to samples at `rate`.
     // ponytail: one tempo for the whole project; a tempo map replaces this.
     pub fn samples(&self, ticks: u64, rate: f64) -> u64 {
         (ticks as f64 / PPQ as f64 * 60.0 / self.tempo * rate).round() as u64
+    }
+
+    /// Samples at the project's rate to ticks, rounded down.
+    pub fn ticks(&self, samples: u64) -> u64 {
+        (samples as f64 / self.sample_rate as f64 * self.tempo / 60.0 * PPQ as f64) as u64
     }
 
     /// The tick where the last region ends.
@@ -139,11 +171,142 @@ impl Project {
             .max()
             .unwrap_or(0)
     }
+
+    pub fn region(&self, at: At) -> &Region {
+        &self.tracks[at.0].regions[at.1]
+    }
+
+    /// Adds a track at `index` and returns its id.
+    pub fn add_track(&mut self, index: usize, mut track: Track) -> u64 {
+        track.id = next_id();
+        let id = track.id;
+        self.tracks.insert(index.min(self.tracks.len()), track);
+        id
+    }
+
+    /// Moves a region to `start` on `track`, or keeps it on its own track if `track` can't play
+    /// it (MIDI goes on instrument tracks, audio on audio tracks). Returns where it is now.
+    pub fn move_region(&mut self, at: At, track: usize, start: u64) -> At {
+        let midi = matches!(self.region(at).content, Content::Midi { .. });
+        let track = if self.tracks[track].instrument.is_some() == midi {
+            track
+        } else {
+            at.0
+        };
+        let mut r = self.tracks[at.0].regions.remove(at.1);
+        r.start = start;
+        self.tracks[track].regions.push(r);
+        (track, self.tracks[track].regions.len() - 1)
+    }
+
+    /// Moves a region's start to `start`, leaving its content where it is on the timeline. An
+    /// audio region can't start before its file does.
+    pub fn trim_start(&mut self, at: At, start: u64) {
+        let r = self.region(at);
+        let end = r.start + r.length;
+        let mut start = start.min(end - 1);
+        if let Content::Audio { offset, .. } = r.content {
+            start = start.max(r.start.saturating_sub(self.ticks(offset)));
+        }
+        let (old, rate) = (r.start, self.sample_rate as f64);
+        let moved = if start >= old {
+            self.samples(start - old, rate) as i64
+        } else {
+            -(self.samples(old - start, rate) as i64)
+        };
+        let r = &mut self.tracks[at.0].regions[at.1];
+        match &mut r.content {
+            Content::Midi { notes } => {
+                for n in notes {
+                    n.start -= start as i64 - old as i64;
+                }
+            }
+            Content::Audio { offset, .. } => *offset = (*offset as i64 + moved).max(0) as u64,
+        }
+        r.start = start;
+        r.length = end - start;
+    }
+
+    /// Moves a region's end to `end`.
+    pub fn trim_end(&mut self, at: At, end: u64) {
+        let r = &mut self.tracks[at.0].regions[at.1];
+        r.length = end.max(r.start + 1) - r.start;
+    }
+
+    /// Splits a region at `tick`, if that's inside it, and returns where the second half went.
+    /// Notes stay with the half they start in, as Logic's "Keep" does.
+    pub fn split_region(&mut self, at: At, tick: u64) -> Option<At> {
+        let r = self.region(at);
+        if tick <= r.start || tick >= r.start + r.length {
+            return None;
+        }
+        let first = tick - r.start;
+        let skip = self.samples(first, self.sample_rate as f64);
+        let r = &mut self.tracks[at.0].regions[at.1];
+        let mut second = r.clone();
+        second.start = tick;
+        second.length = r.length - first;
+        r.length = first;
+        match (&mut r.content, &mut second.content) {
+            (Content::Midi { notes: a }, Content::Midi { notes: b }) => {
+                a.retain(|n| n.start < first as i64);
+                b.retain(|n| n.start >= first as i64);
+                for n in b {
+                    n.start -= first as i64;
+                }
+            }
+            (_, Content::Audio { offset, .. }) => *offset += skip,
+            _ => unreachable!(),
+        }
+        self.tracks[at.0].regions.push(second);
+        Some((at.0, self.tracks[at.0].regions.len() - 1))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn midi(start: u64, length: u64, notes: &[(i64, u8)]) -> Region {
+        let notes = notes
+            .iter()
+            .map(|&(start, pitch)| Note {
+                start,
+                length: 240,
+                pitch,
+                velocity: 100,
+            })
+            .collect();
+        Region {
+            start,
+            length,
+            content: Content::Midi { notes },
+        }
+    }
+
+    fn audio(start: u64, length: u64, offset: u64) -> Region {
+        Region {
+            start,
+            length,
+            content: Content::Audio {
+                file: "a.wav".into(),
+                offset,
+            },
+        }
+    }
+
+    fn project(regions: Vec<Region>, instrument: bool) -> Project {
+        let track = Track {
+            name: "t".into(),
+            instrument: instrument.then_some(Instrument::Synth),
+            regions,
+            ..Default::default()
+        };
+        Project {
+            tracks: vec![track],
+            ..Project::new(48_000)
+        }
+    }
 
     #[test]
     fn json_round_trips_and_reads_sparse_tracks() {
@@ -170,8 +333,87 @@ mod tests {
     }
 
     #[test]
-    fn ticks_to_samples() {
+    fn ticks_and_samples() {
         let p = Project::new(48_000);
         assert_eq!(p.samples(PPQ, 48_000.0), 24_000); // a beat at 120 bpm is half a second
+        assert_eq!(p.ticks(24_000), PPQ);
+    }
+
+    #[test]
+    fn splitting_midi_keeps_notes_with_the_half_they_start_in() {
+        let mut p = project(
+            vec![midi(960, 1920, &[(0, 60), (900, 62), (960, 64)])],
+            true,
+        );
+        assert_eq!(p.split_region((0, 0), 960), None); // at the region's start: nothing to split
+        let at = p.split_region((0, 0), 1920).unwrap();
+        let (a, b) = (p.region((0, 0)), p.region(at));
+        assert_eq!(
+            (a.start, a.length, b.start, b.length),
+            (960, 960, 1920, 960)
+        );
+        let pitches = |r: &Region| match &r.content {
+            Content::Midi { notes } => notes.iter().map(|n| (n.start, n.pitch)).collect::<Vec<_>>(),
+            _ => unreachable!(),
+        };
+        assert_eq!(pitches(a), [(0, 60), (900, 62)]);
+        assert_eq!(pitches(b), [(0, 64)]);
+    }
+
+    #[test]
+    fn splitting_audio_moves_the_offset() {
+        let mut p = project(vec![audio(0, 1920, 100)], false);
+        let at = p.split_region((0, 0), 960).unwrap();
+        assert!(matches!(
+            p.region(at).content,
+            Content::Audio { offset: 24_100, .. }
+        ));
+    }
+
+    #[test]
+    fn trimming_the_start_keeps_content_in_place() {
+        let mut p = project(vec![midi(960, 1920, &[(0, 60), (480, 62)])], true);
+        p.trim_start((0, 0), 1440);
+        let r = p.region((0, 0));
+        assert_eq!((r.start, r.length), (1440, 1440));
+        let Content::Midi { notes } = &r.content else {
+            unreachable!()
+        };
+        assert_eq!((notes[0].start, notes[1].start), (-480, 0));
+        p.trim_start((0, 0), 960); // back again: the hidden note returns
+        let Content::Midi { notes } = &p.region((0, 0)).content else {
+            unreachable!()
+        };
+        assert_eq!(notes[0].start, 0);
+
+        // Audio can't start before its file.
+        let mut p = project(vec![audio(1920, 960, 12_000)], false);
+        p.trim_start((0, 0), 0);
+        let r = p.region((0, 0));
+        assert_eq!((r.start, r.length), (1440, 1440));
+        assert!(matches!(r.content, Content::Audio { offset: 0, .. }));
+    }
+
+    #[test]
+    fn regions_only_move_to_tracks_that_can_play_them() {
+        let mut p = project(vec![midi(0, 960, &[])], true);
+        p.add_track(
+            1,
+            Track {
+                name: "audio".into(),
+                ..Default::default()
+            },
+        );
+        p.add_track(
+            2,
+            Track {
+                name: "keys".into(),
+                instrument: Some(Instrument::Synth),
+                ..Default::default()
+            },
+        );
+        assert_eq!(p.move_region((0, 0), 1, 480), (0, 0));
+        assert_eq!(p.move_region((0, 0), 2, 480), (2, 0));
+        assert_eq!(p.region((2, 0)).start, 480);
     }
 }

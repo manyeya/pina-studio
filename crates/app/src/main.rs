@@ -1,12 +1,21 @@
-mod arrange;
+mod strip;
+mod theme;
+mod tracks;
+mod workspace;
 
-use std::{path::Path, process::exit, thread, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    process::exit,
+    thread,
+    time::Duration,
+};
 
-use gpui::{App, AppContext, Bounds, WindowBounds, WindowOptions, px, size};
-use tempo_engine::{engine::Engine, project::Project};
+use gpui::{App, AppContext, Bounds, Menu, MenuItem, WindowBounds, WindowOptions, px, size};
+use tempo_engine::{engine::Engine, player::Player, project::Project, session::Session};
+use workspace::*;
 
 const USAGE: &str = "usage:
-  tempo                           open the app
+  tempo [project]                 open a project folder (default ~/Music/tempo/Untitled)
   tempo render <project> <out>    bounce a project folder to a WAV file
   tempo play <project>            play a project folder through the default output";
 
@@ -17,16 +26,14 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
-        [] => {
-            app();
-            Ok(())
-        }
         ["render", dir, out] => render(Path::new(dir), Path::new(out)),
         ["play", dir] => play(Path::new(dir)),
         ["-h" | "--help" | "help"] => {
             println!("{USAGE}");
             Ok(())
         }
+        [] => open(&default_project()),
+        [dir] if !dir.starts_with('-') => open(Path::new(dir)),
         _ => Err(USAGE.to_string()),
     };
     if let Err(e) = result {
@@ -35,19 +42,55 @@ fn main() {
     }
 }
 
-fn app() {
-    gpui_platform::application().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1200.), px(700.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |_, cx| cx.new(|_| arrange::Arrange::new()),
-        )
+fn default_project() -> PathBuf {
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    Path::new(&home).join("Music/tempo/Untitled")
+}
+
+fn open(dir: &Path) -> Result<(), String> {
+    let session = Session::open(dir)?;
+    let player = Player::start(&session.project, dir)?;
+    gpui_platform::application().run(move |cx: &mut App| {
+        bind_keys(cx);
+        cx.set_menus([
+            Menu::new("tempo").items([MenuItem::action("Quit tempo", Quit)]),
+            Menu::new("File").items([MenuItem::action("Save", Save)]),
+            Menu::new("Edit").items([
+                MenuItem::action("Undo", Undo),
+                MenuItem::action("Redo", Redo),
+                MenuItem::separator(),
+                MenuItem::action("Split at Playhead", Split),
+                MenuItem::action("Delete", Delete),
+            ]),
+            Menu::new("Track").items([
+                MenuItem::action("New Track", NewTrack),
+                MenuItem::action("Delete Track", DeleteTrack),
+            ]),
+            Menu::new("View").items([
+                MenuItem::action("Mixer", ToggleMixer),
+                MenuItem::action("Inspector", ToggleInspector),
+                MenuItem::separator(),
+                MenuItem::action("Zoom In", ZoomIn),
+                MenuItem::action("Zoom Out", ZoomOut),
+            ]),
+            Menu::new("Transport").items([
+                MenuItem::action("Play or Stop", PlayStop),
+                MenuItem::action("Go to Beginning", GoToStart),
+            ]),
+        ]);
+        let bounds = Bounds::centered(None, size(px(1400.), px(860.)), cx);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        };
+        cx.open_window(options, |window, cx| {
+            cx.new(|cx| Workspace::new(session, player, window, cx))
+        })
         .unwrap();
+        cx.on_window_closed(|cx, _| cx.quit()).detach();
         cx.activate(true);
     });
+    Ok(())
 }
 
 /// Loads a project and its engine, and how long it plays for, in samples.
@@ -76,7 +119,7 @@ fn play(dir: &Path) -> Result<(), String> {
     let seconds = frames as f64 / engine.rate();
     engine.play();
     let _stream = engine.start_output()?;
-    println!("playing {:.1} s (ctrl-c stops)", seconds);
+    println!("playing {seconds:.1} s (ctrl-c stops)");
     thread::sleep(Duration::from_secs_f64(seconds));
     Ok(())
 }
