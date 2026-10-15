@@ -44,6 +44,7 @@
       "solo": false,
       "regions": [
         {
+          "name": "Groove",
           "start": 0,
           "length": 30720,
           "pattern": {
@@ -209,6 +210,7 @@
           }
         },
         {
+          "name": "Chorus beat",
           "start": 46080,
           "length": 15360,
           "pattern": {
@@ -344,6 +346,12 @@
           "gain_db": -6.0,
           "q": 1.0
         }
+      },
+      "sat": {
+        "drive_db": 6.0,
+        "tone": -0.3,
+        "mix": 0.4,
+        "output_db": 0.0
       },
       "volume_db": -6.0,
       "pan": 0.0,
@@ -1420,8 +1428,10 @@
       "solo": false,
       "regions": [
         {
+          "name": "Hook",
           "start": 15360,
           "length": 15360,
+          "link": 1,
           "midi": {
             "notes": [
               {
@@ -1536,8 +1546,10 @@
           }
         },
         {
+          "name": "Hook",
           "start": 46080,
           "length": 15360,
+          "link": 1,
           "midi": {
             "notes": [
               {
@@ -1842,19 +1854,11 @@
         "volume": [
           {
             "tick": 0,
-            "value": -30.0
+            "value": -26.0
           },
           {
             "tick": 15360,
             "value": -12.0
-          },
-          {
-            "tick": 46080,
-            "value": -12.0
-          },
-          {
-            "tick": 61440,
-            "value": -24.0
           }
         ]
       },

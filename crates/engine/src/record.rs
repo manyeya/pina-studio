@@ -1,8 +1,10 @@
-//! Recording audio from the default input device into a WAV file.
+//! Recording audio from the default input device into a WAV file: the channels a track asks for.
 
 use std::{fs::File, io::BufWriter, path::Path};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+use crate::project::Input;
 
 /// Seconds of input buffered between the input callback and `drain`.
 const BUFFER: usize = 4;
@@ -13,9 +15,18 @@ pub struct AudioRecorder {
     writer: Writer,
 }
 
+/// How many channels the default input device has; 0 without one.
+pub fn input_channels() -> u16 {
+    cpal::default_host()
+        .default_input_device()
+        .and_then(|d| d.default_input_config().ok())
+        .map_or(0, |c| c.channels())
+}
+
 impl AudioRecorder {
-    /// Starts recording the default input at `rate` into a new WAV file at `path`.
-    pub fn start(path: &Path, rate: u32) -> Result<AudioRecorder, String> {
+    /// Starts recording `input` (by default the first two channels) of the default input device at
+    /// `rate` into a new WAV file at `path`.
+    pub fn start(path: &Path, rate: u32, input: Option<Input>) -> Result<AudioRecorder, String> {
         let device = cpal::default_host()
             .default_input_device()
             .ok_or("no audio input device")?;
@@ -30,7 +41,17 @@ impl AudioRecorder {
             .with_sample_rate(rate)
             .config();
         let channels = config.channels as usize;
-        let writer = Writer::create(path, rate, channels)?;
+        let input = input.unwrap_or(Input {
+            channel: 0,
+            stereo: true,
+        });
+        if input.channel as usize >= channels {
+            return Err(format!(
+                "the input device has {channels} channels: there's no {}",
+                input.name()
+            ));
+        }
+        let writer = Writer::create(path, rate, channels, input)?;
         let (mut tx, input) = rtrb::RingBuffer::new(rate as usize * channels * BUFFER);
         let stream = device
             .build_input_stream(
@@ -75,11 +96,13 @@ impl AudioRecorder {
     }
 }
 
-/// Writes interleaved input as a mono or stereo 32-bit float WAV: the first two channels.
+/// Writes some channels of interleaved input as a mono or stereo 32-bit float WAV.
 struct Writer {
     wav: hound::WavWriter<BufWriter<File>>,
     path: String,
     channels_in: usize,
+    /// The channels kept: from `first`, `channels_out` of them.
+    first: usize,
     channels_out: usize,
     /// Which channel of the current frame comes next.
     channel: usize,
@@ -87,12 +110,14 @@ struct Writer {
 }
 
 impl Writer {
-    fn create(path: &Path, rate: u32, channels_in: usize) -> Result<Writer, String> {
+    fn create(path: &Path, rate: u32, channels_in: usize, input: Input) -> Result<Writer, String> {
         let shown = path.display().to_string();
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
-        let channels_out = channels_in.min(2);
+        let first = (input.channel as usize).min(channels_in.saturating_sub(1));
+        let wanted = if input.stereo { 2 } else { 1 };
+        let channels_out = wanted.min(channels_in - first).max(1);
         let spec = hound::WavSpec {
             channels: channels_out as u16,
             sample_rate: rate,
@@ -104,6 +129,7 @@ impl Writer {
             wav,
             path: shown,
             channels_in,
+            first,
             channels_out,
             channel: 0,
             frames: 0,
@@ -111,7 +137,7 @@ impl Writer {
     }
 
     fn write(&mut self, s: f32) -> Result<(), String> {
-        if self.channel < self.channels_out {
+        if (self.first..self.first + self.channels_out).contains(&self.channel) {
             self.wav
                 .write_sample(s)
                 .map_err(|e| format!("{}: {e}", self.path))?;
@@ -136,20 +162,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keeps_the_first_two_of_many_input_channels() {
+    fn keeps_the_channels_asked_for() {
         let dir = std::env::temp_dir().join(format!("tempo-test-record-{}", std::process::id()));
         let path = dir.join("Audio Files/take.wav");
-        let mut w = Writer::create(&path, 48_000, 4).unwrap();
-        for frame in 0..3 {
-            for ch in 0..4 {
-                w.write((frame * 10 + ch) as f32).unwrap();
+        let read = |input: Input| {
+            let mut w = Writer::create(&path, 48_000, 4, input).unwrap();
+            for frame in 0..3 {
+                for ch in 0..4 {
+                    w.write((frame * 10 + ch) as f32).unwrap();
+                }
             }
-        }
-        assert_eq!(w.finish().unwrap(), 3);
-        let mut r = hound::WavReader::open(&path).unwrap();
-        assert_eq!(r.spec().channels, 2);
-        let samples: Vec<f32> = r.samples().map(Result::unwrap).collect();
-        assert_eq!(samples, [0.0, 1.0, 10.0, 11.0, 20.0, 21.0]);
+            assert_eq!(w.finish().unwrap(), 3);
+            let mut r = hound::WavReader::open(&path).unwrap();
+            let channels = r.spec().channels;
+            (
+                channels,
+                r.samples().map(Result::unwrap).collect::<Vec<f32>>(),
+            )
+        };
+        let stereo = |channel| Input {
+            channel,
+            stereo: true,
+        };
+        assert_eq!(read(stereo(0)), (2, vec![0.0, 1.0, 10.0, 11.0, 20.0, 21.0]));
+        assert_eq!(read(stereo(2)), (2, vec![2.0, 3.0, 12.0, 13.0, 22.0, 23.0]));
+        let mono = Input {
+            channel: 1,
+            stereo: false,
+        };
+        assert_eq!(read(mono), (1, vec![1.0, 11.0, 21.0]));
+        // Stereo from the last channel has only it.
+        assert_eq!(read(stereo(3)), (1, vec![3.0, 13.0, 23.0]));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

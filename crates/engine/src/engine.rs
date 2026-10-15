@@ -21,12 +21,12 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::{
     drums::Drums,
-    dsp::{CompParams, CompState, EqFilters, EqState},
+    dsp::{CompParams, CompState, EqFilters, EqState, SatParams, SatState},
     peaks::Peaks,
     plugin::{AUDIO_MODULE, Module, Note, Plugin, Processor},
     project::{
-        AutoPoint, Comp, Content, Eq, Instrument, PluginRef, Project, Region, comp_segments,
-        value_at,
+        AutoMode, AutoPoint, Comp, Content, Eq, Instrument, PluginRef, Project, Region, Saturator,
+        Which, comp_segments, value_at,
     },
     synth::Synth,
 };
@@ -133,6 +133,11 @@ pub struct Arrangement {
     master_strip: StripDsp,
     /// Where playback loops, in samples, while the cycle is on.
     cycle: Option<(u64, u64)>,
+    /// The lane holding the master's plugins.
+    master_lane: Option<usize>,
+    /// A beat, in quarter notes, and beats to a bar: for the metronome.
+    beat: f64,
+    beats_per_bar: u64,
 }
 
 impl Arrangement {
@@ -146,23 +151,28 @@ impl Arrangement {
             lookahead: 0,
             master_strip: StripDsp::default(),
             cycle: None,
+            master_lane: None,
+            beat: 1.0,
+            beats_per_bar: 4,
         }
     }
 }
 
-/// A channel's built-in EQ and compressor at a rate, unless absent or bypassed.
-fn strip_dsp(eq: Option<&Eq>, comp: Option<&Comp>, rate: f64) -> StripDsp {
+/// A channel's built-in EQ, compressor and saturator at a rate, unless absent or bypassed.
+fn strip_dsp(eq: Option<&Eq>, comp: Option<&Comp>, sat: Option<&Saturator>, rate: f64) -> StripDsp {
     StripDsp {
         eq: eq.filter(|e| !e.bypass).map(|e| EqFilters::new(e, rate)),
         comp: comp.filter(|c| !c.bypass).map(|c| CompParams::new(c, rate)),
+        sat: sat.filter(|s| !s.bypass).map(|s| SatParams::new(s, rate)),
     }
 }
 
-/// What a channel's built-in EQ and compressor do.
+/// What a channel's built-in EQ, compressor and saturator do.
 #[derive(Default)]
 struct StripDsp {
     eq: Option<EqFilters>,
     comp: Option<CompParams>,
+    sat: Option<SatParams>,
 }
 
 /// Their memory, kept with the lane (or the engine, for the master) through edits.
@@ -170,18 +180,24 @@ struct StripDsp {
 struct StripState {
     eq: EqState,
     comp: CompState,
+    sat: SatState,
 }
 
 impl StripState {
-    /// Runs a block through the EQ and compressor in place; returns the gain reduction, in dB.
+    /// Runs a block through the EQ, compressor and saturator in place; returns the compressor's
+    /// gain reduction, in dB.
     fn process(&mut self, dsp: &StripDsp, l: &mut [f32], r: &mut [f32]) -> f32 {
         if let Some(eq) = &dsp.eq {
             self.eq.process(eq, l, r);
         }
-        match &dsp.comp {
+        let reduction = match &dsp.comp {
             Some(c) => self.comp.process(c, l, r),
             None => 0.0,
+        };
+        if let Some(sat) = &dsp.sat {
+            self.sat.process(sat, l, r);
         }
+        reduction
     }
 }
 
@@ -321,8 +337,10 @@ struct Plan {
     /// Automation, with ticks turned to samples; empty follows the fader.
     volume: Vec<AutoPoint>,
     pans: Vec<AutoPoint>,
-    /// Aux index and level.
-    sends: Vec<(usize, f32)>,
+    /// Plugin parameters' automation, in samples, 0 to 1.
+    params: Vec<(Which, u32, Vec<AutoPoint>)>,
+    /// Aux index, level, and whether it's taken before the fader.
+    sends: Vec<(usize, f32, bool)>,
     /// Live Loops cells, in the track's order.
     cells: Vec<CellPlan>,
     /// The aux it plays into instead of the master.
@@ -334,6 +352,14 @@ struct Plan {
 }
 
 impl Plan {
+    /// Moves a plugin's automated parameters across a block, `from` to `to` (samples read).
+    fn automate(&self, which: Which, p: &mut Processor, (from, to): (u64, u64)) {
+        for (_, id, points) in self.params.iter().filter(|a| a.0 == which) {
+            let at = |s: u64| value_at(points, s as f64).unwrap_or(0.0) as f64;
+            p.automate(*id, at(from), at(to.saturating_sub(1)));
+        }
+    }
+
     /// Left and right gain at a sample.
     fn gain(&self, at: u64) -> [f32; 2] {
         let volume = value_at(&self.volume, at as f64).unwrap_or(self.volume_db);
@@ -454,13 +480,15 @@ pub fn make_lane(
 }
 
 /// Compiles what `project` plays at `rate`. Track `i` is on lane `tracks[i].0`, whose plugins
-/// make it `tracks[i].1` samples late; likewise auxes. Regions whose audio can't be read are left
-/// out, and the reasons returned, so one missing file doesn't stop the rest playing.
+/// make it `tracks[i].1` samples late; likewise auxes; the master's plugins are on lane `master`.
+/// Regions whose audio can't be read are left out, and the reasons returned, so one missing file
+/// doesn't stop the rest playing.
 pub fn compile(
     project: &Project,
     rate: f64,
     tracks: &[(usize, u32)],
     auxes: &[(usize, u32)],
+    master: Option<usize>,
     files: &mut AudioFiles,
 ) -> (Arrangement, Vec<String>) {
     let mut problems = Vec::new();
@@ -470,16 +498,32 @@ pub fn compile(
     let mut plans = Vec::new();
     for (i, (t, &(slot, _))) in project.tracks.iter().zip(tracks).enumerate() {
         let (mut clips, mut events) = (Vec::new(), Vec::new());
-        for region in &t.regions {
-            play_region(
-                project,
-                rate,
-                region,
-                files,
-                &mut events,
-                &mut clips,
-                &mut problems,
-            );
+        for (r, region) in t.regions.iter().enumerate() {
+            // A looped region plays again from each multiple of its length, the last time cut
+            // short where the loop stops.
+            let until = match region.looped {
+                true => project.loop_end((i, r)),
+                false => region.start + region.length,
+            };
+            let mut start = region.start;
+            while start < until {
+                // ponytail: a copy of the region per pass; fine for loops, not for thousands.
+                let pass = Region {
+                    start,
+                    length: region.length.min(until - start),
+                    ..region.clone()
+                };
+                play_region(
+                    project,
+                    rate,
+                    &pass,
+                    files,
+                    &mut events,
+                    &mut clips,
+                    &mut problems,
+                );
+                start += region.length.max(1);
+            }
         }
         // A loop cell plays its region from 0, every note ending by the loop's end.
         let cells = t
@@ -525,6 +569,8 @@ pub fn compile(
                 })
                 .collect()
         };
+        // With its automation off, a track follows its faders and knobs.
+        let auto = (t.automation.mode != AutoMode::Off).then_some(&t.automation);
         plans.push(Plan {
             slot,
             events,
@@ -536,15 +582,22 @@ pub fn compile(
             },
             volume_db: t.volume_db,
             pan: t.pan,
-            volume: in_samples(&t.automation.volume),
-            pans: in_samples(&t.automation.pan),
+            volume: auto.map_or_else(Vec::new, |a| in_samples(&a.volume)),
+            pans: auto.map_or_else(Vec::new, |a| in_samples(&a.pan)),
+            params: auto
+                .map(|a| &a.plugins[..])
+                .unwrap_or_default()
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| (a.plugin, a.param, in_samples(&a.points)))
+                .collect(),
             cells,
             sends: t
                 .sends
                 .iter()
                 .filter_map(|s| {
                     let aux = project.auxes.iter().position(|a| a.bus == s.bus)?;
-                    Some((aux, db(s.level_db)))
+                    Some((aux, db(s.level_db), s.pre))
                 })
                 .collect(),
             delay: pdc.tracks[i],
@@ -553,7 +606,7 @@ pub fn compile(
                 .and_then(|bus| project.auxes.iter().position(|a| a.bus == bus)),
             // Through an aux, the aux's own compensation lines it up.
             direct: if t.output.is_some() { 0 } else { pdc.direct },
-            dsp: strip_dsp(t.eq.as_ref(), t.comp.as_ref(), rate),
+            dsp: strip_dsp(t.eq.as_ref(), t.comp.as_ref(), t.sat.as_ref(), rate),
         });
     }
     let auxes = project
@@ -566,7 +619,7 @@ pub fn compile(
             AuxPlan {
                 slot,
                 gain: balance(g, a.pan),
-                dsp: strip_dsp(a.eq.as_ref(), a.comp.as_ref(), rate),
+                dsp: strip_dsp(a.eq.as_ref(), a.comp.as_ref(), a.sat.as_ref(), rate),
                 delay,
             }
         })
@@ -583,12 +636,16 @@ pub fn compile(
         master_strip: strip_dsp(
             project.master_eq.as_ref(),
             project.master_comp.as_ref(),
+            project.master_sat.as_ref(),
             rate,
         ),
         cycle: project
             .cycle
             .filter(|c| !c.off && c.end > c.start)
             .map(|c| (project.samples(c.start, rate), project.samples(c.end, rate))),
+        master_lane: master,
+        beat: project.beat() as f64 / crate::project::PPQ as f64,
+        beats_per_bar: project.beats_per_bar(),
     };
     (arrangement, problems)
 }
@@ -611,6 +668,7 @@ fn play_region(
             let notes = content.notes((to as i64 - at).max(0) as u64).unwrap();
             for n in notes
                 .iter()
+                .map(|n| region.played(n))
                 .filter(|n| (from as i64..to as i64).contains(&(at + n.start)))
             {
                 let on = region.start + (at + n.start) as u64;
@@ -817,6 +875,8 @@ pub struct Engine {
     master_strip: StripState,
     /// The metronome's click sounding: samples left, and its pitch.
     click: (u32, f32),
+    /// Where the next block reads from if playback carries on; reading anywhere else is a jump.
+    next_read: u64,
 }
 
 impl Engine {
@@ -834,6 +894,7 @@ impl Engine {
             pending_len: 0,
             master_strip: StripState::default(),
             click: (0, 0.0),
+            next_read: 0,
         }
     }
 
@@ -861,8 +922,10 @@ impl Engine {
             .iter()
             .map(|a| add(None, &a.inserts))
             .collect::<Result<Vec<_>, _>>()?;
+        let master = add(None, &project.master_inserts)?.0;
         let mut files = AudioFiles::new(dir, rate);
-        let (arrangement, problems) = compile(project, rate, &tracks, &auxes, &mut files);
+        let (arrangement, problems) =
+            compile(project, rate, &tracks, &auxes, Some(master), &mut files);
         if let Some(p) = problems.into_iter().next() {
             return Err(p);
         }
@@ -981,7 +1044,8 @@ impl Engine {
     pub fn process(&mut self, out: [&mut [f32]; 2], frames: usize) {
         let began = Instant::now();
         let [l, r] = out;
-        // ponytail: what plugins' lookahead read past the cycle's end is dropped, not wrapped.
+        // What's heard wraps here; what's read, ahead of it by the plugins' latency, wraps in
+        // `block`.
         let wrap = match self.arrangement.cycle {
             Some((start, end)) if self.playing && self.position < end => {
                 let left = (end - self.position) as usize;
@@ -993,7 +1057,6 @@ impl Engine {
             Some((left, start)) => {
                 self.block([&mut l[..left], &mut r[..left]], left);
                 self.position = start;
-                self.release = true;
                 self.block([&mut l[left..], &mut r[left..]], frames - left);
             }
             None => self.block([l, r], frames),
@@ -1041,12 +1104,30 @@ impl Engine {
         // delay compensation then makes up, so it's heard on time.
         // ponytail: the first `lookahead` samples after starting play are skipped.
         let heard = self.position;
-        let (from, to) = (
-            heard + self.arrangement.lookahead,
-            heard + self.arrangement.lookahead + frames as u64,
-        );
-        let release = std::mem::take(&mut self.release);
         let (playing, tempo) = (self.playing, self.arrangement.tempo);
+        // Inside the cycle, reading ahead wraps round to its start, and a block whose reading
+        // crosses its end reads the rest from the start.
+        let cycle = self
+            .arrangement
+            .cycle
+            .filter(|&(start, end)| playing && heard < end && end > start);
+        let mut from = heard + self.arrangement.lookahead;
+        if let Some((start, end)) = cycle
+            && from >= end
+        {
+            from = start + (from - end) % (end - start);
+        }
+        let to = from + frames as u64;
+        let split = cycle
+            .filter(|&(_, end)| from < end && to > end)
+            .map(|(start, end)| ((end - from) as usize, start));
+        // Reading somewhere new (a locate, or the cycle going round) lets held notes go.
+        let jumped = playing && from != self.next_read;
+        self.next_read = match split {
+            Some((left, start)) => start + (frames - left) as u64,
+            None => to,
+        };
+        let release = std::mem::take(&mut self.release) || jumped;
         let shared = self.link.as_ref().map(|l| &*l.shared);
         let [l, r] = &mut self.scratch;
         let (l, r) = (&mut l[..frames], &mut r[..frames]);
@@ -1125,17 +1206,29 @@ impl Engine {
                         }
                     }
                     None => {
-                        let held = &mut lane.held;
-                        gather(
-                            &plan.events,
-                            &plan.clips,
-                            (from, to),
-                            0,
-                            &mut notes,
-                            &mut n,
-                            held,
-                            into,
-                        );
+                        let (e, c, held) = (&plan.events, &plan.clips, &mut lane.held);
+                        match split {
+                            Some((left, start)) => {
+                                let end = (from, from + left as u64);
+                                gather(e, c, end, 0, &mut notes, &mut n, held, into);
+                                // Round to the cycle's start: what's held lets go there.
+                                for (pitch, h) in held.iter_mut().enumerate().filter(|(_, h)| **h) {
+                                    *h = false;
+                                    if n < BLOCK_NOTES {
+                                        notes[n] = Note {
+                                            offset: left as u32,
+                                            pitch: pitch as u8,
+                                            velocity: 0.0,
+                                        };
+                                        n += 1;
+                                    }
+                                }
+                                let into = [&mut *l, &mut *r];
+                                let rest = (start, start + (frames - left) as u64);
+                                gather(e, c, rest, left, &mut notes, &mut n, held, into);
+                            }
+                            None => gather(e, c, (from, to), 0, &mut notes, &mut n, held, into),
+                        }
                     }
                 }
             }
@@ -1161,16 +1254,27 @@ impl Engine {
                 Source::Synth(s) => s.process([&mut *l, &mut *r], frames, notes),
                 Source::Drums(d) => d.process([&mut *l, &mut *r], frames, notes),
                 Source::Plugin(p) => {
+                    plan.automate(Which::Instrument, p, (from, to));
                     p.set_transport(playing, from, tempo);
                     p.process([&mut *l, &mut *r], frames, notes);
                 }
             }
             let reduction = lane.strip.process(&plan.dsp, l, r);
-            for p in &mut lane.inserts {
+            for (i, p) in lane.inserts.iter_mut().enumerate() {
+                plan.automate(Which::Insert(i), p, (from, to));
                 p.set_transport(playing, from, tempo);
                 p.process([&mut *l, &mut *r], frames, &[]);
             }
             lane.pre.process(l, r, plan.delay);
+            // Pre-fader sends: muting still silences them.
+            for &(aux, level, _) in plan.sends.iter().filter(|s| s.2) {
+                let bus = &mut arrangement.buses[aux];
+                let level = level * plan.audible;
+                for i in 0..frames {
+                    bus[0][i] += l[i] * level;
+                    bus[1][i] += r[i] * level;
+                }
+            }
             // Gain ramps across the block, so automation moves smoothly.
             let later = if playing {
                 heard + frames as u64
@@ -1190,7 +1294,7 @@ impl Engine {
                 peak = [peak[0].max(l[i].abs()), peak[1].max(r[i].abs())];
             }
             // Post-fader sends.
-            for &(aux, level) in &plan.sends {
+            for &(aux, level, _) in plan.sends.iter().filter(|s| !s.2) {
                 let bus = &mut arrangement.buses[aux];
                 for i in 0..frames {
                     bus[0][i] += l[i] * level;
@@ -1243,6 +1347,15 @@ impl Engine {
             &mut out_l[..frames],
             &mut out_r[..frames],
         );
+        if let Some(lane) = arrangement
+            .master_lane
+            .and_then(|s| self.lanes[s].as_deref_mut())
+        {
+            for p in &mut lane.inserts {
+                p.set_transport(playing, from, tempo);
+                p.process([&mut out_l[..frames], &mut out_r[..frames]], frames, &[]);
+            }
+        }
         let mut peak = [0f32; 2];
         for (side, buf) in [&mut *out_l, &mut *out_r].into_iter().enumerate() {
             for s in buf[..frames].iter_mut() {
@@ -1255,7 +1368,10 @@ impl Engine {
             click(
                 &mut self.click,
                 heard,
-                self.rate * 60.0 / tempo,
+                (
+                    self.rate * 60.0 / tempo * arrangement.beat,
+                    arrangement.beats_per_bar,
+                ),
                 self.rate,
                 [&mut out_l[..frames], &mut out_r[..frames]],
             );
@@ -1360,14 +1476,20 @@ impl Engine {
 
 /// The metronome: a short blip on every beat from `heard`, higher on the bar, added to `out`.
 /// `click` is the blip still sounding: samples left and its pitch.
-fn click(click: &mut (u32, f32), heard: u64, beat: f64, rate: f64, [l, r]: [&mut [f32]; 2]) {
+fn click(
+    click: &mut (u32, f32),
+    heard: u64,
+    (beat, per_bar): (f64, u64),
+    rate: f64,
+    [l, r]: [&mut [f32]; 2],
+) {
     const LENGTH: f64 = 0.03;
     let length = (LENGTH * rate) as u32;
     let mut next = (heard as f64 / beat).ceil();
     for i in 0..l.len() {
         let t = heard + i as u64;
         if t as f64 >= next * beat - 0.5 {
-            let bar = (next as u64).is_multiple_of(crate::project::BEATS_PER_BAR);
+            let bar = (next as u64).is_multiple_of(per_bar);
             *click = (length, if bar { 1_760.0 } else { 1_320.0 });
             next += 1.0;
         }
@@ -1447,6 +1569,7 @@ mod tests {
                 start: 0,
                 length,
                 content: Content::Midi { notes },
+                ..Default::default()
             }],
             ..Default::default()
         }
@@ -1574,6 +1697,7 @@ mod tests {
         p.tracks[0].sends = vec![AuxSend {
             bus: 1,
             level_db: 0.0,
+            pre: false,
         }];
         p.add_aux();
         let [l, _] = render(&p, Path::new("."), BEAT);
@@ -1624,7 +1748,7 @@ mod tests {
             lanes.push(Some(Box::new(lane)));
         }
         let mut files = AudioFiles::new(Path::new("."), RATE);
-        let (arrangement, _) = compile(&p, RATE, &[(0, 100), (1, 0)], &[], &mut files);
+        let (arrangement, _) = compile(&p, RATE, &[(0, 100), (1, 0)], &[], None, &mut files);
         let mut engine = Engine::new(RATE, arrangement, lanes);
         engine.play();
         let [l, r] = run(&mut engine, BEAT * 2);
@@ -1680,6 +1804,7 @@ mod tests {
                 offset: 100,
                 stretch: 1.0,
             },
+            ..Default::default()
         };
         let track = Track {
             name: "audio".into(),
@@ -1705,6 +1830,7 @@ mod tests {
                 offset: 0,
                 stretch: 1.0,
             },
+            ..Default::default()
         };
         let audio = Track {
             name: "audio".into(),
@@ -1714,7 +1840,7 @@ mod tests {
         let synth = synth_track("a", vec![note(0, PPQ, 69)], PPQ);
         let p = project(vec![audio, synth]);
         let mut files = AudioFiles::new(Path::new("."), RATE);
-        let (arrangement, problems) = compile(&p, RATE, &[(0, 0), (1, 0)], &[], &mut files);
+        let (arrangement, problems) = compile(&p, RATE, &[(0, 0), (1, 0)], &[], None, &mut files);
         assert_eq!(problems.len(), 1);
         assert!(arrangement.plans[0].clips.is_empty());
         assert_eq!(arrangement.plans[1].events.len(), 2);
@@ -1736,6 +1862,7 @@ mod tests {
                 step: PPQ / 4,
                 rows,
             },
+            ..Default::default()
         };
         let track = Track {
             name: "d".into(),
@@ -1749,6 +1876,7 @@ mod tests {
             RATE,
             &[(0, 0)],
             &[],
+            None,
             &mut files,
         );
         let ons: Vec<u64> = arrangement.plans[0]
@@ -1783,6 +1911,7 @@ mod tests {
                 takes: vec![take(57), take(69)],
                 comp,
             },
+            ..Default::default()
         };
         let track = Track {
             name: "t".into(),
@@ -1791,7 +1920,14 @@ mod tests {
             ..Default::default()
         };
         let mut files = AudioFiles::new(Path::new("."), RATE);
-        let (arrangement, _) = compile(&project(vec![track]), RATE, &[(0, 0)], &[], &mut files);
+        let (arrangement, _) = compile(
+            &project(vec![track]),
+            RATE,
+            &[(0, 0)],
+            &[],
+            None,
+            &mut files,
+        );
         let ons: Vec<(u64, u8)> = arrangement.plans[0]
             .events
             .iter()
@@ -1826,6 +1962,7 @@ mod tests {
             start: 0,
             length: PPQ * 2,
             content,
+            ..Default::default()
         };
         let mut p = project(vec![Track {
             name: "a".into(),
@@ -1861,6 +1998,7 @@ mod tests {
             start: 0,
             length: PPQ,
             content: Content::Midi { notes },
+            ..Default::default()
         };
         t.cells.push(Cell { scene: 0, region });
         let (mut engine, _) = Engine::load(&project(vec![t]), Path::new("."), RATE).unwrap();
@@ -1922,7 +2060,7 @@ mod tests {
         )
         .unwrap();
         let mut files = AudioFiles::new(Path::new("."), RATE);
-        let (arrangement, _) = compile(&p, RATE, &[(7, 0)], &[], &mut files);
+        let (arrangement, _) = compile(&p, RATE, &[(7, 0)], &[], None, &mut files);
         for m in [
             Msg::Insert(7, Box::new(lane)),
             Msg::Arrange(Box::new(arrangement)),
@@ -2060,5 +2198,162 @@ mod tests {
         assert_eq!(peak(&l[..at - 1]), 0.0);
         assert!(peak(&l[at..at + 500]) > 0.1);
         assert!(shared.take_load() > 0.0);
+    }
+
+    fn note_ons(p: &Project) -> Vec<(u64, u8, u8)> {
+        let mut files = AudioFiles::new(Path::new("."), RATE);
+        let (a, _) = compile(p, RATE, &[(0, 0)], &[], None, &mut files);
+        a.plans[0]
+            .events
+            .iter()
+            .filter(|e| e.velocity > 0.0)
+            .map(|e| (e.at, e.pitch, (e.velocity * 127.0).round() as u8))
+            .collect()
+    }
+
+    #[test]
+    fn a_looped_region_plays_until_the_next_region() {
+        let mut t = synth_track("a", vec![note(0, 240, 60)], PPQ);
+        t.regions[0].looped = true;
+        t.regions.push(Region {
+            start: PPQ * 3,
+            length: PPQ,
+            content: Content::Midi {
+                notes: vec![note(0, 240, 72)],
+            },
+            ..Default::default()
+        });
+        let b = BEAT as u64;
+        assert_eq!(
+            note_ons(&project(vec![t])),
+            [
+                (0, 60, 127),
+                (b, 60, 127),
+                (2 * b, 60, 127),
+                (3 * b, 72, 127)
+            ]
+        );
+    }
+
+    #[test]
+    fn region_playback_settings_change_what_plays_not_the_notes() {
+        let mut t = synth_track("a", vec![note(100, 240, 60), note(350, 240, 64)], PPQ);
+        let r = &mut t.regions[0];
+        r.transpose = 12;
+        r.velocity = -27;
+        r.quantize = Some(240);
+        let p = project(vec![t]);
+        let sixteenth = BEAT as u64 / 4;
+        assert_eq!(note_ons(&p), [(0, 72, 100), (sixteenth, 76, 100)]);
+        let Content::Midi { notes } = &p.tracks[0].regions[0].content else {
+            unreachable!()
+        };
+        assert_eq!((notes[0].start, notes[0].pitch), (100, 60));
+    }
+
+    #[test]
+    fn pre_fader_sends_ignore_the_fader_but_not_mute() {
+        let track = synth_track("a", vec![note(0, PPQ, 69)], PPQ);
+        let mut p = project(vec![track]);
+        p.tracks[0].sends = vec![AuxSend {
+            bus: 1,
+            level_db: 0.0,
+            pre: true,
+        }];
+        p.add_aux();
+        p.tracks[0].volume_db = -144.0;
+        assert!(peak(&render(&p, Path::new("."), BEAT)[0]) > 0.1);
+        p.tracks[0].mute = true;
+        assert!(peak(&render(&p, Path::new("."), BEAT)[0]) < 1e-6);
+    }
+
+    #[test]
+    fn the_cycle_wraps_what_plugins_read_ahead() {
+        // A track 64 samples late (as a plugin's latency would make it): the engine reads 64
+        // ahead, so each pass of the cycle must read its start before the last one's heard end.
+        let mut p = project(vec![synth_track("a", vec![note(0, 240, 69)], PPQ)]);
+        p.cycle = Some(crate::project::Cycle {
+            start: 0,
+            end: PPQ,
+            off: false,
+        });
+        let mut files = AudioFiles::new(Path::new("."), RATE);
+        let (arrangement, _) = compile(&p, RATE, &[(0, 64)], &[], None, &mut files);
+        let lane = make_lane(
+            Some(&Instrument::Synth),
+            &[],
+            RATE,
+            &mut Modules::new(),
+            Path::new("."),
+        )
+        .unwrap()
+        .0;
+        let mut engine = Engine::new(RATE, arrangement, vec![Some(Box::new(lane))]);
+        engine.play();
+        let [l, _] = run(&mut engine, 2 * BEAT);
+        // The note sounds again as the second pass begins, and not long before.
+        assert!(peak(&l[BEAT - 64..BEAT + 2000]) > 0.1);
+        assert!(peak(&l[BEAT / 2..BEAT - 100]) < 1e-3);
+    }
+
+    #[test]
+    fn the_master_saturator_rounds_off_the_mix() {
+        let t = synth_track("a", vec![note(0, PPQ * 2, 69)], PPQ * 2);
+        let p = project(vec![t]);
+        let dry = peak(&render(&p, Path::new("."), BEAT)[0][BEAT / 2..]);
+        let mut hot = p.clone();
+        hot.master_sat = Some(Saturator {
+            drive_db: 24.0,
+            ..Saturator::default()
+        });
+        let wet = peak(&render(&hot, Path::new("."), BEAT)[0][BEAT / 2..]);
+        assert!(wet < dry * 0.6, "{dry} {wet}");
+    }
+
+    /// With a real instrument, which CI doesn't have:
+    /// `TEMPO_TEST_VST3="/path/Some Synth.vst3" cargo test -p tempo-engine -- --ignored`
+    #[test]
+    #[ignore]
+    fn a_plugin_parameter_follows_its_automation() {
+        let path = std::env::var("TEMPO_TEST_VST3").expect("set TEMPO_TEST_VST3");
+        let class = crate::scan::inspect(Path::new(&path))
+            .unwrap()
+            .remove(0)
+            .class;
+        let plugin = PluginRef {
+            path: path.into(),
+            class,
+            ..Default::default()
+        };
+        let mut t = synth_track("s", vec![note(0, PPQ * 8, 57)], PPQ * 8);
+        t.instrument = Some(Instrument::Vst3(plugin));
+        let p = project(vec![t]);
+        // Its loudest-sounding level parameter, turned right down by automation.
+        let (_engine, lanes) = Engine::load(&p, Path::new("."), RATE).unwrap();
+        let params = lanes[0].instrument.as_ref().unwrap().params();
+        let volume = params
+            .iter()
+            .find(|q| q.name.to_lowercase().contains("volume"))
+            .unwrap_or_else(|| panic!("no volume among {} params", params.len()));
+        let loud = peak(&render(&p, Path::new("."), BEAT * 2)[0][BEAT..]);
+        let mut quiet = p.clone();
+        quiet.tracks[0]
+            .automation
+            .plugins
+            .push(crate::project::PluginAuto {
+                plugin: Which::Instrument,
+                param: volume.id,
+                name: volume.name.clone(),
+                points: vec![AutoPoint {
+                    tick: 0,
+                    value: 0.0,
+                }],
+            });
+        let soft = peak(&render(&quiet, Path::new("."), BEAT * 2)[0][BEAT..]);
+        assert!(loud > 0.01 && soft < loud / 4.0, "{loud} {soft}");
+        // Off, the automation is ignored.
+        quiet.tracks[0].automation.mode = AutoMode::Off;
+        let off = peak(&render(&quiet, Path::new("."), BEAT * 2)[0][BEAT..]);
+        assert!((off - loud).abs() < loud * 0.1, "{loud} {off}");
     }
 }

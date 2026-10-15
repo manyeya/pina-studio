@@ -10,7 +10,7 @@ use gpui::{
 };
 use tempo_engine::{
     music::NoteEdit,
-    project::{At, BEATS_PER_BAR, Content, Note, PPQ},
+    project::{At, Content, Note, PPQ},
 };
 
 use crate::{
@@ -182,17 +182,16 @@ impl Workspace {
                             .child(text),
                     )
             };
+        // The tools work on a MIDI region's notes; without one they're greyed out.
         let tool = |label: &'static str, edit: NoteEdit, cx: &mut Context<Self>| {
-            button(label, false)
-                .debug_selector(move || format!("roll-{label}"))
-                .on_mouse_down(
+            let b = button(label, false).debug_selector(move || format!("roll-{label}"));
+            match at {
+                Some(at) => b.on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        if let Some(at) = at {
-                            ws.edit_notes(at, edit, cx);
-                        }
-                    }),
-                )
+                    cx.listener(move |ws, _, _, cx| ws.edit_notes(at, edit, cx)),
+                ),
+                None => b.opacity(0.4).cursor_default(),
+            }
         };
         div()
             .flex_1()
@@ -217,6 +216,7 @@ impl Workspace {
                         tray()
                             .p(px(2.))
                             .rounded(px(7.))
+                            .child(grid_seg("1/4", PPQ, g == PPQ, cx))
                             .child(grid_seg("1/8", PPQ / 2, g == PPQ / 2, cx))
                             .child(grid_seg("1/16", PPQ / 4, g == PPQ / 4, cx))
                             .child(grid_seg("1/32", PPQ / 8, g == PPQ / 8, cx)),
@@ -259,6 +259,7 @@ impl Workspace {
 
     pub fn roll_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let (ppt, sx, sy) = (self.px_per_tick(), self.scroll_x, self.roll_scroll_y);
+        let (beat_ticks, bar_ticks) = (self.session.project.beat(), self.session.project.bar());
         let at = self.roll_region();
         let color = at.map_or(ACCENT, |at| self.color(at.0));
         let project = &self.session.project;
@@ -323,15 +324,15 @@ impl Workspace {
                 }
                 let sixteenth = ppt * (PPQ / 4) as f32;
                 let fine = sixteenth >= 6.0;
-                let step = if fine { PPQ / 4 } else { PPQ };
+                let step = if fine { PPQ / 4 } else { beat_ticks };
                 let step_px = ppt * step as f32;
                 let first = (sx / step_px) as u64;
                 let last = ((sx + w) / step_px) as u64 + 1;
                 for k in first..=last {
                     let t = k * step;
-                    let color = if t % (PPQ * BEATS_PER_BAR) == 0 {
+                    let color = if t % bar_ticks == 0 {
                         0x34343d
-                    } else if t % PPQ == 0 {
+                    } else if t % beat_ticks == 0 {
                         0x24242b
                     } else {
                         0x17171c
@@ -624,7 +625,7 @@ impl Workspace {
                     .on_scroll_wheel(cx.listener(|ws, e, _, cx| ws.roll_scroll(e, cx))),
             );
 
-        let bar_px = ppt * (PPQ * BEATS_PER_BAR) as f32;
+        let bar_px = ppt * bar_ticks as f32;
         let width = f32::from(self.roll_bounds.get().size.width).max(400.0);
         let every = (40.0 / bar_px).ceil().max(1.0) as u64;
         let bars = ((sx / bar_px) as u64..=((sx + width) / bar_px) as u64 + 1)
@@ -693,7 +694,20 @@ impl Workspace {
                             .bg(rgb(WELL))
                             .border_b_1()
                             .border_color(rgb(LINE))
-                            .children(bars),
+                            .cursor_pointer()
+                            .children(bars)
+                            .debug_selector(|| "roll-ruler".into())
+                            // Click the ruler to move the playhead there.
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                                    let x = f32::from(e.position.x)
+                                        - f32::from(ws.roll_bounds.get().origin.x);
+                                    let tick = ((x + ws.scroll_x) / ws.px_per_tick()).max(0.0);
+                                    let tick = ws.snap(tick as f64);
+                                    ws.locate_tick(tick, cx);
+                                }),
+                            ),
                     )
                     .child(
                         div()
@@ -793,6 +807,7 @@ impl Workspace {
                             ws.menu = Some(Menu {
                                 at: e.position,
                                 items,
+                                ..Default::default()
                             });
                             cx.notify();
                         }),
@@ -807,6 +822,7 @@ impl Workspace {
                     false,
                 )
                 .debug_selector(|| "roll-quantize".into())
+                .when(at.is_none(), |d| d.opacity(0.4).cursor_default())
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |ws, _, _, cx| {

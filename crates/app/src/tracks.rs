@@ -11,7 +11,7 @@ use gpui::{
 use tempo_engine::{
     peaks::Peaks,
     project::{
-        At, AutoPoint, BEATS_PER_BAR, Content, Instrument, PPQ, Param, Region, comp_segments,
+        At, AutoMode, AutoPoint, Content, Instrument, PPQ, Param, Region, Which, comp_segments,
     },
 };
 
@@ -19,18 +19,19 @@ use crate::{
     menu::{MARKER_NAMES, Menu, MenuAction},
     strip,
     theme::*,
-    workspace::{Bottom, Drag, Edge, Snap, Tool, Workspace},
+    workspace::{Bottom, Drag, Edge, Name, Snap, Tool, Workspace},
 };
 
 /// Space kept free above and below an automation line.
 const AUTO_PAD: f32 = 6.0;
 
 /// Where a parameter value sits in an automation lane, from its top: volume on the fader's
-/// scale, pan with left at the top.
+/// scale, pan with left at the top, a plugin parameter with 1 at the top.
 pub fn auto_to_y(param: Param, value: f32) -> f32 {
     let t = match param {
         Param::Volume => 1.0 - strip::fader_pos(value),
         Param::Pan => (value.clamp(-1.0, 1.0) + 1.0) / 2.0,
+        Param::Plugin(..) => 1.0 - value.clamp(0.0, 1.0),
     };
     AUTO_PAD + t * (AUTO_H - 2.0 * AUTO_PAD)
 }
@@ -40,6 +41,17 @@ pub fn auto_from_y(param: Param, y: f32) -> f32 {
     match param {
         Param::Volume => strip::fader_db(1.0 - t),
         Param::Pan => t * 2.0 - 1.0,
+        Param::Plugin(..) => 1.0 - t,
+    }
+}
+
+/// How each automation mode shows: Read green, Touch amber, Latch violet, Off grey.
+pub fn mode_color(mode: AutoMode) -> u32 {
+    match mode {
+        AutoMode::Off => TEXT_3,
+        AutoMode::Read => METER_LOW,
+        AutoMode::Touch => AMBER,
+        AutoMode::Latch => VIOLET,
     }
 }
 
@@ -75,6 +87,7 @@ fn region_name(track: &str, region: &Region) -> String {
         Content::Audio { file, .. } => file
             .file_stem()
             .map_or(track.to_string(), |s| s.to_string_lossy().into_owned()),
+        _ if !region.name.is_empty() => region.name.clone(),
         Content::Pattern { .. } => format!("{track} · Pattern"),
         Content::Midi { .. } => track.to_string(),
     }
@@ -222,6 +235,7 @@ impl Workspace {
                             ws.menu = Some(Menu {
                                 at: e.position,
                                 items,
+                                ..Default::default()
                             });
                             cx.notify();
                         }),
@@ -256,6 +270,7 @@ impl Workspace {
                             ws.menu = Some(Menu {
                                 at: e.position,
                                 items,
+                                ..Default::default()
                             });
                             cx.notify();
                         }),
@@ -268,7 +283,7 @@ impl Workspace {
         let (ppt, sx) = (self.px_per_tick(), self.scroll_x);
         let markers = &self.session.project.markers;
         let playhead = self.playhead();
-        let bar = PPQ * BEATS_PER_BAR;
+        let bar = self.session.project.bar();
         let chips: Vec<Div> = markers
             .iter()
             .enumerate()
@@ -296,12 +311,20 @@ impl Workspace {
                     .whitespace_nowrap()
                     .overflow_hidden()
                     .cursor_grab()
-                    .child(m.name.clone())
+                    .child(match self.name_field(Name::Marker(i)) {
+                        Some(field) => div().w_full().child(field),
+                        None => div().child(m.name.clone()),
+                    })
                     .debug_selector(move || format!("marker-{i}"))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                        cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
+                            // Double-click a marker to rename it.
+                            if e.click_count == 2 {
+                                ws.start_naming(Name::Marker(i), window, cx);
+                                return;
+                            }
                             let x = f32::from(e.position.x);
                             ws.begin_drag(
                                 Drag::Marker {
@@ -318,19 +341,19 @@ impl Workspace {
                         MouseButton::Right,
                         cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            let mut items: Vec<(String, MenuAction)> = MARKER_NAMES
-                                .iter()
-                                .map(|n| {
-                                    (
-                                        format!("Call it {n}"),
-                                        MenuAction::NameMarker(i, n.to_string()),
-                                    )
-                                })
-                                .collect();
+                            let mut items =
+                                vec![("Rename…".to_string(), MenuAction::Rename(Name::Marker(i)))];
+                            items.extend(MARKER_NAMES.iter().map(|n| {
+                                (
+                                    format!("Call it {n}"),
+                                    MenuAction::NameMarker(i, n.to_string()),
+                                )
+                            }));
                             items.push(("Delete Marker".into(), MenuAction::DeleteMarker(i)));
                             ws.menu = Some(Menu {
                                 at: e.position,
                                 items,
+                                ..Default::default()
                             });
                             cx.notify();
                         }),
@@ -361,17 +384,22 @@ impl Workspace {
             .debug_selector(|| "markers".into())
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                cx.listener(|ws, e: &MouseDownEvent, window, cx| {
                     if e.click_count != 2 {
                         return;
                     }
-                    let bar = (PPQ * BEATS_PER_BAR) as f64;
+                    let bar = ws.session.project.bar() as f64;
                     let tick = ((ws.tick_at(f32::from(e.position.x)) / bar).floor() * bar) as u64;
                     let n = ws.session.project.markers.len();
                     let name = MARKER_NAMES
                         .get(n)
                         .map_or(format!("Marker {}", n + 1), |s| s.to_string());
                     ws.choose(MenuAction::AddMarker(tick, name), cx);
+                    // Then name it.
+                    let markers = &ws.session.project.markers;
+                    if let Some(i) = markers.iter().rposition(|m| m.tick == tick) {
+                        ws.start_naming(Name::Marker(i), window, cx);
+                    }
                 }),
             )
             .on_scroll_wheel(self.on_scroll(cx))
@@ -379,7 +407,11 @@ impl Workspace {
 
     fn ruler(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let (ppt, scroll) = (self.px_per_tick(), self.scroll_x);
-        let bar_px = ppt * (PPQ * BEATS_PER_BAR) as f32;
+        let (beat, per_bar) = (
+            self.session.project.beat(),
+            self.session.project.beats_per_bar(),
+        );
+        let bar_px = ppt * (beat * per_bar) as f32;
         let width = f32::from(self.lanes_bounds.get().size.width).max(2000.0);
         // Label every bar, or fewer when they'd crowd.
         let every = (40.0 / bar_px).ceil().max(1.0) as u64;
@@ -425,11 +457,11 @@ impl Workspace {
                 canvas(
                     |_, _, _| {},
                     move |b, _, window, _| {
-                        let beat_px = ppt * PPQ as f32;
+                        let beat_px = ppt * beat as f32;
                         let first = (scroll / beat_px) as u64;
                         let last = ((scroll + f32::from(b.size.width)) / beat_px) as u64 + 1;
                         for beat in first..=last {
-                            let bar = beat % BEATS_PER_BAR == 0;
+                            let bar = beat % per_bar == 0;
                             if !bar && beat_px < 8.0 {
                                 continue;
                             }
@@ -488,6 +520,7 @@ impl Workspace {
     }
 
     fn headers(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let armed = self.armed();
         let tracks = &self.session.project.tracks;
         let mut rows: Vec<Div> = Vec::new();
         for (i, t) in tracks.iter().enumerate() {
@@ -559,16 +592,29 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap(px(2.))
-                            .child(
-                                div()
+                            .child(match self.name_field(Name::Track(i)) {
+                                Some(field) => div().child(field),
+                                None => div()
                                     .text_size(px(13.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .line_height(px(16.))
                                     .whitespace_nowrap()
                                     .overflow_hidden()
                                     .text_color(rgb(if selected { 0xffffff } else { 0xe6e6ea }))
-                                    .child(t.name.clone()),
-                            )
+                                    .child(t.name.clone())
+                                    .debug_selector(move || format!("track-name-{i}"))
+                                    // Double-click the name to rename the track.
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                                            if e.click_count == 2 {
+                                                cx.stop_propagation();
+                                                ws.select_track(i);
+                                                ws.start_naming(Name::Track(i), window, cx);
+                                            }
+                                        }),
+                                    ),
+                            })
                             .child(
                                 div()
                                     .flex()
@@ -614,13 +660,13 @@ impl Workspace {
                                     ),
                             )
                             .child(
-                                toggle("R", selected, RECORD, 0xffffff, 20.)
+                                toggle("R", armed == Some(i), RECORD, 0xffffff, 20.)
                                     .debug_selector(move || format!("arm-{i}"))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |ws, _, _, cx| {
                                             cx.stop_propagation();
-                                            ws.select_track(i);
+                                            ws.toggle_arm(i);
                                             cx.notify();
                                         }),
                                     ),
@@ -643,9 +689,17 @@ impl Workspace {
                     ),
             );
             if self.show_automation {
-                let id = t.id;
-                let param = self.params.get(&id).copied().unwrap_or_default();
-                let points = t.automation.points(param).len();
+                let param = self.lane_param(i);
+                let mode = t.automation.mode;
+                let (label, plugin) = match param {
+                    Param::Volume => ("Volume".to_string(), None),
+                    Param::Pan => ("Pan".to_string(), None),
+                    // The instrument's is plain (the header names it); an insert's says whose.
+                    Param::Plugin(Which::Instrument, _) => (self.param_name(i, param), None),
+                    Param::Plugin(which, _) => {
+                        (self.param_name(i, param), Some(self.plugin_name(i, which)))
+                    }
+                };
                 rows.push(
                     div()
                         .absolute()
@@ -656,41 +710,62 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .pl(px(52.))
+                        .pl(px(12.))
                         .pr(px(10.))
                         .bg(rgb(0x16161b))
                         .border_b_1()
                         .border_color(rgb(LINE_SOFT))
                         .child(
-                            dropdown(
-                                if param == Param::Volume {
-                                    "Volume"
-                                } else {
-                                    "Pan"
-                                },
-                                24.,
-                            )
-                            .debug_selector(move || format!("auto-param-{i}"))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |ws, _, _, cx| {
-                                    cx.stop_propagation();
-                                    let p = ws.params.entry(id).or_default();
-                                    *p = if *p == Param::Volume {
-                                        Param::Pan
-                                    } else {
-                                        Param::Volume
-                                    };
-                                    cx.notify();
-                                }),
-                            ),
+                            dropdown(label, 24.)
+                                .min_w(px(0.))
+                                .max_w(px(160.))
+                                .flex_shrink_1()
+                                .overflow_hidden()
+                                .debug_selector(move || format!("auto-param-{i}"))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        ws.menu = Some(Menu::search(e.position, ws.auto_params(i)));
+                                        cx.notify();
+                                    }),
+                                ),
                         )
+                        .children(plugin.map(|name| {
+                            div()
+                                .min_w(px(0.))
+                                .flex_shrink_1()
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .text_size(px(10.5))
+                                .text_color(rgb(TEXT_3))
+                                .text_ellipsis()
+                                .child(name)
+                        }))
                         .child(div().flex_1())
-                        .child(if points > 0 {
-                            chip("Read", METER_LOW)
-                        } else {
-                            chip("Off", TEXT_3)
-                        }),
+                        .child(
+                            chip(mode.name(), mode_color(mode))
+                                .cursor_pointer()
+                                .debug_selector(move || format!("auto-mode-{i}"))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        let items = AutoMode::ALL
+                                            .iter()
+                                            .map(|&m| {
+                                                (m.name().to_string(), MenuAction::AutoMode(i, m))
+                                            })
+                                            .collect();
+                                        ws.menu = Some(Menu {
+                                            at: e.position,
+                                            items,
+                                            ..Menu::default()
+                                        });
+                                        cx.notify();
+                                    }),
+                                ),
+                        ),
                 );
             }
         }
@@ -709,6 +784,8 @@ impl Workspace {
 
     fn lanes(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let (ppt, sx, sy) = (self.px_per_tick(), self.scroll_x, self.scroll_y);
+        let p = &self.session.project;
+        let (beat_ticks, per_bar, bar_ticks) = (p.beat(), p.beats_per_bar(), p.bar());
         let tracks = self.session.project.tracks.len();
         let selected = self.track;
         let row_h = self.row_h();
@@ -734,7 +811,7 @@ impl Workspace {
                     ));
                 };
                 // Every other four bars a shade lighter, as FL Studio does.
-                let group = ppt * (PPQ * BEATS_PER_BAR * 4) as f32;
+                let group = ppt * (bar_ticks * 4) as f32;
                 let mut k = (sx / group).floor() as i64;
                 while (k as f32 * group - sx) < w {
                     if k % 2 == 1 {
@@ -770,15 +847,15 @@ impl Workspace {
                     }
                     quad(window, 0.0, y + row_h - 1.0, w, 1.0, rgb(LINE_SOFT).into());
                 }
-                let beat_px = ppt * PPQ as f32;
+                let beat_px = ppt * beat_ticks as f32;
                 let first = (sx / beat_px) as u64;
                 let last = ((sx + w) / beat_px) as u64 + 1;
                 for beat in first..=last {
-                    let bar = beat % BEATS_PER_BAR == 0;
+                    let bar = beat % per_bar == 0;
                     if !bar && beat_px < 10.0 {
                         continue;
                     }
-                    let color = if beat % (BEATS_PER_BAR * 4) == 0 {
+                    let color = if beat % (per_bar * 4) == 0 {
                         0x2a2a32
                     } else if bar {
                         0x202027
@@ -857,6 +934,7 @@ impl Workspace {
                 if x + w >= 0.0 && x <= width {
                     regions.push(self.region_view((t, r), cx));
                 }
+                regions.extend(self.loop_views((t, r), cx));
             }
         }
 
@@ -997,7 +1075,7 @@ impl Workspace {
             );
             return;
         }
-        let bar = PPQ * BEATS_PER_BAR;
+        let bar = self.session.project.bar();
         let start = self.tick_at(x) as u64 / bar * bar;
         self.edit(cx, |ws| {
             let regions = &mut ws.session.project.tracks[track].regions;
@@ -1005,6 +1083,7 @@ impl Workspace {
                 start,
                 length: bar,
                 content: Content::Midi { notes: Vec::new() },
+                ..Default::default()
             });
             ws.region = Some((track, regions.len() - 1));
         });
@@ -1068,23 +1147,34 @@ impl Workspace {
             })
             .when(track.mute, |d| d.opacity(0.4))
             .debug_selector(move || format!("region-{}-{}", at.0, at.1))
-            .child(
+            .child({
+                let ink = if selected {
+                    0xffffff
+                } else {
+                    tint(color, 0.55)
+                };
                 div()
                     .h(px(17.))
                     .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
                     .px(px(7.))
                     .pt(px(2.))
                     .text_size(px(10.5))
                     .font_weight(FontWeight::SEMIBOLD)
                     .whitespace_nowrap()
                     .overflow_hidden()
-                    .text_color(rgb(if selected {
-                        0xffffff
-                    } else {
-                        tint(color, 0.55)
-                    }))
-                    .child(region_name(&track.name, region)),
-            )
+                    .text_color(rgb(ink))
+                    // An alias, as Logic shows one: its name in italics, and a link.
+                    .when(region.link.is_some(), |d| {
+                        d.italic().child(icon(Icon::Link, 11.).text_color(rgb(ink)))
+                    })
+                    .when(region.looped, |d| {
+                        d.child(icon(Icon::Loop, 11.).text_color(rgb(ink)))
+                    })
+                    .child(region_name(&track.name, region))
+            })
             .child(
                 div().flex_1().relative().mx(px(1.)).mb(px(4.)).child(
                     canvas(
@@ -1106,18 +1196,91 @@ impl Workspace {
             .on_mouse_down(MouseButton::Left, grab(at, Edge::Move, start, end, cx))
     }
 
+    /// A looped region's repeats, after it to where its loop stops: its content again, fainter.
+    /// Clicking one selects the region.
+    fn loop_views(&self, at: At, cx: &mut Context<Self>) -> Vec<Div> {
+        let project = &self.session.project;
+        let region = project.region(at);
+        if !region.looped || region.length == 0 {
+            return Vec::new();
+        }
+        let (ppt, sx) = (self.px_per_tick(), self.scroll_x);
+        let width = f32::from(self.lanes_bounds.get().size.width).max(2000.0);
+        let until = project.loop_end(at);
+        let color = self.color(at.0);
+        let ink = alpha(color, 0.55);
+        let y = self.row_top(at.0) + 4.0;
+        let mut out = Vec::new();
+        let mut start = region.start + region.length;
+        while start < until {
+            let length = region.length.min(until - start);
+            let (x, w) = (start as f32 * ppt - sx, length as f32 * ppt);
+            if x > width {
+                break;
+            }
+            if x + w >= 0.0 {
+                let inside = self.inside(&region.content, length);
+                out.push(
+                    div()
+                        .absolute()
+                        .left(px(x))
+                        .top(px(y))
+                        .w(px(w.max(3.0)))
+                        .h(px(LANE_H - 8.))
+                        .rounded(px(6.))
+                        .overflow_hidden()
+                        .bg(alpha(color, 0.06))
+                        .border_1()
+                        .border_dashed()
+                        .border_color(alpha(color, 0.3))
+                        .debug_selector(move || format!("loop-{}-{}-{start}", at.0, at.1))
+                        .child(
+                            div()
+                                .absolute()
+                                .top(px(17.))
+                                .left(px(1.))
+                                .right(px(1.))
+                                .bottom(px(4.))
+                                .child(
+                                    canvas(
+                                        |_, _, _| {},
+                                        move |b, _, window, _| {
+                                            paint_inside(&inside, b, ppt, ink, window)
+                                        },
+                                    )
+                                    .size_full(),
+                                ),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| {
+                                cx.stop_propagation();
+                                ws.region = Some(at);
+                                ws.select_track(at.0);
+                                cx.notify();
+                            }),
+                        ),
+                );
+            }
+            start += region.length;
+        }
+        out
+    }
+
     /// Each track's automation for its chosen parameter, in the lane under it: a line over a
     /// shaded area, and points to drag.
     fn automation(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let (ppt, sx) = (self.px_per_tick(), self.scroll_x);
         let mut out = Vec::new();
         for (t, track) in self.session.project.tracks.iter().enumerate() {
-            let param = self.params.get(&track.id).copied().unwrap_or_default();
+            let param = self.lane_param(t);
             let points: Vec<AutoPoint> = track.automation.points(param).to_vec();
             let level = match param {
                 Param::Volume => track.volume_db,
                 Param::Pan => track.pan,
+                Param::Plugin(which, id) => self.player.param_value(track.id, which, id) as f32,
             };
+            let off = track.automation.mode == AutoMode::Off;
             let color = self.color(t);
             let top = self.row_top(t) + LANE_H;
             let shown = points.clone();
@@ -1142,7 +1305,7 @@ impl Workspace {
                         area.line_to(point(right, y(last)));
                         area.line_to(point(right, bottom));
                         area.close();
-                        let faint = if shown.is_empty() { 0.35 } else { 1.0 };
+                        let faint = if shown.is_empty() || off { 0.35 } else { 1.0 };
                         if let Ok(p) = area.build() {
                             window.paint_path(p, alpha(color, 0.12 * faint));
                         }
@@ -1183,6 +1346,7 @@ impl Workspace {
                                     ws.edit(cx, |ws| {
                                         let a = &mut ws.session.project.tracks[t].automation;
                                         a.points_mut(param).remove(i);
+                                        a.tidy();
                                     });
                                 } else {
                                     let drag = Drag::Auto {
@@ -1204,16 +1368,16 @@ impl Workspace {
 
     /// Adds an automation point where the pointer is, and starts dragging it.
     pub fn add_auto_point(&mut self, track: usize, p: Point<f32>, cx: &mut Context<Self>) {
-        let id = self.session.project.tracks[track].id;
-        let param = self.params.get(&id).copied().unwrap_or_default();
+        let param = self.lane_param(track);
         let point = AutoPoint {
             tick: self.snap(self.tick_at(p.x)),
             value: self.auto_value(track, param, p.y),
         };
         self.session.checkpoint();
-        let index = self.session.project.tracks[track]
-            .automation
-            .add(param, point);
+        let name = self.param_name(track, param);
+        let automation = &mut self.session.project.tracks[track].automation;
+        let index = automation.add(param, point);
+        automation.name(param, &name);
         self.drag = Some(Drag::Auto {
             track,
             param,
@@ -1281,6 +1445,8 @@ fn grab(
             edge
         };
         let from = e.position.map(f32::from);
+        // Option-dragging a region drags a copy of it; with shift too, an alias, as in Logic.
+        let copy = edge == Edge::Move && e.modifiers.alt;
         let drag = Drag::Region {
             at,
             edge,
@@ -1289,8 +1455,36 @@ fn grab(
             end,
             track: at.0,
             moved: false,
+            copy,
         };
         ws.begin_drag(drag, cx);
+        if copy {
+            let project = &mut ws.session.project;
+            let made = match e.modifiers.shift {
+                true => project.alias(at, at.0, start),
+                false => {
+                    let mut r = project.region(at).clone();
+                    r.link = None;
+                    project.tracks[at.0].regions.push(r);
+                    Ok((at.0, project.tracks[at.0].regions.len() - 1))
+                }
+            };
+            match made {
+                Ok(copy) => {
+                    if let Some(Drag::Region { at, .. }) = &mut ws.drag {
+                        *at = copy;
+                    }
+                    ws.region = Some(copy);
+                    ws.changed(cx);
+                }
+                Err(e) => {
+                    ws.drag = None;
+                    ws.session.cancel();
+                    ws.status = Some(e);
+                    cx.notify();
+                }
+            }
+        }
     })
 }
 

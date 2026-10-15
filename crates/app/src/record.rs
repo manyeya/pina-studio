@@ -9,7 +9,7 @@ use std::{
 
 use gpui::Context;
 use tempo_engine::{
-    project::{AUDIO_DIR, BEATS_PER_BAR, Content, Note, PPQ, Region},
+    project::{AUDIO_DIR, Content, Note, Region},
     record::AudioRecorder,
 };
 
@@ -66,15 +66,19 @@ fn note(start: u64, on: u64, off: u64, pitch: u8, velocity: u8) -> Note {
 }
 
 impl Workspace {
-    /// Starts recording on the selected track at the playhead, or stops if it's recording.
+    /// Starts recording on the armed track at the playhead, or stops if it's recording.
     pub fn record(&mut self, cx: &mut Context<Self>) {
         if self.recording.is_some() {
             self.stop(cx);
             return;
         }
+        let armed = self.armed();
         let project = &self.session.project;
-        let Some(track) = project.tracks.get(self.track) else {
-            self.status = Some("Add a track to record on.".into());
+        let Some(track) = armed.and_then(|t| project.tracks.get(t)) else {
+            self.status = Some(match project.tracks.is_empty() {
+                true => "Add a track to record on.".into(),
+                false => "Arm a track to record on: its R button.".into(),
+            });
             cx.notify();
             return;
         };
@@ -90,7 +94,7 @@ impl Workspace {
         } else {
             let file = take_file(&self.session.dir, &track.name);
             let path = self.session.dir.join(&file);
-            match AudioRecorder::start(&path, project.sample_rate) {
+            match AudioRecorder::start(&path, project.sample_rate, track.input) {
                 Ok(recorder) => Recording::Audio {
                     track: id,
                     start,
@@ -162,7 +166,7 @@ impl Workspace {
                     .map(|n| n.start as u64 + n.length)
                     .max()
                     .unwrap();
-                let bar = PPQ * BEATS_PER_BAR;
+                let bar = self.session.project.bar();
                 let length = end.saturating_sub(start).max(last).div_ceil(bar).max(1) * bar;
                 let content = Content::Midi { notes };
                 (
@@ -171,6 +175,7 @@ impl Workspace {
                         start,
                         length,
                         content,
+                        ..Default::default()
                     },
                 )
             }
@@ -194,6 +199,7 @@ impl Workspace {
                             start,
                             length,
                             content,
+                            ..Default::default()
                         },
                     )
                 }

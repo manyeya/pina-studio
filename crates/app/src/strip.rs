@@ -11,14 +11,14 @@ use gpui::{
 };
 use tempo_engine::{
     dsp::{LOW_CUT_OFF, eq_response},
-    player::Which,
-    project::{Comp, Eq, Instrument, PluginRef},
+    player::{MASTER_ID, Which},
+    project::{AutoMode, Comp, Eq, Input, Instrument, Param, PluginRef, Saturator, value_at},
 };
 
 use crate::{
     menu::{Menu, MenuAction},
     theme::*,
-    workspace::{CompField, Drag, View, Workspace},
+    workspace::{CompField, Drag, Name, SatField, View, Workspace},
 };
 
 /// Quieter than anything audible: the fader's floor.
@@ -36,6 +36,7 @@ pub enum Channel {
 pub enum Builtin {
     Eq,
     Comp,
+    Sat,
 }
 
 /// Where a strip is drawn: narrow in the inspector, or in a row of the mixer.
@@ -148,6 +149,40 @@ pub fn comp_text(field: CompField, c: &Comp) -> String {
     }
 }
 
+/// A saturator knob's position, 0 to 1.
+pub fn sat_pos(field: SatField, s: &Saturator) -> f32 {
+    match field {
+        SatField::Drive => s.drive_db / 24.0,
+        SatField::Tone => (s.tone + 1.0) / 2.0,
+        SatField::Mix => s.mix,
+        SatField::Output => (s.output_db + 12.0) / 24.0,
+    }
+    .clamp(0.0, 1.0)
+}
+
+pub fn sat_set(field: SatField, s: &mut Saturator, v: f32) {
+    match field {
+        SatField::Drive => s.drive_db = (v * 48.0).round() / 2.0,
+        SatField::Tone => s.tone = ((v * 2.0 - 1.0) * 100.0).round() / 100.0,
+        SatField::Mix => s.mix = (v * 100.0).round() / 100.0,
+        SatField::Output => s.output_db = (v * 48.0).round() / 2.0 - 12.0,
+    }
+}
+
+pub fn sat_text(field: SatField, s: &Saturator) -> String {
+    match field {
+        SatField::Drive => format!("{} dB", trim(s.drive_db)),
+        SatField::Tone if s.tone.abs() < 0.005 => "Neutral".into(),
+        SatField::Tone => format!(
+            "{} {:.0}",
+            if s.tone < 0.0 { "Dark" } else { "Bright" },
+            s.tone.abs() * 100.0
+        ),
+        SatField::Mix => format!("{:.0}%", s.mix * 100.0),
+        SatField::Output => format!("{} dB", db_text(s.output_db)),
+    }
+}
+
 fn trim(v: f32) -> String {
     if v >= 10.0 {
         format!("{v:.0}")
@@ -172,12 +207,43 @@ pub fn eq_curve(eq: &Eq, rate: f64, width: usize) -> Vec<f32> {
 }
 
 impl Workspace {
+    /// A channel's level: for a track whose volume is automated, where the automation has it.
     pub fn volume(&self, ch: Channel) -> f32 {
         let p = &self.session.project;
         match ch {
-            Channel::Track(i) => p.tracks[i].volume_db,
+            Channel::Track(i) => self
+                .automated(i, Param::Volume)
+                .unwrap_or(p.tracks[i].volume_db),
             Channel::Aux(i) => p.auxes[i].volume_db,
             Channel::Master => p.master_volume_db,
+        }
+    }
+
+    /// A track parameter's value at the playhead, while automation plays it.
+    pub fn automated(&self, track: usize, param: Param) -> Option<f32> {
+        let a = &self.session.project.tracks.get(track)?.automation;
+        if a.mode == AutoMode::Off {
+            return None;
+        }
+        value_at(a.points(param), self.playhead() as f64)
+    }
+
+    /// A channel's built-in saturator.
+    pub fn sat(&self, ch: Channel) -> Option<Saturator> {
+        let p = &self.session.project;
+        match ch {
+            Channel::Track(i) => p.tracks[i].sat,
+            Channel::Aux(i) => p.auxes[i].sat,
+            Channel::Master => p.master_sat,
+        }
+    }
+
+    pub fn sat_mut(&mut self, ch: Channel) -> &mut Option<Saturator> {
+        let p = &mut self.session.project;
+        match ch {
+            Channel::Track(i) => &mut p.tracks[i].sat,
+            Channel::Aux(i) => &mut p.auxes[i].sat,
+            Channel::Master => &mut p.master_sat,
         }
     }
 
@@ -205,7 +271,7 @@ impl Workspace {
         match ch {
             Channel::Track(i) => Some(&mut p.tracks[i].inserts),
             Channel::Aux(i) => Some(&mut p.auxes[i].inserts),
-            Channel::Master => None,
+            Channel::Master => Some(&mut p.master_inserts),
         }
     }
 
@@ -214,7 +280,7 @@ impl Workspace {
         match ch {
             Channel::Track(i) => &p.tracks[i].inserts,
             Channel::Aux(i) => &p.auxes[i].inserts,
-            Channel::Master => &[],
+            Channel::Master => &p.master_inserts,
         }
     }
 
@@ -237,11 +303,14 @@ impl Workspace {
         }
     }
 
+    /// The id a channel's plugins go by in the player.
+    pub fn owner_id(&self, ch: Channel) -> u64 {
+        self.channel_id(ch).unwrap_or(MASTER_ID)
+    }
+
     /// Opens a plugin's editor, saying why not if it can't.
     pub fn open_editor(&mut self, ch: Channel, which: Which, cx: &mut Context<Self>) {
-        let Some(id) = self.channel_id(ch) else {
-            return;
-        };
+        let id = self.owner_id(ch);
         if let Err(e) = self.player.open_editor(id, which) {
             self.status = Some(e);
             cx.notify();
@@ -265,7 +334,8 @@ impl Workspace {
                     ));
                 }
             }
-            (_, Which::Insert(index)) => {
+            // Taking out a plugin, from a slot that has one.
+            (_, Which::Insert(index)) if index < self.inserts(ch).len() => {
                 let action = MenuAction::Insert {
                     channel: ch,
                     index,
@@ -285,6 +355,7 @@ impl Workspace {
                 path: p.path.clone(),
                 class: p.class.clone(),
                 state: None,
+                ..Default::default()
             };
             let action = match (ch, which) {
                 (Channel::Track(track), Which::Instrument) => MenuAction::Instrument {
@@ -320,11 +391,24 @@ impl Workspace {
                     },
                 ));
             }
+            if self.sat(ch).is_none() {
+                items.push((
+                    "Saturator (built in)".into(),
+                    MenuAction::AddBuiltin {
+                        channel: ch,
+                        builtin: Builtin::Sat,
+                    },
+                ));
+            }
         }
         if self.plugins.is_none() {
             items.push(("Looking for plugins…".to_string(), MenuAction::Nothing));
         }
-        Menu { at, items }
+        Menu {
+            at,
+            items,
+            ..Default::default()
+        }
     }
 
     /// Where a track can play: the master, or any aux or stack.
@@ -342,7 +426,11 @@ impl Workspace {
                 },
             )
         }));
-        Menu { at, items }
+        Menu {
+            at,
+            items,
+            ..Default::default()
+        }
     }
 
     /// The buses a track can send to: every aux, and a new one.
@@ -363,7 +451,68 @@ impl Workspace {
             })
             .collect();
         items.push(("New Aux".to_string(), MenuAction::Send { track, bus: None }));
-        Menu { at, items }
+        Menu {
+            at,
+            items,
+            ..Default::default()
+        }
+    }
+
+    /// What an audio track can record: each input channel alone, and in pairs.
+    pub fn input_menu(&self, track: usize, at: Point<Pixels>) -> Menu {
+        let channels = tempo_engine::record::input_channels();
+        let mut items = Vec::new();
+        for stereo in [true, false] {
+            let step = if stereo { 2 } else { 1 };
+            for channel in (0..channels).step_by(step) {
+                let input = Input { channel, stereo };
+                let action = MenuAction::Input {
+                    track,
+                    input: Some(input),
+                };
+                items.push((input.name(), action));
+            }
+        }
+        if items.is_empty() {
+            items.push(("No audio input".into(), MenuAction::Nothing));
+        }
+        Menu {
+            at,
+            items,
+            ..Default::default()
+        }
+    }
+
+    /// What a send can do: switch between before and after the fader, or go.
+    pub fn send_options(&self, track: usize, index: usize, at: Point<Pixels>) -> Menu {
+        let pre = self.session.project.tracks[track].sends[index].pre;
+        let mark = |on: bool| if on { "✓ " } else { "    " };
+        Menu {
+            at,
+            items: vec![
+                (
+                    format!("{}Post-fader", mark(!pre)),
+                    MenuAction::SendPre {
+                        track,
+                        index,
+                        pre: false,
+                    },
+                ),
+                (
+                    format!("{}Pre-fader", mark(pre)),
+                    MenuAction::SendPre {
+                        track,
+                        index,
+                        pre: true,
+                    },
+                ),
+                (
+                    "Remove Send".into(),
+                    MenuAction::RemoveSend { track, index },
+                ),
+            ],
+            ..Default::default()
+        }
     }
 
     fn has_builtin_instrument(&self, ch: Channel) -> bool {
@@ -421,6 +570,24 @@ fn dotted(label: impl Into<gpui::SharedString>, used: bool, h: f32, dot: Option<
                 .text_ellipsis()
                 .child(label.into()),
         )
+}
+
+/// A slot that says what feeds a channel but can't be changed: no hover, no pointer.
+fn info(label: impl Into<gpui::SharedString>, h: f32) -> Div {
+    div()
+        .flex_none()
+        .h(px(h))
+        .px(px(6.))
+        .flex()
+        .items_center()
+        .rounded(px(5.))
+        .border_1()
+        .border_color(rgb(LINE_SOFT))
+        .text_size(px(10.5))
+        .text_color(rgb(TEXT_3))
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .child(label.into())
 }
 
 /// An empty row, keeping the mixer's strips lined up.
@@ -497,6 +664,7 @@ fn builtin_slot(
                             builtin: b,
                         },
                     )],
+                    ..Default::default()
                 });
                 cx.notify();
             }),
@@ -632,7 +800,8 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
     let (pan, mute, solo, id) = match ch {
         Channel::Track(i) => {
             let t = &project.tracks[i];
-            (Some(t.pan), Some(t.mute), Some(t.solo), Some(t.id))
+            let pan = ws.automated(i, Param::Pan).unwrap_or(t.pan);
+            (Some(pan), Some(t.mute), Some(t.solo), Some(t.id))
         }
         Channel::Aux(i) => {
             let a = &project.auxes[i];
@@ -652,7 +821,22 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
             let t = &project.tracks[i];
             let dot = Some(color);
             match &t.instrument {
-                None => dotted("Audio In", true, 24., dot).cursor_default(),
+                None => {
+                    let input = t.input.unwrap_or(Input {
+                        channel: 0,
+                        stereo: true,
+                    });
+                    dotted(input.name(), true, 24., dot)
+                        .debug_selector(move || format!("input-{i}"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                ws.menu = Some(ws.input_menu(i, e.position));
+                                cx.notify();
+                            }),
+                        )
+                }
                 Some(Instrument::Synth) => plugin_slot(
                     "Sine Synth".into(),
                     true,
@@ -670,10 +854,8 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                 }
             }
         }
-        Channel::Aux(i) => {
-            slot(format!("Bus {}", project.auxes[i].bus), true, 24.).cursor_default()
-        }
-        Channel::Master => slot("Output 1–2", true, 24.).cursor_default(),
+        Channel::Aux(i) => info(format!("Bus {}", project.auxes[i].bus), 24.),
+        Channel::Master => info("Output 1–2", 24.),
     };
 
     // Effect slots: the built-ins it has, its plugins, and an empty one to add another.
@@ -707,6 +889,17 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
             cx,
         ));
     }
+    if let Some(sat) = ws.sat(ch) {
+        let color = if sat.bypass { TEXT_4 } else { color };
+        effects.push(builtin_slot(
+            "Saturator",
+            ch,
+            Builtin::Sat,
+            slot_h,
+            color,
+            cx,
+        ));
+    }
     let inserts = ws.inserts(ch);
     for (n, r) in inserts.iter().enumerate() {
         effects.push(plugin_slot(
@@ -719,8 +912,7 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
             cx,
         ));
     }
-    let has_room = ch != Channel::Master || eq.is_none() || comp.is_none();
-    if has_room {
+    {
         effects.push(plugin_slot(
             String::new(),
             false,
@@ -743,18 +935,20 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
     if let Channel::Track(track) = ch {
         let list = &project.tracks[track].sends;
         for (index, s) in list.iter().enumerate() {
-            let level = s.level_db;
+            let (level, pre) = (s.level_db, s.pre);
             let bus = project
                 .auxes
                 .iter()
                 .find(|a| a.bus == s.bus)
                 .map_or(format!("Bus {}", s.bus), |a| a.name.clone());
+            // Before the fader: amber, its dot and its knob.
+            let tone = if pre { AMBER } else { TEXT };
             sends.push(
-                slot(bus, true, slot_h)
+                dotted(bus, true, slot_h, pre.then_some(AMBER))
                     .justify_between()
                     .pr(px(3.))
                     .cursor_ns_resize()
-                    .child(knob(fader_pos(level), 16., TEXT, false))
+                    .child(knob(fader_pos(level), 16., tone, false))
                     .debug_selector(move || format!("send-{track}-{index}"))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -780,11 +974,10 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                     )
                     .on_mouse_down(
                         MouseButton::Right,
-                        cx.listener(move |ws, _, _, cx| {
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            ws.edit(cx, |ws| {
-                                ws.session.project.tracks[track].sends.remove(index);
-                            });
+                            ws.menu = Some(ws.send_options(track, index, e.position));
+                            cx.notify();
                         }),
                     ),
             );
@@ -831,8 +1024,8 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                     }),
                 )
         }
-        Channel::Aux(_) => pill("Stereo Out".into()),
-        Channel::Master => pill("Out 1–2".into()),
+        Channel::Aux(_) => info("Stereo Out", 22.).justify_center().rounded(px(11.)),
+        Channel::Master => info("Out 1–2", 22.).justify_center().rounded(px(11.)),
     };
 
     let pan_row = div()
@@ -943,6 +1136,7 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
         .relative()
         .h(px(fader_h))
         .cursor_ns_resize()
+        .debug_selector(move || format!("fader-{ch:?}"))
         .child(
             div()
                 .absolute()
@@ -1066,13 +1260,14 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                 },
                 |d, i| {
                     d.child(
-                        toggle("R", ws.track == i, RECORD, 0xffffff, 22.)
+                        toggle("R", ws.armed() == Some(i), RECORD, 0xffffff, 22.)
                             .flex_1()
+                            .debug_selector(move || format!("strip-arm-{i}"))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |ws, _, _, cx| {
                                     cx.stop_propagation();
-                                    ws.select_track(i);
+                                    ws.toggle_arm(i);
                                     cx.notify();
                                 }),
                             ),
@@ -1098,8 +1293,28 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
         } else {
             alpha(color, 0.14)
         })
-        .text_color(rgb(if selected { BG } else { tint(color, 0.5) }))
-        .child(name);
+        .text_color(rgb(if selected { BG } else { tint(color, 0.5) }));
+    // Double-click a track's or bus's name to rename it.
+    let naming = match ch {
+        Channel::Track(i) => Some(Name::Track(i)),
+        Channel::Aux(i) => Some(Name::Aux(i)),
+        Channel::Master => None,
+    };
+    let plate = match naming.and_then(|n| ws.name_field(n)) {
+        Some(field) => plate.child(field),
+        None => plate.child(name).when_some(naming, |d, what| {
+            d.debug_selector(move || format!("plate-{ch:?}"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                        if e.click_count == 2 {
+                            cx.stop_propagation();
+                            ws.start_naming(what, window, cx);
+                        }
+                    }),
+                )
+        }),
+    };
 
     let reduction = ws.reductions.get(&id).copied().unwrap_or(0.0);
     let header = mixer.then(|| {

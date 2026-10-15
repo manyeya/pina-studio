@@ -15,9 +15,15 @@ use futures::StreamExt;
 use gpui::{App, Context, WeakEntity};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tempo_engine::commands::{self, Command};
+use tempo_engine::{
+    commands::{self, ChannelRef, Command},
+    project::Which,
+};
 
-use crate::workspace::{AgentEdit, Workspace};
+use crate::{
+    strip::Channel,
+    workspace::{AgentEdit, Workspace},
+};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "request", rename_all = "snake_case")]
@@ -39,6 +45,11 @@ pub enum Request {
         track: usize,
         #[serde(default)]
         scene: Option<usize>,
+    },
+    /// A plugin's parameters: ids, names, values.
+    Params {
+        channel: ChannelRef,
+        plugin: Which,
     },
 }
 
@@ -207,6 +218,23 @@ impl Workspace {
                 }
                 self.launch(track, scene, cx);
                 ok
+            }
+            Request::Params { channel, plugin } => {
+                let p = &self.session.project;
+                let ch = match channel {
+                    ChannelRef::Track(i) if i < p.tracks.len() => Channel::Track(i),
+                    ChannelRef::Aux(i) if i < p.auxes.len() => Channel::Aux(i),
+                    ChannelRef::Master => Channel::Master,
+                    _ => return Err("no such channel".into()),
+                };
+                let id = self.owner_id(ch);
+                let params = self.player.params(id, plugin);
+                if params.is_empty() {
+                    return Err("no plugin there, or it has no parameters".into());
+                }
+                Ok(crate::cli::params_json(&params, |param, v| {
+                    self.player.param_text(id, plugin, param, v)
+                }))
             }
             Request::Undo | Request::Redo => {
                 let done = match request {

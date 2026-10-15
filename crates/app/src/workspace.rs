@@ -13,21 +13,25 @@ use std::{
 pub use crate::record::Recording;
 
 use gpui::{
-    App, Bounds, Context, DispatchPhase, FocusHandle, FontWeight, KeyBinding, KeyDownEvent,
-    KeyUpEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, PromptLevel, ScrollDelta,
-    ScrollWheelEvent, Window, actions, canvas, div, prelude::*, px, rgb,
+    App, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, FontWeight, KeyBinding,
+    KeyDownEvent, KeyUpEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, PromptLevel,
+    ScrollDelta, ScrollWheelEvent, Subscription, Window, actions, canvas, div, prelude::*, px, rgb,
 };
 use tempo_engine::{
     engine::LiveNote,
     player::Player,
-    project::{At, BEATS_PER_BAR, Comp, Cycle, Eq, Instrument, PPQ, Param, Project, Track},
+    project::{
+        At, AutoMode, Comp, Content, Cycle, Eq, Instrument, PPQ, Param, Project, Track, Which,
+        value_at,
+    },
     scan::{self, PluginInfo},
     session::Session,
 };
 
 use crate::{
-    menu::Menu,
+    menu::{Menu, MenuAction},
     strip::{self, Channel},
+    text::{TextEvent, TextInput},
     theme::*,
 };
 
@@ -62,17 +66,19 @@ actions!(
     ]
 );
 
-/// Logic's shortcuts, where it has one.
+/// Logic's shortcuts, where it has one. While a name is being typed the workspace's context is
+/// "Naming", so these keys type instead.
 pub fn bind_keys(cx: &mut App) {
+    crate::text::bind_keys(cx);
     cx.bind_keys([
-        KeyBinding::new("space", PlayStop, None),
-        KeyBinding::new("enter", GoToStart, None),
-        KeyBinding::new("cmd-z", Undo, None),
-        KeyBinding::new("cmd-shift-z", Redo, None),
-        KeyBinding::new("backspace", Delete, None),
-        KeyBinding::new("delete", Delete, None),
-        KeyBinding::new("cmd-backspace", DeleteTrack, None),
-        KeyBinding::new("cmd-t", Split, None),
+        KeyBinding::new("space", PlayStop, Some("Workspace")),
+        KeyBinding::new("enter", GoToStart, Some("Workspace")),
+        KeyBinding::new("cmd-z", Undo, Some("Workspace")),
+        KeyBinding::new("cmd-shift-z", Redo, Some("Workspace")),
+        KeyBinding::new("backspace", Delete, Some("Workspace")),
+        KeyBinding::new("delete", Delete, Some("Workspace")),
+        KeyBinding::new("cmd-backspace", DeleteTrack, Some("Workspace")),
+        KeyBinding::new("cmd-t", Split, Some("Workspace")),
         // Letters are notes while musical typing is on, so these only work in the arrangement.
         KeyBinding::new("x", ToggleMixer, Some("Arrange")),
         KeyBinding::new("i", ToggleInspector, Some("Arrange")),
@@ -82,15 +88,15 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("a", ToggleAutomation, Some("Arrange")),
         KeyBinding::new("c", ToggleCycle, Some("Arrange")),
         KeyBinding::new("k", ToggleMetronome, Some("Arrange")),
-        KeyBinding::new("r", Record, None),
-        KeyBinding::new("cmd-k", ToggleTyping, None),
-        KeyBinding::new("cmd-shift-d", CreateStack, None),
-        KeyBinding::new("cmd-alt-p", NewPattern, None),
+        KeyBinding::new("r", Record, Some("Workspace")),
+        KeyBinding::new("cmd-k", ToggleTyping, Some("Workspace")),
+        KeyBinding::new("cmd-shift-d", CreateStack, Some("Workspace")),
+        KeyBinding::new("cmd-alt-p", NewPattern, Some("Workspace")),
         KeyBinding::new("cmd-s", Save, None),
         KeyBinding::new("cmd-b", Export, None),
-        KeyBinding::new("cmd-alt-n", NewTrack, None),
-        KeyBinding::new("cmd-right", ZoomIn, None),
-        KeyBinding::new("cmd-left", ZoomOut, None),
+        KeyBinding::new("cmd-alt-n", NewTrack, Some("Workspace")),
+        KeyBinding::new("cmd-right", ZoomIn, Some("Workspace")),
+        KeyBinding::new("cmd-left", ZoomOut, Some("Workspace")),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-w", Quit, None),
     ]);
@@ -117,6 +123,15 @@ pub enum Target {
     /// A bell or the shelf of a channel's EQ: 1 the low mid, 2 the high mid, 3 the shelf.
     Gain(Channel, usize),
     Comp(Channel, CompField),
+    Sat(Channel, SatField),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SatField {
+    Drive,
+    Tone,
+    Mix,
+    Output,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -148,6 +163,8 @@ pub enum Drag {
         end: u64,
         track: usize,
         moved: bool,
+        /// Dragging a copy (or an alias) just made, the original staying put.
+        copy: bool,
     },
     Fader {
         channel: Channel,
@@ -254,6 +271,31 @@ pub enum Bottom {
 pub enum View {
     Arrange,
     Mixer,
+}
+
+/// What a name being typed is for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Name {
+    Track(usize),
+    Aux(usize),
+    Marker(usize),
+    Region(At),
+}
+
+/// A name being typed, in a text field where the name shows.
+pub struct Naming {
+    pub what: Name,
+    pub input: Entity<TextInput>,
+    _subscriptions: [Subscription; 2],
+}
+
+/// Which track is armed, to record and to hear the MIDI keyboard: the selected one, as Logic
+/// does until you arm one yourself; one you armed; or none.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Arm {
+    Selected,
+    Track(u64),
+    Off,
 }
 
 /// What clicking in the lanes and the piano roll does.
@@ -415,12 +457,25 @@ pub struct Workspace {
     pub show_automation: bool,
     /// Which parameter each track's automation shows, by track id.
     pub params: HashMap<u64, Param>,
+    /// What each group of aliases played after the last edit, to tell which one changed.
+    links: HashMap<u64, Content>,
+    /// Automation being recorded (Touch or Latch), by track id and parameter: the last tick
+    /// written, the control's value, and whether it's still held.
+    pub writing: HashMap<(u64, Param), (u64, f32, bool)>,
     pub recording: Option<Recording>,
     /// Musical typing's octave shift, when it's on; and the notes its held keys play.
     pub typing: Option<i8>,
     typed: HashMap<String, u8>,
     /// An open pop-up menu.
     pub menu: Option<Menu>,
+    /// A name being typed.
+    pub naming: Option<Naming>,
+    /// Something to start naming on the next frame (from a menu, which has no window to hand).
+    pub pending_name: Option<Name>,
+    /// Which track records and hears the MIDI keyboard.
+    pub arm: Arm,
+    /// Give the workspace back the keyboard on the next frame (after naming).
+    refocus: bool,
     /// Live Loops launched, by track id: the scene (None, stopped) and the sample it begins at.
     pub live: HashMap<u64, (Option<usize>, u64)>,
     /// The plugins installed, once the scan is done.
@@ -469,6 +524,7 @@ impl Workspace {
             this.update(cx, |ws, cx| ws.should_close(window, cx))
                 .unwrap_or(true)
         });
+        let links = session.project.link_contents();
         Workspace {
             session,
             player,
@@ -500,10 +556,16 @@ impl Workspace {
             },
             show_automation: false,
             params: HashMap::new(),
+            links,
+            writing: HashMap::new(),
             recording: None,
             typing: None,
             typed: HashMap::new(),
             menu: None,
+            naming: None,
+            pending_name: None,
+            arm: Arm::Selected,
+            refocus: false,
             plugins: None,
             live: HashMap::new(),
             drag: None,
@@ -548,11 +610,11 @@ impl Workspace {
         match self.snap {
             Snap::Smart => match self.px_per_beat {
                 z if z >= 96.0 => PPQ / 4,
-                z if z >= 20.0 => PPQ,
-                _ => PPQ * BEATS_PER_BAR,
+                z if z >= 20.0 => self.session.project.beat(),
+                _ => self.session.project.bar(),
             },
-            Snap::Bar => PPQ * BEATS_PER_BAR,
-            Snap::Beat => PPQ,
+            Snap::Bar => self.session.project.bar(),
+            Snap::Beat => self.session.project.beat(),
             Snap::Eighth => PPQ / 2,
             Snap::Sixteenth => PPQ / 4,
             Snap::Off => 1,
@@ -609,6 +671,8 @@ impl Workspace {
 
     /// After an edit (or undo): keeps the selection valid and brings the engine up to date.
     pub fn changed(&mut self, cx: &mut Context<Self>) {
+        // Aliases of whatever changed change with it.
+        self.session.project.sync_links(&mut self.links);
         let tracks = &self.session.project.tracks;
         self.track = self.track.min(tracks.len().saturating_sub(1));
         if let Some((t, r)) = self.region
@@ -636,6 +700,256 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The parameter a track's automation lane shows: the one picked, else the first with
+    /// points, else volume.
+    pub fn lane_param(&self, track: usize) -> Param {
+        let t = &self.session.project.tracks[track];
+        self.params
+            .get(&t.id)
+            .copied()
+            .or_else(|| t.automation.params().first().copied())
+            .unwrap_or_default()
+    }
+
+    /// A plugin's name on a track, from its bundle.
+    pub fn plugin_name(&self, track: usize, which: Which) -> String {
+        self.session.project.tracks[track]
+            .plugin(which)
+            .and_then(|r| r.path.file_stem())
+            .map_or_else(|| "Plugin".into(), |s| s.to_string_lossy().into_owned())
+    }
+
+    /// What a parameter is called: Volume, Pan, or the plugin's name for it.
+    pub fn param_name(&self, track: usize, param: Param) -> String {
+        let t = &self.session.project.tracks[track];
+        match param {
+            Param::Volume => "Volume".into(),
+            Param::Pan => "Pan".into(),
+            Param::Plugin(which, id) => t
+                .automation
+                .plugins
+                .iter()
+                .find(|a| a.plugin == which && a.param == id && !a.name.is_empty())
+                .map(|a| a.name.clone())
+                .or_else(|| {
+                    let params = self.player.params(t.id, which);
+                    params.into_iter().find(|p| p.id == id).map(|p| p.name)
+                })
+                .unwrap_or_else(|| format!("Parameter {id}")),
+        }
+    }
+
+    /// What a track's automation lane can show: volume, pan, and every parameter of its
+    /// plugins, those with automation marked.
+    pub fn auto_params(&self, track: usize) -> Vec<(String, MenuAction)> {
+        let t = &self.session.project.tracks[track];
+        let id = t.id;
+        let mark = |p: Param| match t.automation.points(p).is_empty() {
+            true => "",
+            false => "● ",
+        };
+        let mut items: Vec<(String, MenuAction)> = [Param::Volume, Param::Pan]
+            .into_iter()
+            .map(|p| {
+                let label = format!("{}{}", mark(p), self.param_name(track, p));
+                (label, MenuAction::AutoParam(id, p))
+            })
+            .collect();
+        let plugins = std::iter::once(Which::Instrument)
+            .chain((0..t.inserts.len()).map(Which::Insert))
+            .filter(|&w| t.plugin(w).is_some());
+        for which in plugins {
+            let name = self.plugin_name(track, which);
+            items.push((name.clone(), MenuAction::Nothing));
+            for p in self.player.params(id, which) {
+                let param = Param::Plugin(which, p.id);
+                let label = format!("{}{name}: {}", mark(param), p.name);
+                items.push((label, MenuAction::AutoParam(id, param)));
+            }
+        }
+        items
+    }
+
+    /// While the song plays, a control moved on a track whose automation is in Touch or Latch
+    /// records its value at the playhead.
+    pub fn record_auto(&mut self, track: usize, param: Param, value: f32) {
+        if !self.player.playing() {
+            return;
+        }
+        let name = matches!(param, Param::Plugin(..)).then(|| self.param_name(track, param));
+        let tick = self.playhead();
+        let Some(t) = self.session.project.tracks.get_mut(track) else {
+            return;
+        };
+        if !t.automation.mode.writes() {
+            return;
+        }
+        let key = (t.id, param);
+        let after = self.writing.get(&key).map(|w| w.0);
+        t.automation.write(param, after, tick, value);
+        if let Some(name) = name {
+            t.automation.name(param, &name);
+        }
+        self.writing.insert(key, (tick, value, true));
+        self.params.insert(t.id, param);
+    }
+
+    /// Lets go of a control: Touch stops recording it, Latch carries on with its last value until
+    /// playback stops.
+    pub fn release_auto(&mut self, track: usize, param: Param) {
+        let Some(t) = self.session.project.tracks.get(track) else {
+            return;
+        };
+        let (key, latch) = ((t.id, param), t.automation.mode == AutoMode::Latch);
+        match latch {
+            true => {
+                if let Some(w) = self.writing.get_mut(&key) {
+                    w.2 = false;
+                }
+            }
+            false => drop(self.writing.remove(&key)),
+        }
+    }
+
+    /// Each frame while recording automation, held and latched controls keep writing their
+    /// value as the playhead moves; when playback stops, recording does.
+    fn keep_writing(&mut self, cx: &mut Context<Self>) {
+        if self.writing.is_empty() {
+            return;
+        }
+        if !self.player.playing() {
+            self.writing.clear();
+            return;
+        }
+        let tick = self.playhead();
+        let mut wrote = false;
+        for (&(id, param), w) in self.writing.iter_mut() {
+            let Some(t) = self.session.project.tracks.iter_mut().find(|t| t.id == id) else {
+                continue;
+            };
+            if tick > w.0 {
+                t.automation.write(param, Some(w.0), tick, w.1);
+                w.0 = tick;
+                wrote = true;
+            }
+        }
+        if wrote {
+            self.changed(cx);
+        }
+    }
+
+    /// Shows automated plugin parameters' values in their plugins (and Smart Controls) as the
+    /// playhead moves: the engine plays them, the controllers only show them.
+    fn show_automation_values(&self) {
+        let tick = self.playhead() as f64;
+        for t in &self.session.project.tracks {
+            if t.automation.mode == AutoMode::Off {
+                continue;
+            }
+            for a in &t.automation.plugins {
+                if let Some(v) = value_at(&a.points, tick) {
+                    self.player.show_param(t.id, a.plugin, a.param, v as f64);
+                }
+            }
+        }
+    }
+
+    /// The armed track, by index.
+    pub fn armed(&self) -> Option<usize> {
+        let tracks = &self.session.project.tracks;
+        match self.arm {
+            Arm::Selected => (self.track < tracks.len()).then_some(self.track),
+            Arm::Track(id) => tracks.iter().position(|t| t.id == id),
+            Arm::Off => None,
+        }
+    }
+
+    /// The R button: arms a track, or disarms it if it's the one armed.
+    pub fn toggle_arm(&mut self, track: usize) {
+        self.arm = match self.armed() == Some(track) {
+            true => Arm::Off,
+            false => Arm::Track(self.session.project.tracks[track].id),
+        };
+    }
+
+    /// What something is called now.
+    pub fn name_of(&self, what: Name) -> String {
+        let p = &self.session.project;
+        match what {
+            Name::Track(i) => p.tracks.get(i).map(|t| t.name.clone()),
+            Name::Aux(i) => p.auxes.get(i).map(|a| a.name.clone()),
+            Name::Marker(i) => p.markers.get(i).map(|m| m.name.clone()),
+            Name::Region(at) => p
+                .tracks
+                .get(at.0)
+                .and_then(|t| t.regions.get(at.1))
+                .map(|r| r.name.clone()),
+        }
+        .unwrap_or_default()
+    }
+
+    /// Opens a text field to name something, where its name shows.
+    pub fn start_naming(&mut self, what: Name, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_naming(None, cx);
+        let input = cx.new(|cx| TextInput::new(&self.name_of(what), cx));
+        let done = cx.subscribe(&input, |ws, _, e: &TextEvent, cx| {
+            let text = match e {
+                TextEvent::Confirm(text) => Some(text.clone()),
+                TextEvent::Cancel => None,
+            };
+            ws.finish_naming(text, cx);
+        });
+        let focus = input.read(cx).focus_handle(cx);
+        // Clicking elsewhere keeps what's typed.
+        let blur = cx.on_blur(&focus, window, |ws, _, cx| {
+            if let Some(n) = &ws.naming {
+                n.input.update(cx, |i, cx| i.confirm(cx));
+            }
+        });
+        window.focus(&focus, cx);
+        // Started from a click: the workspace mustn't take the keyboard back as it bubbles up.
+        window.prevent_default();
+        self.naming = Some(Naming {
+            what,
+            input,
+            _subscriptions: [done, blur],
+        });
+        cx.notify();
+    }
+
+    /// Closes the text field, naming the thing `text` if given. A track, bus or marker keeps its
+    /// name rather than going without; a region without one goes by its track's.
+    pub fn finish_naming(&mut self, text: Option<String>, cx: &mut Context<Self>) {
+        let Some(naming) = self.naming.take() else {
+            return;
+        };
+        self.refocus = true;
+        let what = naming.what;
+        if let Some(text) = text
+            .filter(|t| !t.is_empty() || matches!(what, Name::Region(_)))
+            .filter(|t| *t != self.name_of(what))
+        {
+            self.edit(cx, |ws| {
+                let p = &mut ws.session.project;
+                match what {
+                    Name::Track(i) => p.tracks[i].name = text,
+                    Name::Aux(i) => p.auxes[i].name = text,
+                    Name::Marker(i) => p.markers[i].name = text,
+                    Name::Region(at) => p.tracks[at.0].regions[at.1].name = text,
+                }
+            });
+        }
+        cx.notify();
+    }
+
+    /// The text field for `what`, if it's being named.
+    pub fn name_field(&self, what: Name) -> Option<Entity<TextInput>> {
+        self.naming
+            .as_ref()
+            .filter(|n| n.what == what)
+            .map(|n| n.input.clone())
+    }
+
     /// One undoable edit.
     pub fn edit(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Self)) {
         self.session.checkpoint();
@@ -657,10 +971,6 @@ impl Workspace {
                 | Drag::Comp { .. }
                 | Drag::Slider {
                     slider: Slider::Strength | Slider::Swing | Slider::Zoom,
-                    ..
-                }
-                | Drag::Knob {
-                    target: Target::Param { .. },
                     ..
                 }
         );
@@ -732,9 +1042,16 @@ impl Workspace {
             }) => {
                 let db = strip::fader_db((pos - (p.y - y) / height).clamp(0.0, 1.0));
                 self.set_volume(channel, db);
+                if let Channel::Track(t) = channel {
+                    self.record_auto(t, Param::Volume, db);
+                }
             }
             Some(Drag::Pan { channel, y, pan }) => {
-                self.set_pan(channel, (pan - (p.y - y) / 100.0).clamp(-1.0, 1.0));
+                let pan = (pan - (p.y - y) / 100.0).clamp(-1.0, 1.0);
+                self.set_pan(channel, pan);
+                if let Channel::Track(t) = channel {
+                    self.record_auto(t, Param::Pan, pan);
+                }
             }
             Some(Drag::Send {
                 track,
@@ -821,9 +1138,8 @@ impl Workspace {
             Some(Drag::Knob { target, y, value }) => {
                 let v = (value - (p.y - y) / 150.0).clamp(0.0, 1.0);
                 self.set_target(target, v);
-                if matches!(target, Target::Param { .. }) {
-                    cx.notify();
-                    return;
+                if let Some((t, param)) = self.target_param(target) {
+                    self.record_auto(t, param, v);
                 }
             }
             Some(Drag::Slider {
@@ -844,7 +1160,49 @@ impl Workspace {
         self.changed(cx);
     }
 
+    /// The automatable parameter a knob turns, if it is one: a track and its parameter.
+    fn target_param(&self, target: Target) -> Option<(usize, Param)> {
+        let Target::Param { track, param } = target else {
+            return None;
+        };
+        let t = self
+            .session
+            .project
+            .tracks
+            .iter()
+            .position(|t| t.id == track)?;
+        Some((t, Param::Plugin(Which::Instrument, param)))
+    }
+
     fn end_drag(&mut self, cx: &mut Context<Self>) {
+        // An option-click that didn't drag leaves no copy behind.
+        if let Some(Drag::Region {
+            at,
+            moved: false,
+            copy: true,
+            ..
+        }) = self.drag
+        {
+            self.session.project.tracks[at.0].regions.remove(at.1);
+            self.region = None;
+            self.changed(cx);
+        }
+        // Letting go of a control ends a Touch pass.
+        let released = match self.drag {
+            Some(Drag::Fader {
+                channel: Channel::Track(t),
+                ..
+            }) => Some((t, Param::Volume)),
+            Some(Drag::Pan {
+                channel: Channel::Track(t),
+                ..
+            }) => Some((t, Param::Pan)),
+            Some(Drag::Knob { target, .. }) => self.target_param(target),
+            _ => None,
+        };
+        if let Some((t, param)) = released {
+            self.release_auto(t, param);
+        }
         if let Some(
             Drag::Region { moved: false, .. }
             | Drag::Note { moved: false, .. }
@@ -873,7 +1231,7 @@ impl Workspace {
             moved: false,
         }) = self.drag
         {
-            let bar = PPQ * BEATS_PER_BAR;
+            let bar = self.session.project.bar();
             let cycle = &mut self.session.project.cycle;
             match cycle {
                 Some(c) => c.off = !c.off,
@@ -993,7 +1351,7 @@ impl Workspace {
     /// Turns the cycle on or off; with none yet, cycles the selected region (or four bars from
     /// the playhead's bar).
     pub fn toggle_cycle(&mut self, cx: &mut Context<Self>) {
-        let bar = PPQ * BEATS_PER_BAR;
+        let bar = self.session.project.bar();
         let (start, end) = match self.region {
             Some(at) => {
                 let r = self.session.project.region(at);
@@ -1153,6 +1511,10 @@ impl Workspace {
     /// Musical typing, as in Logic: A to K are white keys from C, W E T Y U O P the black ones;
     /// Z and X shift the octave.
     fn type_key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
+        if self.naming.is_none() && self.menu_key(e, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let Some(octave) = self.typing else { return };
         let key = e.keystroke.key.as_str();
         if e.keystroke.modifiers.modified() {
@@ -1279,6 +1641,9 @@ impl Workspace {
             Target::Comp(ch, field) => {
                 crate::strip::comp_pos(field, &self.strip_dsp(ch).1.unwrap_or_default())
             }
+            Target::Sat(ch, field) => {
+                crate::strip::sat_pos(field, &self.sat(ch).unwrap_or_default())
+            }
         }
     }
 
@@ -1286,9 +1651,16 @@ impl Workspace {
     pub fn set_target(&mut self, target: Target, v: f32) {
         use crate::strip::{comp_set, eq_gain_db, low_cut_hz};
         match target {
+            // In the project, so it's undone like any edit; the player passes it on.
             Target::Param { track, param } => {
-                let which = tempo_engine::player::Which::Instrument;
-                self.player.set_param(track, which, param, v as f64);
+                let tracks = &mut self.session.project.tracks;
+                if let Some(r) = tracks
+                    .iter_mut()
+                    .find(|t| t.id == track)
+                    .and_then(|t| t.plugin_mut(Which::Instrument))
+                {
+                    r.params.insert(param, v as f64);
+                }
             }
             Target::LowCut(ch) => {
                 self.strip_dsp_mut(ch).0.get_or_insert_default().low_cut = low_cut_hz(v)
@@ -1304,6 +1676,9 @@ impl Workspace {
             }
             Target::Comp(ch, field) => {
                 comp_set(field, self.strip_dsp_mut(ch).1.get_or_insert_default(), v)
+            }
+            Target::Sat(ch, field) => {
+                crate::strip::sat_set(field, self.sat_mut(ch).get_or_insert_default(), v)
             }
         }
     }
@@ -1514,7 +1889,9 @@ impl Workspace {
 
     fn status_bar(&self) -> impl IntoElement {
         let hint = match (self.view, self.tool, self.bottom) {
-            (View::Mixer, ..) => "Click a slot to open it · drag a fader, ⌥-click to reset",
+            (View::Mixer, ..) => {
+                "Click a slot to open it · right-click a send for pre or post · drag a fader, ⌥-click to reset · double-click a name to rename"
+            }
             (_, Tool::Pencil, _) => {
                 "Click an empty lane for a new region · in the piano roll, a note"
             }
@@ -1523,8 +1900,11 @@ impl Workspace {
             (_, _, Some(Bottom::PianoRoll)) => {
                 "Double-click to add a note · drag to move · drag its end to resize"
             }
+            _ if self.show_automation => {
+                "Click a lane to add a point · ⌥-click a point to delete it · pick Touch or Latch to record while playing"
+            }
             _ => {
-                "Drag to move · drag an edge to trim · ⌥-drag an audio end to flex · ⌘-scroll to zoom"
+                "Drag to move · ⌥-drag to copy · ⌥⇧-drag for an alias · drag an edge to trim · ⌘-scroll to zoom"
             }
         };
         let (text, color) = match &self.status {
@@ -1581,10 +1961,29 @@ impl Workspace {
             })
             .child(format!("CPU {:.0}%", (self.load * 100.0).min(999.0)))
             .child(div().font_family(MONO).child(format))
-            .child(if self.session.edited {
-                "Edited"
-            } else {
-                "Saved"
+            .when_some(self.typing, |d, octave| {
+                // Musical typing is on: letters are notes, so say so, and where they are.
+                let low = (60 + octave as i32 * 12).clamp(0, 127) as u8;
+                let high = low.saturating_add(17).min(127);
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .text_color(rgb(ACCENT_TEXT))
+                        .whitespace_nowrap()
+                        .child(icon(Icon::Keys, 12.).text_color(rgb(ACCENT_TEXT)))
+                        .child(format!(
+                            "Musical Typing · {}–{} · Z X octave · ⌘K off",
+                            crate::pianoroll::name(low),
+                            crate::pianoroll::name(high)
+                        )),
+                )
+            })
+            .child(match (self.session.edited, self.session.on_disk) {
+                (true, _) => "Edited",
+                (false, true) => "Saved",
+                (false, false) => "Not saved",
             })
     }
 
@@ -1611,12 +2010,20 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(what) = self.pending_name.take() {
+            self.start_naming(what, window, cx);
+        }
+        if std::mem::take(&mut self.refocus) && self.naming.is_none() {
+            self.focus.focus(window, cx);
+        }
         self.viewport_h = f32::from(window.viewport_size().height);
         self.viewport_w = f32::from(window.viewport_size().width);
         self.player.collect();
         self.read_meters();
         self.capture(cx);
-        let armed = self.session.project.tracks.get(self.track).map(|t| t.id);
+        self.keep_writing(cx);
+        self.show_automation_values();
+        let armed = self.armed().map(|t| self.session.project.tracks[t].id);
         self.player.arm(armed);
         let playing = self.player.playing();
         if playing {
@@ -1625,6 +2032,7 @@ impl Render for Workspace {
         // ponytail: redraws every frame while anything moves; fine until the UI gets heavy.
         let busy = playing
             || self.recording.is_some()
+            || !self.writing.is_empty()
             || self.levels.values().any(Level::moving)
             || self.reductions.values().any(|&g| g > 0.01)
             || self.agent_presence().is_some();
@@ -1659,11 +2067,17 @@ impl Render for Workspace {
             .text_size(px(12.))
             .font_weight(FontWeight::NORMAL)
             .track_focus(&self.focus)
-            .key_context(if self.typing.is_some() {
-                "Typing"
-            } else {
-                "Arrange"
-            })
+            .key_context(
+                match (
+                    &self.naming,
+                    self.menu.as_ref().is_some_and(|m| m.searchable),
+                ) {
+                    (Some(_), _) => "Naming",
+                    (None, true) => "Menu",
+                    _ if self.typing.is_some() => "Workspace Typing",
+                    _ => "Workspace Arrange",
+                },
+            )
             .on_key_down(cx.listener(|ws, e: &KeyDownEvent, _, cx| ws.type_key(e, cx)))
             .on_key_up(cx.listener(|ws, e: &KeyUpEvent, _, cx| ws.release_key(e, cx)))
             .on_action(

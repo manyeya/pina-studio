@@ -77,6 +77,19 @@ fn tools() -> Value {
             "name": "plugins",
             "description": "The VST3 plugins installed, for set_instrument and set_insert.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "params",
+            "description": "A plugin's parameters (id, name, value 0-1, and as the plugin shows it), for set_plugin_param and plugin automation.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": project,
+                    "channel": { "description": "{\"track\": i}, {\"aux\": i} or \"master\"." },
+                    "plugin": { "description": "\"instrument\" or {\"insert\": i}." }
+                },
+                "required": ["project", "channel", "plugin"]
+            }
         }
     ])
 }
@@ -132,6 +145,14 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
             cli::app(&path(args, "project")?, request)
         }
         "plugins" => cli::plugins(),
+        "params" => {
+            let parse = |key: &str| args.get(key).cloned().unwrap_or_default();
+            let channel =
+                serde_json::from_value(parse("channel")).map_err(|e| format!("`channel`: {e}"))?;
+            let plugin =
+                serde_json::from_value(parse("plugin")).map_err(|e| format!("`plugin`: {e}"))?;
+            cli::params(&path(args, "project")?, channel, plugin)
+        }
         _ => Err(format!("no tool called {name}")),
     }
 }
@@ -219,7 +240,8 @@ mod tests {
                 "analyze",
                 "render",
                 "transport",
-                "plugins"
+                "plugins",
+                "params"
             ]
         );
 

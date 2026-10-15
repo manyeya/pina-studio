@@ -201,6 +201,9 @@ pub struct Processor {
     events: ComWrapper<EventList>,
     params: ComWrapper<ParameterChanges>,
     edits: rtrb::Consumer<(ParamID, ParamValue)>,
+    /// Automation for the next block: a parameter, and its value at the block's start and end.
+    automation: [(ParamID, ParamValue, ParamValue); AUTOMATED],
+    automated: usize,
     // Channel buffers, their pointers, and the bus structs that point at those.
     _buffers: Vec<Vec<f32>>,
     _channels: Vec<Vec<*mut f32>>,
@@ -209,6 +212,9 @@ pub struct Processor {
     context: ProcessContext,
     max_block: usize,
 }
+
+/// Most parameters one plugin follows automation for, per block.
+pub const AUTOMATED: usize = 32;
 
 // The COM pointers are only used from the audio thread once the processor moves there.
 unsafe impl Send for Processor {}
@@ -368,6 +374,8 @@ impl Plugin {
                 events: ComWrapper::new(EventList::with_capacity(512)),
                 params: ComWrapper::new(ParameterChanges::with_capacity(64)),
                 edits,
+                automation: [(0, 0.0, 0.0); AUTOMATED],
+                automated: 0,
                 _buffers: buffers,
                 _channels: channels,
                 inputs,
@@ -406,6 +414,14 @@ impl Plugin {
         let value = value.clamp(0.0, 1.0);
         unsafe { self.controller.setParamNormalized(id, value) };
         self._handler.edit(id, value);
+    }
+
+    /// Shows a parameter's value (0 to 1) in the controller and editor only.
+    pub fn show_param(&self, id: u32, value: f64) {
+        unsafe {
+            self.controller
+                .setParamNormalized(id, value.clamp(0.0, 1.0))
+        };
     }
 
     /// A parameter's value now, from 0 to 1.
@@ -581,6 +597,15 @@ impl Processor {
         c.state = (kTempoValid | kTimeSigValid | kProjectTimeMusicValid | playing) as _;
     }
 
+    /// Moves a parameter (0 to 1) across the next block, from `start` to `end`, as automation
+    /// does. Past `AUTOMATED` parameters a block, the rest wait.
+    pub fn automate(&mut self, id: u32, start: f64, end: f64) {
+        if self.automated < AUTOMATED {
+            self.automation[self.automated] = (id, start.clamp(0.0, 1.0), end.clamp(0.0, 1.0));
+            self.automated += 1;
+        }
+    }
+
     /// Runs one block in place: `buf` goes to the main input (if the plugin has one) and comes
     /// back holding the main output. Applies these notes and any edits from the editor.
     /// Allocation-free: safe on the audio thread.
@@ -615,6 +640,11 @@ impl Processor {
         self.params.clear();
         while let Ok((id, value)) = self.edits.pop() {
             self.params.add(id, 0, value);
+        }
+        // Automation after edits: where a parameter has both, automation wins.
+        for &(id, start, end) in &self.automation[..std::mem::take(&mut self.automated)] {
+            self.params.add(id, 0, start);
+            self.params.add(id, frames.saturating_sub(1) as int32, end);
         }
         for b in &mut self.outputs {
             b.silenceFlags = 0;

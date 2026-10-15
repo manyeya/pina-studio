@@ -1,21 +1,22 @@
 //! The mixer, in place of the arrangement: a strip for every track, aux and the master, labelled
 //! down the left; and on the right the selected channel's chain, FL Studio style: its instrument,
-//! its EQ to drag about, its compressor, its plugins, its sends.
+//! its EQ to drag about, its compressor and saturator, its plugins, its sends.
 
 use gpui::{
     Bounds, Context, Div, FontWeight, MouseButton, MouseDownEvent, canvas, div, fill, point,
     prelude::*, px, rgb, size,
 };
 use tempo_engine::{
+    dsp::SatParams,
     player::Which,
-    project::{Comp, Eq, Instrument},
+    project::{Comp, Eq, Instrument, Saturator},
 };
 
 use crate::{
     menu::{Menu, MenuAction},
     strip::{self, Builtin, Channel, Layout, MIXER_INSERTS, MIXER_SENDS},
     theme::*,
-    workspace::{Channels, CompField, Drag, Slider, Target, Workspace, pt},
+    workspace::{Channels, CompField, Drag, SatField, Slider, Target, Workspace, pt},
 };
 
 /// The EQ graph's range: 20 Hz to 20 kHz across, ±18 dB up and down.
@@ -350,14 +351,21 @@ impl Workspace {
         };
 
         let (eq, comp) = self.strip_dsp(ch);
+        let sat = self.sat(ch);
         let inserts = self.inserts(ch).to_vec();
-        let used = inserts.len() + eq.is_some() as usize + comp.is_some() as usize;
+        let used = inserts.len()
+            + eq.is_some() as usize
+            + comp.is_some() as usize
+            + sat.is_some() as usize;
         let mut chain: Vec<Div> = Vec::new();
         if let Some(eq) = eq {
             chain.push(self.eq_card(ch, eq, cx));
         }
         if let Some(comp) = comp {
             chain.push(self.comp_card(ch, comp, cx));
+        }
+        if let Some(sat) = sat {
+            chain.push(self.sat_card(ch, sat, cx));
         }
         for (n, r) in inserts.iter().enumerate() {
             chain.push(
@@ -394,7 +402,7 @@ impl Workspace {
                     )),
             );
         }
-        let add = (ch != Channel::Master || eq.is_none() || comp.is_none()).then(|| {
+        let add = Some({
             let index = inserts.len();
             div()
                 .flex_none()
@@ -435,7 +443,25 @@ impl Workspace {
                         .find(|a| a.bus == s.bus)
                         .map_or(format!("Bus {}", s.bus), |a| a.name.clone());
                     let slider = Slider::Send { track: t, index };
+                    let pre = s.pre;
                     self.slider_row(bus, format!("{} dB", db_text(s.level_db)), slider, cx)
+                        .child(
+                            seg(if pre { "Pre" } else { "Post" }, pre, 22.)
+                                .w(px(40.))
+                                .justify_center()
+                                .debug_selector(move || format!("send-pre-{index}"))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, _, _, cx| {
+                                        let action = MenuAction::SendPre {
+                                            track: t,
+                                            index,
+                                            pre: !pre,
+                                        };
+                                        ws.choose(action, cx);
+                                    }),
+                                ),
+                        )
                 })
                 .collect(),
             _ => Vec::new(),
@@ -495,7 +521,7 @@ impl Workspace {
                                             div()
                                                 .text_size(px(11.))
                                                 .text_color(rgb(TEXT_3))
-                                                .child("Post-fader"),
+                                                .child("Before or after the fader"),
                                         ),
                                 )
                                 .children(sends),
@@ -767,6 +793,139 @@ impl Workspace {
             .child(div().flex().justify_between().children(knobs))
     }
 
+    /// The saturator: its curve (how hard it rounds off what comes in), and its knobs.
+    fn sat_card(&self, ch: Channel, sat: Saturator, cx: &mut Context<Self>) -> Div {
+        let color = self.channel_look(ch).1;
+        let on = !sat.bypass;
+        let params = SatParams::new(&sat, self.session.project.sample_rate as f64);
+        let curve = canvas(
+            |_, _, _| {},
+            move |b, _, window, _| {
+                let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
+                let line = |window: &mut gpui::Window, x: f32, y: f32, ww: f32, hh: f32| {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(b.origin.x + px(x), b.origin.y + px(y)),
+                            size(px(ww), px(hh)),
+                        ),
+                        rgb(LINE_SOFT),
+                    ));
+                };
+                line(window, 0.0, (h / 2.0).round(), w, 1.0);
+                line(window, (w / 2.0).round(), 0.0, 1.0, h);
+                // In from -1 to 1 across, out from -1 to 1 up: straight is clean.
+                let at = |x: f32, y: f32| {
+                    point(
+                        b.origin.x + px((x + 1.0) / 2.0 * w),
+                        b.origin.y + px((1.0 - (y.clamp(-1.0, 1.0) + 1.0) / 2.0) * h),
+                    )
+                };
+                let mut clean = gpui::PathBuilder::stroke(px(1.));
+                clean.move_to(at(-1.0, -1.0));
+                clean.line_to(at(1.0, 1.0));
+                if let Ok(p) = clean.build() {
+                    window.paint_path(p, alpha(TEXT_4, 1.0));
+                }
+                let mut path = gpui::PathBuilder::stroke(px(2.));
+                for i in 0..=64 {
+                    let x = i as f32 / 32.0 - 1.0;
+                    let y = x + (params.shape(x) - x) * sat.mix;
+                    match i {
+                        0 => path.move_to(at(x, y)),
+                        _ => path.line_to(at(x, y)),
+                    }
+                }
+                if let Ok(p) = path.build() {
+                    let c = if on {
+                        rgb(color).into()
+                    } else {
+                        alpha(TEXT_3, 1.0)
+                    };
+                    window.paint_path(p, c);
+                }
+            },
+        )
+        .size_full();
+        let knobs = [
+            (SatField::Drive, "Drive", false),
+            (SatField::Tone, "Tone", true),
+            (SatField::Mix, "Mix", false),
+            (SatField::Output, "Output", true),
+        ]
+        .map(|(field, label, bipolar)| {
+            let target = Target::Sat(ch, field);
+            let value = strip::sat_pos(field, &sat);
+            let shown = if bipolar { value * 2.0 - 1.0 } else { value };
+            div()
+                .w(px(60.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(4.))
+                .cursor_ns_resize()
+                .debug_selector(move || format!("sat-{field:?}"))
+                .child(knob(shown, 36., color, bipolar))
+                .child(
+                    div()
+                        .font_family(MONO)
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .whitespace_nowrap()
+                        .child(strip::sat_text(field, &sat)),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(rgb(TEXT_3))
+                        .child(label),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                        let y = pt(e.position).y;
+                        ws.begin_drag(Drag::Knob { target, y, value }, cx);
+                    }),
+                )
+        });
+        card()
+            .gap(px(10.))
+            .child(self.card_header("Saturator", ch, Builtin::Sat, on, cx))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .size(px(64.))
+                            .flex_none()
+                            .rounded(px(8.))
+                            .bg(rgb(WELL))
+                            .p(px(6.))
+                            .child(curve),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .gap(px(3.))
+                            .text_size(px(11.))
+                            .text_color(rgb(TEXT_3))
+                            .child(format!(
+                                "{} into a soft clip",
+                                strip::sat_text(SatField::Drive, &sat)
+                            ))
+                            .child(format!(
+                                "{} · {} wet",
+                                strip::sat_text(SatField::Tone, &sat),
+                                strip::sat_text(SatField::Mix, &sat)
+                            )),
+                    ),
+            )
+            .child(div().flex().justify_between().children(knobs))
+    }
+
     /// A built-in's title row: on/off, name, and taking it out.
     fn card_header(
         &self,
@@ -787,18 +946,20 @@ impl Workspace {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |ws, _, _, cx| {
-                            ws.edit(cx, |ws| {
-                                let (eq, comp) = ws.strip_dsp_mut(ch);
-                                match b {
-                                    Builtin::Eq => {
-                                        if let Some(e) = eq {
-                                            e.bypass ^= true
-                                        }
+                            ws.edit(cx, |ws| match b {
+                                Builtin::Eq => {
+                                    if let Some(e) = ws.strip_dsp_mut(ch).0 {
+                                        e.bypass ^= true
                                     }
-                                    Builtin::Comp => {
-                                        if let Some(c) = comp {
-                                            c.bypass ^= true
-                                        }
+                                }
+                                Builtin::Comp => {
+                                    if let Some(c) = ws.strip_dsp_mut(ch).1 {
+                                        c.bypass ^= true
+                                    }
+                                }
+                                Builtin::Sat => {
+                                    if let Some(s) = ws.sat_mut(ch) {
+                                        s.bypass ^= true
                                     }
                                 }
                             })
@@ -819,6 +980,7 @@ impl Workspace {
                                 builtin: b,
                             },
                         )],
+                        ..Default::default()
                     });
                     cx.notify();
                 }),

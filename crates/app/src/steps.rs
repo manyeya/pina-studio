@@ -1,10 +1,12 @@
 //! The step sequencer, as in Logic: a pattern region's rows of steps, in the pane under the
 //! tracks. Click a step to turn it on or off, option-click for an accent; "+ Sound" adds a row.
+//! On the drum kit a row is a drum; on any other instrument, a note.
 
 use gpui::{Context, MouseButton, MouseDownEvent, div, prelude::*, px, rgb};
 use tempo_engine::{
     drums,
-    project::{At, BEATS_PER_BAR, Content, PPQ, PatternRow, Region},
+    music::Key,
+    project::{At, Content, Instrument, PPQ, PatternRow, Region},
 };
 
 use crate::{
@@ -17,8 +19,26 @@ const CELL: f32 = 24.0;
 const ON: u8 = 100;
 const ACCENTED: u8 = 127;
 
-/// The rows a new pattern starts with.
+/// The rows a new drum pattern starts with.
 const STARTING_ROWS: [u8; 5] = [36, 38, 42, 46, 39];
+
+/// The notes a pattern on a melodic instrument can have rows for: two octaves of the song's key
+/// (C major without one) from the C below middle C, highest first.
+fn scale_notes(key: Option<Key>) -> Vec<u8> {
+    let key = key.unwrap_or(Key {
+        root: 0,
+        minor: false,
+    });
+    (48..=72).rev().filter(|&p| key.contains(p)).collect()
+}
+
+/// A row's name: a drum on the kit, else a note.
+fn row_name(drums: bool, pitch: u8) -> String {
+    match drums {
+        true => drums::name(pitch),
+        false => crate::pianoroll::name(pitch),
+    }
+}
 
 impl Workspace {
     /// The pattern region the pane shows: the selected one, if it's a pattern.
@@ -43,13 +63,27 @@ impl Workspace {
             cx.notify();
             return;
         }
-        let bar = PPQ * BEATS_PER_BAR;
+        let bar = self.session.project.bar();
         let start = self.playhead() / bar * bar;
-        let rows = STARTING_ROWS
+        // A drum kit starts with kick, snare and hats; anything else with the key's chord.
+        let starting: Vec<u8> = match tracks[self.track].instrument {
+            Some(Instrument::Drums) => STARTING_ROWS.to_vec(),
+            _ => {
+                let key = self.session.project.song_key().unwrap_or(Key {
+                    root: 0,
+                    minor: false,
+                });
+                let root = 60 + key.root;
+                let third = if key.minor { 3 } else { 4 };
+                vec![root + 12, root + 7, root + third, root]
+            }
+        };
+        let steps = (bar / (PPQ / 4)).max(1) as usize;
+        let rows = starting
             .iter()
             .map(|&pitch| PatternRow {
                 pitch,
-                cells: vec![0; 16],
+                cells: vec![0; steps],
             })
             .collect();
         let t = self.track;
@@ -62,6 +96,7 @@ impl Workspace {
                     step: PPQ / 4,
                     rows,
                 },
+                ..Default::default()
             });
             ws.region = Some((t, regions.len() - 1));
             ws.bottom = Some(Bottom::Steps);
@@ -94,6 +129,10 @@ impl Workspace {
             };
             let steps = rows.iter().map(|r| r.cells.len()).max().unwrap_or(16);
             let track_color = self.color(at.0);
+            let kit = matches!(
+                self.session.project.tracks[at.0].instrument,
+                Some(Instrument::Drums)
+            );
             // The step under the playhead, while playing in the region.
             let tick = self.playhead();
             let now = (self.player.playing()
@@ -107,7 +146,7 @@ impl Workspace {
                         .items_center()
                         .px_2()
                         .text_size(px(11.))
-                        .child(drums::name(row.pitch)),
+                        .child(row_name(kit, row.pitch)),
                 );
                 let cells = row.cells.iter().enumerate().map(|(k, &v)| {
                     let beat_start = k % 4 == 0;
@@ -148,15 +187,26 @@ impl Workspace {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                        let items = drums::SOUNDS
-                            .iter()
-                            .map(|&(pitch, name)| {
-                                (name.to_string(), MenuAction::AddRow { at, pitch })
-                            })
-                            .collect();
+                        let project = &ws.session.project;
+                        let items = match project.tracks[at.0].instrument {
+                            Some(Instrument::Drums) => drums::SOUNDS
+                                .iter()
+                                .map(|&(pitch, name)| {
+                                    (name.to_string(), MenuAction::AddRow { at, pitch })
+                                })
+                                .collect(),
+                            _ => scale_notes(project.song_key())
+                                .into_iter()
+                                .map(|pitch| {
+                                    let label = crate::pianoroll::name(pitch);
+                                    (label, MenuAction::AddRow { at, pitch })
+                                })
+                                .collect(),
+                        };
                         ws.menu = Some(Menu {
                             at: e.position,
                             items,
+                            ..Default::default()
                         });
                         cx.notify();
                     }),

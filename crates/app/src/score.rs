@@ -6,9 +6,12 @@ use gpui::{
     Bounds, Context, Hsla, MouseButton, PathBuilder, Pixels, Point, Window, canvas, div, fill,
     point, prelude::*, px, rgb, size,
 };
-use tempo_engine::project::{BEATS_PER_BAR, Content, PPQ};
+use tempo_engine::project::{Content, PPQ};
 
-use crate::{theme::*, workspace::Workspace};
+use crate::{
+    theme::*,
+    workspace::{Drag, Workspace},
+};
 
 /// The space between staff lines.
 const GAP: f32 = 9.0;
@@ -95,6 +98,7 @@ fn head(window: &mut Window, c: Point<Pixels>, hollow: bool, color: Hsla) {
 impl Workspace {
     pub fn score_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let (ppt, sx) = (self.px_per_tick(), self.scroll_x);
+        let bar_ticks = self.session.project.bar();
         let at = self.region.filter(|&at| {
             matches!(
                 self.session.project.region(at).content,
@@ -131,7 +135,7 @@ impl Workspace {
                     }
                 }
                 // Bar lines across both staves.
-                let bar = (PPQ * BEATS_PER_BAR) as f32 * ppt;
+                let bar = bar_ticks as f32 * ppt;
                 let first = (sx / bar) as u64;
                 let last = ((sx + f32::from(w)) / bar) as u64 + 1;
                 for k in first..=last {
@@ -261,10 +265,11 @@ impl Workspace {
                     cx.listener(move |ws, _, _, cx| {
                         cx.stop_propagation();
                         ws.note = Some(i);
+                        // It sounds until the mouse comes up, as a piano roll key does.
                         if let Some(at) = ws.region {
                             let track = ws.session.project.tracks[at.0].id;
                             ws.player.preview(track, pitch, 100);
-                            ws.player.preview(track, pitch, 0);
+                            ws.begin_drag(Drag::Key { track, pitch }, cx);
                         }
                         cx.notify();
                     }),

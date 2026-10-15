@@ -6,9 +6,10 @@ use std::path::Path;
 use serde_json::{Value, json};
 use tempo_engine::{
     analysis::{self, Analysis},
-    commands::{self, Command},
+    commands::{self, ChannelRef, Command},
     engine::Engine,
-    project::Project,
+    plugin::PluginParam,
+    project::{Project, Which},
     scan,
     session::Session,
 };
@@ -122,6 +123,40 @@ pub fn bounce(p: &Project, dir: &Path, out: &Path) -> Result<(), String> {
     let rate = p.sample_rate as f64;
     let (mut engine, _plugins) = Engine::load(p, dir, rate)?;
     engine.bounce(out, length(p))
+}
+
+/// A plugin's parameters as JSON: id, name, value (0 to 1) and how the plugin shows it.
+pub fn params_json(params: &[PluginParam], text: impl Fn(u32, f64) -> String) -> Value {
+    let list: Vec<Value> = params
+        .iter()
+        .map(|p| json!({ "id": p.id, "name": p.name, "value": p.value, "text": text(p.id, p.value) }))
+        .collect();
+    Value::Array(list)
+}
+
+/// A plugin's parameters, for automating them or setting them: from the app if it has the project
+/// open, else by loading the plugin.
+pub fn params(dir: &Path, channel: ChannelRef, plugin: Which) -> Result<Value, String> {
+    if let Some(reply) = server::ask(dir, &Request::Params { channel, plugin }) {
+        return reply;
+    }
+    let p = Project::load(dir)?;
+    let (_engine, lanes) = Engine::load(&p, dir, p.sample_rate as f64)?;
+    // Lanes are the tracks', then the auxes', then the master's.
+    let lane = match channel {
+        ChannelRef::Track(i) if i < p.tracks.len() => i,
+        ChannelRef::Aux(i) if i < p.auxes.len() => p.tracks.len() + i,
+        ChannelRef::Master => p.tracks.len() + p.auxes.len(),
+        _ => return Err("no such channel".into()),
+    };
+    let found = match plugin {
+        Which::Instrument => lanes[lane].instrument.as_ref(),
+        Which::Insert(n) => lanes[lane].inserts.get(n),
+    };
+    let plugin = found.ok_or("no plugin there")?;
+    Ok(params_json(&plugin.params(), |id, v| {
+        plugin.param_text(id, v)
+    }))
 }
 
 /// The plugins installed, scanning what's new.

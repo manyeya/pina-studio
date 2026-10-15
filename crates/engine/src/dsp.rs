@@ -1,10 +1,10 @@
 //! The channel strip's built-in processors, as Logic's Channel EQ and Compressor: a low cut, two
-//! bells and a high shelf; and a soft-knee compressor. Their settings are in the project; filters
+//! bells and a high shelf; a soft-knee compressor; and a saturator. Their settings are in the project; filters
 //! and coefficients are worked out on the main thread, and their state lives with the lane.
 
 use std::f64::consts::PI;
 
-use crate::project::{Band, Comp, Eq};
+use crate::project::{Band, Comp, Eq, Saturator};
 
 /// Second-order filter coefficients, normalized so a0 is 1 (RBJ's audio EQ cookbook).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -239,6 +239,74 @@ impl CompState {
     }
 }
 
+/// A saturator's settings, worked out for a sample rate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SatParams {
+    drive: f32,
+    /// What the tone tilt does below and above its split, and the split's one-pole coefficient.
+    low: f32,
+    high: f32,
+    split: f32,
+    mix: f32,
+    output: f32,
+    /// The DC blocker's coefficient.
+    dc: f32,
+}
+
+/// A little asymmetry in the curve, for the even harmonics tape and tubes add.
+const BIAS: f32 = 0.15;
+/// How far the tone tilts each way, in dB.
+const TILT_DB: f32 = 6.0;
+
+impl SatParams {
+    pub fn new(s: &Saturator, rate: f64) -> Self {
+        let tilt = s.tone.clamp(-1.0, 1.0) * TILT_DB;
+        let gain = |db: f32| 10f32.powf(db / 20.0);
+        SatParams {
+            drive: gain(s.drive_db.clamp(0.0, 24.0)),
+            low: gain(-tilt),
+            high: gain(tilt),
+            split: (-2.0 * PI * 1_500.0 / rate).exp() as f32,
+            mix: s.mix.clamp(0.0, 1.0),
+            output: gain(s.output_db),
+            dc: (-2.0 * PI * 10.0 / rate).exp() as f32,
+        }
+    }
+
+    /// The curve: a biased tanh, scaled so quiet sounds keep their level.
+    pub fn shape(&self, x: f32) -> f32 {
+        let (g, b) = (self.drive, BIAS.tanh());
+        ((self.drive * x + BIAS).tanh() - b) / (g * (1.0 - b * b))
+    }
+}
+
+/// A saturator's memory, per side: its tone filter and DC blocker.
+#[derive(Default)]
+pub struct SatState {
+    low: [f32; 2],
+    dc_in: [f32; 2],
+    dc_out: [f32; 2],
+}
+
+impl SatState {
+    /// Saturates a block in place. Allocation-free.
+    pub fn process(&mut self, p: &SatParams, l: &mut [f32], r: &mut [f32]) {
+        for (ch, buf) in [l, r].into_iter().enumerate() {
+            for x in buf.iter_mut() {
+                let dry = *x;
+                let shaped = p.shape(dry);
+                // The bias leaves an offset on loud passages; this takes it out.
+                let y = shaped - self.dc_in[ch] + p.dc * self.dc_out[ch];
+                self.dc_in[ch] = shaped;
+                self.dc_out[ch] = y;
+                self.low[ch] = p.split * self.low[ch] + (1.0 - p.split) * y;
+                let wet = self.low[ch] * p.low + (y - self.low[ch]) * p.high;
+                *x = (dry + (wet - dry) * p.mix) * p.output;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,5 +388,33 @@ mod tests {
         let (mut l, mut r) = (sine(1000.0, 4_800), sine(1000.0, 4_800));
         l.iter_mut().chain(r.iter_mut()).for_each(|x| *x *= 0.01);
         assert_eq!(state.process(&p, &mut l, &mut r), 0.0);
+    }
+
+    #[test]
+    fn the_saturator_keeps_quiet_sounds_and_rounds_off_loud_ones() {
+        let sat = Saturator {
+            drive_db: 12.0,
+            ..Saturator::default()
+        };
+        let p = SatParams::new(&sat, RATE);
+        assert!((p.shape(0.001) / 0.001 - 1.0).abs() < 0.01); // quiet: unity
+        assert!(p.shape(1.0) < 0.3 && p.shape(-1.0) > -0.3); // loud: rounded off
+        let run = |sat: &Saturator, level: f32| {
+            let p = SatParams::new(sat, RATE);
+            let mut state = SatState::default();
+            let (mut l, mut r) = (sine(1000.0, 48_000), sine(1000.0, 48_000));
+            l.iter_mut().chain(r.iter_mut()).for_each(|x| *x *= level);
+            state.process(&p, &mut l, &mut r);
+            peak(&l[24_000..])
+        };
+        assert!((run(&sat, 0.01) - 0.01).abs() < 0.0005);
+        assert!(run(&sat, 1.0) < 0.35);
+        // All dry: untouched, but for the output level.
+        let dry = Saturator {
+            mix: 0.0,
+            output_db: -6.0,
+            ..sat
+        };
+        assert!((run(&dry, 1.0) - 0.501).abs() < 0.01);
     }
 }

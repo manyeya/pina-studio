@@ -5,7 +5,7 @@
 //! buttons under the grid launch a whole scene.
 
 use gpui::{Context, Hsla, MouseButton, div, prelude::*, px, rgb};
-use tempo_engine::project::{BEATS_PER_BAR, Cell, Content, PPQ, Region};
+use tempo_engine::project::{Cell, Content, Region};
 
 use crate::{theme::*, workspace::Workspace};
 
@@ -20,11 +20,8 @@ impl Workspace {
         let t = &self.session.project.tracks[track];
         let cell = scene.and_then(|s| t.cells.iter().position(|c| c.scene == s));
         let rate = self.player.rate();
-        let bar = self
-            .session
-            .project
-            .samples(PPQ * BEATS_PER_BAR, rate)
-            .max(1);
+        let p = &self.session.project;
+        let bar = p.samples(p.bar(), rate).max(1);
         let now = self.player.position();
         let at = if self.player.playing() {
             (now / bar + 1) * bar
@@ -88,6 +85,7 @@ impl Workspace {
 
     pub fn loops_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let project = &self.session.project;
+        let bar_ticks = project.bar();
         let now = self.player.position();
         let mut names = Vec::new();
         let mut rows = Vec::new();
@@ -111,11 +109,12 @@ impl Workspace {
                 let playing = launched.is_some_and(|(_, at)| now >= at);
                 let waiting = launched.is_some() && !playing;
                 let label = cell.map(|c| {
-                    let bars = c.region.length as f32 / (PPQ * BEATS_PER_BAR) as f32;
+                    let bars = c.region.length as f32 / bar_ticks as f32;
                     let kind = match c.region.content {
                         Content::Audio { .. } => "Audio",
                         Content::Pattern { .. } => "Pattern",
-                        _ => "MIDI",
+                        Content::Takes { .. } => "Takes",
+                        Content::Midi { .. } => "MIDI",
                     };
                     format!(
                         "{}{kind} · {bars:.0} bar{}",

@@ -4,6 +4,7 @@
 
 use std::{
     borrow::Cow,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -12,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 /// Ticks per quarter note, as in Logic.
 pub const PPQ: u64 = 960;
-/// Beats to a bar: 4/4 throughout, for now.
-pub const BEATS_PER_BAR: u64 = 4;
+/// The notes a time signature's beat can be: a whole note to a sixteenth.
+pub const BEAT_UNITS: [u64; 5] = [1, 2, 4, 8, 16];
 
 pub const FILE: &str = "project.json";
 pub const AUDIO_DIR: &str = "Audio Files";
@@ -21,8 +22,11 @@ pub const STATES_DIR: &str = "Plugin States";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Project {
-    /// Beats per minute.
+    /// Quarter notes per minute.
     pub tempo: f64,
+    /// Beats to a bar, and the note that is a beat: [4, 4], [3, 4], [6, 8].
+    #[serde(default = "common_time", skip_serializing_if = "is_common_time")]
+    pub time_signature: [u64; 2],
     pub sample_rate: u32,
     #[serde(default)]
     pub master_volume_db: f32,
@@ -31,6 +35,11 @@ pub struct Project {
     pub master_eq: Option<Eq>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master_comp: Option<Comp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_sat: Option<Saturator>,
+    /// Plugins on the master, after its built-in effects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub master_inserts: Vec<PluginRef>,
     pub tracks: Vec<Track>,
     /// Aux channels: tracks send to them by bus number, and they play into the master.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -44,6 +53,14 @@ pub struct Project {
     /// The stretch playback loops over, while it's on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cycle: Option<Cycle>,
+}
+
+fn common_time() -> [u64; 2] {
+    [4, 4]
+}
+
+fn is_common_time(t: &[u64; 2]) -> bool {
+    *t == [4, 4]
 }
 
 /// A named place on the timeline.
@@ -137,6 +154,34 @@ impl Default for Comp {
     }
 }
 
+/// A channel's built-in saturator, after its compressor: it drives the sound into a soft clip, as
+/// tape or a tube would, adding harmonics. Quiet sounds keep their level; loud ones round off.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(default)]
+pub struct Saturator {
+    /// How hard it's driven, in dB: 0 to 24.
+    pub drive_db: f32,
+    /// What it adds, darker (-1) to brighter (1).
+    pub tone: f32,
+    /// How much of the saturated sound is heard, 0 to 1; the rest is the dry sound.
+    pub mix: f32,
+    pub output_db: f32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bypass: bool,
+}
+
+impl Default for Saturator {
+    fn default() -> Self {
+        Saturator {
+            drive_db: 6.0,
+            tone: 0.0,
+            mix: 1.0,
+            output_db: 0.0,
+            bypass: false,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Track {
     /// Identifies the track while the project is open, so the engine keeps its instrument and
@@ -152,6 +197,9 @@ pub struct Track {
     pub eq: Option<Eq>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comp: Option<Comp>,
+    /// The built-in saturator, after the compressor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sat: Option<Saturator>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inserts: Vec<PluginRef>,
     #[serde(default)]
@@ -165,7 +213,8 @@ pub struct Track {
     pub solo: bool,
     #[serde(default)]
     pub regions: Vec<Region>,
-    /// Volume and pan over time. A parameter with points follows them instead of its fader.
+    /// Volume, pan and plugin parameters over time. A parameter with points follows them instead
+    /// of its fader or knob, unless the track's automation is off.
     #[serde(default, skip_serializing_if = "Automation::is_empty")]
     pub automation: Automation,
     /// Post-fader sends to aux buses.
@@ -177,6 +226,84 @@ pub struct Track {
     /// The bus the track plays into instead of the master: an aux, or a summing stack.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<u32>,
+    /// What an audio track records: the input device's channels from here. The first two by
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<Input>,
+}
+
+/// Input channels to record from.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Input {
+    /// The first channel, from 0.
+    pub channel: u16,
+    /// This channel and the next, or this one alone.
+    #[serde(default)]
+    pub stereo: bool,
+}
+
+impl Input {
+    pub fn name(self) -> String {
+        match self.stereo {
+            true => format!("Input {}–{}", self.channel + 1, self.channel + 2),
+            false => format!("Input {}", self.channel + 1),
+        }
+    }
+}
+
+impl Track {
+    /// Puts a plugin in insert slot `index` (past the end adds one), or takes it out with None.
+    /// Automation follows: a slot's lanes go with its plugin.
+    pub fn set_insert(&mut self, index: usize, plugin: Option<PluginRef>) -> Result<(), String> {
+        match plugin {
+            Some(p) if index < self.inserts.len() => {
+                if !self.inserts[index].same_plugin(&p) {
+                    self.automation.forget(Which::Insert(index));
+                }
+                self.inserts[index] = p;
+            }
+            Some(p) => self.inserts.push(p),
+            None if index < self.inserts.len() => {
+                self.inserts.remove(index);
+                self.automation.insert_removed(index);
+            }
+            None => return Err(format!("no insert {index} to remove")),
+        }
+        Ok(())
+    }
+
+    /// Changes the instrument; another plugin's parameters aren't this one's, so its lanes go.
+    pub fn set_instrument(&mut self, instrument: Instrument) {
+        let same = match (&self.instrument, &instrument) {
+            (Some(Instrument::Vst3(a)), Instrument::Vst3(b)) => a.same_plugin(b),
+            _ => false,
+        };
+        if !same {
+            self.automation.forget(Which::Instrument);
+        }
+        self.instrument = Some(instrument);
+    }
+
+    /// A plugin on the track.
+    pub fn plugin(&self, which: Which) -> Option<&PluginRef> {
+        match which {
+            Which::Instrument => match &self.instrument {
+                Some(Instrument::Vst3(r)) => Some(r),
+                _ => None,
+            },
+            Which::Insert(i) => self.inserts.get(i),
+        }
+    }
+
+    pub fn plugin_mut(&mut self, which: Which) -> Option<&mut PluginRef> {
+        match which {
+            Which::Instrument => match &mut self.instrument {
+                Some(Instrument::Vst3(r)) => Some(r),
+                _ => None,
+            },
+            Which::Insert(i) => self.inserts.get_mut(i),
+        }
+    }
 }
 
 /// A Live Loops cell: a loop on a track, in a scene's column. Its region's start doesn't matter;
@@ -188,11 +315,14 @@ pub struct Cell {
     pub region: Region,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct AuxSend {
     pub bus: u32,
     #[serde(default)]
     pub level_db: f32,
+    /// Taken before the fader, so the fader doesn't change what's sent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pre: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -207,6 +337,8 @@ pub struct Aux {
     pub eq: Option<Eq>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comp: Option<Comp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sat: Option<Saturator>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inserts: Vec<PluginRef>,
     #[serde(default)]
@@ -228,6 +360,72 @@ pub struct Automation {
     /// -1 to 1.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pan: Vec<AutoPoint>,
+    /// Plugin parameters over time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<PluginAuto>,
+    #[serde(default, skip_serializing_if = "AutoMode::is_read")]
+    pub mode: AutoMode,
+}
+
+/// A plugin parameter's automation.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PluginAuto {
+    pub plugin: Which,
+    /// The parameter's id in the plugin.
+    pub param: u32,
+    /// Its name, for people and agents reading the project.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// Values from 0 to 1.
+    pub points: Vec<AutoPoint>,
+}
+
+/// A plugin on a track or aux: its instrument, or an insert by index.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Which {
+    Instrument,
+    Insert(usize),
+}
+
+/// How a track uses its automation, as Logic's modes: Read plays it; Touch and Latch play it and
+/// also record what's moved while the song plays (Touch until the control is let go, Latch until
+/// playback stops); Off ignores it.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoMode {
+    Off,
+    #[default]
+    Read,
+    Touch,
+    Latch,
+}
+
+impl AutoMode {
+    pub const ALL: [AutoMode; 4] = [
+        AutoMode::Off,
+        AutoMode::Read,
+        AutoMode::Touch,
+        AutoMode::Latch,
+    ];
+
+    fn is_read(&self) -> bool {
+        *self == AutoMode::Read
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            AutoMode::Off => "Off",
+            AutoMode::Read => "Read",
+            AutoMode::Touch => "Touch",
+            AutoMode::Latch => "Latch",
+        }
+    }
+
+    /// Whether moving a control while playing records it.
+    pub fn writes(self) -> bool {
+        matches!(self, AutoMode::Touch | AutoMode::Latch)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -236,31 +434,148 @@ pub struct AutoPoint {
     pub value: f32,
 }
 
-/// An automatable parameter.
+/// An automatable parameter: the fader, the pan knob, or a plugin's parameter by id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Param {
     #[default]
     Volume,
     Pan,
+    Plugin(Which, u32),
 }
 
 impl Automation {
     pub fn is_empty(&self) -> bool {
-        self.volume.is_empty() && self.pan.is_empty()
+        self.volume.is_empty()
+            && self.pan.is_empty()
+            && self.plugins.is_empty()
+            && self.mode == AutoMode::Read
     }
 
     pub fn points(&self, param: Param) -> &[AutoPoint] {
         match param {
             Param::Volume => &self.volume,
             Param::Pan => &self.pan,
+            Param::Plugin(which, id) => self
+                .plugins
+                .iter()
+                .find(|a| a.plugin == which && a.param == id)
+                .map_or(&[], |a| &a.points),
         }
     }
 
+    /// A parameter's points, making it a lane if it has none.
     pub fn points_mut(&mut self, param: Param) -> &mut Vec<AutoPoint> {
         match param {
             Param::Volume => &mut self.volume,
             Param::Pan => &mut self.pan,
+            Param::Plugin(plugin, param) => {
+                let i = match self
+                    .plugins
+                    .iter()
+                    .position(|a| a.plugin == plugin && a.param == param)
+                {
+                    Some(i) => i,
+                    None => {
+                        self.plugins.push(PluginAuto {
+                            plugin,
+                            param,
+                            name: String::new(),
+                            points: Vec::new(),
+                        });
+                        self.plugins.len() - 1
+                    }
+                };
+                &mut self.plugins[i].points
+            }
         }
+    }
+
+    /// Names a plugin parameter's lane, so the project says what it is.
+    pub fn name(&mut self, param: Param, name: &str) {
+        if let Param::Plugin(which, id) = param
+            && let Some(a) = self
+                .plugins
+                .iter_mut()
+                .find(|a| a.plugin == which && a.param == id)
+        {
+            a.name = name.to_string();
+        }
+    }
+
+    /// Drops plugin lanes left without points.
+    pub fn tidy(&mut self) {
+        self.plugins.retain(|a| !a.points.is_empty());
+    }
+
+    /// Every parameter with points, faders first.
+    pub fn params(&self) -> Vec<Param> {
+        let mut out = Vec::new();
+        if !self.volume.is_empty() {
+            out.push(Param::Volume);
+        }
+        if !self.pan.is_empty() {
+            out.push(Param::Pan);
+        }
+        out.extend(
+            self.plugins
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| Param::Plugin(a.plugin, a.param)),
+        );
+        out
+    }
+
+    /// Records a control's value at `tick` while the song plays, replacing the line since
+    /// `after`: the last tick this pass recorded, or None on its first, which keeps the line as it
+    /// was up to here.
+    pub fn write(&mut self, param: Param, after: Option<u64>, tick: u64, value: f32) {
+        let points = self.points_mut(param);
+        let from = match after {
+            Some(a) => a.min(tick),
+            None => {
+                let before = tick.saturating_sub(1);
+                if let Some(old) = value_at(points, tick as f64)
+                    && tick > 0
+                    && !points.iter().any(|p| p.tick == before)
+                {
+                    let i = points.partition_point(|p| p.tick < before);
+                    points.insert(
+                        i,
+                        AutoPoint {
+                            tick: before,
+                            value: old,
+                        },
+                    );
+                }
+                before
+            }
+        };
+        points.retain(|p| p.tick <= from || p.tick > tick);
+        let n = points.partition_point(|p| p.tick <= from);
+        // Holding still needs no points in between: the last one moves along.
+        if after.is_some() && n >= 2 && points[n - 1].value == value && points[n - 2].value == value
+        {
+            points[n - 1].tick = tick;
+        } else {
+            points.insert(n, AutoPoint { tick, value });
+        }
+    }
+
+    /// Plugin lanes after an insert is taken out of slot `i`: its own go, later ones move up.
+    fn insert_removed(&mut self, i: usize) {
+        self.plugins.retain(|a| a.plugin != Which::Insert(i));
+        for a in &mut self.plugins {
+            if let Which::Insert(j) = &mut a.plugin
+                && *j > i
+            {
+                *j -= 1;
+            }
+        }
+    }
+
+    /// Drops a plugin's lanes, when another plugin takes its place.
+    fn forget(&mut self, which: Which) {
+        self.plugins.retain(|a| a.plugin != which);
     }
 
     /// Adds a point in time order and returns its index.
@@ -308,7 +623,7 @@ pub enum Instrument {
     Vst3(PluginRef),
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct PluginRef {
     /// The `.vst3` bundle.
     pub path: PathBuf,
@@ -317,6 +632,10 @@ pub struct PluginRef {
     /// Its settings, saved under `Plugin States/` in the project folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<PathBuf>,
+    /// Parameters set from tempo (its Smart Controls, or an agent), by id, 0 to 1: applied over
+    /// its saved settings, and undone like any edit.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<u32, f64>,
 }
 
 impl PluginRef {
@@ -326,14 +645,60 @@ impl PluginRef {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Region {
+    /// What it's called, like "Hook"; without a name it goes by its track's.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     /// Position and length on the timeline, in ticks.
     #[serde(default)]
     pub start: u64,
     pub length: u64,
+    /// Aliases share a link: they play the same notes or steps, and editing one edits them all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<u64>,
+    /// Plays over and over, until the next region on its track or the end of the song.
+    #[serde(default, rename = "loop", skip_serializing_if = "std::ops::Not::not")]
+    pub looped: bool,
+    /// Playback settings, as Logic's region inspector has: MIDI plays moved by `transpose`
+    /// semitones, `velocity` louder, and started on a `quantize` grid (ticks), its notes kept as
+    /// they are.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub transpose: i8,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub velocity: i8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quantize: Option<u64>,
     #[serde(flatten)]
     pub content: Content,
+}
+
+fn is_zero(v: &i8) -> bool {
+    *v == 0
+}
+
+impl Region {
+    /// A note as this region plays it, after its playback settings.
+    pub fn played(&self, n: &Note) -> Note {
+        let start = match self.quantize.filter(|&q| q > 0) {
+            Some(q) => {
+                let q = q as i64;
+                (n.start + q / 2).div_euclid(q) * q
+            }
+            None => n.start,
+        };
+        Note {
+            start,
+            pitch: (n.pitch as i16 + self.transpose as i16).clamp(0, 127) as u8,
+            velocity: (n.velocity as i16 + self.velocity as i16).clamp(1, 127) as u8,
+            ..*n
+        }
+    }
+
+    /// Whether its playback settings change anything.
+    pub fn plain(&self) -> bool {
+        self.transpose == 0 && self.velocity == 0 && self.quantize.is_none()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -367,6 +732,12 @@ pub enum Content {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         comp: Vec<CompPiece>,
     },
+}
+
+impl Default for Content {
+    fn default() -> Self {
+        Content::Midi { notes: Vec::new() }
+    }
 }
 
 fn one() -> f64 {
@@ -515,6 +886,9 @@ impl Project {
             master_volume_db: 0.0,
             master_eq: None,
             master_comp: None,
+            master_sat: None,
+            master_inserts: Vec::new(),
+            time_signature: common_time(),
             tracks: Vec::new(),
             auxes: Vec::new(),
             markers: Vec::new(),
@@ -602,6 +976,43 @@ impl Project {
         crate::music::detect(notes)
     }
 
+    /// Ticks in a beat: a quarter note in 4/4, an eighth in 6/8.
+    pub fn beat(&self) -> u64 {
+        PPQ * 4 / self.time_signature[1].clamp(1, 16)
+    }
+
+    pub fn beats_per_bar(&self) -> u64 {
+        self.time_signature[0].clamp(1, 32)
+    }
+
+    /// Ticks in a bar.
+    pub fn bar(&self) -> u64 {
+        self.beat() * self.beats_per_bar()
+    }
+
+    /// A tick as bars, beats, sixteenths and ticks, each from 0.
+    pub fn bbt(&self, tick: u64) -> [u64; 4] {
+        let (bar, beat) = (self.bar(), self.beat());
+        [
+            tick / bar,
+            tick % bar / beat,
+            tick % beat / (PPQ / 4),
+            tick % (PPQ / 4),
+        ]
+    }
+
+    /// Where a looped region stops: at the next region on its track, or else the end of the song.
+    pub fn loop_end(&self, at: At) -> u64 {
+        let r = self.region(at);
+        let next = self.tracks[at.0]
+            .regions
+            .iter()
+            .map(|o| o.start)
+            .filter(|&s| s > r.start)
+            .min();
+        next.unwrap_or_else(|| self.end()).max(r.start + r.length)
+    }
+
     /// Ticks to samples at `rate`.
     // ponytail: one tempo for the whole project; a tempo map replaces this.
     pub fn samples(&self, ticks: u64, rate: f64) -> u64 {
@@ -649,6 +1060,7 @@ impl Project {
                 start,
                 length: (end - start).max(1),
                 content,
+                ..Default::default()
             });
             return (track, regions.len() - 1);
         };
@@ -754,6 +1166,7 @@ impl Project {
                 start: r.start,
                 length: r.length,
                 content: Content::Midi { notes },
+                ..Default::default()
             });
         } else {
             for &(a, b, t) in &segments {
@@ -778,6 +1191,7 @@ impl Project {
                         start: r.start + from as u64,
                         length: b - from as u64,
                         content,
+                        ..Default::default()
                     });
                 }
             }
@@ -835,7 +1249,9 @@ impl Project {
         };
         let r = &mut self.tracks[at.0].regions[at.1];
         match &mut r.content {
+            // Its notes move, so an alias trimmed at the start becomes a region of its own.
             Content::Midi { notes } => {
+                r.link = None;
                 for n in notes {
                     n.start -= start as i64 - old as i64;
                 }
@@ -876,6 +1292,95 @@ impl Project {
         r.length = end.max(r.start + 1) - r.start;
     }
 
+    /// Makes an alias of a MIDI or pattern region at `start` on `track`: a region linked to it,
+    /// so editing either's notes or steps edits both. Returns where it went.
+    pub fn alias(&mut self, at: At, track: usize, start: u64) -> Result<At, String> {
+        let r = self.region(at);
+        if !matches!(r.content, Content::Midi { .. } | Content::Pattern { .. }) {
+            return Err("only MIDI and pattern regions have aliases".into());
+        }
+        if self.tracks[track].instrument.is_none() {
+            return Err("an alias goes on an instrument track".into());
+        }
+        let link = match r.link {
+            Some(l) => l,
+            None => {
+                let next = self
+                    .tracks
+                    .iter()
+                    .flat_map(|t| &t.regions)
+                    .filter_map(|r| r.link)
+                    .max()
+                    .map_or(1, |l| l + 1);
+                self.tracks[at.0].regions[at.1].link = Some(next);
+                next
+            }
+        };
+        let alias = Region {
+            start,
+            link: Some(link),
+            ..self.region(at).clone()
+        };
+        self.tracks[track].regions.push(alias);
+        Ok((track, self.tracks[track].regions.len() - 1))
+    }
+
+    /// Makes an alias a region of its own, its notes copied.
+    pub fn unlink(&mut self, at: At) {
+        self.tracks[at.0].regions[at.1].link = None;
+    }
+
+    /// What each group of aliases plays now, for `sync_links`.
+    pub fn link_contents(&self) -> HashMap<u64, Content> {
+        let mut out = HashMap::new();
+        for r in self.tracks.iter().flat_map(|t| &t.regions) {
+            if let Some(l) = r.link {
+                out.entry(l).or_insert_with(|| r.content.clone());
+            }
+        }
+        out
+    }
+
+    /// Keeps aliases alike after an edit: in each group, the region whose content changed since
+    /// `last` (the groups' contents after the previous call) is copied to the others. A region
+    /// left on its own is no longer an alias.
+    pub fn sync_links(&mut self, last: &mut HashMap<u64, Content>) {
+        let mut groups: BTreeMap<u64, Vec<At>> = BTreeMap::new();
+        for (t, track) in self.tracks.iter().enumerate() {
+            for (r, region) in track.regions.iter().enumerate() {
+                if let Some(l) = region.link {
+                    groups.entry(l).or_default().push((t, r));
+                }
+            }
+        }
+        last.retain(|l, _| groups.contains_key(l));
+        for (link, members) in groups {
+            if members.len() == 1 {
+                let (t, r) = members[0];
+                self.tracks[t].regions[r].link = None;
+                last.remove(&link);
+                continue;
+            }
+            let changed = last
+                .get(&link)
+                .and_then(|c| {
+                    members
+                        .iter()
+                        .copied()
+                        .find(|&at| self.region(at).content != *c)
+                })
+                .unwrap_or(members[0]);
+            let content = self.region(changed).content.clone();
+            for &(t, r) in members.iter().filter(|&&at| at != changed) {
+                let other = &mut self.tracks[t].regions[r].content;
+                if *other != content {
+                    *other = content.clone();
+                }
+            }
+            last.insert(link, content);
+        }
+    }
+
     /// Splits a region at `tick`, if that's inside it, and returns where the second half went.
     /// Notes stay with the half they start in, as Logic's "Keep" does.
     pub fn split_region(&mut self, at: At, tick: u64) -> Option<At> {
@@ -891,7 +1396,10 @@ impl Project {
         second.length = r.length - first;
         r.length = first;
         match (&mut r.content, &mut second.content) {
+            // Each half keeps only its notes, so neither is an alias any more.
             (Content::Midi { notes: a }, Content::Midi { notes: b }) => {
+                r.link = None;
+                second.link = None;
                 a.retain(|n| n.start < first as i64);
                 b.retain(|n| n.start >= first as i64);
                 for n in b {
@@ -945,6 +1453,7 @@ mod tests {
             start,
             length,
             content: Content::Midi { notes },
+            ..Default::default()
         }
     }
 
@@ -957,6 +1466,7 @@ mod tests {
                 offset,
                 stretch: 1.0,
             },
+            ..Default::default()
         }
     }
 
@@ -1150,6 +1660,7 @@ mod tests {
                 takes,
                 comp: vec![],
             },
+            ..Default::default()
         };
         let mut p = project(vec![region], true);
         p.comp((0, 0), 960, 1920, 0).unwrap();
@@ -1184,6 +1695,7 @@ mod tests {
             start: 0,
             length: 1920,
             content: Content::Takes { takes, comp },
+            ..Default::default()
         };
         let mut p = project(vec![region], true);
         let at = p.split_region((0, 0), 1440).unwrap();
@@ -1227,5 +1739,115 @@ mod tests {
         assert_eq!(p.move_region((0, 0), 1, 480), (0, 0));
         assert_eq!(p.move_region((0, 0), 2, 480), (2, 0));
         assert_eq!(p.region((2, 0)).start, 480);
+    }
+
+    #[test]
+    fn aliases_share_their_notes_until_unlinked() {
+        let mut p = project(vec![midi(0, 960, &[(0, 60)])], true);
+        let alias = p.alias((0, 0), 0, 3840).unwrap();
+        assert!(p.region(alias).link.is_some());
+        assert_eq!(p.region(alias).link, p.region((0, 0)).link);
+        assert_eq!(p.region(alias).start, 3840);
+        let mut links = p.link_contents();
+        // Editing the alias edits the original, and the other way round.
+        p.notes_mut(alias).unwrap()[0].pitch = 64;
+        p.sync_links(&mut links);
+        assert_eq!(p.notes_mut((0, 0)).unwrap()[0].pitch, 64);
+        p.notes_mut((0, 0)).unwrap()[0].pitch = 67;
+        p.sync_links(&mut links);
+        assert_eq!(p.notes_mut(alias).unwrap()[0].pitch, 67);
+        // Its place and playback settings are its own.
+        p.tracks[0].regions[1].transpose = 12;
+        p.sync_links(&mut links);
+        assert_eq!(p.region((0, 0)).transpose, 0);
+        // Splitting makes regions of their own; one left alone isn't an alias.
+        p.split_region(alias, 3840 + 480).unwrap();
+        p.sync_links(&mut links);
+        assert!(p.tracks[0].regions.iter().all(|r| r.link.is_none()));
+        // Audio has no aliases.
+        let mut p = project(vec![audio(0, 960, 0)], false);
+        assert!(p.alias((0, 0), 0, 960).is_err());
+    }
+
+    #[test]
+    fn recording_automation_replaces_the_line_it_passes() {
+        let mut a = Automation::default();
+        for tick in [0, 3840] {
+            a.add(Param::Volume, AutoPoint { tick, value: -6.0 });
+        }
+        a.write(Param::Volume, None, 960, 0.0);
+        a.write(Param::Volume, Some(960), 1440, -3.0);
+        a.write(Param::Volume, Some(1440), 1920, -3.0);
+        a.write(Param::Volume, Some(1920), 2400, -3.0); // held still: the last point moves on
+        let points: Vec<(u64, f32)> = a.volume.iter().map(|p| (p.tick, p.value)).collect();
+        assert_eq!(
+            points,
+            [
+                (0, -6.0),
+                (959, -6.0), // the line as it was, up to where recording began
+                (960, 0.0),
+                (1440, -3.0),
+                (2400, -3.0),
+                (3840, -6.0)
+            ]
+        );
+        // Plugin parameters record the same way, in lanes of their own.
+        let cutoff = Param::Plugin(Which::Instrument, 7);
+        a.write(cutoff, None, 0, 0.25);
+        a.name(cutoff, "Cutoff");
+        assert_eq!(a.points(cutoff).len(), 1);
+        assert_eq!(a.plugins[0].name, "Cutoff");
+        assert_eq!(a.params(), [Param::Volume, cutoff]);
+    }
+
+    #[test]
+    fn a_slots_automation_goes_with_its_plugin() {
+        let plugin = |class: &str| PluginRef {
+            path: "/p.vst3".into(),
+            class: class.into(),
+            ..Default::default()
+        };
+        let mut t = Track {
+            inserts: vec![plugin("a"), plugin("b")],
+            ..Default::default()
+        };
+        for i in 0..2 {
+            t.automation.add(
+                Param::Plugin(Which::Insert(i), 1),
+                AutoPoint {
+                    tick: 0,
+                    value: i as f32,
+                },
+            );
+        }
+        t.set_insert(0, None).unwrap();
+        assert_eq!(t.automation.plugins.len(), 1);
+        assert_eq!(t.automation.plugins[0].plugin, Which::Insert(0)); // b's, moved up
+        assert_eq!(t.automation.plugins[0].points[0].value, 1.0);
+        // The same plugin with other settings keeps it; another plugin doesn't.
+        t.set_insert(0, Some(plugin("b"))).unwrap();
+        assert_eq!(t.automation.plugins.len(), 1);
+        t.set_insert(0, Some(plugin("c"))).unwrap();
+        assert!(t.automation.plugins.is_empty());
+    }
+
+    #[test]
+    fn time_signatures_set_the_bar() {
+        let mut p = Project::new(48_000);
+        assert_eq!((p.beat(), p.bar()), (PPQ, 4 * PPQ));
+        p.time_signature = [6, 8];
+        assert_eq!(
+            (p.beat(), p.bar(), p.beats_per_bar()),
+            (PPQ / 2, 3 * PPQ, 6)
+        );
+        p.time_signature = [3, 4];
+        assert_eq!(p.bar(), 3 * PPQ);
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"time_signature\":[3,4]"));
+        assert!(
+            !serde_json::to_string(&Project::new(48_000))
+                .unwrap()
+                .contains("time_signature")
+        );
     }
 }

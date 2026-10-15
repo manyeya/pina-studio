@@ -9,38 +9,26 @@ use tempo_engine::{
     music::NoteEdit,
     player::Which,
     plugin::PluginParam,
-    project::{BEATS_PER_BAR, Content, Instrument, PPQ, PluginRef},
+    project::{Content, Instrument, PPQ, PluginRef, Project},
 };
 
 use crate::{
     menu::{Menu, MenuAction},
     strip::{self, Builtin, Channel, Layout},
     theme::*,
-    workspace::{Bottom, CompField, Drag, Side, Target, Workspace, pt},
+    workspace::{Bottom, CompField, Drag, Name, Side, Target, Workspace, pt},
 };
 
 /// "17 1 1 1": a position as bars, beats, sixteenths and ticks, from 1.
-pub fn position(tick: u64) -> String {
-    let beat = tick / PPQ;
-    format!(
-        "{} {} {} {}",
-        beat / BEATS_PER_BAR + 1,
-        beat % BEATS_PER_BAR + 1,
-        tick % PPQ / (PPQ / 4) + 1,
-        tick % (PPQ / 4) + 1
-    )
+pub fn position(p: &Project, tick: u64) -> String {
+    let [bar, beat, div, tick] = p.bbt(tick);
+    format!("{} {} {} {}", bar + 1, beat + 1, div + 1, tick + 1)
 }
 
 /// "4 0 0 0": a length as bars, beats, sixteenths and ticks.
-pub fn length(ticks: u64) -> String {
-    let beats = ticks / PPQ;
-    format!(
-        "{} {} {} {}",
-        beats / BEATS_PER_BAR,
-        beats % BEATS_PER_BAR,
-        ticks % PPQ / (PPQ / 4),
-        ticks % (PPQ / 4)
-    )
+pub fn length(p: &Project, ticks: u64) -> String {
+    let [bars, beats, divs, ticks] = p.bbt(ticks);
+    format!("{bars} {beats} {divs} {ticks}")
 }
 
 /// A row of the inspector: a label, and what it's set to.
@@ -192,9 +180,12 @@ impl Workspace {
                 .flex_col()
                 .gap(px(6.))
                 .child(section_title("Region"))
-                .child(div().text_color(rgb(TEXT_3)).line_height(px(17.)).child(
-                    "Select a region to see its position, quantize it, or move its notes.",
-                ));
+                .child(
+                    div()
+                        .text_color(rgb(TEXT_3))
+                        .line_height(px(17.))
+                        .child("Select a region to name it, loop it, or change how it plays."),
+                );
         };
         let track = &project.tracks[at.0];
         let region = &track.regions[at.1];
@@ -205,6 +196,14 @@ impl Workspace {
             Content::Audio { .. } => "Audio",
             Content::Takes { .. } => "Takes",
         };
+        let aliases = region.link.map(|l| {
+            project
+                .tracks
+                .iter()
+                .flat_map(|t| &t.regions)
+                .filter(|r| r.link == Some(l))
+                .count()
+        });
         let header = div()
             .h(px(22.))
             .flex()
@@ -218,14 +217,130 @@ impl Workspace {
                     .gap(px(6.))
                     .font_weight(FontWeight::MEDIUM)
                     .child(div().size(px(8.)).rounded(px(2.)).bg(rgb(color)))
+                    .when(aliases.is_some(), |d| {
+                        d.child(icon(Icon::Link, 13.).text_color(rgb(TEXT_2)))
+                    })
                     .child(format!("{} · {kind}", track.name)),
             );
+        // Its name: click to type one.
+        let name = match self.name_field(Name::Region(at)) {
+            Some(field) => div().w(px(150.)).child(field),
+            None => {
+                let named = !region.name.is_empty();
+                mono(if named {
+                    region.name.clone()
+                } else {
+                    "Unnamed".into()
+                })
+                .when(!named, |d| d.text_color(rgb(TEXT_4)))
+                .max_w(px(150.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .cursor_text()
+                .debug_selector(|| "region-name".into())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, window, cx| {
+                        ws.start_naming(Name::Region(at), window, cx)
+                    }),
+                )
+            }
+        };
+        let looped = region.looped;
         let mut d = div()
             .flex()
             .flex_col()
             .child(header)
-            .child(row("Position", mono(position(region.start))))
-            .child(row("Length", mono(length(region.length))));
+            .child(row("Name", name))
+            .child(row("Position", mono(position(project, region.start))))
+            .child(row("Length", mono(length(project, region.length))))
+            .child(row(
+                "Loop",
+                switch(looped)
+                    .debug_selector(|| "region-loop".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| {
+                            ws.edit(cx, |ws| {
+                                ws.session.project.tracks[at.0].regions[at.1].looped ^= true
+                            })
+                        }),
+                    ),
+            ));
+        // What MIDI plays, its notes untouched: as Logic's region parameters.
+        if region.content.is_midi() && !matches!(region.content, Content::Takes { .. }) {
+            let q = region.quantize;
+            let signed = |v: i8| match v {
+                0 => "0".to_string(),
+                v if v > 0 => format!("+{v}"),
+                v => format!("−{}", -(v as i16)),
+            };
+            d = d
+                .child(row(
+                    "Quantize",
+                    dropdown(q.map_or("Off".into(), grid_name), 22.)
+                        .debug_selector(|| "region-quantize".into())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                let items = [None, Some(PPQ), Some(PPQ / 2), Some(PPQ / 4)]
+                                    .into_iter()
+                                    .chain([Some(PPQ / 8)])
+                                    .map(|g| {
+                                        let label = g.map_or("Off".into(), grid_name);
+                                        (label, MenuAction::RegionQuantize(at, g))
+                                    })
+                                    .collect();
+                                ws.menu = Some(Menu {
+                                    at: e.position,
+                                    items,
+                                    ..Default::default()
+                                });
+                                cx.notify();
+                            }),
+                        ),
+                ))
+                .child(row(
+                    "Transpose",
+                    stepper(signed(region.transpose), at, Field::Transpose, cx),
+                ))
+                .child(row(
+                    "Velocity",
+                    stepper(signed(region.velocity), at, Field::Velocity, cx),
+                ))
+                .when(!region.plain(), |d| {
+                    d.child(row(
+                        "",
+                        button("Apply to notes", false)
+                            .debug_selector(|| "region-apply".into())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| ws.apply_region_settings(at, cx)),
+                            ),
+                    ))
+                })
+                .child(row(
+                    "Alias",
+                    match aliases {
+                        Some(n) => button(format!("Make unique · {n} linked"), false)
+                            .debug_selector(|| "region-unlink".into())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    ws.choose(MenuAction::Unlink(at), cx)
+                                }),
+                            ),
+                        None => button("Make alias", false)
+                            .debug_selector(|| "region-alias".into())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    ws.choose(MenuAction::Alias(at), cx)
+                                }),
+                            ),
+                    },
+                ));
+        }
         match &region.content {
             Content::Midi { notes } => {
                 let range = match (
@@ -239,55 +354,8 @@ impl Workspace {
                     ),
                     _ => "—".into(),
                 };
-                let velocity = if notes.is_empty() {
-                    "—".to_string()
-                } else {
-                    format!(
-                        "{}",
-                        notes.iter().map(|n| n.velocity as u32).sum::<u32>() / notes.len() as u32
-                    )
-                };
-                let grid = self.roll.grid;
                 d = d
-                    .child(row(
-                        "Quantize",
-                        dropdown(grid_name(grid), 22.)
-                            .debug_selector(|| "region-quantize".into())
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                                    let items = [PPQ, PPQ / 2, PPQ / 4, PPQ / 8]
-                                        .into_iter()
-                                        .map(|g| (grid_name(g), MenuAction::Quantize(g)))
-                                        .collect();
-                                    ws.menu = Some(Menu {
-                                        at: e.position,
-                                        items,
-                                    });
-                                    cx.notify();
-                                }),
-                            ),
-                    ))
-                    .child(row(
-                        "Transpose",
-                        stepper(
-                            range,
-                            at,
-                            NoteEdit::Transpose { semitones: -1 },
-                            NoteEdit::Transpose { semitones: 1 },
-                            cx,
-                        ),
-                    ))
-                    .child(row(
-                        "Velocity",
-                        stepper(
-                            velocity,
-                            at,
-                            NoteEdit::Velocity { by: -5 },
-                            NoteEdit::Velocity { by: 5 },
-                            cx,
-                        ),
-                    ))
+                    .child(row("Range", mono(range)))
                     .child(row("Notes", mono(format!("{}", notes.len()))));
             }
             Content::Pattern { step, rows } => {
@@ -395,7 +463,7 @@ impl Workspace {
                         }),
                     ),
                 ];
-                ("Channel EQ".into(), knobs)
+                ("Channel Strip".into(), knobs)
             }
         };
         let tiles = knobs
@@ -604,7 +672,7 @@ impl Workspace {
             ),
             entry(
                 "Drum Kit".into(),
-                "Built in · 9 sounds".into(),
+                format!("Built in · {} sounds", tempo_engine::drums::SOUNDS.len()),
                 Icon::Drum,
                 MenuAction::Instrument {
                     track: t,
@@ -613,25 +681,48 @@ impl Workspace {
                 cx,
             ),
         ];
+        // The built-ins: one the track has already shows it in the mixer.
+        let (has_eq, has_comp, has_sat) = match has_track {
+            true => {
+                let (eq, comp) = self.strip_dsp(ch);
+                (eq.is_some(), comp.is_some(), self.sat(ch).is_some())
+            }
+            false => (false, false, false),
+        };
+        let builtin = |name: &str, about: &str, has: bool, i: Icon, b: Builtin, cx: &mut _| {
+            let sub = match has {
+                true => "On this track · click to show it".to_string(),
+                false => format!("Built in · {about}"),
+            };
+            let action = MenuAction::AddBuiltin {
+                channel: ch,
+                builtin: b,
+            };
+            entry(name.into(), sub, i, action, cx)
+        };
         let mut effects = vec![
-            entry(
-                "Channel EQ".into(),
-                "Built in · low cut, bells, shelf".into(),
+            builtin(
+                "Channel EQ",
+                "low cut, bells, shelf",
+                has_eq,
                 Icon::Scale,
-                MenuAction::AddBuiltin {
-                    channel: ch,
-                    builtin: Builtin::Eq,
-                },
+                Builtin::Eq,
                 cx,
             ),
-            entry(
-                "Compressor".into(),
-                "Built in".into(),
+            builtin(
+                "Compressor",
+                "soft knee",
+                has_comp,
                 Icon::Mixer,
-                MenuAction::AddBuiltin {
-                    channel: ch,
-                    builtin: Builtin::Comp,
-                },
+                Builtin::Comp,
+                cx,
+            ),
+            builtin(
+                "Saturator",
+                "drive, tone, mix",
+                has_sat,
+                Icon::Burst,
+                Builtin::Sat,
                 cx,
             ),
         ];
@@ -646,6 +737,7 @@ impl Workspace {
                 path: p.path.clone(),
                 class: p.class.clone(),
                 state: None,
+                ..Default::default()
             };
             if p.instrument {
                 instruments.push(entry(
@@ -841,16 +933,28 @@ pub fn grid_name(ticks: u64) -> String {
     }
 }
 
-/// − value +: two buttons that edit a MIDI region's notes, either side of what they change.
+/// A region playback setting a stepper changes.
+#[derive(Clone, Copy)]
+enum Field {
+    Transpose,
+    Velocity,
+}
+
+/// − value +: steps a region's transpose (a semitone) or velocity (one) down or up; ⌥ steps an
+/// octave, or ten.
 fn stepper(
     value: String,
     at: tempo_engine::project::At,
-    down: NoteEdit,
-    up: NoteEdit,
+    field: Field,
     cx: &mut Context<Workspace>,
 ) -> Div {
-    let side = |i: Icon, edit: NoteEdit, cx: &mut Context<Workspace>| {
+    let side = |i: Icon, sign: i8, cx: &mut Context<Workspace>| {
+        let name = match field {
+            Field::Transpose => "transpose",
+            Field::Velocity => "velocity",
+        };
         div()
+            .debug_selector(move || format!("{name}{sign:+}"))
             .w(px(22.))
             .h(px(20.))
             .flex()
@@ -863,7 +967,22 @@ fn stepper(
             .child(icon(i, 12.).text_color(rgb(TEXT_3)))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |ws, _, _, cx| ws.edit_notes(at, edit, cx)),
+                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                    let r = &ws.session.project.tracks[at.0].regions[at.1];
+                    let (now, big, limit) = match field {
+                        Field::Transpose => (r.transpose, 12, 96),
+                        Field::Velocity => (r.velocity, 10, 99),
+                    };
+                    let by = if e.modifiers.alt { big } else { 1 } * sign;
+                    let to = (now as i16 + by as i16).clamp(-limit, limit) as i8;
+                    ws.edit(cx, |ws| {
+                        let r = &mut ws.session.project.tracks[at.0].regions[at.1];
+                        match field {
+                            Field::Transpose => r.transpose = to,
+                            Field::Velocity => r.velocity = to,
+                        }
+                    });
+                }),
             )
     };
     div()
@@ -874,7 +993,7 @@ fn stepper(
         .border_1()
         .border_color(rgb(RAISED))
         .bg(rgb(CARD))
-        .child(side(Icon::Minus, down, cx))
+        .child(side(Icon::Minus, -1, cx))
         .child(
             div()
                 .min_w(px(52.))
@@ -885,10 +1004,38 @@ fn stepper(
                 .font_weight(FontWeight::MEDIUM)
                 .child(value),
         )
-        .child(side(Icon::Plus, up, cx))
+        .child(side(Icon::Plus, 1, cx))
 }
 
 impl Workspace {
+    /// Writes a region's playback settings into its notes, as Logic's "Apply Quantization
+    /// Settings Destructively" and "Normalize Region Parameters" do, and clears them.
+    pub fn apply_region_settings(&mut self, at: tempo_engine::project::At, cx: &mut Context<Self>) {
+        self.edit(cx, |ws| {
+            let r = &mut ws.session.project.tracks[at.0].regions[at.1];
+            let played = r.clone();
+            match &mut r.content {
+                Content::Midi { notes } => {
+                    for n in notes.iter_mut() {
+                        *n = played.played(n);
+                    }
+                }
+                // A pattern is on its grid already: it takes the transpose and velocity.
+                Content::Pattern { rows, .. } => {
+                    for row in rows.iter_mut() {
+                        row.pitch =
+                            (row.pitch as i16 + played.transpose as i16).clamp(0, 127) as u8;
+                        for c in row.cells.iter_mut().filter(|c| **c > 0) {
+                            *c = (*c as i16 + played.velocity as i16).clamp(1, 127) as u8;
+                        }
+                    }
+                }
+                _ => return,
+            }
+            (r.transpose, r.velocity, r.quantize) = (0, 0, None);
+        });
+    }
+
     /// Edits a MIDI region's notes in one go: the selected note alone where that makes sense.
     pub fn edit_notes(
         &mut self,
@@ -939,7 +1086,10 @@ mod tests {
             .map(|c| c.0)
             .collect();
         assert_eq!(plain, [9, 8]);
-        assert_eq!(position(PPQ * 4 * 16 + PPQ), "17 2 1 1");
-        assert_eq!(length(PPQ * 4 * 4), "4 0 0 0");
+        let mut p = Project::new(48_000);
+        assert_eq!(position(&p, PPQ * 4 * 16 + PPQ), "17 2 1 1");
+        assert_eq!(length(&p, PPQ * 4 * 4), "4 0 0 0");
+        p.time_signature = [6, 8];
+        assert_eq!(position(&p, PPQ * 3 + PPQ / 2), "2 2 1 1");
     }
 }

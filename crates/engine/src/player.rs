@@ -28,7 +28,57 @@ struct Slot {
     sound: Sound,
     latency: u32,
     plugins: LanePlugins,
+    /// Parameters the project sets, as last applied; and what each was before tempo first set
+    /// it, to go back to when the project stops setting it (as when that edit is undone).
+    applied: HashMap<(Which, u32), f64>,
+    original: HashMap<(Which, u32), f64>,
 }
+
+impl Slot {
+    fn plugin(&self, which: Which) -> Option<&Plugin> {
+        match which {
+            Which::Instrument => self.plugins.instrument.as_ref(),
+            Which::Insert(i) => self.plugins.inserts.get(i),
+        }
+    }
+
+    /// Gives a plugin the parameter values its `PluginRef` sets.
+    fn apply(&mut self, which: Which, r: &PluginRef) {
+        let plugins = &self.plugins;
+        let Some(p) = (match which {
+            Which::Instrument => plugins.instrument.as_ref(),
+            Which::Insert(i) => plugins.inserts.get(i),
+        }) else {
+            return;
+        };
+        let mut changed = Vec::new();
+        for (&id, &v) in &r.params {
+            if self.applied.get(&(which, id)) != Some(&v) {
+                changed.push((id, v, p.param_value(id)));
+                p.set_param(id, v);
+            }
+        }
+        let gone: Vec<(Which, u32)> = self
+            .applied
+            .keys()
+            .filter(|(w, id)| *w == which && !r.params.contains_key(id))
+            .copied()
+            .collect();
+        for key in gone {
+            self.applied.remove(&key);
+            if let Some(v) = self.original.remove(&key) {
+                p.set_param(key.1, v);
+            }
+        }
+        for (id, v, was) in changed {
+            self.original.entry((which, id)).or_insert(was);
+            self.applied.insert((which, id), v);
+        }
+    }
+}
+
+/// The id the master's plugins go by, where tracks and auxes use theirs.
+pub const MASTER_ID: u64 = u64::MAX;
 
 /// What makes a lane's sound, settings aside: its instrument ("synth", "drums" or a plugin) and
 /// its inserts.
@@ -44,12 +94,7 @@ fn sound(instrument: Option<&Instrument>, inserts: &[PluginRef]) -> Sound {
     (instrument, inserts.iter().map(key).collect())
 }
 
-/// A plugin on a track or aux.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Which {
-    Instrument,
-    Insert(usize),
-}
+pub use crate::project::Which;
 
 pub struct Player {
     rate: f64,
@@ -68,6 +113,15 @@ pub struct Player {
     dir: PathBuf,
     /// Open plugin editors, by track or aux id.
     editors: HashMap<(u64, Which), Editor>,
+}
+
+impl Drop for Player {
+    fn drop(&mut self) {
+        // Editors close before their plugins go, and the audio stops (dropping the engine and its
+        // processors) before the plugins' main-thread halves do.
+        self.editors.clear();
+        self._stream = None;
+    }
 }
 
 impl Player {
@@ -140,6 +194,7 @@ impl Player {
             .iter()
             .map(|t| (t.id, t.instrument.as_ref(), &t.inserts[..]))
             .chain(project.auxes.iter().map(|a| (a.id, None, &a.inserts[..])))
+            .chain([(MASTER_ID, None, &project.master_inserts[..])])
             .collect();
         let current: HashMap<u64, Sound> = channels
             .iter()
@@ -180,13 +235,26 @@ impl Player {
                     sound,
                     latency,
                     plugins,
+                    applied: HashMap::new(),
+                    original: HashMap::new(),
                 },
             );
+        }
+        for &(id, instrument, inserts) in &channels {
+            let slot = self.lanes.get_mut(&id).unwrap();
+            if let Some(Instrument::Vst3(r)) = instrument {
+                slot.apply(Which::Instrument, r);
+            }
+            for (i, r) in inserts.iter().enumerate() {
+                slot.apply(Which::Insert(i), r);
+            }
         }
         let lane = |id: &u64| (self.lanes[id].slot, self.lanes[id].latency);
         let tracks: Vec<_> = project.tracks.iter().map(|t| lane(&t.id)).collect();
         let auxes: Vec<_> = project.auxes.iter().map(|a| lane(&a.id)).collect();
-        let (arrangement, missing) = compile(project, self.rate, &tracks, &auxes, &mut self.files);
+        let master = Some(self.lanes[&MASTER_ID].slot);
+        let (arrangement, missing) =
+            compile(project, self.rate, &tracks, &auxes, master, &mut self.files);
         problems.extend(missing);
         self.send(Msg::Arrange(Box::new(arrangement)))?;
         match problems.is_empty() {
@@ -196,11 +264,7 @@ impl Player {
     }
 
     fn plugin(&self, id: u64, which: Which) -> Option<&Plugin> {
-        let plugins = &self.lanes.get(&id)?.plugins;
-        match which {
-            Which::Instrument => plugins.instrument.as_ref(),
-            Which::Insert(i) => plugins.inserts.get(i),
-        }
+        self.lanes.get(&id)?.plugin(which)
     }
 
     /// Opens (or brings back) a plugin's editor. Main thread only.
@@ -224,6 +288,10 @@ impl Player {
         std::fs::create_dir_all(&dir).map_err(err)?;
         let mut kept = HashSet::new();
         let mut save = |r: &mut PluginRef, p: &Plugin, name: String| -> Result<(), String> {
+            // What tempo set may since have been turned in the plugin's own editor.
+            for (&id, v) in r.params.iter_mut() {
+                *v = p.param_value(id);
+            }
             if let Some(bytes) = p.state() {
                 let file = PathBuf::from(STATES_DIR).join(name);
                 std::fs::write(self.dir.join(&file), bytes).map_err(err)?;
@@ -251,6 +319,12 @@ impl Player {
             };
             for (i, (r, p)) in a.inserts.iter_mut().zip(&slot.plugins.inserts).enumerate() {
                 save(r, p, format!("Aux {} insert {}.state", a.bus, i + 1))?;
+            }
+        }
+        if let Some(slot) = self.lanes.get(&MASTER_ID) {
+            let inserts = project.master_inserts.iter_mut();
+            for (i, (r, p)) in inserts.zip(&slot.plugins.inserts).enumerate() {
+                save(r, p, format!("Master insert {}.state", i + 1))?;
             }
         }
         for entry in std::fs::read_dir(&dir).map_err(err)?.flatten() {
@@ -388,6 +462,14 @@ impl Player {
         }
     }
 
+    /// Shows a parameter's value (0 to 1) in the plugin's controller and editor, without sending
+    /// it to the sound: for automation, which the engine plays itself.
+    pub fn show_param(&self, id: u64, which: Which, param: u32, value: f64) {
+        if let Some(p) = self.plugin(id, which) {
+            p.show_param(param, value);
+        }
+    }
+
     /// A plugin parameter's value now, from 0 to 1.
     pub fn param_value(&self, id: u64, which: Which, param: u32) -> f64 {
         self.plugin(id, which).map_or(0.0, |p| p.param_value(param))
@@ -425,6 +507,7 @@ mod tests {
             path: path.into(),
             class,
             state: None,
+            ..Default::default()
         };
         let mut project = Project::new(48_000);
         project.add_track(
@@ -443,6 +526,26 @@ mod tests {
         };
         let file = r.state.clone().expect("a state file");
         assert!(dir.join(&file).exists());
+
+        // A parameter the project sets is applied; when it stops setting it (an undo), it goes
+        // back to what it was.
+        let id = project.tracks[0].id;
+        let param = player.params(id, Which::Instrument)[0].clone();
+        let set = |project: &mut Project, v: Option<f64>| {
+            let r = project.tracks[0].plugin_mut(Which::Instrument).unwrap();
+            match v {
+                Some(v) => drop(r.params.insert(param.id, v)),
+                None => drop(r.params.remove(&param.id)),
+            }
+        };
+        let other = if param.value > 0.5 { 0.1 } else { 0.9 };
+        set(&mut project, Some(other));
+        player.sync(&project).unwrap();
+        assert!((player.param_value(id, Which::Instrument, param.id) - other).abs() < 0.02);
+        set(&mut project, None);
+        player.sync(&project).unwrap();
+        let back = player.param_value(id, Which::Instrument, param.id);
+        assert!((back - param.value).abs() < 0.02, "{back} {}", param.value);
         // A bounce of the saved project loads it.
         project.save(&dir).unwrap();
         let loaded = Project::load(&dir).unwrap();

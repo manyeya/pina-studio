@@ -14,6 +14,7 @@ mod strip;
 mod takes;
 #[cfg(test)]
 mod tests;
+mod text;
 mod theme;
 mod topbar;
 mod tracks;
@@ -30,6 +31,7 @@ use gpui::{App, AppContext, Bounds, Menu, MenuItem, WindowBounds, WindowOptions,
 use serde_json::Value;
 use server::Request;
 use tempo_engine::{engine::Engine, player::Player, project::Project, session::Session};
+use topbar::MIN_W;
 use workspace::*;
 
 const USAGE: &str = "usage:
@@ -44,6 +46,9 @@ const USAGE: &str = "usage:
   tempo launch <project> <track> [scene]
                                    drive the app that has the project open
   tempo plugins                    the VST3 plugins installed
+  tempo params <project> <track> [--insert N]
+  tempo params <project> --aux N|--master [--insert N]
+                                   a plugin's parameters, to automate or set
   tempo mcp                        an MCP server on stdin and stdout";
 
 fn main() {
@@ -78,6 +83,10 @@ fn main() {
             }
         }
         ["plugins"] => print(cli::plugins()),
+        ["params", dir, rest @ ..] => match params_args(rest) {
+            Some((channel, plugin)) => print(cli::params(p(dir), channel, plugin)),
+            None => Err(USAGE.to_string()),
+        },
         ["mcp"] => mcp::serve(),
         // What a plugin bundle holds, as JSON: run by the plugin scan, one bundle per process.
         ["__scan", bundle] => tempo_engine::scan::inspect(p(bundle))
@@ -94,6 +103,28 @@ fn main() {
         eprintln!("{e}");
         exit(1);
     }
+}
+
+/// `<track> [--insert N]`, `--aux N [--insert N]` or `--master --insert N`.
+fn params_args(
+    args: &[&str],
+) -> Option<(
+    tempo_engine::commands::ChannelRef,
+    tempo_engine::project::Which,
+)> {
+    use tempo_engine::{commands::ChannelRef, project::Which};
+    let (channel, rest) = match args {
+        ["--aux", n, rest @ ..] => (ChannelRef::Aux(n.parse().ok()?), rest),
+        ["--master", rest @ ..] => (ChannelRef::Master, rest),
+        [n, rest @ ..] => (ChannelRef::Track(n.parse().ok()?), rest),
+        [] => return None,
+    };
+    let plugin = match rest {
+        [] if matches!(channel, ChannelRef::Track(_)) => Which::Instrument,
+        ["--insert", n] => Which::Insert(n.parse().ok()?),
+        _ => return None,
+    };
+    Some((channel, plugin))
 }
 
 fn print(result: Result<Value, String>) -> Result<(), String> {
@@ -155,8 +186,10 @@ fn open(dir: &Path) -> Result<(), String> {
             Menu::new("Window").items([MenuItem::action("Musical Typing", ToggleTyping)]),
         ]);
         let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+        // The control bar, tracks and an editor all fit down to this.
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(MIN_W), px(640.))),
             ..Default::default()
         };
         cx.open_window(options, |window, cx| {

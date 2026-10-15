@@ -178,8 +178,10 @@ pub enum Icon {
     Scale,
     Ghost,
     Export,
-    Folder,
     Plug,
+    Search,
+    Link,
+    Loop,
 }
 
 impl Icon {
@@ -250,11 +252,15 @@ impl Icon {
                 r##"<rect stroke-dasharray="3 2.5" x="3.5" y="7" width="17" height="10" rx="2.5"/>"##
             }
             Icon::Export => r##"<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/>"##,
-            Icon::Folder => {
-                r##"<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>"##
-            }
             Icon::Plug => {
                 r##"<path d="M9 3.5v4M15 3.5v4M6.5 7.5h11v3a5.5 5.5 0 0 1-11 0zM12 16v4.5"/>"##
+            }
+            Icon::Search => r##"<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/>"##,
+            Icon::Link => {
+                r##"<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>"##
+            }
+            Icon::Loop => {
+                r##"<path d="M4 12a5 5 0 0 1 5-5h9M15 4l3 3-3 3M20 12a5 5 0 0 1-5 5H6M9 20l-3-3 3-3"/>"##
             }
         }
     }
@@ -262,61 +268,16 @@ impl Icon {
     fn svg(self) -> &'static [u8] {
         // Built once per icon and kept: the SVG renderer caches by the bytes' hash.
         use std::sync::OnceLock;
-        static CACHE: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
-        let all = CACHE.get_or_init(|| {
-            ALL.iter()
-                .map(|i| {
-                    format!(
-                        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">{}</svg>"##,
-                        i.path()
-                    )
-                    .into_bytes()
-                })
-                .collect()
-        });
-        &all[ALL.iter().position(|&i| i == self).unwrap()]
+        static CACHE: [OnceLock<Vec<u8>>; 64] = [const { OnceLock::new() }; 64];
+        CACHE[self as usize].get_or_init(|| {
+            format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">{}</svg>"##,
+                self.path()
+            )
+            .into_bytes()
+        })
     }
 }
-
-const ALL: [Icon; 37] = [
-    Icon::Play,
-    Icon::Stop,
-    Icon::ToStart,
-    Icon::Record,
-    Icon::Cycle,
-    Icon::Metronome,
-    Icon::PanelLeft,
-    Icon::PanelBottom,
-    Icon::Mixer,
-    Icon::Grid,
-    Icon::Chevron,
-    Icon::Plus,
-    Icon::Minus,
-    Icon::Close,
-    Icon::Pointer,
-    Icon::Pencil,
-    Icon::Scissors,
-    Icon::Eraser,
-    Icon::Magnet,
-    Icon::Person,
-    Icon::Agent,
-    Icon::Drum,
-    Icon::Sine,
-    Icon::Keys,
-    Icon::Saw,
-    Icon::Pad,
-    Icon::Mic,
-    Icon::Burst,
-    Icon::Wave,
-    Icon::Bus,
-    Icon::Output,
-    Icon::More,
-    Icon::Scale,
-    Icon::Ghost,
-    Icon::Export,
-    Icon::Folder,
-    Icon::Plug,
-];
 
 /// An icon, `size` pixels square, in the text color (set it with `text_color`).
 pub fn icon(i: Icon, size: f32) -> Svg {
@@ -395,7 +356,13 @@ pub fn dropdown(label: impl Into<gpui::SharedString>, h: f32) -> Div {
         .whitespace_nowrap()
         .cursor_pointer()
         .hover(|s| s.border_color(rgb(LINE_STRONG)))
-        .child(label.into())
+        .child(
+            div()
+                .min_w(px(0.))
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(label.into()),
+        )
         .child(icon(Icon::Chevron, 12.).text_color(rgb(TEXT_3)))
 }
 

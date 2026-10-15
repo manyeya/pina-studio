@@ -2,10 +2,7 @@
 //! who's here (you, and an agent when one is editing), and export.
 
 use gpui::{Context, Div, FontWeight, MouseButton, MouseDownEvent, div, prelude::*, px, rgb};
-use tempo_engine::{
-    music::Key,
-    project::{BEATS_PER_BAR, PPQ},
-};
+use tempo_engine::{music::Key, project::PPQ};
 
 use crate::{
     menu::{Menu, MenuAction},
@@ -13,10 +10,33 @@ use crate::{
     workspace::{Bottom, Drag, View, Workspace, pt},
 };
 
+/// The narrowest the window goes.
+pub const MIN_W: f32 = 1120.0;
+/// Below these widths, the control bar tightens up to keep everything in it: first the
+/// wordmark goes and the spacing closes up, then Export becomes an icon.
+const ROOMY: f32 = 1520.0;
+const SNUG: f32 = 1320.0;
+
+/// The time signatures to pick from.
+const SIGNATURES: [[u64; 2]; 12] = [
+    [4, 4],
+    [3, 4],
+    [2, 4],
+    [5, 4],
+    [6, 4],
+    [7, 4],
+    [6, 8],
+    [3, 8],
+    [5, 8],
+    [7, 8],
+    [9, 8],
+    [12, 8],
+];
+
 /// A field of the transport display: a value over its label.
-fn field(value: impl IntoElement, label: &'static str, big: bool) -> Div {
+fn field(value: impl IntoElement, label: &'static str, big: bool, pad: f32) -> Div {
     div()
-        .px(px(12.))
+        .px(px(pad))
         .flex()
         .flex_col()
         .gap(px(1.))
@@ -47,15 +67,15 @@ impl Workspace {
         let recording = self.recording.is_some();
         let project = &self.session.project;
         let ticks = self.playhead();
-        let beat = ticks / PPQ;
+        let [bar, beat, sixteenth, _] = project.bbt(ticks);
         let dot = || div().text_color(rgb(TEXT_4)).child(".");
         let position = div()
             .flex()
-            .child(format!("{}", beat / BEATS_PER_BAR + 1))
+            .child(format!("{}", bar + 1))
             .child(dot())
-            .child(format!("{}", beat % BEATS_PER_BAR + 1))
+            .child(format!("{}", beat + 1))
             .child(dot())
-            .child(format!("{}", ticks % PPQ / (PPQ / 4) + 1))
+            .child(format!("{}", sixteenth + 1))
             .child(dot())
             .child(format!("{:03}", ticks % (PPQ / 4) + 1));
         let seconds = self.player.position() as f64 / self.player.rate();
@@ -88,25 +108,45 @@ impl Workspace {
                 .child(icon(i, 16.).text_color(rgb(color)))
         };
         let toggle_on = |on: bool| on.then_some(0x1d2a4a);
+        // Tighter below a roomy width, so every field still fits.
+        let roomy = self.viewport_w >= ROOMY;
+        let snug = !roomy && self.viewport_w >= SNUG;
+        let pad = match (roomy, snug) {
+            (true, _) => 12.,
+            (_, true) => 10.,
+            _ => 8.,
+        };
+        let [beats, unit] = project.time_signature;
 
         div()
             .h(px(CONTROL_BAR_H))
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(10.))
+            .gap(px(match (roomy, snug) {
+                (true, _) => 10.,
+                (_, true) => 8.,
+                _ => 6.,
+            }))
             .pl(px(14.))
             .pr(px(12.))
             .bg(rgb(SURFACE))
             .border_b_1()
             .border_color(rgb(LINE))
             .child(
-                div().flex().items_center().gap(px(8.)).child(logo()).child(
-                    div()
-                        .text_size(px(15.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("tempo"),
-                ),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(logo())
+                    .when(roomy, |d| {
+                        d.child(
+                            div()
+                                .text_size(px(15.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("tempo"),
+                        )
+                    }),
             )
             .child(divider(20.))
             .child(
@@ -122,7 +162,13 @@ impl Workspace {
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
                     .whitespace_nowrap()
-                    .child(name)
+                    .child(
+                        div()
+                            .max_w(px(if roomy { 220. } else { 120. }))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(name),
+                    )
                     .child(icon(Icon::Chevron, 14.).text_color(rgb(TEXT_3)))
                     .debug_selector(|| "project-menu".into())
                     .on_mouse_down(
@@ -134,6 +180,7 @@ impl Workspace {
                                     ("Save".into(), MenuAction::Save),
                                     ("Export to WAV".into(), MenuAction::Export),
                                 ],
+                                ..Default::default()
                             });
                             cx.notify();
                         }),
@@ -219,18 +266,17 @@ impl Workspace {
                     .border_1()
                     .border_color(rgb(LINE))
                     .font_family(MONO)
-                    .child(field(position, "BAR · BEAT · DIV · TICK", true))
+                    .child(field(position, "BAR · BEAT · DIV · TICK", true, pad))
                     .child(divider(24.))
-                    .when(self.viewport_w >= 1460.0, |d| {
-                        d.child(field(
-                            div().text_color(rgb(TEXT_2)).child(time),
-                            "TIME",
-                            false,
-                        ))
-                        .child(divider(24.))
-                    })
+                    .child(field(
+                        div().text_color(rgb(TEXT_2)).child(time),
+                        "TIME",
+                        false,
+                        pad,
+                    ))
+                    .child(divider(24.))
                     .child(
-                        field(format!("{:.2}", project.tempo), "BPM", false)
+                        field(format!("{:.2}", project.tempo), "BPM", false, pad)
                             .cursor_ns_resize()
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -247,10 +293,34 @@ impl Workspace {
                             ),
                     )
                     .child(divider(24.))
-                    .child(field("4/4", "TIME SIG", false))
+                    .child(
+                        field(format!("{beats}/{unit}"), "TIME SIG", false, pad)
+                            .cursor_pointer()
+                            .debug_selector(|| "time-signature".into())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                                    let now = ws.session.project.time_signature;
+                                    let items = SIGNATURES
+                                        .into_iter()
+                                        .map(|s| {
+                                            let mark = if s == now { "✓ " } else { "    " };
+                                            let label = format!("{mark}{}/{}", s[0], s[1]);
+                                            (label, MenuAction::TimeSignature(s))
+                                        })
+                                        .collect();
+                                    ws.menu = Some(Menu {
+                                        at: e.position,
+                                        items,
+                                        ..Default::default()
+                                    });
+                                    cx.notify();
+                                }),
+                            ),
+                    )
                     .child(divider(24.))
                     .child(
-                        field(key_label, "KEY", false)
+                        field(key_label, "KEY", false, pad)
                             .cursor_pointer()
                             .debug_selector(|| "key".into())
                             .on_mouse_down(
@@ -339,7 +409,7 @@ impl Workspace {
             .child(
                 div()
                     .h(px(32.))
-                    .px(px(14.))
+                    .px(px(if roomy || snug { 14. } else { 9. }))
                     .flex()
                     .items_center()
                     .gap(px(6.))
@@ -350,10 +420,16 @@ impl Workspace {
                     .text_size(px(12.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .hover(|s| s.bg(rgb(0xffffff)))
-                    .child(if self.exporting {
-                        "Exporting…"
-                    } else {
-                        "Export"
+                    .when(!roomy && !snug, |d| {
+                        let fg = if self.exporting { TEXT_2 } else { BG };
+                        d.child(icon(Icon::Export, 15.).text_color(rgb(fg)))
+                    })
+                    .when(roomy || snug || self.exporting, |d| {
+                        d.child(if self.exporting {
+                            "Exporting…"
+                        } else {
+                            "Export"
+                        })
                     })
                     .debug_selector(|| "export".into())
                     .on_mouse_down(MouseButton::Left, cx.listener(|ws, _, _, cx| ws.export(cx))),
@@ -407,8 +483,15 @@ impl Workspace {
             },
             MenuAction::Key(None),
         )];
+        // Majors in one column, minors in the other.
         items.extend(Key::all().map(|k| (k.name(), MenuAction::Key(Some(k.name())))));
-        Menu { at, items }
+        Menu {
+            at,
+            items,
+            columns: 2,
+            lead: 1,
+            ..Default::default()
+        }
     }
 }
 

@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 use crate::{
     music::{Key, NoteEdit},
     project::{
-        AUDIO_DIR, AutoPoint, AuxSend, Cell, Comp, Content, Cycle, Eq, Instrument, Marker, Note,
-        PPQ, PatternRow, PluginRef, Project, Region, Track,
+        AUDIO_DIR, AutoMode, AutoPoint, AuxSend, BEAT_UNITS, Cell, Comp, Content, Cycle, Eq, Input,
+        Instrument, Marker, Note, PPQ, Param, PatternRow, PluginRef, Project, Region, Saturator,
+        Track, Which,
     },
 };
 
@@ -22,6 +23,11 @@ pub const DESCRIBE: &str = include_str!("commands.md");
 pub enum Command {
     SetTempo {
         bpm: f64,
+    },
+    /// Beats to a bar and the note that's a beat.
+    SetTimeSignature {
+        beats: u64,
+        unit: u64,
     },
     SetMaster {
         volume_db: f32,
@@ -125,6 +131,36 @@ pub enum Command {
         track: usize,
         region: usize,
     },
+    /// A region's name and playback settings (any of them): MIDI played transposed, louder or
+    /// quantized, its notes kept; and looping.
+    SetRegion {
+        track: usize,
+        region: usize,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default, rename = "loop")]
+        looped: Option<bool>,
+        #[serde(default)]
+        transpose: Option<i8>,
+        #[serde(default)]
+        velocity: Option<i8>,
+        /// Ticks; 0 turns it off.
+        #[serde(default)]
+        quantize: Option<u64>,
+    },
+    /// An alias of a MIDI or pattern region: a copy linked to it, so editing either edits both.
+    AddAlias {
+        track: usize,
+        region: usize,
+        start: u64,
+        #[serde(default)]
+        to_track: Option<usize>,
+    },
+    /// Makes an alias a region of its own.
+    Unlink {
+        track: usize,
+        region: usize,
+    },
     /// Puts a loop in a track's Live Loops cell for a scene, or empties the cell.
     SetCell {
         track: usize,
@@ -158,11 +194,22 @@ pub enum Command {
         bus: Option<u32>,
         #[serde(default)]
         level_db: f32,
+        #[serde(default)]
+        pre: bool,
     },
     SetSend {
         track: usize,
         send: usize,
-        level_db: f32,
+        #[serde(default)]
+        level_db: Option<f32>,
+        #[serde(default)]
+        pre: Option<bool>,
+    },
+    /// What an audio track records: input channels from `channel` (0 is the first), one or two.
+    SetInput {
+        track: usize,
+        #[serde(default)]
+        input: Option<Input>,
     },
     /// Where a track plays: into an aux or stack's bus, or (without one) the master.
     SetOutput {
@@ -191,11 +238,32 @@ pub enum Command {
         #[serde(default)]
         mute: Option<bool>,
     },
-    /// Replaces a track's volume (dB) or pan (-1 to 1) automation; no points turns it off.
+    /// Replaces a track's volume (dB), pan (-1 to 1) or plugin parameter (0 to 1) automation; no
+    /// points takes it out.
     SetAutomation {
         track: usize,
         param: AutoParam,
+        /// For a plugin parameter: which plugin, and the parameter's id.
+        #[serde(default)]
+        plugin: Option<Which>,
+        #[serde(default)]
+        id: Option<u32>,
+        #[serde(default)]
+        name: Option<String>,
         points: Vec<AutoPoint>,
+    },
+    /// How a track follows its automation: off, read, touch or latch.
+    SetAutomationMode {
+        track: usize,
+        mode: AutoMode,
+    },
+    /// Turns a plugin's parameter (0 to 1), by id; without `value`, tempo stops setting it.
+    SetPluginParam {
+        channel: ChannelRef,
+        plugin: Which,
+        param: u32,
+        #[serde(default)]
+        value: Option<f64>,
     },
     /// Names a place in the song; answers with the marker's index, in time order.
     AddMarker {
@@ -236,6 +304,12 @@ pub enum Command {
         #[serde(default)]
         comp: Option<Comp>,
     },
+    /// A channel's built-in saturator, after its compressor; without `sat`, takes it out.
+    SetSaturator {
+        channel: ChannelRef,
+        #[serde(default)]
+        sat: Option<Saturator>,
+    },
     /// Quantizes, humanizes, makes legato, chops, arpeggiates, transposes or changes the
     /// velocity of a MIDI region's notes (or one of them, with `note`).
     EditNotes {
@@ -264,6 +338,7 @@ pub enum ChannelRef {
 pub enum AutoParam {
     Volume,
     Pan,
+    Plugin,
 }
 
 fn track(p: &mut Project, i: usize) -> Result<&mut Track, String> {
@@ -303,8 +378,15 @@ fn finite(name: &str, v: f32) -> Result<f32, String> {
 }
 
 /// Applies a command to the project in `dir`. Returns what an agent needs next, like the index
-/// of what it made.
+/// of what it made. Aliases of a region it changes change with it.
 pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
+    let mut links = p.link_contents();
+    let result = run(p, dir, cmd);
+    p.sync_links(&mut links);
+    result
+}
+
+fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
     match cmd {
         Command::SetTempo { bpm } => {
             if !(bpm.is_finite() && (20.0..=999.0).contains(&bpm)) {
@@ -313,6 +395,12 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
             p.tempo = bpm;
         }
         Command::SetMaster { volume_db } => p.master_volume_db = finite("volume_db", volume_db)?,
+        Command::SetTimeSignature { beats, unit } => {
+            if !(1..=32).contains(&beats) || !BEAT_UNITS.contains(&unit) {
+                return Err("a time signature is 1 to 32 beats of a 1, 2, 4, 8 or 16".into());
+            }
+            p.time_signature = [beats, unit];
+        }
         Command::AddTrack {
             name,
             instrument,
@@ -369,7 +457,7 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
             {
                 return Err("an audio track with audio regions can't take an instrument".into());
             }
-            t.instrument = Some(instrument);
+            t.set_instrument(instrument);
         }
         Command::SetInsert {
             channel,
@@ -377,11 +465,11 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
             plugin,
         } => {
             let list = match channel {
-                ChannelRef::Track(i) => &mut track(p, i)?.inserts,
-                ChannelRef::Aux(i) => &mut aux(p, i)?.inserts,
-                ChannelRef::Master => {
-                    return Err("the master has no insert slots: use set_eq and set_comp".into());
+                ChannelRef::Track(i) => {
+                    return track(p, i)?.set_insert(index, plugin).map(|_| json!({}));
                 }
+                ChannelRef::Aux(i) => &mut aux(p, i)?.inserts,
+                ChannelRef::Master => &mut p.master_inserts,
             };
             match plugin {
                 Some(plugin) if index < list.len() => list[index] = plugin,
@@ -406,6 +494,7 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
                 start,
                 length: length.max(1),
                 content: Content::Midi { notes },
+                ..Default::default()
             });
             return Ok(json!({ "region": [t, tr.regions.len() - 1] }));
         }
@@ -439,6 +528,7 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
                 start,
                 length: length.max(1),
                 content,
+                ..Default::default()
             });
             return Ok(json!({ "region": [t, tr.regions.len() - 1] }));
         }
@@ -488,6 +578,7 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
                 start,
                 length,
                 content,
+                ..Default::default()
             });
             return Ok(json!({ "region": [t, regions.len() - 1] }));
         }
@@ -585,10 +676,57 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
             region_at(p, t, r)?;
             p.tracks[t].regions.remove(r);
         }
+        Command::SetRegion {
+            track: t,
+            region: r,
+            name,
+            looped,
+            transpose,
+            velocity,
+            quantize,
+        } => {
+            region_at(p, t, r)?;
+            let region = &mut p.tracks[t].regions[r];
+            if let Some(v) = name {
+                region.name = v;
+            }
+            if let Some(v) = looped {
+                region.looped = v;
+            }
+            if let Some(v) = transpose {
+                region.transpose = v.clamp(-96, 96);
+            }
+            if let Some(v) = velocity {
+                region.velocity = v.clamp(-99, 99);
+            }
+            if let Some(v) = quantize {
+                region.quantize = (v > 0).then_some(v);
+            }
+        }
+        Command::AddAlias {
+            track: t,
+            region: r,
+            start,
+            to_track,
+        } => {
+            region_at(p, t, r)?;
+            let to = to_track.unwrap_or(t);
+            track(p, to)?;
+            let at = p.alias((t, r), to, start)?;
+            return Ok(json!({ "region": [at.0, at.1] }));
+        }
+        Command::Unlink {
+            track: t,
+            region: r,
+        } => {
+            region_at(p, t, r)?;
+            p.unlink((t, r));
+        }
         Command::AddSend {
             track: t,
             bus,
             level_db,
+            pre,
         } => {
             track(p, t)?;
             let bus = match bus {
@@ -597,20 +735,34 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
                 None => p.add_aux(),
             };
             let level_db = finite("level_db", level_db)?;
-            track(p, t)?.sends.push(AuxSend { bus, level_db });
+            track(p, t)?.sends.push(AuxSend { bus, level_db, pre });
             return Ok(json!({ "bus": bus }));
         }
         Command::SetSend {
             track: t,
             send,
             level_db,
+            pre,
         } => {
-            let level_db = finite("level_db", level_db)?;
             let s = track(p, t)?
                 .sends
                 .get_mut(send)
                 .ok_or(format!("track {t} has no send {send}"))?;
-            s.level_db = level_db;
+            if let Some(v) = level_db {
+                s.level_db = finite("level_db", v)?;
+            }
+            if let Some(v) = pre {
+                s.pre = v;
+            }
+        }
+        Command::SetInput { track: t, input } => {
+            let tr = track(p, t)?;
+            if tr.instrument.is_some() {
+                return Err(format!(
+                    "track {t} is an instrument track: inputs are for audio tracks"
+                ));
+            }
+            tr.input = input;
         }
         Command::SetOutput { track: t, bus } => {
             if let Some(b) = bus
@@ -664,14 +816,59 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
         Command::SetAutomation {
             track: t,
             param,
+            plugin,
+            id,
+            name,
             points,
         } => {
             let mut points = points;
             points.sort_by_key(|p| p.tick);
+            let param = match param {
+                AutoParam::Volume => Param::Volume,
+                AutoParam::Pan => Param::Pan,
+                AutoParam::Plugin => {
+                    let (Some(plugin), Some(id)) = (plugin, id) else {
+                        return Err("a plugin parameter needs `plugin` and `id`".into());
+                    };
+                    if track(p, t)?.plugin(plugin).is_none() {
+                        return Err(format!("track {t} has no plugin there"));
+                    }
+                    for pt in &mut points {
+                        pt.value = finite("value", pt.value)?.clamp(0.0, 1.0);
+                    }
+                    Param::Plugin(plugin, id)
+                }
+            };
             let a = &mut track(p, t)?.automation;
-            match param {
-                AutoParam::Volume => a.volume = points,
-                AutoParam::Pan => a.pan = points,
+            *a.points_mut(param) = points;
+            if let Some(name) = name {
+                a.name(param, &name);
+            }
+            a.tidy();
+        }
+        Command::SetAutomationMode { track: t, mode } => track(p, t)?.automation.mode = mode,
+        Command::SetPluginParam {
+            channel,
+            plugin,
+            param,
+            value,
+        } => {
+            let r = match channel {
+                ChannelRef::Track(i) => track(p, i)?.plugin_mut(plugin),
+                ChannelRef::Aux(i) => match plugin {
+                    Which::Insert(n) => aux(p, i)?.inserts.get_mut(n),
+                    Which::Instrument => None,
+                },
+                ChannelRef::Master => match plugin {
+                    Which::Insert(n) => p.master_inserts.get_mut(n),
+                    Which::Instrument => None,
+                },
+            }
+            .ok_or("no plugin there")?;
+            match value {
+                Some(v) if v.is_finite() => drop(r.params.insert(param, v.clamp(0.0, 1.0))),
+                Some(_) => return Err("value must be a number from 0 to 1".into()),
+                None => drop(r.params.remove(&param)),
             }
         }
         Command::AddMarker { tick, name } => {
@@ -717,8 +914,9 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
                 off: !on,
             });
         }
-        Command::SetEq { channel, eq } => *strip(p, channel)?.0 = eq,
-        Command::SetComp { channel, comp } => *strip(p, channel)?.1 = comp,
+        Command::SetEq { channel, eq } => *strip(p, channel)?.eq = eq,
+        Command::SetComp { channel, comp } => *strip(p, channel)?.comp = comp,
+        Command::SetSaturator { channel, sat } => *strip(p, channel)?.sat = sat,
         Command::EditNotes {
             track: t,
             region: r,
@@ -737,21 +935,37 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
     Ok(json!({}))
 }
 
-/// A channel's built-in EQ and compressor.
-pub fn strip(
-    p: &mut Project,
-    channel: ChannelRef,
-) -> Result<(&mut Option<Eq>, &mut Option<Comp>), String> {
+/// A channel's built-in effects.
+pub struct Strip<'a> {
+    pub eq: &'a mut Option<Eq>,
+    pub comp: &'a mut Option<Comp>,
+    pub sat: &'a mut Option<Saturator>,
+}
+
+/// A channel's built-in EQ, compressor and saturator.
+pub fn strip(p: &mut Project, channel: ChannelRef) -> Result<Strip<'_>, String> {
     Ok(match channel {
         ChannelRef::Track(i) => {
             let t = track(p, i)?;
-            (&mut t.eq, &mut t.comp)
+            Strip {
+                eq: &mut t.eq,
+                comp: &mut t.comp,
+                sat: &mut t.sat,
+            }
         }
         ChannelRef::Aux(i) => {
             let a = aux(p, i)?;
-            (&mut a.eq, &mut a.comp)
+            Strip {
+                eq: &mut a.eq,
+                comp: &mut a.comp,
+                sat: &mut a.sat,
+            }
         }
-        ChannelRef::Master => (&mut p.master_eq, &mut p.master_comp),
+        ChannelRef::Master => Strip {
+            eq: &mut p.master_eq,
+            comp: &mut p.master_comp,
+            sat: &mut p.master_sat,
+        },
     })
 }
 
@@ -896,6 +1110,7 @@ mod tests {
     fn every_command_is_described() {
         let samples = [
             "set_tempo",
+            "set_time_signature",
             "set_master",
             "add_track",
             "delete_track",
@@ -929,7 +1144,14 @@ mod tests {
             "set_cycle",
             "set_eq",
             "set_comp",
+            "set_saturator",
             "edit_notes",
+            "set_region",
+            "add_alias",
+            "unlink",
+            "set_input",
+            "set_automation_mode",
+            "set_plugin_param",
         ];
         for op in samples {
             assert!(
