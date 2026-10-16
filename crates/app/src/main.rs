@@ -64,6 +64,10 @@ const USAGE: &str = "usage:
   tempo samples kit [<words or JSON>] [--for <project>]
                                    a kit that goes together, with alternatives
   tempo samples info <file>        what a sample is
+  tempo samples put <file> <project> [--track N] [--at TICK]
+                                   into the song, made to fit: a loop stretched to its
+                                   tempo and moved into its key; a one-shot as a sampler
+                                   zone in tune
   tempo mcp                        an MCP server on stdin and stdout";
 
 fn main() {

@@ -218,15 +218,143 @@ pub fn remove_folder(dir: &Path) -> Result<Value, String> {
     status()
 }
 
+/// Puts a sample into a song, made to fit it. A loop goes on an audio track (`track`, else a new
+/// one) at `at`, stretched to the song's tempo, moved into its key if a small move fits, and
+/// looping; a one-shot goes into a sampler (`track`'s, else a new sampler track) as a zone that
+/// plays it in tune: a drum on its note, a pitched sound across the keys from its own note.
+pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Value, String> {
+    use tempo_engine::{
+        commands::Command,
+        project::{Instrument, Sampler},
+    };
+    let lib = library();
+    let path = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
+    let sample = match lib.get(&path) {
+        Some(s) => s.clone(),
+        None => Sample {
+            path: path.clone(),
+            name: path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            folder: String::new(),
+            modified: 0,
+            size: 0,
+            analysis: tempo_engine::samples::analyze::analyze_file(&path)?,
+        },
+    };
+    let p = crate::cli::project(dir)?;
+    let edit = |c: Command| crate::cli::edit_with(dir, c);
+    let a = &sample.analysis;
+    let mut done = Vec::new();
+    if a.kind == Kind::Loop {
+        let t = match track.filter(|&t| p.tracks.get(t).is_some_and(|t| t.instrument.is_none())) {
+            Some(t) => t,
+            None => {
+                let made = edit(Command::AddTrack {
+                    name: sample.name.clone(),
+                    instrument: None,
+                    index: None,
+                })?;
+                made["track"].as_u64().ok_or("no track made")? as usize
+            }
+        };
+        let r = edit(Command::AddAudioRegion {
+            track: t,
+            file: path.clone(),
+            start: at,
+            offset: 0,
+            length: None,
+        })?;
+        let region = r["region"][1].as_u64().ok_or("no region made")? as usize;
+        // In time: its bars at the song's tempo.
+        if let (Some(bpm), Some(bars)) = (a.bpm, a.bars) {
+            let length = (bars as f64 * p.bar() as f64).round() as u64;
+            edit(Command::FlexRegion {
+                track: t,
+                region,
+                length,
+            })?;
+            done.push(format!("stretched from {bpm:.0} to {:.0} BPM", p.tempo));
+        }
+        // In key: the small move that fits it, if there is one.
+        let fit = p.song_key().and_then(|key| {
+            let q = search::Query {
+                key: Some(key.name()),
+                limit: usize::MAX,
+                ..Default::default()
+            };
+            let index = lib.samples.iter().position(|s| s.path == path)?;
+            search::find(&lib.samples, &q)
+                .into_iter()
+                .find(|h| h.index == index)
+                .and_then(|h| h.transpose.map(|t| (t, key)))
+        });
+        let mut set =
+            serde_json::json!({"op": "set_region", "track": t, "region": region, "loop": true});
+        if let Some((semitones, key)) = fit {
+            set["transpose"] = json!(semitones);
+            done.push(format!("moved {semitones:+} semitones into {}", key.name()));
+        }
+        edit(serde_json::from_value(set).map_err(|e| e.to_string())?)?;
+        return Ok(json!({ "track": t, "region": [t, region], "done": done }));
+    }
+    let sampler = |i: Option<&Instrument>| match i {
+        Some(Instrument::Sampler(s)) => Some(s.clone()),
+        _ => None,
+    };
+    match track.and_then(|t| sampler(p.tracks.get(t)?.instrument.as_ref()).map(|s| (t, s))) {
+        Some((t, mut s)) => {
+            // A drum takes its note, or the next free one; a pitched sound has the keys.
+            let mut zone = search::zone(&sample, None);
+            if zone.high.is_none() {
+                while s.zones.iter().any(|z| z.covers(zone.note)) && zone.note < 127 {
+                    zone.note += 1;
+                }
+            }
+            let note = zone.note;
+            s.zones.push(zone);
+            edit(Command::SetInstrument {
+                track: t,
+                instrument: Instrument::Sampler(s),
+            })?;
+            Ok(json!({ "track": t, "note": note }))
+        }
+        None => {
+            let zone = search::zone(&sample, None);
+            let note = zone.note;
+            let made = edit(Command::AddTrack {
+                name: sample.name.clone(),
+                instrument: Some(Instrument::Sampler(Sampler { zones: vec![zone] })),
+                index: None,
+            })?;
+            Ok(json!({ "track": made["track"], "note": note }))
+        }
+    }
+}
+
 /// `tempo samples …` from the command line.
 pub fn command(args: &[&str]) -> Result<Value, String> {
-    // Options anywhere: --for <project>, --limit <n>.
+    // Options anywhere: --for <project>, --limit <n>, --track <n>, --at <tick>.
     let mut rest = Vec::new();
-    let (mut project, mut limit) = (None, None);
+    let (mut project, mut limit, mut track, mut at) = (None, None, None, 0);
     let mut it = args.iter();
     while let Some(&a) = it.next() {
         match a {
             "--for" => project = it.next().map(PathBuf::from),
+            "--track" => {
+                track = Some(
+                    it.next()
+                        .and_then(|n| n.parse().ok())
+                        .ok_or("--track takes a number")?,
+                )
+            }
+            "--at" => {
+                at = it
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("--at takes a tick")?
+            }
             "--limit" => {
                 limit = Some(
                     it.next()
@@ -244,6 +372,7 @@ pub fn command(args: &[&str]) -> Result<Value, String> {
         ["add", dir] => add_folder(Path::new(dir)),
         ["remove", dir] => remove_folder(Path::new(dir)),
         ["info", path] => info(Path::new(path)),
+        ["put", file, dir] => put(Path::new(file), Path::new(dir), track, at),
         ["similar", path] => similar(Path::new(path), Aspects::default(), limit.unwrap_or(20)),
         ["find", words @ ..] => {
             let mut q = query(&words.join(" "))?;

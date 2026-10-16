@@ -161,7 +161,9 @@ agent can send, with examples. An agent can:
   (a kit fitting the song's key and tempo, each pick going with the rest, with alternatives) and
   `tempo samples info <file>`. Every hit says why it fits ("in C minor", "stretches from 92
   BPM", "same pack as Kick_01"), how far to transpose it if a small move fits better, and, for a
-  one-shot, the sampler zone that plays it in tune.
+  one-shot, the sampler zone that plays it in tune. `tempo samples put <file> <project>` puts one
+  in the song made to fit: a loop stretched to its tempo and moved into its key, a one-shot as a
+  sampler zone in tune.
 - Play any plugin as a person would: find it with `tempo plugins`, set its parameters by name and
   as it shows them (`"param": "Filter Cutoff", "text": "850 Hz"`), list and load its presets and
   save new ones (`tempo presets`, `set_preset`), automate any parameter, send it controllers,
@@ -188,8 +190,8 @@ analyses what's new or changed, on every core.
 `tempo mcp` is the same as an MCP server on stdio, for agents without a shell (Claude Desktop,
 claude.ai and the like): its tools list themselves with typed inputs, and a user can allow them
 without allowing a shell. Its tools are `describe`, `show`, `edit`, `analyze`, `render`,
-`transport`, `plugins`, `params`, `presets`, `samples_find`, `samples_similar`, `samples_kit` and
-`samples_library`. For Claude Code:
+`transport`, `plugins`, `params`, `presets`, `samples_find`, `samples_similar`, `samples_kit`,
+`samples_put` and `samples_library`. For Claude Code:
 
     claude mcp add tempo -- /path/to/tempo mcp
 

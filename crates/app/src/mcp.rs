@@ -142,6 +142,20 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "samples_put",
+            "description": "Puts a sample into a song, made to fit it: a loop on an audio track (`track`, else a new one) at `at` ticks, stretched to the song's tempo, moved into its key if a small move fits, looping; a one-shot into a sampler (`track`'s, else a new sampler track) as a zone that plays it in tune (a drum on its note, a pitched sound across the keys from its own note).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "project": project,
+                    "track": { "type": "integer", "minimum": 0 },
+                    "at": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["path", "project"]
+            }
+        },
+        {
             "name": "samples_library",
             "description": "The sample library: `status` (its folders and what's in them), `scan` (analyse what's new or changed), `add` or `remove` a folder (`path`), or `info` on a sample (`path`).",
             "inputSchema": {
@@ -257,6 +271,14 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
                 .map(PathBuf::from);
             crate::samples_cli::kit(seed, project.as_deref())
         }
+        "samples_put" => crate::samples_cli::put(
+            &path(args, "path")?,
+            &path(args, "project")?,
+            args.get("track")
+                .and_then(Value::as_u64)
+                .map(|t| t as usize),
+            args.get("at").and_then(Value::as_u64).unwrap_or(0),
+        ),
         "samples_library" => match args.get("action").and_then(Value::as_str) {
             Some("status") => crate::samples_cli::status(),
             Some("scan") => crate::samples_cli::scan(),
@@ -370,6 +392,7 @@ mod tests {
                 "samples_find",
                 "samples_similar",
                 "samples_kit",
+                "samples_put",
                 "samples_library"
             ]
         );
