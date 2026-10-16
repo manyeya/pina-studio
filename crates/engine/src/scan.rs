@@ -1,6 +1,7 @@
-//! Finding the VST3 plugins installed. Each bundle is opened in a child process (`tempo __scan
-//! <bundle>`), so one that crashes takes only its scan down, and results are cached by bundle
-//! and modification time, so a scan only opens what's new.
+//! Finding the plugins installed: VST3, CLAP and VST2 bundles, and Audio Units. Each bundle is
+//! opened in a child process (`tempo __scan <bundle>`, or `tempo __scan au` for the Audio
+//! Units), so one that crashes takes only its scan down, and results are cached by bundle and
+//! modification time, so a scan only opens what's new.
 
 use std::{
     collections::HashMap,
@@ -12,18 +13,39 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::plugin::{AUDIO_MODULE, Module};
+use crate::{plugin, project::Format};
 
 /// How long one bundle gets to report what's in it.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
+/// A plugin, as `PluginRef` names it: format, bundle, name and (for some formats) id.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PluginInfo {
+    #[serde(default)]
+    pub format: Format,
     pub path: PathBuf,
     pub class: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
     pub vendor: String,
     pub instrument: bool,
 }
+
+impl PluginInfo {
+    /// The reference a project keeps to it.
+    pub fn plugin_ref(&self) -> crate::project::PluginRef {
+        crate::project::PluginRef {
+            format: self.format,
+            path: self.path.clone(),
+            class: self.class.clone(),
+            uid: self.uid.clone(),
+            ..Default::default()
+        }
+    }
+}
+
+/// What `scan` passes for the Audio Units, which aren't found as bundles.
+pub const AUDIO_UNITS: &str = "au";
 
 #[derive(Serialize, Deserialize, Default)]
 struct Cached {
@@ -31,29 +53,43 @@ struct Cached {
     plugins: Vec<PluginInfo>,
 }
 
-/// Where VST3 plugins are installed, and the folders in `TEMPO_VST3_PATH` (colon-separated).
+/// Where VST3, CLAP and VST2 plugins are installed, and the folders in `TEMPO_PLUGIN_PATH` (or,
+/// as before, `TEMPO_VST3_PATH`; colon-separated).
 pub fn folders() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    let mut dirs = vec![
-        PathBuf::from("/Library/Audio/Plug-Ins/VST3"),
-        home.join("Library/Audio/Plug-Ins/VST3"),
-    ];
-    if let Some(extra) = std::env::var_os("TEMPO_VST3_PATH") {
-        dirs.extend(std::env::split_paths(&extra));
+    let mut dirs = Vec::new();
+    for kind in ["VST3", "CLAP", "VST"] {
+        dirs.push(PathBuf::from("/Library/Audio/Plug-Ins").join(kind));
+        dirs.push(home.join("Library/Audio/Plug-Ins").join(kind));
+    }
+    for var in ["TEMPO_PLUGIN_PATH", "TEMPO_VST3_PATH"] {
+        if let Some(extra) = std::env::var_os(var) {
+            dirs.extend(std::env::split_paths(&extra));
+        }
     }
     dirs
 }
 
-/// Every `.vst3` bundle in `dirs`, in vendor subfolders too.
+/// A bundle's format, by its extension.
+pub fn format_of(bundle: &Path) -> Option<Format> {
+    match bundle.extension()?.to_str()? {
+        "vst3" => Some(Format::Vst3),
+        "clap" => Some(Format::Clap),
+        "vst" => Some(Format::Vst2),
+        _ => None,
+    }
+}
+
+/// Every plugin bundle (`.vst3`, `.clap`, `.vst`) in `dirs`, in vendor subfolders too.
 pub fn bundles(dirs: &[PathBuf]) -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for path in entries.flatten().map(|e| e.path()) {
-            if path.extension().is_some_and(|e| e == "vst3") {
+            if format_of(&path).is_some() {
                 out.push(path);
             } else if path.is_dir() {
                 walk(&path, out);
@@ -66,20 +102,34 @@ pub fn bundles(dirs: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
-/// The plugins in one bundle, opening it in this process. What `tempo __scan` runs.
+/// The plugins in one bundle (or with `AUDIO_UNITS`, the Audio Units), opening it in this
+/// process. What `tempo __scan` runs.
 pub fn inspect(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
-    let module = Module::load(bundle)?;
-    Ok(module
-        .classes()
-        .into_iter()
-        .filter(|c| c.category == AUDIO_MODULE)
-        .map(|c| PluginInfo {
-            path: bundle.to_path_buf(),
-            class: c.name,
-            vendor: c.vendor,
-            instrument: c.instrument,
-        })
-        .collect())
+    if bundle == Path::new(AUDIO_UNITS) {
+        return Ok(plugin::au::list());
+    }
+    match format_of(bundle) {
+        Some(Format::Vst3) => plugin::vst3::inspect(bundle),
+        Some(Format::Clap) => plugin::clap::inspect(bundle),
+        Some(Format::Vst2) => plugin::vst2::inspect(bundle),
+        _ => Err(format!("{}: not a plugin bundle", bundle.display())),
+    }
+}
+
+/// When the Audio Units last changed, as far as their folders say.
+fn units_modified() -> u64 {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    [
+        PathBuf::from("/Library/Audio/Plug-Ins/Components"),
+        home.join("Library/Audio/Plug-Ins/Components"),
+        PathBuf::from("/System/Library/Components"),
+    ]
+    .iter()
+    .map(|d| modified(d))
+    .max()
+    .unwrap_or(0)
 }
 
 fn modified(path: &Path) -> u64 {
@@ -118,8 +168,9 @@ fn scan_one(exe: &Path, bundle: &Path) -> Vec<PluginInfo> {
     serde_json::from_slice(&out.stdout).unwrap_or_default()
 }
 
-/// Every plugin in `bundles`, scanning (with `exe`) only bundles that are new or changed since
-/// the cache at `cache` was written, and updating it.
+/// Every plugin in `bundles` (and the Audio Units, if `AUDIO_UNITS` is among them), scanning
+/// (with `exe`) only what's new or changed since the cache at `cache` was written, and
+/// updating it.
 // ponytail: one bundle at a time; scan in parallel if first scans of big collections drag.
 pub fn scan(exe: &Path, bundles: &[PathBuf], cache: &Path) -> Vec<PluginInfo> {
     let old: HashMap<PathBuf, Cached> = std::fs::read(cache)
@@ -128,7 +179,10 @@ pub fn scan(exe: &Path, bundles: &[PathBuf], cache: &Path) -> Vec<PluginInfo> {
         .unwrap_or_default();
     let mut new = HashMap::new();
     for bundle in bundles {
-        let modified = modified(bundle);
+        let modified = match bundle == Path::new(AUDIO_UNITS) {
+            true => units_modified(),
+            false => modified(bundle),
+        };
         let entry = match old.get(bundle) {
             Some(c) if c.modified == modified => Cached {
                 modified,
@@ -148,6 +202,13 @@ pub fn scan(exe: &Path, bundles: &[PathBuf], cache: &Path) -> Vec<PluginInfo> {
     let mut plugins: Vec<PluginInfo> = new.into_values().flat_map(|c| c.plugins).collect();
     plugins.sort_by_key(|p| p.class.to_lowercase());
     plugins
+}
+
+/// What `scan` looks through: every bundle in `folders`, and the Audio Units.
+pub fn everything() -> Vec<PathBuf> {
+    let mut all = bundles(&folders());
+    all.push(PathBuf::from(AUDIO_UNITS));
+    all
 }
 
 /// Where the scan cache lives.

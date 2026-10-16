@@ -2062,7 +2062,7 @@ impl Workspace {
             return;
         };
         let found = cx.background_spawn(async move {
-            scan::scan(&exe, &scan::bundles(&scan::folders()), &scan::cache_file())
+            scan::scan(&exe, &scan::everything(), &scan::cache_file())
         });
         cx.spawn(async move |this, cx| {
             let plugins = found.await;

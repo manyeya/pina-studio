@@ -1,4 +1,5 @@
-//! Loads a VST3 instrument, opens its editor, and plays an arpeggio through it.
+//! Loads an instrument (VST3, CLAP or VST2 bundle, or with `au` the first Audio Unit
+//! instrument), opens its editor, and plays an arpeggio through it.
 //!
 //!     cargo run -p tempo-engine --example play_vst -- "/path/to/Surge XT.vst3"
 
@@ -15,7 +16,10 @@ use std::{
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-use tempo_engine::plugin::{AUDIO_MODULE, Module, Note, Plugin};
+use tempo_engine::{
+    plugin::{self, Libraries, Note},
+    scan,
+};
 
 const MAX_BLOCK: usize = 512;
 
@@ -27,15 +31,20 @@ fn main() {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-    let module = Module::load(Path::new(&path)).unwrap();
-    let classes = module.classes();
-    for c in &classes {
-        println!("class: {} [{}]", c.name, c.category);
+    let found = scan::inspect(Path::new(&path)).unwrap();
+    for p in &found {
+        println!(
+            "plugin: {} ({}, instrument: {})",
+            p.class,
+            p.format.name(),
+            p.instrument
+        );
     }
-    let class = classes
+    let info = found
         .iter()
-        .find(|c| c.category == AUDIO_MODULE)
-        .expect("no audio module class");
+        .find(|p| p.instrument)
+        .or(found.first())
+        .expect("no plugins there");
 
     let device = cpal::default_host()
         .default_output_device()
@@ -44,9 +53,16 @@ fn main() {
     let channels = config.channels as usize;
     println!("output: {} Hz, {channels} channels", config.sample_rate);
 
-    let (plugin, mut processor) =
-        Plugin::instantiate(&module, class, config.sample_rate as f64, MAX_BLOCK, None).unwrap();
-    println!("loaded {}", plugin.name);
+    let rate = config.sample_rate as f64;
+    let (plugin, mut processor) = plugin::instantiate(
+        &mut Libraries::new(),
+        &info.plugin_ref(),
+        rate,
+        MAX_BLOCK,
+        None,
+    )
+    .unwrap();
+    println!("loaded {}", plugin.name());
 
     let (mut notes_tx, mut notes_rx) = rtrb::RingBuffer::<Note>::new(256);
     // Loudest sample since the last print, so a run shows the plugin is making sound.
@@ -66,7 +82,7 @@ fn main() {
                         n += 1;
                     }
                     let (mut l, mut r) = ([0f32; MAX_BLOCK], [0f32; MAX_BLOCK]);
-                    processor.process([&mut l, &mut r], frames, &notes[..n]);
+                    processor.process([&mut l, &mut r], frames, &notes[..n], &[], None);
                     for (f, frame) in chunk.chunks_mut(channels).enumerate() {
                         for (c, s) in frame.iter_mut().enumerate() {
                             *s = if c % 2 == 0 { l[f] } else { r[f] };

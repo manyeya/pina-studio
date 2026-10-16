@@ -153,7 +153,7 @@ pub fn instrument_name(i: Option<&Instrument>) -> String {
         Some(Instrument::Synth) => "Sine Synth".into(),
         Some(Instrument::Drums) => "Drum Kit".into(),
         Some(Instrument::Sampler(s)) => sampler_name(s),
-        Some(Instrument::Vst3(r)) => r.class.clone(),
+        Some(Instrument::Plugin(r)) => r.class.clone(),
     }
 }
 

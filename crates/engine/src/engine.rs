@@ -23,7 +23,7 @@ use crate::{
     drums::Drums,
     dsp::Strip,
     peaks::Peaks,
-    plugin::{AUDIO_MODULE, Module, Note, Plugin, Processor},
+    plugin::{self, Libraries, Note, Plugin, Processor},
     project::{
         AutoMode, AutoPoint, Comp, Content, Eq, Instrument, PluginRef, Project, Region, Saturator,
         Which, comp_segments, value_at,
@@ -111,7 +111,7 @@ impl AudioFiles {
 }
 
 /// Loaded plugin bundles, by path.
-pub type Modules = HashMap<PathBuf, Module>;
+pub type Modules = Libraries;
 
 struct Clip {
     /// Timeline position and length, and where in the file it starts, all in samples.
@@ -461,6 +461,18 @@ pub struct Lane {
     strip: Box<Strip>,
 }
 
+impl Lane {
+    /// Lets its plugins apply what's been set on them, before they're heard.
+    pub fn settle(&mut self) {
+        if let Source::Plugin(p) = &mut self.source {
+            plugin::settle(p, MAX_BLOCK);
+        }
+        for p in &mut self.inserts {
+            plugin::settle(p, MAX_BLOCK);
+        }
+    }
+}
+
 /// The main-thread halves of a lane's plugins.
 #[derive(Default)]
 pub struct LanePlugins {
@@ -483,21 +495,12 @@ pub fn make_lane(
     dir: &Path,
 ) -> Result<(Lane, LanePlugins, u32), String> {
     let mut instantiate = |r: &PluginRef| -> Result<(Plugin, Processor), String> {
-        if !modules.contains_key(&r.path) {
-            modules.insert(r.path.clone(), Module::load(&r.path)?);
-        }
-        let module = &modules[&r.path];
-        let classes = module.classes();
-        let class = classes
-            .iter()
-            .find(|c| c.category == AUDIO_MODULE && c.name == r.class)
-            .ok_or_else(|| format!("{}: no plugin named {:?}", r.path.display(), r.class))?;
         // A missing settings file just means default settings.
         let state = r
             .state
             .as_ref()
             .and_then(|f| std::fs::read(dir.join(f)).ok());
-        Plugin::instantiate(module, class, rate, MAX_BLOCK, state.as_deref())
+        plugin::instantiate(modules, r, rate, MAX_BLOCK, state.as_deref())
     };
     let mut plugins = LanePlugins::default();
     let source = match instrument {
@@ -507,7 +510,7 @@ pub fn make_lane(
         Some(Instrument::Sampler(s)) => {
             Source::Sampler(Box::new(Sampler::load(&s.zones, dir, rate)?))
         }
-        Some(Instrument::Vst3(r)) => {
+        Some(Instrument::Plugin(r)) => {
             let (plugin, processor) = instantiate(r)?;
             plugins.instrument = Some(plugin);
             Source::Plugin(processor)
@@ -522,7 +525,7 @@ pub fn make_lane(
     let latency = match &source {
         Source::Plugin(p) => p.latency(),
         _ => 0,
-    } + processors.iter().map(Processor::latency).sum::<u32>();
+    } + processors.iter().map(|p| p.latency()).sum::<u32>();
     let lane = Lane {
         source,
         inserts: processors,
@@ -968,17 +971,23 @@ impl Engine {
         let (mut modules, mut plugins, mut lanes) = (Modules::new(), Vec::new(), Vec::new());
         let mut add = |instrument: Option<&Instrument>, inserts: &[PluginRef]| {
             let (lane, p, latency) = make_lane(instrument, inserts, rate, &mut modules, dir)?;
-            // The parameters the project sets, as the player gives them live.
+            // The preset and parameters the project sets, as the player gives them live; a
+            // preset a saved state already holds isn't loaded again.
             let instrument_ref = match instrument {
-                Some(Instrument::Vst3(r)) => Some(r),
+                Some(Instrument::Plugin(r)) => Some(r),
                 _ => None,
             };
             let refs = instrument_ref.into_iter().zip(&p.instrument);
             for (r, plugin) in refs.chain(inserts.iter().zip(&p.inserts)) {
+                if let (Some(preset), None) = (&r.preset, &r.state) {
+                    plugin.load_preset(preset)?;
+                }
                 for (&id, &v) in &r.params {
                     plugin.set_param(id, v);
                 }
             }
+            let mut lane = lane;
+            lane.settle();
             lanes.push(Some(Box::new(lane)));
             plugins.push(p);
             Ok::<_, String>((lanes.len() - 1, latency))
@@ -1307,14 +1316,14 @@ impl Engine {
                 Source::Plugin(p) => {
                     plan.automate(Which::Instrument, p, (from, to));
                     p.set_transport(playing, from, tempo);
-                    p.process([&mut *l, &mut *r], frames, notes);
+                    p.process([&mut *l, &mut *r], frames, notes, &[], None);
                 }
             }
             let reduction = lane.strip.run(&plan.dsp, l, r);
             for (i, p) in lane.inserts.iter_mut().enumerate() {
                 plan.automate(Which::Insert(i), p, (from, to));
                 p.set_transport(playing, from, tempo);
-                p.process([&mut *l, &mut *r], frames, &[]);
+                p.process([&mut *l, &mut *r], frames, &[], &[], None);
             }
             lane.pre.process(l, r, plan.delay);
             // Pre-fader sends: muting still silences them.
@@ -1378,7 +1387,7 @@ impl Engine {
             let reduction = lane.strip.run(&plan.dsp, l, r);
             for p in &mut lane.inserts {
                 p.set_transport(playing, from, tempo);
-                p.process([&mut *l, &mut *r], frames, &[]);
+                p.process([&mut *l, &mut *r], frames, &[], &[], None);
             }
             lane.post.process(l, r, plan.delay);
             let mut peak = [0f32; 2];
@@ -1404,7 +1413,13 @@ impl Engine {
         {
             for p in &mut lane.inserts {
                 p.set_transport(playing, from, tempo);
-                p.process([&mut out_l[..frames], &mut out_r[..frames]], frames, &[]);
+                p.process(
+                    [&mut out_l[..frames], &mut out_r[..frames]],
+                    frames,
+                    &[],
+                    &[],
+                    None,
+                );
             }
         }
         let mut peak = [0f32; 2];
@@ -2527,7 +2542,7 @@ mod tests {
             ..Default::default()
         };
         let mut t = synth_track("s", vec![note(0, PPQ * 8, 57)], PPQ * 8);
-        t.instrument = Some(Instrument::Vst3(plugin));
+        t.instrument = Some(Instrument::Plugin(plugin));
         let p = project(vec![t]);
         // Its loudest-sounding level parameter, turned right down by automation.
         let (_engine, lanes) = Engine::load(&p, Path::new("."), RATE).unwrap();
@@ -2554,7 +2569,7 @@ mod tests {
         assert!(loud > 0.01 && soft < loud / 4.0, "{loud} {soft}");
         // A value the project sets, as Smart Controls and agents do, holds in a render too.
         let mut set = p.clone();
-        if let Some(Instrument::Vst3(r)) = &mut set.tracks[0].instrument {
+        if let Some(Instrument::Plugin(r)) = &mut set.tracks[0].instrument {
             r.params.insert(volume.id, 0.0);
         }
         let held = peak(&render(&set, Path::new("."), BEAT * 2)[0][BEAT..]);

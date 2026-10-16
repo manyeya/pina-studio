@@ -9,7 +9,7 @@ use tempo_engine::{
     music::NoteEdit,
     player::Which,
     plugin::PluginParam,
-    project::{Content, Instrument, PPQ, PluginRef, Project},
+    project::{Content, Instrument, PPQ, Project},
 };
 
 use crate::{
@@ -403,7 +403,7 @@ impl Workspace {
         // An instrument plugin's own parameters, else the channel's EQ and compressor.
         let (source, knobs): (String, Vec<(Target, String, f32, String)>) = match &track.instrument
         {
-            Some(Instrument::Vst3(r)) => {
+            Some(Instrument::Plugin(r)) => {
                 let key = format!("{}#{}", r.path.display(), r.class);
                 let stale = self
                     .smart
@@ -731,12 +731,7 @@ impl Workspace {
             .get(t)
             .map_or(0, |tr| tr.inserts.len());
         for p in self.plugins.iter().flatten() {
-            let plugin = PluginRef {
-                path: p.path.clone(),
-                class: p.class.clone(),
-                state: None,
-                ..Default::default()
-            };
+            let plugin = p.plugin_ref();
             if p.instrument {
                 instruments.push(entry(
                     p.class.clone(),
@@ -744,7 +739,7 @@ impl Workspace {
                     Icon::Plug,
                     MenuAction::Instrument {
                         track: t,
-                        instrument: Instrument::Vst3(plugin),
+                        instrument: Instrument::Plugin(plugin),
                     },
                     cx,
                 ));
@@ -1062,6 +1057,7 @@ mod tests {
             id,
             name: name.into(),
             value: 0.5,
+            ..Default::default()
         }
     }
 

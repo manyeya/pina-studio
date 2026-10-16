@@ -91,7 +91,7 @@ fn sound(instrument: Option<&Instrument>, inserts: &[PluginRef]) -> Sound {
         Instrument::Drums => "drums".to_string(),
         // A sampler is rebuilt when its samples or their settings change.
         Instrument::Sampler(s) => format!("sampler {:?}", s.zones),
-        Instrument::Vst3(r) => format!("{}#{}", r.path.display(), r.class),
+        Instrument::Plugin(r) => format!("{}#{}", r.path.display(), r.class),
     });
     (instrument, inserts.iter().map(key).collect())
 }
@@ -244,7 +244,7 @@ impl Player {
         }
         for &(id, instrument, inserts) in &channels {
             let slot = self.lanes.get_mut(&id).unwrap();
-            if let Some(Instrument::Vst3(r)) = instrument {
+            if let Some(Instrument::Plugin(r)) = instrument {
                 slot.apply(Which::Instrument, r);
             }
             for (i, r) in inserts.iter().enumerate() {
@@ -306,7 +306,7 @@ impl Player {
             let Some(slot) = self.lanes.get(&t.id) else {
                 continue;
             };
-            if let (Some(Instrument::Vst3(r)), Some(p)) =
+            if let (Some(Instrument::Plugin(r)), Some(p)) =
                 (&mut t.instrument, &slot.plugins.instrument)
             {
                 save(r, p, format!("Track {} instrument.state", n + 1))?;
@@ -454,7 +454,7 @@ impl Player {
 
     /// A plugin's parameters, as its controller has them now.
     pub fn params(&self, id: u64, which: Which) -> Vec<PluginParam> {
-        self.plugin(id, which).map_or(Vec::new(), Plugin::params)
+        self.plugin(id, which).map_or(Vec::new(), |p| p.params())
     }
 
     /// Sets a plugin's parameter (0 to 1), as if turned in its editor.
@@ -516,14 +516,14 @@ mod tests {
             0,
             Track {
                 name: "Synth".into(),
-                instrument: Some(Instrument::Vst3(plugin)),
+                instrument: Some(Instrument::Plugin(plugin)),
                 ..Default::default()
             },
         );
         let mut player = Player::silent(&project, &dir);
         player.sync(&project).unwrap();
         player.save_states(&mut project).unwrap();
-        let Some(Instrument::Vst3(r)) = &project.tracks[0].instrument else {
+        let Some(Instrument::Plugin(r)) = &project.tracks[0].instrument else {
             unreachable!()
         };
         let file = r.state.clone().expect("a state file");

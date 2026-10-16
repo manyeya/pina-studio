@@ -379,8 +379,10 @@ fn a_send_to_a_new_aux_and_its_level(cx: &mut TestAppContext) {
 fn a_plugin_that_wont_load_is_reported_and_removable(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     let missing = PluginInfo {
+        format: Default::default(),
         path: "/nowhere/Missing.vst3".into(),
         class: "Missing".into(),
+        uid: None,
         vendor: "Nobody".into(),
         instrument: false,
     };

@@ -162,9 +162,5 @@ pub fn params(dir: &Path, channel: ChannelRef, plugin: Which) -> Result<Value, S
 /// The plugins installed, scanning what's new.
 pub fn plugins() -> Result<Value, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    json(scan::scan(
-        &exe,
-        &scan::bundles(&scan::folders()),
-        &scan::cache_file(),
-    ))
+    json(scan::scan(&exe, &scan::everything(), &scan::cache_file()))
 }

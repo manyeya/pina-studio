@@ -6,13 +6,14 @@
 use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
-    sync::Mutex,
 };
 
 use vst3::{
     Class, ComWrapper,
     Steinberg::{IBStream_::IStreamSeekMode_::*, Vst::*, *},
 };
+
+use crate::plugin::EditSender;
 
 pub struct HostApplication;
 
@@ -43,19 +44,17 @@ impl IHostApplicationTrait for HostApplication {
 
 /// Hears parameter edits made in a plugin's editor and passes them to its processor.
 pub struct ComponentHandler {
-    edits: Mutex<rtrb::Producer<(ParamID, ParamValue)>>,
+    edits: EditSender,
 }
 
 impl ComponentHandler {
-    pub fn new(edits: rtrb::Producer<(ParamID, ParamValue)>) -> Self {
-        ComponentHandler {
-            edits: Mutex::new(edits),
-        }
+    pub fn new(edits: EditSender) -> Self {
+        ComponentHandler { edits }
     }
 
     /// Passes an edit made from tempo itself to the processor.
     pub fn edit(&self, id: ParamID, value: ParamValue) {
-        let _ = self.edits.lock().unwrap().push((id, value));
+        self.edits.push(id, value);
     }
 }
 
@@ -69,8 +68,7 @@ impl IComponentHandlerTrait for ComponentHandler {
     }
 
     unsafe fn performEdit(&self, id: ParamID, value: ParamValue) -> tresult {
-        // A full queue drops the edit; the processor catches up on the next one.
-        let _ = self.edits.lock().unwrap().push((id, value));
+        self.edits.push(id, value);
         kResultOk
     }
 

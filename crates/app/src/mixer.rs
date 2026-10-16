@@ -295,7 +295,7 @@ impl Workspace {
                         format!("Sampler · built in · {} samples", s.zones.len()),
                         false,
                     ),
-                    Some(Instrument::Vst3(r)) => {
+                    Some(Instrument::Plugin(r)) => {
                         (r.class.clone(), "Instrument · VST3".into(), true)
                     }
                 };

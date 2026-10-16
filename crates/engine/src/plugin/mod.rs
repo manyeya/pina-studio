@@ -1,229 +1,26 @@
-//! Hosting VST3 plugins (macOS): load a `.vst3` bundle, run its processor on the audio thread,
-//! and open its editor in a window of its own.
+//! Hosting plugins (macOS): VST3, CLAP, VST2 and Audio Units, behind one interface. Each format
+//! loads a plugin as two halves: a `Plugin` on the main thread (its parameters, settings,
+//! presets and editor) and a `Processor` the audio thread runs.
 
-mod com;
+pub mod au;
+pub mod clap;
+pub mod vst2;
+pub mod vst3;
 
 use std::{
-    ffi::{CStr, CString, c_char, c_void},
-    path::Path,
-    ptr,
+    collections::HashMap,
+    path::{Path, PathBuf},
 };
 
 use objc2::{MainThreadMarker, rc::Retained};
 use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
-use vst3::{
-    Class, ComPtr, ComRef, ComWrapper, Interface,
-    Steinberg::{
-        Vst::{
-            BusDirections_::*, Event_::EventTypes_::*, MediaTypes_::*,
-            ProcessContext_::StatesAndFlags_::*, ProcessModes_::*, SymbolicSampleSizes_::*, *,
-        },
-        *,
-    },
-};
 
-use com::*;
+use crate::project::PluginRef;
+pub use crate::project::{Format, Preset, PresetSource};
 
-/// The category of a plugin's processor class.
-pub const AUDIO_MODULE: &str = "Audio Module Class";
-
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFURLCreateFromFileSystemRepresentation(
-        a: *const c_void,
-        buf: *const u8,
-        len: isize,
-        dir: u8,
-    ) -> *const c_void;
-    fn CFBundleCreate(a: *const c_void, url: *const c_void) -> *const c_void;
-    fn CFBundleLoadExecutable(bundle: *const c_void) -> u8;
-    fn CFBundleGetFunctionPointerForName(
-        bundle: *const c_void,
-        name: *const c_void,
-    ) -> *const c_void;
-    fn CFStringCreateWithCString(
-        a: *const c_void,
-        s: *const c_char,
-        encoding: u32,
-    ) -> *const c_void;
-    fn CFRelease(cf: *const c_void);
-}
-
-/// A loaded `.vst3` bundle.
-// ponytail: never unloaded (no bundleExit); add when the plugin browser rescans.
-pub struct Module {
-    factory: ComPtr<IPluginFactory>,
-}
-
-pub struct ClassInfo {
-    pub name: String,
-    pub category: String,
-    pub vendor: String,
-    /// An instrument rather than an effect, by its subcategories.
-    pub instrument: bool,
-    cid: TUID,
-}
-
-impl Module {
-    pub fn load(path: &Path) -> Result<Module, String> {
-        let fail = |why: &str| format!("{}: {why}", path.display());
-        unsafe {
-            let p =
-                CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| fail("bad path"))?;
-            let url = CFURLCreateFromFileSystemRepresentation(
-                ptr::null(),
-                p.as_ptr().cast(),
-                p.as_bytes().len() as isize,
-                1,
-            );
-            if url.is_null() {
-                return Err(fail("bad path"));
-            }
-            let bundle = CFBundleCreate(ptr::null(), url);
-            CFRelease(url);
-            if bundle.is_null() {
-                return Err(fail("not a bundle"));
-            }
-            if CFBundleLoadExecutable(bundle) == 0 {
-                return Err(fail("couldn't load its binary (wrong architecture?)"));
-            }
-            let entry: unsafe extern "C" fn(*const c_void) -> bool =
-                symbol(bundle, c"bundleEntry").ok_or_else(|| fail("no bundleEntry"))?;
-            let get_factory: unsafe extern "C" fn() -> *mut IPluginFactory =
-                symbol(bundle, c"GetPluginFactory").ok_or_else(|| fail("no GetPluginFactory"))?;
-            if !entry(bundle) {
-                return Err(fail("bundleEntry failed"));
-            }
-            let factory =
-                ComPtr::from_raw(get_factory()).ok_or_else(|| fail("no plugin factory"))?;
-            Ok(Module { factory })
-        }
-    }
-
-    pub fn classes(&self) -> Vec<ClassInfo> {
-        let factory2 = self.factory.cast::<IPluginFactory2>();
-        unsafe {
-            (0..self.factory.countClasses())
-                .filter_map(|i| {
-                    if let Some(f) = &factory2 {
-                        let mut info: PClassInfo2 = std::mem::zeroed();
-                        if f.getClassInfo2(i, &mut info) == kResultOk {
-                            return Some(ClassInfo {
-                                name: text(&info.name),
-                                category: text(&info.category),
-                                vendor: text(&info.vendor),
-                                instrument: text(&info.subCategories).contains("Instrument"),
-                                cid: info.cid,
-                            });
-                        }
-                    }
-                    let mut info: PClassInfo = std::mem::zeroed();
-                    (self.factory.getClassInfo(i, &mut info) == kResultOk).then(|| ClassInfo {
-                        name: text(&info.name),
-                        category: text(&info.category),
-                        vendor: String::new(),
-                        instrument: false,
-                        cid: info.cid,
-                    })
-                })
-                .collect()
-        }
-    }
-
-    unsafe fn create<I: Interface>(&self, cid: &TUID) -> Option<ComPtr<I>> {
-        let mut obj = ptr::null_mut();
-        let iid = I::IID;
-        unsafe {
-            (self
-                .factory
-                .createInstance(cid.as_ptr(), iid.as_ptr().cast(), &mut obj)
-                == kResultOk)
-                .then(|| ComPtr::from_raw(obj.cast()))
-                .flatten()
-        }
-    }
-}
-
-unsafe fn symbol<F: Copy>(bundle: *const c_void, name: &CStr) -> Option<F> {
-    const UTF8: u32 = 0x0800_0100;
-    unsafe {
-        let s = CFStringCreateWithCString(ptr::null(), name.as_ptr(), UTF8);
-        let f = CFBundleGetFunctionPointerForName(bundle, s);
-        CFRelease(s);
-        (!f.is_null()).then(|| std::mem::transmute_copy(&f))
-    }
-}
-
-fn text(chars: &[c_char]) -> String {
-    let bytes: Vec<u8> = chars
-        .iter()
-        .take_while(|&&c| c != 0)
-        .map(|&c| c as u8)
-        .collect();
-    String::from_utf8_lossy(&bytes).into_owned()
-}
-
-fn com_ptr<C: Class, I: Interface>(obj: &ComWrapper<C>) -> *mut I {
-    obj.as_com_ref::<I>().unwrap().as_ptr()
-}
-
-/// A plugin parameter: its id, name, and value from 0 to 1.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PluginParam {
-    pub id: u32,
-    pub name: String,
-    pub value: f64,
-}
-
-fn text16(chars: &[TChar]) -> String {
-    let end = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
-    String::from_utf16_lossy(&chars[..end])
-}
-
-/// A plugin's main-thread side: its controller and editor, and its saved state.
-pub struct Plugin {
-    pub name: String,
-    component: ComPtr<IComponent>,
-    controller: ComPtr<IEditController>,
-    _host: ComWrapper<HostApplication>,
-    _handler: ComWrapper<ComponentHandler>,
-}
-
-/// A plugin's audio-thread side. Dropping it shuts the plugin down, so it's dropped back on the
-/// main thread, after its `Plugin`.
-pub struct Processor {
-    processor: ComPtr<IAudioProcessor>,
-    component: ComPtr<IComponent>,
-    controller: ComPtr<IEditController>,
-    /// The component and controller, when they're separate objects talking to each other.
-    links: Option<(ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>)>,
-    events: ComWrapper<EventList>,
-    params: ComWrapper<ParameterChanges>,
-    /// Where the plugin reports its own changes (meters, MIDI it makes), as a host must give it.
-    // ponytail: read by nothing; forward them when something shows plugin meters or MIDI out.
-    out_events: ComWrapper<EventList>,
-    out_params: ComWrapper<ParameterChanges>,
-    edits: rtrb::Consumer<(ParamID, ParamValue)>,
-    /// Automation for the next block: a parameter, and its value at the block's start and end.
-    automation: [(ParamID, ParamValue, ParamValue); AUTOMATED],
-    automated: usize,
-    // Channel buffers, their pointers, and the bus structs that point at those.
-    _buffers: Vec<Vec<f32>>,
-    _channels: Vec<Vec<*mut f32>>,
-    inputs: Vec<AudioBusBuffers>,
-    outputs: Vec<AudioBusBuffers>,
-    context: ProcessContext,
-    max_block: usize,
-}
-
-/// Most parameters one plugin follows automation for, per block.
-pub const AUTOMATED: usize = 32;
-
-// The COM pointers are only used from the audio thread once the processor moves there.
-unsafe impl Send for Processor {}
-
-#[derive(Clone, Copy, Default)]
+/// A note for an instrument, `offset` samples into the block.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub struct Note {
     pub offset: u32,
     pub pitch: u8,
@@ -231,292 +28,185 @@ pub struct Note {
     pub velocity: f32,
 }
 
-impl Plugin {
-    /// Creates a plugin at `rate`, restoring `state` (from `Plugin::state`) if given.
-    pub fn instantiate(
-        module: &Module,
-        class: &ClassInfo,
-        rate: f64,
-        max_block: usize,
-        state: Option<&[u8]>,
-    ) -> Result<(Plugin, Processor), String> {
-        let fail = |why: &str| format!("{}: {why}", class.name);
-        unsafe {
-            let host = ComWrapper::new(HostApplication);
-            let host_ptr = com_ptr::<_, IHostApplication>(&host).cast::<FUnknown>();
-            let component: ComPtr<IComponent> = module
-                .create(&class.cid)
-                .ok_or_else(|| fail("couldn't create it"))?;
-            if component.initialize(host_ptr) != kResultOk {
-                return Err(fail("initialize failed"));
-            }
-            let processor: ComPtr<IAudioProcessor> = component
-                .cast()
-                .ok_or_else(|| fail("not an audio processor"))?;
+/// What an instrument hears besides notes, `offset` samples into the block.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Control {
+    pub offset: u32,
+    pub kind: ControlKind,
+}
 
-            let mut links = None;
-            let controller: ComPtr<IEditController> = match component.cast() {
-                Some(c) => c,
-                None => {
-                    let mut cid: TUID = [0; 16];
-                    if component.getControllerClassId(&mut cid) != kResultOk {
-                        return Err(fail("no edit controller"));
-                    }
-                    let c: ComPtr<IEditController> = module
-                        .create(&cid)
-                        .ok_or_else(|| fail("couldn't create its controller"))?;
-                    c.initialize(host_ptr);
-                    if let (Some(a), Some(b)) = (
-                        component.cast::<IConnectionPoint>(),
-                        c.cast::<IConnectionPoint>(),
-                    ) {
-                        a.connect(b.as_ptr());
-                        b.connect(a.as_ptr());
-                        links = Some((a, b));
-                    }
-                    let state = ComWrapper::new(MemoryStream::default());
-                    if component.getState(com_ptr::<_, IBStream>(&state)) == kResultOk {
-                        state.rewind();
-                        c.setComponentState(com_ptr::<_, IBStream>(&state));
-                    }
-                    c
-                }
-            };
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ControlKind {
+    /// A MIDI controller (0 to 127; 1 is the mod wheel, 64 the sustain pedal), 0 to 1.
+    Cc { number: u8, value: f32 },
+    /// -1 to 1, across the plugin's bend range.
+    PitchBend(f32),
+    /// Channel pressure, 0 to 1.
+    Aftertouch(f32),
+    /// One held note's pressure, 0 to 1.
+    PolyPressure { pitch: u8, value: f32 },
+    /// One held note's expression, the note known by its pitch.
+    Expression {
+        pitch: u8,
+        kind: ExpressionKind,
+        value: f32,
+    },
+}
 
-            if let Some((ours, theirs)) = state.and_then(unpack) {
-                let stream = |bytes: &[u8]| ComWrapper::new(MemoryStream::from(bytes.to_vec()));
-                let s = stream(ours);
-                component.setState(com_ptr::<_, IBStream>(&s));
-                let s = stream(ours);
-                controller.setComponentState(com_ptr::<_, IBStream>(&s));
-                if !theirs.is_empty() {
-                    let s = stream(theirs);
-                    controller.setState(com_ptr::<_, IBStream>(&s));
-                }
-            }
+/// Per-note expression, as VST3 and CLAP have it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExpressionKind {
+    /// Semitones up or down, -120 to 120.
+    Tuning,
+    /// Gain, 0 to 4 (1 is as played).
+    Volume,
+    /// -1 left to 1 right.
+    Pan,
+    /// 0 to 1.
+    Brightness,
+    /// 0 to 1.
+    Vibrato,
+    /// 0 to 1.
+    Expression,
+}
 
-            let (edits_tx, edits) = rtrb::RingBuffer::new(1024);
-            let handler = ComWrapper::new(ComponentHandler::new(edits_tx));
-            controller.setComponentHandler(com_ptr::<_, IComponentHandler>(&handler));
+/// A plugin parameter: its id and name, and its value, default and steps from 0 to 1.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct PluginParam {
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub default: f64,
+    /// 0 for a continuous parameter; otherwise how many steps from 0 to 1 (a switch has 1, a
+    /// choice of four 3), each step's value being `step / steps`.
+    pub steps: u32,
+    /// Its unit, like "Hz" or "dB", if the plugin says.
+    pub units: String,
+}
 
-            // Ask for stereo everywhere, then take whatever the plugin settled on.
-            let n_in = component.getBusCount(kAudio as _, kInput as _);
-            let n_out = component.getBusCount(kAudio as _, kOutput as _);
-            if n_out == 0 {
-                return Err(fail("no audio output"));
-            }
-            let mut ins = vec![SpeakerArr::kStereo; n_in as usize];
-            let mut outs = vec![SpeakerArr::kStereo; n_out as usize];
-            processor.setBusArrangements(ins.as_mut_ptr(), n_in, outs.as_mut_ptr(), n_out);
-            component.activateBus(kAudio as _, kOutput as _, 0, 1);
-            if n_in > 0 {
-                component.activateBus(kAudio as _, kInput as _, 0, 1);
-            }
-            if component.getBusCount(kEvent as _, kInput as _) > 0 {
-                component.activateBus(kEvent as _, kInput as _, 0, 1);
-            }
-
-            // Every bus gets buffers, active or not: some plugins write to all of them.
-            let mut buffers = Vec::new();
-            let mut channels = Vec::new();
-            let mut bus = |dir, i| {
-                let mut arr: SpeakerArrangement = 0;
-                processor.getBusArrangement(dir as _, i, &mut arr);
-                let mut ptrs: Vec<*mut f32> = (0..arr.count_ones())
-                    .map(|_| {
-                        buffers.push(vec![0f32; max_block]);
-                        buffers.last_mut().unwrap().as_mut_ptr()
-                    })
-                    .collect();
-                let b = AudioBusBuffers {
-                    numChannels: ptrs.len() as int32,
-                    silenceFlags: 0,
-                    __field0: AudioBusBuffers__type0 {
-                        channelBuffers32: ptrs.as_mut_ptr(),
-                    },
-                };
-                channels.push(ptrs);
-                b
-            };
-            let inputs = (0..n_in).map(|i| bus(kInput, i)).collect();
-            let outputs: Vec<AudioBusBuffers> = (0..n_out).map(|i| bus(kOutput, i)).collect();
-            if outputs[0].numChannels == 0 {
-                return Err(fail("main output has no channels"));
-            }
-
-            let mut setup = ProcessSetup {
-                processMode: kRealtime as _,
-                symbolicSampleSize: kSample32 as _,
-                maxSamplesPerBlock: max_block as _,
-                sampleRate: rate,
-            };
-            if processor.setupProcessing(&mut setup) != kResultOk {
-                return Err(fail("setupProcessing failed"));
-            }
-            component.setActive(1);
-            processor.setProcessing(1);
-
-            let mut context: ProcessContext = std::mem::zeroed();
-            context.sampleRate = rate;
-            context.tempo = 120.0;
-            context.timeSigNumerator = 4;
-            context.timeSigDenominator = 4;
-            context.state = (kPlaying | kTempoValid | kTimeSigValid) as _;
-
-            let plugin = Plugin {
-                name: class.name.clone(),
-                component: component.clone(),
-                controller: controller.clone(),
-                _host: host,
-                _handler: handler,
-            };
-            let processor = Processor {
-                processor,
-                component,
-                controller,
-                links,
-                events: ComWrapper::new(EventList::with_capacity(512)),
-                params: ComWrapper::new(ParameterChanges::with_capacity(64)),
-                out_events: ComWrapper::new(EventList::with_capacity(512)),
-                out_params: ComWrapper::new(ParameterChanges::with_capacity(64)),
-                edits,
-                automation: [(0, 0.0, 0.0); AUTOMATED],
-                automated: 0,
-                _buffers: buffers,
-                _channels: channels,
-                inputs,
-                outputs,
-                context,
-                max_block,
-            };
-            Ok((plugin, processor))
-        }
-    }
-
+/// A plugin's main-thread side: its parameters, settings, presets and editor.
+pub trait PluginApi {
+    fn name(&self) -> &str;
     /// The parameters a person can turn: automatable, not hidden, not the bypass.
-    pub fn params(&self) -> Vec<PluginParam> {
-        use ParameterInfo_::ParameterFlags_::*;
-        unsafe {
-            (0..self.controller.getParameterCount())
-                .filter_map(|i| {
-                    let mut info: ParameterInfo = std::mem::zeroed();
-                    if self.controller.getParameterInfo(i, &mut info) != kResultOk {
-                        return None;
-                    }
-                    let flags = info.flags;
-                    let shown = flags & kCanAutomate != 0 && flags & (kIsHidden | kIsBypass) == 0;
-                    shown.then(|| PluginParam {
-                        id: info.id,
-                        name: text16(&info.title),
-                        value: self.controller.getParamNormalized(info.id),
-                    })
-                })
-                .collect()
+    fn params(&self) -> Vec<PluginParam>;
+    /// Sets a parameter (0 to 1), in the plugin's controls and, in turn, its processor.
+    fn set_param(&self, id: u32, value: f64);
+    /// Shows a parameter's value (0 to 1) in the plugin's controls and editor only.
+    fn show_param(&self, id: u32, value: f64);
+    /// A parameter's value now, 0 to 1.
+    fn param_value(&self, id: u32) -> f64;
+    /// A value (0 to 1) as the plugin shows it, like "2.40 kHz".
+    fn param_text(&self, id: u32, value: f64) -> String;
+    /// The plugin's own reading of a typed value ("850 Hz", "Sine"), 0 to 1, if it has one.
+    /// `value_from_text` falls back on reading the plugin's display when it hasn't.
+    fn param_from_text(&self, id: u32, text: &str) -> Option<f64>;
+    /// Its settings, to save with the project and give back to `instantiate` or `set_state`.
+    fn state(&self) -> Option<Vec<u8>>;
+    fn set_state(&self, state: &[u8]) -> Result<(), String>;
+    /// What it can load: its own programs, then preset files of its format.
+    fn presets(&self) -> Vec<Preset>;
+    fn load_preset(&self, preset: &Preset) -> Result<(), String>;
+    /// Saves its settings as a preset file of its format called `name`, where its presets live,
+    /// and says where.
+    fn save_preset(&self, name: &str) -> Result<PathBuf, String>;
+    fn open_editor(&self, mtm: MainThreadMarker) -> Result<Editor, String>;
+    /// Work the plugin asked to do on the main thread. Call it often.
+    fn idle(&self) {}
+}
+
+/// A plugin's audio-thread side. Dropping it shuts the plugin down, so it's dropped back on the
+/// main thread, after its `Plugin`.
+pub trait ProcessorApi: Send {
+    /// How late its output is, in samples.
+    fn latency(&self) -> u32;
+    /// Where the transport is, before a `process`.
+    fn set_transport(&mut self, playing: bool, position: u64, tempo: f64);
+    /// Moves a parameter (0 to 1) across the next block, from `start` to `end`, as automation
+    /// does. Past `AUTOMATED` parameters a block, the rest wait.
+    fn automate(&mut self, id: u32, start: f64, end: f64);
+    /// Whether it has a sidechain: a second input, for what another track plays.
+    fn sidechain(&self) -> bool {
+        false
+    }
+    /// Whether edits from the main thread are still waiting to be applied.
+    fn pending(&self) -> bool;
+    /// Runs one block in place: `buf` goes to the main input (if it has one) and comes back
+    /// holding the main output; `sidechain`, if given, goes to its sidechain input. Applies the
+    /// notes and controls (each sorted by offset) and any edits. Allocation-free.
+    fn process(
+        &mut self,
+        buf: [&mut [f32]; 2],
+        frames: usize,
+        notes: &[Note],
+        controls: &[Control],
+        sidechain: Option<[&[f32]; 2]>,
+    );
+}
+
+pub type Plugin = Box<dyn PluginApi>;
+pub type Processor = Box<dyn ProcessorApi>;
+
+/// Most parameters one plugin follows automation for, per block.
+pub const AUTOMATED: usize = 32;
+
+/// Applies what's waiting: runs silent blocks until the main thread's edits are all in, so a
+/// render starts with the sound the project sets.
+pub fn settle(p: &mut Processor, max_block: usize) {
+    let (mut l, mut r) = (vec![0f32; max_block], vec![0f32; max_block]);
+    for _ in 0..16 {
+        if !p.pending() {
+            break;
         }
-    }
-
-    /// Sets a parameter (0 to 1), in the controller and, through the edit queue, the processor.
-    pub fn set_param(&self, id: u32, value: f64) {
-        let value = value.clamp(0.0, 1.0);
-        unsafe { self.controller.setParamNormalized(id, value) };
-        self._handler.edit(id, value);
-    }
-
-    /// Shows a parameter's value (0 to 1) in the controller and editor only.
-    pub fn show_param(&self, id: u32, value: f64) {
-        unsafe {
-            self.controller
-                .setParamNormalized(id, value.clamp(0.0, 1.0))
-        };
-    }
-
-    /// A parameter's value now, from 0 to 1.
-    pub fn param_value(&self, id: u32) -> f64 {
-        unsafe { self.controller.getParamNormalized(id) }
-    }
-
-    /// A parameter's value as the plugin would show it, like "2.40 kHz".
-    pub fn param_text(&self, id: u32, value: f64) -> String {
-        let mut s: String128 = [0; 128];
-        unsafe {
-            if self.controller.getParamStringByValue(id, value, &mut s) != kResultOk {
-                return format!("{:.0}%", value * 100.0);
-            }
-        }
-        text16(&s)
-    }
-
-    /// The plugin's settings, to save with the project and give back to `instantiate`.
-    pub fn state(&self) -> Option<Vec<u8>> {
-        unsafe {
-            let ours = ComWrapper::new(MemoryStream::default());
-            if self.component.getState(com_ptr::<_, IBStream>(&ours)) != kResultOk {
-                return None;
-            }
-            let theirs = ComWrapper::new(MemoryStream::default());
-            self.controller.getState(com_ptr::<_, IBStream>(&theirs));
-            Some(pack(&ours.bytes(), &theirs.bytes()))
-        }
-    }
-
-    /// Opens the plugin's editor in a window of its own; dropping it closes the window.
-    // ponytail: fixed size unless the plugin asks to resize; handle user resizing later.
-    pub fn open_editor(&self, mtm: MainThreadMarker) -> Result<Editor, String> {
-        let fail = |why: &str| format!("{}: {why}", self.name);
-        unsafe {
-            let view = ComPtr::from_raw(self.controller.createView(ViewType::kEditor))
-                .ok_or_else(|| fail("no editor"))?;
-            if view.isPlatformTypeSupported(kPlatformTypeNSView) != kResultTrue {
-                return Err(fail("editor isn't an NSView"));
-            }
-            let mut rect: ViewRect = std::mem::zeroed();
-            view.getSize(&mut rect);
-            let size = NSSize::new(
-                (rect.right - rect.left) as f64,
-                (rect.bottom - rect.top) as f64,
-            );
-            let window = NSWindow::initWithContentRect_styleMask_backing_defer(
-                mtm.alloc(),
-                NSRect::new(NSPoint::new(200.0, 200.0), size),
-                NSWindowStyleMask::Titled
-                    | NSWindowStyleMask::Closable
-                    | NSWindowStyleMask::Miniaturizable,
-                NSBackingStoreType::Buffered,
-                false,
-            );
-            window.setReleasedWhenClosed(false);
-            window.setTitle(&NSString::from_str(&self.name));
-            let frame = ComWrapper::new(PlugFrame {
-                window: window.clone(),
-            });
-            view.setFrame(com_ptr::<_, IPlugFrame>(&frame));
-            let content = window
-                .contentView()
-                .ok_or_else(|| fail("window has no content view"))?;
-            if view.attached(
-                Retained::as_ptr(&content) as *mut c_void,
-                kPlatformTypeNSView,
-            ) != kResultOk
-            {
-                return Err(fail("editor wouldn't attach"));
-            }
-            window.makeKeyAndOrderFront(None);
-            Ok(Editor {
-                view,
-                _frame: frame,
-                window,
-            })
-        }
+        p.process([&mut l, &mut r], max_block, &[], &[], None);
     }
 }
 
+/// The libraries plugins are loaded from, each kept loaded once opened.
+#[derive(Default)]
+pub struct Libraries {
+    vst3: HashMap<PathBuf, vst3::Module>,
+    clap: HashMap<PathBuf, clap::Library>,
+    vst2: HashMap<PathBuf, vst2::Library>,
+}
+
+impl Libraries {
+    pub fn new() -> Libraries {
+        Libraries::default()
+    }
+}
+
+/// Loads the plugin `r` names at `rate`, restoring `state` (from `PluginApi::state`) if given.
+pub fn instantiate(
+    libs: &mut Libraries,
+    r: &PluginRef,
+    rate: f64,
+    max_block: usize,
+    state: Option<&[u8]>,
+) -> Result<(Plugin, Processor), String> {
+    match r.format {
+        Format::Vst3 => vst3::instantiate(&mut libs.vst3, r, rate, max_block, state),
+        Format::Clap => clap::instantiate(&mut libs.clap, r, rate, max_block, state),
+        Format::Vst2 => vst2::instantiate(&mut libs.vst2, r, rate, max_block, state),
+        Format::Au => au::instantiate(r, rate, max_block, state),
+    }
+}
+
+/// An open editor: its window, and what closes the plugin's view. Dropping it closes both.
 pub struct Editor {
-    view: ComPtr<IPlugView>,
-    _frame: ComWrapper<PlugFrame>,
     pub window: Retained<NSWindow>,
+    close: Option<Box<dyn FnOnce()>>,
 }
 
 impl Editor {
+    /// `close` detaches the plugin's view; it runs before the window closes.
+    pub fn new(window: Retained<NSWindow>, close: impl FnOnce() + 'static) -> Editor {
+        Editor {
+            window,
+            close: Some(Box::new(close)),
+        }
+    }
+
     /// Brings the window back, if it was closed.
     pub fn show(&self) {
         self.window.makeKeyAndOrderFront(None);
@@ -525,239 +215,257 @@ impl Editor {
 
 impl Drop for Editor {
     fn drop(&mut self) {
-        unsafe { self.view.removed() };
+        if let Some(close) = self.close.take() {
+            close();
+        }
         self.window.close();
     }
 }
 
-impl Drop for Processor {
-    fn drop(&mut self) {
-        unsafe {
-            self.processor.setProcessing(0);
-            self.component.setActive(0);
-            if let Some((a, b)) = &self.links {
-                a.disconnect(b.as_ptr());
-                b.disconnect(a.as_ptr());
-                self.controller.terminate();
-            }
-            self.component.terminate();
-        }
+/// A window for a plugin's editor, `size` points inside, titled with its name.
+pub fn editor_window(mtm: MainThreadMarker, title: &str, size: (f64, f64)) -> Retained<NSWindow> {
+    let window = unsafe {
+        NSWindow::initWithContentRect_styleMask_backing_defer(
+            mtm.alloc(),
+            NSRect::new(NSPoint::new(200.0, 200.0), NSSize::new(size.0, size.1)),
+            NSWindowStyleMask::Titled
+                | NSWindowStyleMask::Closable
+                | NSWindowStyleMask::Miniaturizable,
+            NSBackingStoreType::Buffered,
+            false,
+        )
+    };
+    unsafe { window.setReleasedWhenClosed(false) };
+    window.setTitle(&NSString::from_str(title));
+    window
+}
+
+/// Parameter edits from the main thread (tempo's, or the plugin's own editor's) to the audio
+/// thread, in order.
+pub struct EditSender(std::sync::Mutex<rtrb::Producer<(u32, f64)>>);
+
+impl EditSender {
+    /// A full queue drops the edit; the next one catches up.
+    pub fn push(&self, id: u32, value: f64) {
+        let _ = self.0.lock().unwrap().push((id, value));
     }
 }
 
-const STATE_MAGIC: &[u8; 4] = b"TMPS";
-
-/// A plugin's state as one blob: the component's, then the controller's.
-fn pack(component: &[u8], controller: &[u8]) -> Vec<u8> {
-    let mut out = STATE_MAGIC.to_vec();
-    out.extend((component.len() as u32).to_le_bytes());
-    out.extend(component);
-    out.extend(controller);
-    out
+/// The audio thread's end of an `EditSender`. A change to a stepped parameter (a mode or type
+/// switch, which can reset others) is the last a block applies, so what was set after it lands
+/// after it rather than being reset by it.
+pub struct EditReceiver {
+    rx: rtrb::Consumer<(u32, f64)>,
+    stepped: Vec<u32>,
 }
 
-fn unpack(blob: &[u8]) -> Option<(&[u8], &[u8])> {
-    let rest = blob.strip_prefix(STATE_MAGIC)?;
-    let (len, rest) = rest.split_first_chunk::<4>()?;
-    let len = u32::from_le_bytes(*len) as usize;
-    (len <= rest.len()).then(|| rest.split_at(len))
+impl EditReceiver {
+    /// Hands this block's edits to `apply`, in order.
+    pub fn drain(&mut self, mut apply: impl FnMut(u32, f64)) {
+        while let Ok((id, value)) = self.rx.pop() {
+            apply(id, value);
+            if self.stepped.binary_search(&id).is_ok() {
+                break;
+            }
+        }
+    }
+
+    pub fn pending(&self) -> bool {
+        !self.rx.is_empty()
+    }
 }
 
-/// Lets an editor resize its window.
-pub struct PlugFrame {
-    window: Retained<NSWindow>,
+/// A queue of edits; `stepped` lists the parameters with steps (see `EditReceiver`).
+pub fn edit_queue(mut stepped: Vec<u32>) -> (EditSender, EditReceiver) {
+    stepped.sort_unstable();
+    let (tx, rx) = rtrb::RingBuffer::new(1024);
+    (
+        EditSender(std::sync::Mutex::new(tx)),
+        EditReceiver { rx, stepped },
+    )
 }
 
-impl Class for PlugFrame {
-    type Interfaces = (IPlugFrame,);
+/// Turns a typed value ("850 Hz", "-6 dB", "Sine", "40%") into a parameter value, 0 to 1: as
+/// the plugin reads it if it can, else by the plugin's own display: a step whose name matches,
+/// or the number found between the values shown either side of it (displays rise or fall
+/// steadily).
+pub fn value_from_text(p: &dyn PluginApi, param: &PluginParam, text: &str) -> Result<f64, String> {
+    let text = text.trim();
+    if let Some(v) = p.param_from_text(param.id, text).filter(|v| v.is_finite()) {
+        return Ok(v.clamp(0.0, 1.0));
+    }
+    let shown = |v: f64| p.param_text(param.id, v);
+    let same = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+    if param.steps > 0 && param.steps <= 1024 {
+        let step = (0..=param.steps).find(|&s| same(&shown(s as f64 / param.steps as f64), text));
+        if let Some(s) = step {
+            return Ok(s as f64 / param.steps as f64);
+        }
+    }
+    let want = number(text).ok_or_else(|| {
+        format!(
+            "{}: no setting reads {text:?} (it shows values like {:?})",
+            param.name,
+            shown(0.5)
+        )
+    })?;
+    // Values as written mean kilo-units when the display uses them ("2.4 kHz" or "2400 Hz").
+    let scaled = |s: &str| number(s).map(|n| n * scale(s));
+    let target = want * scale(text);
+    let samples = 256;
+    let points: Vec<(f64, f64)> = (0..=samples)
+        .filter_map(|i| {
+            let v = i as f64 / samples as f64;
+            scaled(&shown(v)).map(|n| (v, n))
+        })
+        .collect();
+    let bracket = points.windows(2).find(|w| {
+        let (a, b) = (w[0].1, w[1].1);
+        (a <= target && target <= b) || (b <= target && target <= a)
+    });
+    let Some(w) = bracket else {
+        let (lo, hi) = (points.first(), points.last());
+        return Err(match (lo, hi) {
+            (Some(lo), Some(hi)) => format!(
+                "{}: {text:?} is out of its range, {:?} to {:?}",
+                param.name,
+                shown(lo.0),
+                shown(hi.0)
+            ),
+            _ => format!("{}: its values aren't numbers", param.name),
+        });
+    };
+    // Narrow in on it between the two.
+    let (mut lo, mut hi) = (w[0].0, w[1].0);
+    let rising = w[1].1 >= w[0].1;
+    for _ in 0..40 {
+        let mid = (lo + hi) / 2.0;
+        match scaled(&shown(mid)) {
+            Some(n) if (n < target) == rising => lo = mid,
+            Some(_) => hi = mid,
+            None => break,
+        }
+    }
+    let v = (lo + hi) / 2.0;
+    Ok(if param.steps > 0 {
+        (v * param.steps as f64).round() / param.steps as f64
+    } else {
+        v
+    })
 }
 
-impl IPlugFrameTrait for PlugFrame {
-    unsafe fn resizeView(&self, view: *mut IPlugView, size: *mut ViewRect) -> tresult {
-        let (Some(view), false) = (unsafe { ComRef::from_raw(view) }, size.is_null()) else {
-            return kInvalidArgument;
+/// The first number in a display, like -6.5 in "-6.5 dB"; "-inf" counts as very low.
+fn number(s: &str) -> Option<f64> {
+    if s.to_lowercase().contains("-inf") || s.contains("-∞") {
+        return Some(-1e9);
+    }
+    let start = s.find(|c: char| c.is_ascii_digit() || c == '-' || c == '+' || c == '.')?;
+    let rest = &s[start..];
+    let end = rest
+        .char_indices()
+        .skip(1)
+        .find(|&(_, c)| !(c.is_ascii_digit() || c == '.'))
+        .map_or(rest.len(), |(i, _)| i);
+    rest[..end].parse().ok()
+}
+
+/// 1000 for a value in kilo-units ("2.4 kHz", "1.2 k", "1.5 s" read as ms when shown in ms is
+/// left alone: only k and M prefixes count), else 1.
+fn scale(s: &str) -> f64 {
+    let unit = s
+        .trim_start_matches(|c: char| c.is_ascii_digit() || "+-. ".contains(c))
+        .trim_start();
+    match unit.chars().next() {
+        Some('k') | Some('K') => 1e3,
+        Some('M') if !unit.starts_with("ms") => 1e6,
+        _ => 1.0,
+    }
+}
+
+/// Where a format's preset files for a plugin live: `~/Library/Audio/Presets/<vendor>/<name>`
+/// and the same under `/Library`, the user's first.
+pub fn preset_dirs(vendor: &str, name: &str) -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    [
+        home.join("Library/Audio/Presets"),
+        PathBuf::from("/Library/Audio/Presets"),
+    ]
+    .into_iter()
+    .map(|d| d.join(vendor).join(name))
+    .collect()
+}
+
+/// Every file ending in `ext` under `dirs`, in subfolders too, as presets named by their files.
+pub fn preset_files(dirs: &[PathBuf], ext: &str) -> Vec<Preset> {
+    fn walk(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
         };
-        let r = unsafe { *size };
-        self.window.setContentSize(NSSize::new(
-            (r.right - r.left) as f64,
-            (r.bottom - r.top) as f64,
-        ));
-        unsafe { view.onSize(size) };
-        kResultOk
+        for path in entries.flatten().map(|e| e.path()) {
+            if path.is_dir() {
+                walk(&path, ext, out);
+            } else if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+            {
+                out.push(path);
+            }
+        }
     }
+    let mut files = Vec::new();
+    dirs.iter().for_each(|d| walk(d, ext, &mut files));
+    files.sort();
+    files
+        .into_iter()
+        .map(|path| Preset {
+            name: path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            source: PresetSource::File { file: path },
+        })
+        .collect()
 }
 
-impl Processor {
-    /// How late the plugin's output is, in samples.
-    pub fn latency(&self) -> u32 {
-        unsafe { self.processor.getLatencySamples() }
-    }
-
-    /// Tells the plugin where the transport is, before a `process`.
-    pub fn set_transport(&mut self, playing: bool, position: u64, tempo: f64) {
-        let c = &mut self.context;
-        c.tempo = tempo;
-        c.projectTimeSamples = position as i64;
-        c.projectTimeMusic = position as f64 / c.sampleRate * tempo / 60.0;
-        let playing = if playing { kPlaying } else { 0 };
-        c.state = (kTempoValid | kTimeSigValid | kProjectTimeMusicValid | playing) as _;
-    }
-
-    /// Moves a parameter (0 to 1) across the next block, from `start` to `end`, as automation
-    /// does. Past `AUTOMATED` parameters a block, the rest wait.
-    pub fn automate(&mut self, id: u32, start: f64, end: f64) {
-        if self.automated < AUTOMATED {
-            self.automation[self.automated] = (id, start.clamp(0.0, 1.0), end.clamp(0.0, 1.0));
-            self.automated += 1;
-        }
-    }
-
-    /// Runs one block in place: `buf` goes to the main input (if the plugin has one) and comes
-    /// back holding the main output. Applies these notes and any edits from the editor.
-    /// Allocation-free: safe on the audio thread.
-    pub fn process(&mut self, buf: [&mut [f32]; 2], frames: usize, notes: &[Note]) {
-        assert!(frames <= self.max_block);
-        self.events.clear();
-        for n in notes {
-            let mut e: Event = unsafe { std::mem::zeroed() };
-            e.sampleOffset = n.offset as int32;
-            if n.velocity > 0.0 {
-                e.r#type = kNoteOnEvent as _;
-                e.__field0.noteOn = NoteOnEvent {
-                    channel: 0,
-                    pitch: n.pitch as _,
-                    tuning: 0.0,
-                    velocity: n.velocity,
-                    length: 0,
-                    noteId: -1,
-                };
-            } else {
-                e.r#type = kNoteOffEvent as _;
-                e.__field0.noteOff = NoteOffEvent {
-                    channel: 0,
-                    pitch: n.pitch as _,
-                    velocity: 0.0,
-                    noteId: -1,
-                    tuning: 0.0,
-                };
-            }
-            self.events.push(e);
-        }
-        self.params.clear();
-        while let Ok((id, value)) = self.edits.pop() {
-            self.params.add(id, 0, value);
-        }
-        // Automation after edits: where a parameter has both, automation wins.
-        for &(id, start, end) in &self.automation[..std::mem::take(&mut self.automated)] {
-            self.params.add(id, 0, start);
-            self.params.add(id, frames.saturating_sub(1) as int32, end);
-        }
-        self.out_events.clear();
-        self.out_params.clear();
-        for b in &mut self.outputs {
-            b.silenceFlags = 0;
-        }
-        for (i, b) in self.inputs.iter().enumerate() {
-            for c in 0..b.numChannels as usize {
-                let dst = unsafe {
-                    std::slice::from_raw_parts_mut(*b.__field0.channelBuffers32.add(c), frames)
-                };
-                match buf.get(c).filter(|_| i == 0) {
-                    Some(src) => dst.copy_from_slice(&src[..frames]),
-                    None => dst.fill(0.0),
-                }
-            }
-        }
-        let mut data = ProcessData {
-            processMode: kRealtime as _,
-            symbolicSampleSize: kSample32 as _,
-            numSamples: frames as int32,
-            numInputs: self.inputs.len() as int32,
-            numOutputs: self.outputs.len() as int32,
-            inputs: if self.inputs.is_empty() {
-                ptr::null_mut()
-            } else {
-                self.inputs.as_mut_ptr()
-            },
-            outputs: self.outputs.as_mut_ptr(),
-            inputParameterChanges: com_ptr::<_, IParameterChanges>(&self.params),
-            outputParameterChanges: com_ptr::<_, IParameterChanges>(&self.out_params),
-            inputEvents: com_ptr::<_, IEventList>(&self.events),
-            outputEvents: com_ptr::<_, IEventList>(&self.out_events),
-            processContext: &mut self.context,
-        };
-        unsafe { self.processor.process(&mut data) };
-        self.context.projectTimeSamples += frames as i64;
-        self.context.continousTimeSamples += frames as i64;
-        // Mono output goes to both sides.
-        let out = &self.outputs[0];
-        for (c, dst) in buf.into_iter().enumerate() {
-            let c = c.min(out.numChannels as usize - 1);
-            let src = unsafe {
-                std::slice::from_raw_parts(*out.__field0.channelBuffers32.add(c), frames)
-            };
-            dst[..frames].copy_from_slice(src);
-        }
-    }
+/// A file name for a preset called `name`: its characters, less those paths can't have.
+pub fn preset_file_name(name: &str, ext: &str) -> String {
+    let clean: String = name
+        .chars()
+        .map(|c| if "/:\\".contains(c) { '-' } else { c })
+        .collect();
+    format!("{}.{ext}", clean.trim())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// With a real instrument, which CI doesn't have:
-    /// `TEMPO_TEST_VST3="/path/Some Synth.vst3" cargo test -p tempo-engine -- --ignored`
     #[test]
-    #[ignore]
-    fn a_real_instrument_plays_saves_restores_and_shuts_down() {
-        let path = std::env::var("TEMPO_TEST_VST3").expect("set TEMPO_TEST_VST3");
-        let module = Module::load(Path::new(&path)).unwrap();
-        let classes = module.classes();
-        let class = classes.iter().find(|c| c.category == AUDIO_MODULE).unwrap();
-        assert!(class.instrument, "{} isn't an instrument", class.name);
-        let (plugin, mut processor) =
-            Plugin::instantiate(&module, class, 48_000.0, 512, None).unwrap();
-        let (mut l, mut r) = (vec![0f32; 512], vec![0f32; 512]);
-        let note = Note {
-            offset: 0,
-            pitch: 60,
-            velocity: 1.0,
-        };
-        processor.process([&mut l, &mut r], 512, &[note]);
-        let mut loudest = 0f32;
-        for _ in 0..20 {
-            processor.process([&mut l, &mut r], 512, &[]);
-            loudest = l.iter().fold(loudest, |m, x| m.max(x.abs()));
-        }
-        assert!(loudest > 1e-3, "{loudest}");
-
-        // Its parameters can be read and turned, as Smart Controls do.
-        let params = plugin.params();
-        assert!(!params.is_empty());
-        let p = &params[0];
-        let to = if p.value > 0.5 { 0.25 } else { 0.75 };
-        plugin.set_param(p.id, to);
-        assert!(
-            (plugin.param_value(p.id) - to).abs() < 0.02,
-            "{}",
-            plugin.param_value(p.id)
-        );
-        assert!(!plugin.param_text(p.id, to).is_empty());
-        plugin.set_param(p.id, p.value);
-
-        let state = plugin.state().unwrap();
-        drop(plugin);
-        drop(processor);
-        let (again, _processor) =
-            Plugin::instantiate(&module, class, 48_000.0, 512, Some(&state)).unwrap();
-        assert_eq!(again.state().unwrap(), state);
+    fn displays_are_read_for_their_numbers() {
+        assert_eq!(number("-6.5 dB"), Some(-6.5));
+        assert_eq!(number("2.40 kHz"), Some(2.4));
+        assert_eq!(scale("2.40 kHz"), 1e3);
+        assert_eq!(scale("850 Hz"), 1.0);
+        assert_eq!(scale("12 ms"), 1.0);
+        assert_eq!(number("-inf dB"), Some(-1e9));
+        assert_eq!(number("Sine"), None);
+        assert_eq!(number("50.00 % (Center)"), Some(50.0));
     }
 
     #[test]
-    fn state_blobs_round_trip() {
-        let blob = pack(b"component", b"controller");
-        assert_eq!(unpack(&blob), Some((&b"component"[..], &b"controller"[..])));
-        assert_eq!(unpack(b"junk"), None);
-        assert_eq!(unpack(&blob[..10]), None); // cut short
+    fn a_stepped_change_ends_the_blocks_edits() {
+        let (tx, mut rx) = edit_queue(vec![7]);
+        for (id, v) in [(1, 0.1), (7, 0.5), (2, 0.2)] {
+            tx.push(id, v);
+        }
+        let mut got = Vec::new();
+        rx.drain(|id, _| got.push(id));
+        assert_eq!(got, [1, 7]);
+        assert!(rx.pending());
+        rx.drain(|id, _| got.push(id));
+        assert_eq!(got, [1, 7, 2]);
+        assert!(!rx.pending());
     }
 }

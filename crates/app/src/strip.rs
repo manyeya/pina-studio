@@ -351,16 +351,11 @@ impl Workspace {
             .flatten()
             .filter(|p| p.instrument == instrument)
         {
-            let plugin = PluginRef {
-                path: p.path.clone(),
-                class: p.class.clone(),
-                state: None,
-                ..Default::default()
-            };
+            let plugin = p.plugin_ref();
             let action = match (ch, which) {
                 (Channel::Track(track), Which::Instrument) => MenuAction::Instrument {
                     track,
-                    instrument: Instrument::Vst3(plugin),
+                    instrument: Instrument::Plugin(plugin),
                 },
                 (_, Which::Insert(index)) => MenuAction::Insert {
                     channel: ch,
@@ -852,7 +847,7 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                 Some(Instrument::Drums) => {
                     plugin_slot("Drum Kit".into(), true, ch, Which::Instrument, 24., dot, cx)
                 }
-                Some(Instrument::Vst3(r)) => {
+                Some(Instrument::Plugin(r)) => {
                     plugin_slot(r.class.clone(), true, ch, Which::Instrument, 24., dot, cx)
                 }
             }
