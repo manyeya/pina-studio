@@ -1592,6 +1592,7 @@ impl Workspace {
                 file,
                 offset,
                 stretch,
+                ..
             } => {
                 let begin = (from as i64).max(at);
                 let Some(peaks) = self.player.peaks(file).filter(|_| begin < to as i64) else {

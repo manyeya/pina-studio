@@ -9,7 +9,7 @@ use tempo_engine::{
     music::NoteEdit,
     player::Which,
     plugin::PluginParam,
-    project::{Content, Instrument, PPQ, Project},
+    project::{Content, Flex, Instrument, PPQ, Project},
 };
 
 use crate::{
@@ -365,10 +365,22 @@ impl Workspace {
                     ))
                     .child(row("Sounds", mono(format!("{}", rows.len()))));
             }
-            Content::Audio { file, stretch, .. } => {
+            Content::Audio {
+                file,
+                stretch,
+                flex,
+                follow,
+                ..
+            } => {
                 let name = file
                     .file_name()
                     .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+                let (follow, stretch) = (*follow, *stretch);
+                let signed = |v: i8| match v {
+                    0 => "0".to_string(),
+                    v if v > 0 => format!("+{v}"),
+                    v => format!("−{}", -(v as i16)),
+                };
                 d = d
                     .child(row(
                         "File",
@@ -377,7 +389,50 @@ impl Workspace {
                             .overflow_hidden()
                             .whitespace_nowrap(),
                     ))
-                    .child(row("Flex", mono(format!("×{stretch:.2}"))));
+                    // How it's stretched, as Logic's Flex mode or Ableton's warp mode.
+                    .child(row(
+                        "Flex",
+                        dropdown(flex.name(), 22.)
+                            .debug_selector(|| "region-flex".into())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                    let items = Flex::ALL
+                                        .into_iter()
+                                        .map(|f| {
+                                            (f.name().to_string(), MenuAction::RegionFlex(at, f))
+                                        })
+                                        .collect();
+                                    ws.menu = Some(Menu {
+                                        at: e.position,
+                                        items,
+                                        ..Default::default()
+                                    });
+                                    cx.notify();
+                                }),
+                            ),
+                    ))
+                    .child(row("Stretch", mono(format!("×{stretch:.3}"))))
+                    .child(row(
+                        "Follow tempo",
+                        switch(follow)
+                            .debug_selector(|| "region-follow".into())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    ws.edit(cx, |ws| {
+                                        let r = &mut ws.session.project.tracks[at.0].regions[at.1];
+                                        if let Content::Audio { follow, .. } = &mut r.content {
+                                            *follow ^= true;
+                                        }
+                                    })
+                                }),
+                            ),
+                    ))
+                    .child(row(
+                        "Transpose",
+                        stepper(signed(region.transpose), at, Field::Transpose, cx),
+                    ));
             }
             Content::Takes { takes, .. } => {
                 d = d

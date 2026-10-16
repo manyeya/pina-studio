@@ -1151,8 +1151,10 @@ impl Workspace {
                 self.session.project.tracks[track].sends[index].level_db = db;
             }
             Some(Drag::Tempo { y, bpm }) => {
-                self.session.project.tempo =
-                    (bpm + ((y - p.y) / 4.0) as f64).round().clamp(20.0, 400.0);
+                let to = (bpm + ((y - p.y) / 4.0) as f64).round().clamp(20.0, 400.0);
+                if to != self.session.project.tempo {
+                    self.session.project.set_tempo(to);
+                }
             }
             Some(Drag::Locate) => self.locate_at(p.x, cx),
             Some(Drag::Note {
@@ -2173,6 +2175,11 @@ impl Render for Workspace {
         self.viewport_w = f32::from(window.viewport_size().width);
         self.player.collect();
         self.player.idle();
+        // A stretch made in the background goes in, in place of what stood in for it.
+        if self.player.fresh() {
+            let project = self.engine_project().into_owned();
+            self.status = self.player.sync(&project).err();
+        }
         self.follow_pattern(cx);
         self.read_meters();
         self.capture(cx);
@@ -2191,7 +2198,8 @@ impl Render for Workspace {
             || self.levels.values().any(Level::moving)
             || self.reductions.values().any(|&g| g > 0.01)
             || self.agent_presence().is_some()
-            || self.browser.auditioning();
+            || self.browser.auditioning()
+            || self.player.rendering();
         if busy || self.drag.is_some() {
             window.request_animation_frame();
         }

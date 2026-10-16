@@ -34,7 +34,7 @@ use gpui::{
 use tempo_engine::{
     commands::{self, Command},
     music::Key,
-    project::{At, Instrument, Sampler},
+    project::{At, Content, Flex, Instrument, PPQ, Sampler},
     samples::{
         Analysis, Category, Kind, NOTES, Pitch, Sample, TRAITS,
         library::Library,
@@ -42,6 +42,7 @@ use tempo_engine::{
         place::{loop_ticks, place_zone, transpose_to},
         search::{self, Aspects, Hit, KitSeed, KitSlot, Query},
     },
+    stretch,
 };
 
 use crate::{
@@ -175,9 +176,12 @@ pub struct Browser {
     pub kit: Vec<KitPick>,
     /// What's being heard: the sample, since when, and for how long.
     pub audition: Option<(usize, Instant, f32)>,
-    /// Samples read for previews, by path, so going back to one is instant; and the one asked
-    /// for last, so a slow read that's overtaken doesn't play.
-    heard: HashMap<PathBuf, Arc<tempo_engine::engine::AudioData>>,
+    /// Samples read for previews, by path, and as heard (at the song's tempo, in its key), by
+    /// path, stretch and semitones, so going back to one is instant; and the one asked for last,
+    /// so a slow read that's overtaken doesn't play.
+    heard: HashMap<(PathBuf, u64, u32), Arc<tempo_engine::engine::AudioData>>,
+    /// The preview is a loop playing in time with the song, over and over while it plays.
+    pub looping: bool,
     wanted: Option<usize>,
     pub list: UniformListScrollHandle,
     pub panel_list: UniformListScrollHandle,
@@ -241,6 +245,7 @@ impl Browser {
             kit: Vec::new(),
             audition: None,
             heard: HashMap::new(),
+            looping: false,
             wanted: None,
             list: UniformListScrollHandle::new(),
             panel_list: UniformListScrollHandle::new(),
@@ -906,7 +911,21 @@ impl Workspace {
         }
     }
 
-    /// Plays a sample over the mix.
+    /// How much longer a loop plays at the song's tempo (1 for a one-shot, or a loop without one).
+    fn preview_stretch(&self, a: &Analysis) -> f64 {
+        let tempo = self.session.project.tempo;
+        match a.kind {
+            Kind::Loop => loop_ticks(a, tempo)
+                .map(|t| t as f64 / PPQ as f64 * 60.0 / tempo / a.seconds.max(0.01) as f64)
+                .filter(|r| (r - 1.0).abs() > 0.002)
+                .unwrap_or(1.0),
+            Kind::OneShot => 1.0,
+        }
+    }
+
+    /// Plays a sample over the mix as it would be in the song: a loop at its tempo, in its key
+    /// with Play in Key on (both by the same stretch the song uses); and while the song plays, a
+    /// loop in time with it.
     pub fn audition_sample(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(s) = self.browser.sample(index) else {
             return;
@@ -917,29 +936,56 @@ impl Workspace {
             l if (-60.0..0.0).contains(&l) => (PREVIEW_LUFS - l).clamp(-12.0, 6.0),
             _ => 0.0,
         };
-        let seconds = a.seconds / 2f32.powf(semis / 12.0);
+        let ratio = self.preview_stretch(a);
+        let synced = a.kind == Kind::Loop && a.bpm.is_some();
+        let seconds = a.seconds * ratio as f32;
         self.browser.wanted = Some(index);
-        if let Some(data) = self.browser.heard.get(&path).cloned() {
-            self.play_heard(index, data, semis, gain, seconds, cx);
+        let key = (path.clone(), ratio.to_bits(), semis.to_bits());
+        if let Some(data) = self.browser.heard.get(&key).cloned() {
+            self.play_heard(index, data, synced, gain, seconds, cx);
             return;
         }
-        // Read off the UI thread; played when it's ready, if it's still the one wanted.
+        // Read and stretched off the UI thread; played when it's ready, if it's still wanted.
         let rate = self.player.rate();
-        let read = cx.background_spawn({
+        let raw = self
+            .browser
+            .heard
+            .get(&(path.clone(), 1f64.to_bits(), 0f32.to_bits()))
+            .cloned();
+        let made = cx.background_spawn({
             let path = path.clone();
-            async move { tempo_engine::engine::load_audio(&path, rate).map(Arc::new) }
+            async move {
+                let raw = match raw {
+                    Some(raw) => raw,
+                    None => Arc::new(tempo_engine::engine::load_audio(&path, rate)?),
+                };
+                let heard = match ratio == 1.0 && semis == 0.0 {
+                    true => raw.clone(),
+                    false => Arc::new(stretch::render(
+                        &raw,
+                        ratio,
+                        semis as f64,
+                        Flex::Polyphonic,
+                        rate,
+                    )),
+                };
+                Ok::<_, String>((raw, heard))
+            }
         });
         cx.spawn(async move |ws, cx| {
-            let data = read.await;
-            ws.update(cx, |ws, cx| match data {
-                Ok(data) => {
+            let made = made.await;
+            ws.update(cx, |ws, cx| match made {
+                Ok((raw, data)) => {
                     // ponytail: forgets everything past 64 files; an LRU if browsing gets big.
                     if ws.browser.heard.len() >= 64 {
                         ws.browser.heard.clear();
                     }
-                    ws.browser.heard.insert(path, data.clone());
+                    ws.browser
+                        .heard
+                        .insert((path, 1f64.to_bits(), 0f32.to_bits()), raw);
+                    ws.browser.heard.insert(key, data.clone());
                     if ws.browser.wanted == Some(index) {
-                        ws.play_heard(index, data, semis, gain, seconds, cx);
+                        ws.play_heard(index, data, synced, gain, seconds, cx);
                     }
                 }
                 Err(e) => {
@@ -956,13 +1002,30 @@ impl Workspace {
         &mut self,
         index: usize,
         data: Arc<tempo_engine::engine::AudioData>,
-        semis: f32,
+        synced: bool,
         gain: f32,
         seconds: f32,
         cx: &mut Context<Self>,
     ) {
-        match self.player.audition_audio(data, semis, gain) {
-            Ok(()) => self.browser.audition = Some((index, Instant::now(), seconds)),
+        // In time with the song, it starts where the song is in it.
+        let looping = synced && self.player.playing();
+        let since = match looping {
+            true => {
+                let len = data.channels()[0].len().max(1) as u64;
+                let into = (self.player.position() % len) as f64 / self.player.rate();
+                Instant::now() - Duration::from_secs_f64(into)
+            }
+            false => Instant::now(),
+        };
+        let played = match synced {
+            true => self.player.audition_synced(data, gain),
+            false => self.player.audition_audio(data, 0.0, gain),
+        };
+        match played {
+            Ok(()) => {
+                self.browser.audition = Some((index, since, seconds));
+                self.browser.looping = looping;
+            }
             Err(e) => self.status = Some(e),
         }
         cx.notify();
@@ -1094,10 +1157,14 @@ impl Workspace {
             self.refocus = true;
         }
         self.browser.searching = focused && open;
-        if let Some((_, since, seconds)) = self.browser.audition
-            && since.elapsed().as_secs_f32() > seconds
+        if let Some((_, since, seconds)) = &mut self.browser.audition
+            && since.elapsed().as_secs_f32() > *seconds
         {
-            self.browser.audition = None;
+            // A loop in time with the song goes round again while it plays.
+            match self.browser.looping && self.player.playing() {
+                true => *since += Duration::from_secs_f32(*seconds),
+                false => self.browser.audition = None,
+            }
         }
         if open && self.browser.loaded {
             let follows = self.browser.key == KeyFilter::Song || self.browser.song_tempo;
@@ -1189,10 +1256,14 @@ impl Workspace {
                     p.flex(at, length)?;
                 }
             }
-            // Looping, as `tempo samples put` leaves one, till the next region or the end.
+            // Looping, as `tempo samples put` leaves one, till the next region or the end; a
+            // loop following the song's tempo.
             let r = &mut p.tracks[t].regions[at.1];
             r.transpose = semis;
             r.looped = s.analysis.kind == Kind::Loop;
+            if let Content::Audio { follow, .. } = &mut r.content {
+                *follow = s.analysis.kind == Kind::Loop;
+            }
             Ok::<At, String>(at)
         })();
         self.placed(placed, &s.name, cx);

@@ -142,6 +142,18 @@ in it. Saving writes each plugin's settings to `Plugin States/` in the project. 
 compensated, as Logic does. If the output device can't run at the project's sample rate (a
 Bluetooth speaker at 44.1 kHz), playback runs at the device's.
 
+Audio is stretched (Flex, for a tempo or a region's length) three ways, per region.
+Polyphonic, the default, is Rubber Band's finer engine (R3, from Rubber Band 4, built in), run
+offline over the whole file with its hits pinned to their times, and the recording itself kept
+around every hit (the 25 ms before, where a phase vocoder smears a hit ahead of itself, and its
+first 20 ms), so drums stay as sharp as recorded with no pre-echo, and chords and voices are
+R3's. Slicing cuts at the hits and plays each as recorded at its new time; Speed is a turntable.
+Stretches are made off the main thread, something standing in until they're done; loops from
+the sample browser follow the tempo, and their previews play at it, in time with the song while
+it plays. `cargo run --release -p tempo-engine --example stretch_ab -- <out dir> <loop.wav>
+<bpm>` renders a loop each way (and with Signalsmith Stretch) to compare, and measures how sharp
+and how on time its hits come out.
+
 Builds need only the Command Line Tools: gpui compiles its Metal shaders at launch.
 
 The channel EQ, compressor and saturator are Faust (`crates/engine/faust/*.dsp`), using its
@@ -234,7 +246,9 @@ An instrument is `"synth"` (built in) or `{ "plugin": { "format": …, "path": �
 "uid": … } }` (as `tempo plugins` lists it; `"vst3"` is still read); a plugin can carry the
 `"preset"` tempo loaded, `"params"` tempo sets on it (by id, in the order set) and, as an insert,
 the track it hears as a `"sidechain"`. A track without one is an audio track, with an `"input"`.
-Audio files are WAV, at any sample rate. A MIDI region can have `"controls"` beside its notes. Tracks can have
+Audio files are WAV, AIFF, FLAC or MP3, at any sample rate. An audio region can have a
+`"stretch"` (2 is half speed), a `"flex"` (`"polyphonic"`, `"slicing"` or `"speed"`) and
+`"follow": true` to follow the song's tempo. A MIDI region can have `"controls"` beside its notes. Tracks can have
 `"sends": [{ "bus": 1, "level_db": -6, "pre": false }]`, played by an aux in `"auxes": [{ "bus":
 1, "name": "Reverb", "inserts": […] }]`. Tracks, auxes and the master (`master_eq`,
 `master_comp`, `master_sat`, `master_inserts`) can have an `"eq"`, a `"comp"` and a `"sat"`. A

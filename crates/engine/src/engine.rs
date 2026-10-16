@@ -8,13 +8,13 @@
 //! audio thread never frees memory.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Condvar, Mutex, Weak,
         atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -25,10 +25,11 @@ use crate::{
     peaks::Peaks,
     plugin::{self, Control, ControlKind, Libraries, Note, Plugin, Processor},
     project::{
-        AutoMode, AutoPoint, Comp, Content, Eq, Instrument, PluginRef, Project, Region, Saturator,
-        Which, chase, comp_segments, value_at,
+        AutoMode, AutoPoint, Comp, Content, Eq, Flex, Instrument, PluginRef, Project, Region,
+        Saturator, Which, chase, comp_segments, value_at,
     },
     sampler::Sampler,
+    stretch,
     synth::Synth,
 };
 
@@ -71,13 +72,96 @@ impl AudioData {
     }
 }
 
+/// A stretched copy of a file: the file, its stretch (as bits), transposition and flex.
+type Stretched = (PathBuf, u64, i8, Flex);
+
 /// The audio files a project uses, each loaded once, with its waveform overview.
 pub struct AudioFiles {
     dir: PathBuf,
     rate: f64,
     files: HashMap<PathBuf, (Arc<AudioData>, Arc<Peaks>)>,
-    /// Flexed copies, by file and stretch.
-    stretched: HashMap<(PathBuf, u64, i8), Arc<AudioData>>,
+    /// Stretched copies; those asked for since `begin`, which are kept when the arrangement's
+    /// made (with the other copies of the files they're of, a few, to stand in while new ones
+    /// are made).
+    stretched: HashMap<Stretched, Arc<AudioData>>,
+    asked: HashSet<Stretched>,
+    /// For a player that can't wait: copies made off its thread.
+    renders: Option<Arc<Renders>>,
+}
+
+/// Stretching off the main thread, two at a time, the newest wanted first: what the arrangement
+/// wants that isn't made yet, what's being made, and what's made.
+#[derive(Default)]
+struct Renders {
+    state: Mutex<RenderState>,
+    work: Condvar,
+    /// Something new is made: the arrangement can be made again with it.
+    fresh: AtomicBool,
+}
+
+#[derive(Default)]
+struct RenderState {
+    wanted: Vec<(Stretched, Arc<AudioData>)>,
+    busy: HashSet<Stretched>,
+    made: Vec<(Stretched, Arc<AudioData>)>,
+    workers: usize,
+}
+
+const RENDER_THREADS: usize = 2;
+
+/// A render thread: makes what's wanted till nothing has been for a while, or the files go.
+fn render_thread(renders: Weak<Renders>, rate: f64) {
+    loop {
+        let Some(r) = renders.upgrade() else {
+            return;
+        };
+        let job = {
+            let mut s = r.state.lock().unwrap();
+            loop {
+                if let Some(i) = s.wanted.iter().rposition(|(k, _)| !s.busy.contains(k)) {
+                    let (key, source) = s.wanted.remove(i);
+                    s.busy.insert(key.clone());
+                    break Some((key, source));
+                }
+                let (next, waited) = r.work.wait_timeout(s, Duration::from_secs(5)).unwrap();
+                s = next;
+                if waited.timed_out() && s.wanted.is_empty() {
+                    s.workers -= 1;
+                    break None;
+                }
+            }
+        };
+        let Some((key, source)) = job else {
+            return;
+        };
+        let (stretch, semitones, flex) = (f64::from_bits(key.1), key.2 as f64, key.3);
+        let data = Arc::new(stretch::render(&source, stretch, semitones, flex, rate));
+        let mut s = r.state.lock().unwrap();
+        s.busy.remove(&key);
+        s.made.push((key, data));
+        r.fresh.store(true, Ordering::Relaxed);
+    }
+}
+
+/// `data` read faster or slower to `len`, roughly: what plays while a stretch is made.
+fn stand_in(data: &AudioData, len: usize) -> AudioData {
+    let channels = data
+        .channels
+        .iter()
+        .map(|c| {
+            let step = c.len() as f64 / len.max(1) as f64;
+            (0..len)
+                .map(|i| {
+                    let x = i as f64 * step;
+                    let at = x as usize;
+                    let (a, b) = (c.get(at).copied(), c.get(at + 1).copied());
+                    let t = (x - at as f64) as f32;
+                    a.map_or(0.0, |a| a + (b.unwrap_or(a) - a) * t)
+                })
+                .collect()
+        })
+        .collect();
+    AudioData { channels }
 }
 
 impl AudioFiles {
@@ -87,28 +171,102 @@ impl AudioFiles {
             rate,
             files: HashMap::new(),
             stretched: HashMap::new(),
+            asked: HashSet::new(),
+            renders: None,
+        }
+    }
+
+    /// Stretches off the caller's thread: until a copy is made, a stand-in plays.
+    pub fn in_background(mut self) -> Self {
+        self.renders = Some(Arc::default());
+        self
+    }
+
+    /// Stretches still being made, or wanted.
+    pub fn rendering(&self) -> bool {
+        self.renders.as_ref().is_some_and(|r| {
+            let s = r.state.lock().unwrap();
+            !s.wanted.is_empty() || !s.busy.is_empty()
+        })
+    }
+
+    /// A stretch has been made since the last call: the arrangement can use it.
+    pub fn fresh(&self) -> bool {
+        self.renders
+            .as_ref()
+            .is_some_and(|r| r.fresh.swap(false, Ordering::Relaxed))
+    }
+
+    /// An arrangement's being made: what it asks for is what's wanted.
+    fn begin(&mut self) {
+        self.asked.clear();
+        if let Some(r) = &self.renders {
+            r.state.lock().unwrap().wanted.clear();
+            let made = std::mem::take(&mut r.state.lock().unwrap().made);
+            self.stretched.extend(made);
+        }
+    }
+
+    /// It's made: copies of files it doesn't play go, and (past a few) those it doesn't ask for.
+    fn end(&mut self) {
+        let files: HashSet<&PathBuf> = self.asked.iter().map(|k| &k.0).collect();
+        self.stretched
+            .retain(|k, _| self.asked.contains(k) || files.contains(&k.0));
+        if self.stretched.len() > 64 {
+            self.stretched.retain(|k, _| self.asked.contains(k));
         }
     }
 
     /// A file stretched in time (its pitch kept) and moved in pitch by `semitones` (its length
-    /// kept); computed once for each.
+    /// kept), as `flex` says; made once for each.
     fn stretched(
         &mut self,
         file: &Path,
         stretch: f64,
         semitones: i8,
+        flex: Flex,
     ) -> Result<Arc<AudioData>, String> {
+        // Speed can't move pitch without moving time.
+        let semitones = if flex == Flex::Speed { 0 } else { semitones };
         if stretch == 1.0 && semitones == 0 {
             return self.get(file);
         }
-        let key = (file.to_path_buf(), stretch.to_bits(), semitones);
+        let key = (file.to_path_buf(), stretch.to_bits(), semitones, flex);
+        self.asked.insert(key.clone());
         if let Some(data) = self.stretched.get(&key) {
             return Ok(data.clone());
         }
         let source = self.get(file)?;
-        let data = Arc::new(time_stretch(&source, stretch, self.rate, semitones));
-        self.stretched.insert(key, data.clone());
-        Ok(data)
+        let Some(r) = &self.renders else {
+            let data = stretch::render(&source, stretch, semitones as f64, flex, self.rate);
+            let data = Arc::new(data);
+            self.stretched.insert(key, data.clone());
+            return Ok(data);
+        };
+        {
+            let mut s = r.state.lock().unwrap();
+            if !s.busy.contains(&key) && !s.wanted.iter().any(|w| w.0 == key) {
+                s.wanted.push((key.clone(), source.clone()));
+            }
+            while s.workers < RENDER_THREADS {
+                s.workers += 1;
+                let (weak, rate) = (Arc::downgrade(r), self.rate);
+                std::thread::spawn(move || render_thread(weak, rate));
+            }
+            r.work.notify_all();
+        }
+        // Meanwhile: the nearest copy made (else the file), read faster or slower to fit.
+        let len = (source.channels[0].len() as f64 * stretch).round() as usize;
+        let nearest = self
+            .stretched
+            .iter()
+            .filter(|(k, _)| k.0 == key.0 && k.2 == key.2 && k.3 == key.3)
+            .min_by(|a, b| {
+                let off = |k: &Stretched| (f64::from_bits(k.1) / stretch).ln().abs();
+                off(a.0).total_cmp(&off(b.0))
+            })
+            .map_or(source, |(_, d)| d.clone());
+        Ok(Arc::new(stand_in(&nearest, len)))
     }
 
     fn get(&mut self, file: &Path) -> Result<Arc<AudioData>, String> {
@@ -658,6 +816,7 @@ pub fn compile(
     master: Option<usize>,
     files: &mut AudioFiles,
 ) -> (Arrangement, Vec<String>) {
+    files.begin();
     let mut problems = Vec::new();
     let latencies = |l: &[(usize, u32)]| l.iter().map(|&(_, l)| l).collect::<Vec<_>>();
     let pdc = compensate(&latencies(tracks), &latencies(auxes));
@@ -851,6 +1010,7 @@ pub fn compile(
         beat: project.beat() as f64 / crate::project::PPQ as f64,
         beats_per_bar: project.beats_per_bar(),
     };
+    files.end();
     (arrangement, problems)
 }
 
@@ -940,6 +1100,8 @@ fn play_region(
             file,
             offset,
             stretch,
+            flex,
+            ..
         } => {
             let begin = (from as i64).max(at);
             if begin >= to as i64 {
@@ -950,7 +1112,7 @@ fn play_region(
             let skip = project.samples((begin - at) as u64, rate);
             let start = project.samples(region.start + begin as u64, rate);
             let end = project.samples(region.start + to, rate);
-            match files.stretched(file, *stretch, region.transpose) {
+            match files.stretched(file, *stretch, region.transpose, *flex) {
                 Ok(data) => clips.push(Clip {
                     start,
                     len: end - start,
@@ -1003,6 +1165,10 @@ pub struct Audition {
     pos: f64,
     step: f64,
     gain: f32,
+    /// A loop at the song's tempo: while the song plays it plays in time with it (from where
+    /// the song is in it, over and over).
+    synced: bool,
+    started: bool,
 }
 
 impl Audition {
@@ -1012,7 +1178,15 @@ impl Audition {
             pos: 0.0,
             step: 2f64.powf(semitones as f64 / 12.0),
             gain: 10f32.powf(gain_db / 20.0),
+            synced: false,
+            started: false,
         }
+    }
+
+    /// Plays in time with the song while it plays, as a loop at its tempo does.
+    pub fn synced(mut self) -> Audition {
+        self.synced = true;
+        self
     }
 
     fn done(&self) -> bool {
@@ -1663,7 +1837,15 @@ impl Engine {
         if let Some(a) = self.audition.as_deref_mut().filter(|a| !a.done()) {
             let channels = &a.data.channels;
             let len = channels[0].len();
+            // In time with the song: from where the song is in the loop.
+            if a.synced && !a.started && playing && len > 1 {
+                a.pos = (heard % len as u64) as f64;
+            }
+            a.started = true;
             for i in 0..frames {
+                if a.synced && playing && a.pos as usize + 1 >= len {
+                    a.pos -= (len - 1) as f64;
+                }
                 let at = a.pos as usize;
                 if at + 1 >= len {
                     break;
@@ -1848,26 +2030,6 @@ fn click(
             click.0 -= 1;
         }
     }
-}
-
-/// Stretches audio by `ratio` in time with Signalsmith Stretch, keeping its pitch.
-fn time_stretch(data: &AudioData, ratio: f64, rate: f64, semitones: i8) -> AudioData {
-    let channels = data.channels.len();
-    let frames = data.channels[0].len();
-    let input: Vec<f32> = (0..frames)
-        .flat_map(|i| data.channels.iter().map(move |c| c[i]))
-        .collect();
-    let out_frames = (frames as f64 * ratio).round() as usize;
-    let mut output = vec![0f32; out_frames * channels];
-    let mut stretch = signalsmith_stretch::Stretch::preset_default(channels as u32, rate as u32);
-    if semitones != 0 {
-        stretch.set_transpose_factor_semitones(semitones as f32, None);
-    }
-    stretch.exact(&input, &mut output);
-    let channels = (0..channels)
-        .map(|c| output.iter().skip(c).step_by(channels).copied().collect())
-        .collect();
-    AudioData { channels }
 }
 
 /// An audio file's audio (WAV, AIFF, FLAC or MP3) at `rate`: converted, if it was recorded at
@@ -2298,6 +2460,8 @@ mod tests {
                 file: "ramp.wav".into(),
                 offset: 100,
                 stretch: 1.0,
+                flex: Flex::default(),
+                follow: false,
             },
             ..Default::default()
         };
@@ -2324,6 +2488,8 @@ mod tests {
                 file: "gone.wav".into(),
                 offset: 0,
                 stretch: 1.0,
+                flex: Flex::default(),
+                follow: false,
             },
             ..Default::default()
         };
@@ -2454,6 +2620,8 @@ mod tests {
             file: "tone.wav".into(),
             offset: 0,
             stretch: 1.0,
+            flex: Flex::default(),
+            follow: false,
         };
         let region = Region {
             start: 0,
@@ -2486,6 +2654,47 @@ mod tests {
     }
 
     #[test]
+    fn a_player_plays_a_stand_in_while_a_stretch_is_made_off_its_thread() {
+        let dir = scratch_dir("background");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(dir.join("tone.wav"), spec).unwrap();
+        for i in 0..48_000 {
+            let s = 0.5 * (std::f32::consts::TAU * 441.0 * i as f32 / 48_000.0).sin();
+            w.write_sample(s).unwrap();
+        }
+        w.finalize().unwrap();
+        let mut files = AudioFiles::new(&dir, 48_000.0).in_background();
+        let get = |files: &mut AudioFiles| {
+            files.begin();
+            let data = files
+                .stretched(Path::new("tone.wav"), 1.5, 0, Flex::Polyphonic)
+                .unwrap();
+            files.end();
+            data
+        };
+        // At once: as long as the stretch will be.
+        let stand_in = get(&mut files);
+        assert_eq!(stand_in.channels[0].len(), 72_000);
+        assert!(files.rendering());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !files.fresh() {
+            assert!(Instant::now() < deadline, "never made");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Made: the next arrangement has it, and nothing's left to make.
+        let made = get(&mut files);
+        assert!(!Arc::ptr_eq(&stand_in, &made));
+        assert_eq!(made.channels[0].len(), 72_000);
+        assert!(!files.rendering());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn a_transposed_audio_region_moves_in_pitch_not_length() {
         // A second of 441 Hz, an octave up: 882 Hz, still a second.
         let dir = scratch_dir("transpose");
@@ -2509,6 +2718,8 @@ mod tests {
                 file: "tone.wav".into(),
                 offset: 0,
                 stretch: 1.0,
+                flex: Flex::default(),
+                follow: false,
             },
             ..Default::default()
         };
@@ -2756,6 +2967,8 @@ mod tests {
                 file: "loop.wav".into(),
                 offset: 0,
                 stretch: 1.0,
+                flex: Flex::default(),
+                follow: false,
             },
             ..Default::default()
         };

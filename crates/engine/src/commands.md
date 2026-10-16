@@ -31,7 +31,8 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 
 ## Commands
 
-- `set_tempo` `{"bpm": 96}`
+- `set_tempo` `{"bpm": 96}`: audio regions that follow the tempo (`"follow"`) stretch with it,
+  so their beats stay on the song's.
 - `set_master` `{"volume_db": -3}`
 - `set_time_signature` `{"beats": 6, "unit": 8}`: beats to a bar, and the note that's a beat (1,
   2, 4, 8 or 16). The tempo stays in quarter notes a minute.
@@ -87,7 +88,8 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `set_pattern` `{"track": 0, "region": 0, "rows": […], "swing": 62}`: replaces a pattern's
   rows, or its swing.
 - `add_audio_region` `{"track": 2, "file": "/path/take.wav", "start": 0, "offset": 0, "length": 7680}`:
-  a WAV (at any sample rate: it's converted to the project's), copied into `Audio Files`; `offset`
+  a WAV, AIFF, FLAC or MP3 (at any sample rate: it's converted to the project's), copied into
+  `Audio Files`; `offset`
   (samples into it, at the project's rate) and `length` (ticks; the rest of the file by default)
   are optional.
 - `move_region` `{"track": 0, "region": 0, "start": 3840, "to_track": 1}`: MIDI regions go on
@@ -101,6 +103,10 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   of the song). `transpose` (semitones), `velocity` (added) and `quantize` (a grid in ticks; 0 is
   off) change how a MIDI or pattern region plays, not its notes, as Logic's region inspector does;
   `transpose` moves an audio region's pitch too, keeping its length (a loop into the song's key).
+  For audio, `"flex"` is how it's stretched: `"polyphonic"` (the default: Rubber Band's finer
+  engine, with the recording kept around every hit, so drums stay sharp), `"slicing"` (cut at the
+  hits, each played as recorded at its new time) or `"speed"` (a turntable: faster is higher);
+  and `"follow": true` has it follow the song's tempo, as loops from the sample browser do.
 - `add_alias` `{"track": 0, "region": 0, "start": 7680, "to_track": 0}`: an alias of a MIDI or
   pattern region: a copy linked to it (both get the same `"link"` number), so editing the notes or
   steps of either edits both. Its place, length and playback settings are its own. Splitting it,
@@ -112,7 +118,8 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   <project> <track> <scene>` starts a cell at the next bar (or now, starting playback), and
   `tempo launch <project> <track>` stops it, the track's own regions playing again.
 - `flex_region` `{"track": 2, "region": 0, "length": 7680}`: Flex Time: stretches an audio region
-  to that length, slower or faster but at the same pitch (up to four times either way).
+  to that length, slower or faster but at the same pitch (up to four times either way), as its
+  `"flex"` says.
 - `comp` `{"track": 0, "region": 0, "from": 0, "to": 1920, "take": 1}`: in a take folder (a
   region with `"takes"`, made by recording over a region), take 1 plays for that range (ticks
   from the region's start). Takes are numbered from 0, oldest first; with no comp the newest plays.

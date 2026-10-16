@@ -123,15 +123,15 @@ fn main() {
                 ),
                 (
                     "Polyphonic",
-                    Box::new(|| render(&input, ratio, 0, Flex::Polyphonic, RATE)),
+                    Box::new(|| render(&input, ratio, 0.0, Flex::Polyphonic, RATE)),
                 ),
                 (
                     "Slicing",
-                    Box::new(|| render(&input, ratio, 0, Flex::Slicing, RATE)),
+                    Box::new(|| render(&input, ratio, 0.0, Flex::Slicing, RATE)),
                 ),
                 (
                     "Speed",
-                    Box::new(|| render(&input, ratio, 0, Flex::Speed, RATE)),
+                    Box::new(|| render(&input, ratio, 0.0, Flex::Speed, RATE)),
                 ),
             ];
             for (way, f) in ways {

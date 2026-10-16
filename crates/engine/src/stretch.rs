@@ -52,7 +52,7 @@ const FROM_STRETCH: f64 = 0.002;
 
 /// `data` (at `rate`) made `ratio` times as long (2 is half speed), moved by `semitones` (its
 /// length kept; Speed ignores it, as its pitch goes with its speed).
-pub fn render(data: &AudioData, ratio: f64, semitones: i8, flex: Flex, rate: f64) -> AudioData {
+pub fn render(data: &AudioData, ratio: f64, semitones: f64, flex: Flex, rate: f64) -> AudioData {
     let input = &data.channels;
     let channels = match flex {
         _ if input.is_empty() || input[0].is_empty() => input.clone(),
@@ -189,7 +189,7 @@ fn rubber_band(
 }
 
 /// Rubber Band with the hits pinned, and (unmoved in pitch) the recording around each.
-fn polyphonic(input: &[Vec<f32>], ratio: f64, semitones: i8, rate: f64) -> Vec<Vec<f32>> {
+fn polyphonic(input: &[Vec<f32>], ratio: f64, semitones: f64, rate: f64) -> Vec<Vec<f32>> {
     let n = input[0].len();
     let len = out_len(n, ratio);
     let place = |i: usize| out_len(i, ratio);
@@ -199,10 +199,10 @@ fn polyphonic(input: &[Vec<f32>], ratio: f64, semitones: i8, rate: f64) -> Vec<V
         .filter(|&&h| h > 0)
         .map(|&h| (h, place(h)))
         .collect();
-    let pitch = 2f64.powf(semitones as f64 / 12.0);
+    let pitch = 2f64.powf(semitones / 12.0);
     let mut out = rubber_band(input, ratio, pitch, rate, &keys);
     // Moved in pitch, the recording would be in the old key.
-    if semitones != 0 || ratio == 1.0 {
+    if semitones != 0.0 || ratio == 1.0 {
         return out;
     }
     let frames = |s: f64| (s * rate) as usize;
@@ -252,14 +252,14 @@ fn polyphonic(input: &[Vec<f32>], ratio: f64, semitones: i8, rate: f64) -> Vec<V
 
 /// Cut at the hits, each slice played as recorded (moved in pitch by speed, as a sampler would)
 /// from its hit's new time: what's left of its slot is silence, what's over it fades away.
-fn slicing(input: &[Vec<f32>], ratio: f64, semitones: i8, rate: f64) -> Vec<Vec<f32>> {
+fn slicing(input: &[Vec<f32>], ratio: f64, semitones: f64, rate: f64) -> Vec<Vec<f32>> {
     let n = input[0].len();
     let len = out_len(n, ratio);
     let mut starts = onsets(input, rate);
     if starts.first() != Some(&0) {
         starts.insert(0, 0);
     }
-    let speed = 2f64.powf(semitones as f64 / 12.0);
+    let speed = 2f64.powf(semitones / 12.0);
     let fade = (0.003 * rate) as usize;
     let mut out = vec![vec![0f32; len]; input.len()];
     for (k, &a) in starts.iter().enumerate() {
@@ -267,9 +267,9 @@ fn slicing(input: &[Vec<f32>], ratio: f64, semitones: i8, rate: f64) -> Vec<Vec<
         let o = out_len(a, ratio);
         let slot = starts.get(k + 1).map_or(len, |&x| out_len(x, ratio)) - o;
         for (side, src) in out.iter_mut().zip(input) {
-            let slice = match semitones {
-                0 => src[a..b].to_vec(),
-                _ => resample(&src[a..b], rate * speed, rate),
+            let slice = match semitones == 0.0 {
+                true => src[a..b].to_vec(),
+                false => resample(&src[a..b], rate * speed, rate),
             };
             let take = slice.len().min(slot);
             // A slice cut short, or one whose sound goes on into the next, ends in a fade.
@@ -368,7 +368,7 @@ mod tests {
             channels: drums(&times, 1.0),
         };
         for ratio in [0.8, 1.25] {
-            let out = render(&input, ratio, 0, Flex::Polyphonic, RATE);
+            let out = render(&input, ratio, 0.0, Flex::Polyphonic, RATE);
             assert_eq!(out.channels[0].len(), out_len(44_100, ratio));
             let found = onsets(&out.channels, RATE);
             assert_eq!(found.len(), 4, "{ratio}: {found:?}");
@@ -406,11 +406,11 @@ mod tests {
     #[test]
     fn polyphonic_keeps_a_chord_in_tune_and_moves_it_when_asked() {
         let input = AudioData { channels: pad(1.0) };
-        let out = render(&input, 1.3, 0, Flex::Polyphonic, RATE);
+        let out = render(&input, 1.3, 0.0, Flex::Polyphonic, RATE);
         assert_eq!(out.channels[0].len(), out_len(44_100, 1.3));
         assert!((peak_hz(&out.channels[0]) - 261.0).abs() < 3.0);
         // Up three semitones, as long as it was: C becomes Eb.
-        let up = render(&input, 1.0, 3, Flex::Polyphonic, RATE);
+        let up = render(&input, 1.0, 3.0, Flex::Polyphonic, RATE);
         assert_eq!(up.channels[0].len(), 44_100);
         assert!((peak_hz(&up.channels[0]) - 311.1).abs() < 4.0);
     }
@@ -421,7 +421,7 @@ mod tests {
         let input = AudioData {
             channels: drums(&times, 1.0),
         };
-        let out = render(&input, 1.5, 0, Flex::Slicing, RATE);
+        let out = render(&input, 1.5, 0.0, Flex::Slicing, RATE);
         let src = &input.channels[0];
         let found = onsets(&input.channels, RATE);
         for &h in &found {
@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn speed_is_a_turntable() {
         let input = AudioData { channels: pad(1.0) };
-        let out = render(&input, 1.25, 7, Flex::Speed, RATE);
+        let out = render(&input, 1.25, 7.0, Flex::Speed, RATE);
         assert_eq!(out.channels[0].len(), out_len(44_100, 1.25));
         // A quarter slower: lower by that, the transposition ignored.
         assert!((peak_hz(&out.channels[0]) - 261.63 / 1.25).abs() < 3.0);

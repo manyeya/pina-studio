@@ -1363,6 +1363,45 @@ fn the_compact_browser_is_resized_by_its_left_edge(cx: &mut TestAppContext) {
     assert!(!ws.read_with(cx, |ws, _| ws.session.edited));
 }
 
+#[gpui::test]
+fn an_audio_regions_flex_and_tempo_following_are_set_in_its_inspector(cx: &mut TestAppContext) {
+    use tempo_engine::project::Flex;
+    let (ws, cx) = open(cx);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    cx.simulate_click(spot(&ws, cx, PPQ, drums), Modifiers::none());
+    click_on(cx, "region-flex", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "menu-1", Modifiers::none(), MouseButton::Left); // Slicing
+    click_on(cx, "region-follow", Modifiers::none(), MouseButton::Left);
+    let audio = |ws: &Entity<Workspace>, cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            match &ws.session.project.tracks[drums].regions[0].content {
+                Content::Audio {
+                    flex,
+                    follow,
+                    stretch,
+                    ..
+                } => (*flex, *follow, *stretch),
+                c => panic!("{c:?}"),
+            }
+        })
+    };
+    assert_eq!(audio(&ws, cx), (Flex::Slicing, true, 1.0));
+    // The tempo halved: it plays twice as long, its beats on the song's.
+    ws.update(cx, |ws, cx| {
+        ws.edit(cx, |ws| {
+            let p = &mut ws.session.project;
+            p.set_tempo(p.tempo / 2.0);
+        })
+    });
+    assert_eq!(audio(&ws, cx), (Flex::Slicing, true, 2.0));
+    // Undo takes the tempo and the stretch back together.
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(audio(&ws, cx).2, 1.0);
+}
+
 /// A copy of the demo in a folder of its own, so what's added to it lands there.
 fn demo_copy(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("tempo-test-{name}-{}", std::process::id()));
@@ -1553,6 +1592,24 @@ fn the_sample_browser_searches_filters_and_hears(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_loop_is_previewed_at_the_songs_tempo(cx: &mut TestAppContext) {
+    let (ws, cx, dir) = open_browser(cx, "browser-preview");
+    let i = ws.read_with(cx, |ws, _| {
+        let s = &ws.browser.library.samples;
+        s.iter().position(|s| s.name == "Keys_Loop_90").unwrap()
+    });
+    ws.update(cx, |ws, cx| ws.select_sample(i, true, cx));
+    until(cx, &ws, |ws| ws.browser.audition.is_some_and(|a| a.0 == i));
+    // From 90 BPM to the song's 100: nine tenths as long, as it'll play in the song.
+    let (heard, seconds) = ws.read_with(cx, |ws, _| {
+        let s = &ws.browser.library.samples[i];
+        (ws.browser.audition.unwrap().2, s.analysis.seconds)
+    });
+    assert!((heard / seconds - 0.9).abs() < 0.01, "{heard} of {seconds}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
 fn add_to_song_puts_loops_on_audio_tracks_and_one_shots_on_samplers(cx: &mut TestAppContext) {
     use tempo_engine::project::Instrument;
     let (ws, cx, dir) = open_browser(cx, "browser-add");
@@ -1577,9 +1634,16 @@ fn add_to_song_puts_loops_on_audio_tracks_and_one_shots_on_samplers(cx: &mut Tes
     assert_eq!(regions, before + 1);
     assert_eq!((region.start, region.length, region.looped), (0, BAR, true));
     match region.content {
-        Content::Audio { file, stretch, .. } => {
+        Content::Audio {
+            file,
+            stretch,
+            follow,
+            ..
+        } => {
             assert!(dir.join(&file).exists(), "{file:?}");
             assert!((stretch - 0.9).abs() < 0.01, "{stretch}");
+            // A loop follows the song's tempo from here on.
+            assert!(follow);
         }
         c => panic!("{c:?}"),
     }

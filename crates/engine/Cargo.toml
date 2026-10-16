@@ -18,8 +18,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hound = "3.5"
 midir = "0.11"
-signalsmith-stretch = "0.1"
 rubberband = "0.1.5"
 clap-sys = "0.5"
 symphonia = { version = "0.6.1", default-features = false, features = ["aiff", "flac", "mp3", "wav", "pcm", "adpcm", "opt-simd"] }
 rustfft = "6.4"
+
+[dev-dependencies]
+# The stretch tempo used before Rubber Band, for examples/stretch_ab to compare with.
+signalsmith-stretch = "0.1"

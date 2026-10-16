@@ -156,6 +156,8 @@ pub enum MenuAction {
     Unlink(At),
     /// A region's playback quantize, in ticks, or none.
     RegionQuantize(At, Option<u64>),
+    /// How an audio region is stretched.
+    RegionFlex(At, tempo_engine::stretch::Flex),
     /// Names a marker, or adds one at a tick.
     NameMarker(usize, String),
     AddMarker(u64, String),
@@ -305,6 +307,13 @@ impl Workspace {
             MenuAction::Unlink(at) => self.edit(cx, |ws| ws.session.project.unlink(at)),
             MenuAction::RegionQuantize(at, q) => self.edit(cx, |ws| {
                 ws.session.project.tracks[at.0].regions[at.1].quantize = q;
+            }),
+            MenuAction::RegionFlex(at, f) => self.edit(cx, |ws| {
+                if let Content::Audio { flex, .. } =
+                    &mut ws.session.project.tracks[at.0].regions[at.1].content
+                {
+                    *flex = f;
+                }
             }),
             MenuAction::Send { track, bus } => self.edit(cx, |ws| {
                 let project = &mut ws.session.project;

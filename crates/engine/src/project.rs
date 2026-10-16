@@ -11,6 +11,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::stretch::Flex;
+
 /// Ticks per quarter note, as in Logic.
 pub const PPQ: u64 = 960;
 /// The notes a time signature's beat can be: a whole note to a sixteenth.
@@ -960,6 +962,13 @@ pub enum Content {
         /// speed. `offset` is in the file's own samples.
         #[serde(default = "one", skip_serializing_if = "is_one")]
         stretch: f64,
+        /// How it's stretched: Polyphonic, Slicing or Speed (see `crate::stretch`).
+        #[serde(default, skip_serializing_if = "Flex::is_default")]
+        flex: Flex,
+        /// It follows the song's tempo, as a loop from the browser does: a tempo change
+        /// stretches it, so its beats stay on the song's.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        follow: bool,
     },
     /// A step pattern, as Logic's step sequencer makes: rows of steps, looped over the region.
     Pattern {
@@ -1348,6 +1357,38 @@ impl Project {
         bus
     }
 
+    /// Sets the tempo. Audio that follows it stretches, so its beats stay on the song's.
+    pub fn set_tempo(&mut self, bpm: f64) {
+        let by = self.tempo / bpm;
+        fn follow(content: &mut Content, by: f64) {
+            match content {
+                Content::Audio {
+                    stretch,
+                    follow: true,
+                    ..
+                } => {
+                    // Rounded, so going back to a tempo comes back to the same stretch.
+                    *stretch = (*stretch * by * 1e9).round() / 1e9;
+                }
+                Content::Takes { takes, .. } => {
+                    for take in takes {
+                        follow(&mut take.content, by);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for t in &mut self.tracks {
+            for r in &mut t.regions {
+                follow(&mut r.content, by);
+            }
+            for c in &mut t.cells {
+                follow(&mut c.region.content, by);
+            }
+        }
+        self.tempo = bpm;
+    }
+
     /// Sets the song's key, or with None has it worked out from the notes. With `move_notes`, the
     /// music moves into the new key (`Key::move_pitch`): every note and pattern row, in regions,
     /// take folders and Live Loops cells, on every pitched instrument. Drums and audio stay put.
@@ -1628,6 +1669,8 @@ impl Project {
                         file,
                         offset,
                         stretch,
+                        flex,
+                        follow,
                     },
                     true,
                 ) = (&take.content, from < b as i64)
@@ -1637,6 +1680,8 @@ impl Project {
                         file: file.clone(),
                         offset: offset + (skip as f64 / stretch) as u64,
                         stretch: *stretch,
+                        flex: *flex,
+                        follow: *follow,
                     };
                     out.push(Region {
                         start: r.start + from as u64,
@@ -1931,6 +1976,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn audio_that_follows_the_tempo_keeps_its_beats() {
+        let mut p = Project::new(48_000);
+        p.tempo = 100.0;
+        // A loop at 90 stretched to 100 BPM, following; a recording that doesn't.
+        let mut follows = audio(0, PPQ * 4, 0);
+        if let Content::Audio {
+            stretch, follow, ..
+        } = &mut follows.content
+        {
+            (*stretch, *follow) = (0.9, true);
+        }
+        p.tracks.push(Track {
+            regions: vec![follows, audio(0, PPQ * 4, 0)],
+            ..Default::default()
+        });
+        let stretch = |p: &Project, r: usize| match p.tracks[0].regions[r].content {
+            Content::Audio { stretch, .. } => stretch,
+            _ => unreachable!(),
+        };
+        p.set_tempo(120.0);
+        assert_eq!((stretch(&p, 0), stretch(&p, 1)), (0.75, 1.0));
+        assert_eq!(p.tracks[0].regions[0].length, PPQ * 4);
+        // Back where it was, exactly.
+        p.set_tempo(100.0);
+        assert_eq!(stretch(&p, 0), 0.9);
+    }
+
     fn audio(start: u64, length: u64, offset: u64) -> Region {
         Region {
             start,
@@ -1939,6 +2012,8 @@ mod tests {
                 file: "a.wav".into(),
                 offset,
                 stretch: 1.0,
+                flex: Flex::default(),
+                follow: false,
             },
             ..Default::default()
         }

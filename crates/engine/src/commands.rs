@@ -11,8 +11,8 @@ use crate::{
     plugin::{PluginApi, PluginParam, value_from_text},
     project::{
         AUDIO_DIR, AutoMode, AutoPoint, AuxSend, BEAT_UNITS, Cell, Comp, Content, ControlPoint,
-        Cycle, Eq, Input, Instrument, Marker, Note, PPQ, Param, PatternRow, PluginRef, Preset,
-        PresetSource, Project, Region, Saturator, Track, Which,
+        Cycle, Eq, Flex, Input, Instrument, Marker, Note, PPQ, Param, PatternRow, PluginRef,
+        Preset, PresetSource, Project, Region, Saturator, Track, Which,
     },
 };
 
@@ -147,7 +147,8 @@ pub enum Command {
         region: usize,
     },
     /// A region's name and playback settings (any of them): MIDI played transposed, louder or
-    /// quantized, its notes kept; and looping.
+    /// quantized, its notes kept; looping; and audio's flex mode and whether it follows the
+    /// song's tempo.
     SetRegion {
         track: usize,
         region: usize,
@@ -162,6 +163,10 @@ pub enum Command {
         /// Ticks; 0 turns it off.
         #[serde(default)]
         quantize: Option<u64>,
+        #[serde(default)]
+        flex: Option<Flex>,
+        #[serde(default)]
+        follow: Option<bool>,
     },
     /// An alias of a MIDI or pattern region: a copy linked to it, so editing either edits both.
     AddAlias {
@@ -655,7 +660,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             if !(bpm.is_finite() && (20.0..=999.0).contains(&bpm)) {
                 return Err("bpm must be between 20 and 999".into());
             }
-            p.tempo = bpm;
+            p.set_tempo(bpm);
         }
         Command::SetMaster { volume_db } => p.master_volume_db = finite("volume_db", volume_db)?,
         Command::SetTimeSignature { beats, unit } => {
@@ -847,16 +852,23 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                 ));
             }
             let file = import(dir, &file)?;
-            let wav = hound::WavReader::open(dir.join(&file))
-                .map_err(|e| format!("{}: {e}", file.display()))?;
+            // How long it is: a WAV's header says; AIFF, FLAC and MP3 are read.
+            let (frames, from) = match hound::WavReader::open(dir.join(&file)) {
+                Ok(wav) => (wav.duration() as u64, wav.spec().sample_rate as f64),
+                Err(_) => {
+                    let (sides, rate) = crate::engine::read_audio(&dir.join(&file))?;
+                    (sides[0].len() as u64, rate)
+                }
+            };
             // Played at the project's rate, converted if it was recorded at another.
-            let frames =
-                wav.duration() as u64 * p.sample_rate as u64 / wav.spec().sample_rate as u64;
+            let frames = (frames as f64 * p.sample_rate as f64 / from) as u64;
             let length = length.unwrap_or_else(|| p.ticks(frames.saturating_sub(offset)).max(1));
             let content = Content::Audio {
                 file,
                 offset,
                 stretch: 1.0,
+                flex: Flex::default(),
+                follow: false,
             };
             let regions = &mut track(p, t)?.regions;
             regions.push(Region {
@@ -969,9 +981,21 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             transpose,
             velocity,
             quantize,
+            flex,
+            follow,
         } => {
             region_at(p, t, r)?;
             let region = &mut p.tracks[t].regions[r];
+            if flex.is_some() || follow.is_some() {
+                let Content::Audio {
+                    flex: f, follow: w, ..
+                } = &mut region.content
+                else {
+                    return Err("flex and follow are for audio regions".into());
+                };
+                *f = flex.unwrap_or(*f);
+                *w = follow.unwrap_or(*w);
+            }
             if let Some(v) = name {
                 region.name = v;
             }
@@ -1687,6 +1711,40 @@ mod tests {
         let r = p.region((0, 0));
         assert_eq!((r.start, r.length), (PPQ, PPQ)); // half a second at 120 bpm is a beat
         assert!(dir.join("Audio Files/take.wav").exists());
+        // Sliced, and following the tempo: at 60 it plays twice as long, still a beat.
+        run(
+            &mut p,
+            r#"{"op": "set_region", "track": 0, "region": 0, "flex": "slicing", "follow": true}"#,
+        )
+        .unwrap();
+        run(&mut p, r#"{"op": "set_tempo", "bpm": 60}"#).unwrap();
+        let r = p.region((0, 0));
+        assert!(matches!(
+            r.content,
+            Content::Audio {
+                flex: Flex::Slicing,
+                follow: true,
+                stretch: 2.0,
+                ..
+            }
+        ));
+        assert_eq!(r.length, PPQ);
+        // MIDI has no flex.
+        run(
+            &mut p,
+            r#"{"op": "add_track", "name": "Keys", "instrument": "synth"}"#,
+        )
+        .unwrap();
+        run(
+            &mut p,
+            r#"{"op": "add_midi_region", "track": 1, "start": 0, "length": 960, "notes": []}"#,
+        )
+        .unwrap();
+        let err = run(
+            &mut p,
+            r#"{"op": "set_region", "track": 1, "region": 0, "flex": "speed"}"#,
+        );
+        assert!(err.unwrap_err().contains("audio"));
         std::fs::remove_dir_all(base).unwrap();
     }
 

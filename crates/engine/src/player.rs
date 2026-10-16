@@ -180,7 +180,7 @@ impl Player {
             lanes: HashMap::new(),
             free: (0..SLOTS).rev().collect(),
             modules: Modules::new(),
-            files: AudioFiles::new(dir, rate),
+            files: AudioFiles::new(dir, rate).in_background(),
             _stream: None,
             dir: dir.to_path_buf(),
             editors: HashMap::new(),
@@ -467,6 +467,27 @@ impl Player {
     ) -> Result<(), String> {
         let a = crate::engine::Audition::new(data, semitones, gain_db);
         self.send(Msg::Audition(Some(Box::new(a))))
+    }
+
+    /// Previews a loop already at the song's tempo: while the song plays, in time with it, over
+    /// and over.
+    pub fn audition_synced(
+        &mut self,
+        data: std::sync::Arc<AudioData>,
+        gain_db: f32,
+    ) -> Result<(), String> {
+        let a = crate::engine::Audition::new(data, 0.0, gain_db).synced();
+        self.send(Msg::Audition(Some(Box::new(a))))
+    }
+
+    /// Stretched audio is still being made: what plays stands in for it till it is.
+    pub fn rendering(&self) -> bool {
+        self.files.rendering()
+    }
+
+    /// Stretched audio has been made since the last call: `sync` puts it in.
+    pub fn fresh(&self) -> bool {
+        self.files.fresh()
     }
 
     pub fn stop_audition(&mut self) {

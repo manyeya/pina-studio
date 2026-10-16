@@ -289,8 +289,10 @@ pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Val
                 .find(|h| h.index == index)
                 .and_then(|h| h.transpose.map(|t| (t, key)))
         });
-        let mut set =
-            serde_json::json!({"op": "set_region", "track": t, "region": region, "loop": true});
+        // Looping, and following the song's tempo from here on.
+        let mut set = serde_json::json!({
+            "op": "set_region", "track": t, "region": region, "loop": true, "follow": true
+        });
         if let Some((semitones, key)) = fit {
             set["transpose"] = json!(semitones);
             done.push(format!("moved {semitones:+} semitones into {}", key.name()));

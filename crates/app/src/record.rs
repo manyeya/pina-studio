@@ -195,6 +195,8 @@ impl Workspace {
                         file,
                         offset: 0,
                         stretch: 1.0,
+                        flex: Default::default(),
+                        follow: false,
                     };
                     (
                         track,
