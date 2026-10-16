@@ -156,6 +156,12 @@ agent can send, with examples. An agent can:
 - Measure it with `tempo analyze`, since it can't listen: loudness (integrated and loudest),
   peaks, clipping, crest, six-band balance, stereo correlation and width, and the notes sounding
   with the key they fit, for the mix, each section (marker to marker) and each track.
+- Find samples that sound good together: `tempo samples find "dusty keys loop in C minor 95 bpm"`
+  (or a JSON query), `tempo samples similar <file>`, `tempo samples kit "punchy" --for <project>`
+  (a kit fitting the song's key and tempo, each pick going with the rest, with alternatives) and
+  `tempo samples info <file>`. Every hit says why it fits ("in C minor", "stretches from 92
+  BPM", "same pack as Kick_01"), how far to transpose it if a small move fits better, and, for a
+  one-shot, the sampler zone that plays it in tune.
 - Play any plugin as a person would: find it with `tempo plugins`, set its parameters by name and
   as it shows them (`"param": "Filter Cutoff", "text": "850 Hz"`), list and load its presets and
   save new ones (`tempo presets`, `set_preset`), automate any parameter, send it controllers,
@@ -173,10 +179,17 @@ parameters (value and display, default, unit, steps, and a choice's options), fo
 `set_plugin_param` and plugin automation; `tempo presets` lists its presets, and `--save <name>`
 saves its settings as one. Both answer from the app if it's open, else by loading that plugin.
 
+The sample library is the folders in `~/Library/Application Support/tempo/library.json`
+(`~/Music/tempo/Samples` to start; `tempo samples add <folder>`), each sample analysed once (what
+it is, its note or key, tempo, envelope, spectrum, stereo width, traits like punchy or lo-fi, and
+a timbre fingerprint) and indexed in `~/Library/Caches/tempo/samples.json`; `tempo samples scan`
+analyses what's new or changed, on every core.
+
 `tempo mcp` is the same as an MCP server on stdio, for agents without a shell (Claude Desktop,
 claude.ai and the like): its tools list themselves with typed inputs, and a user can allow them
 without allowing a shell. Its tools are `describe`, `show`, `edit`, `analyze`, `render`,
-`transport`, `plugins`, `params` and `presets`. For Claude Code:
+`transport`, `plugins`, `params`, `presets`, `samples_find`, `samples_similar`, `samples_kit` and
+`samples_library`. For Claude Code:
 
     claude mcp add tempo -- /path/to/tempo mcp
 

@@ -14,7 +14,14 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::{Sample, analyze};
+use super::{ANALYSIS_VERSION, Sample, analyze};
+
+/// The index as saved: which analysis made it, and the samples.
+#[derive(Serialize, Deserialize)]
+struct Index {
+    version: u32,
+    samples: Vec<Sample>,
+}
 
 /// The audio files the library reads.
 pub const EXTENSIONS: [&str; 6] = ["wav", "wave", "aif", "aiff", "flac", "mp3"];
@@ -85,9 +92,12 @@ impl Library {
                 folders: vec![default_folder()],
                 samples: Vec::new(),
             });
+        // An index another analysis made is no use: everything's analysed again.
         library.samples = std::fs::read(index_file())
             .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
+            .and_then(|b| serde_json::from_slice::<Index>(&b).ok())
+            .filter(|i| i.version == ANALYSIS_VERSION)
+            .map(|i| i.samples)
             .unwrap_or_default();
         library
     }
@@ -95,7 +105,11 @@ impl Library {
     /// Saves its folders and index.
     pub fn save(&self) -> Result<(), String> {
         write(&config_file(), &serde_json::to_vec_pretty(self).unwrap())?;
-        write(&index_file(), &serde_json::to_vec(&self.samples).unwrap())
+        let index = Index {
+            version: ANALYSIS_VERSION,
+            samples: self.samples.clone(),
+        };
+        write(&index_file(), &serde_json::to_vec(&index).unwrap())
     }
 
     /// Adds a folder (it's scanned next time).
@@ -297,7 +311,7 @@ mod tests {
         // Saved, it loads back.
         let again = Library::load();
         assert_eq!(again.samples.len(), 1);
-        assert_eq!(again.folders, [base.clone()]);
+        assert_eq!(again.folders, std::slice::from_ref(&base));
         std::fs::remove_dir_all(base).unwrap();
     }
 }

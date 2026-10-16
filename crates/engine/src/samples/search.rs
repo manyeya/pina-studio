@@ -606,7 +606,10 @@ pub fn find(samples: &[Sample], q: &Query) -> Vec<Hit> {
                     return None;
                 }
                 transpose = t;
-                reasons.push(why);
+                // A drum's lack of a key goes without saying.
+                if !matches!(harmony(s), Harmony::None) {
+                    reasons.push(why);
+                }
                 parts.push((fit, 1.5));
             }
             if let Some(bpm) = bpm {
@@ -624,14 +627,25 @@ pub fn find(samples: &[Sample], q: &Query) -> Vec<Hit> {
             }
             if !with.is_empty() {
                 let mut total = 0.0;
+                let mut mates = Vec::new();
                 for w in &with {
                     let (fit, why) = goes_with(s, w);
                     total += fit;
                     for r in why {
-                        if !reasons.contains(&r) {
-                            reasons.push(r);
+                        // Pack-mates are told once: "same pack as Kick_01, Snare_02 and 2 more".
+                        match r.strip_prefix("same pack as ") {
+                            Some(name) => mates.push(name.to_string()),
+                            None if !reasons.contains(&r) => reasons.push(r),
+                            None => {}
                         }
                     }
+                }
+                if !mates.is_empty() {
+                    let named = mates.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+                    reasons.push(match mates.len() {
+                        1 | 2 => format!("same pack as {named}"),
+                        n => format!("same pack as {named} and {} more", n - 2),
+                    });
                 }
                 parts.push((total / with.len() as f32, 2.0));
             }

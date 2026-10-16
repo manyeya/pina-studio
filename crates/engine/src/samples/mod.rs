@@ -71,6 +71,9 @@ pub struct Analysis {
 pub const EMBEDDING: usize = 32;
 /// How many points `Analysis::waveform` has.
 pub const WAVEFORM: usize = 96;
+/// Which analysis made an index: when the analysis changes, this goes up, and a library indexed
+/// by an older one is analysed again.
+pub const ANALYSIS_VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]
