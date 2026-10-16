@@ -22,7 +22,7 @@ fn library() -> Library {
 }
 
 fn progress(done: usize, of: usize) {
-    if done == of || done % 50 == 0 {
+    if done == of || done.is_multiple_of(50) {
         eprintln!("analysed {done} of {of}");
     }
 }
