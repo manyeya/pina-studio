@@ -10,7 +10,8 @@ plugins, and agents as first-class collaborators. macOS first.
 - `crates/engine` also has the live `player.rs` (keeps the engine in step with edits) and
   `session.rs` (an open project and its undo history).
 - `crates/engine` also has the built-in drum kit (`drums.rs`), the channel EQ, compressor and
-  saturator (`dsp.rs`), keys, scales and note edits like quantize and legato (`music.rs`), MIDI input
+  saturator (written in Faust, in `faust/*.dsp`, compiled to Rust in `src/faust/` and run by
+  `dsp.rs`), keys, scales and note edits like quantize and legato (`music.rs`), MIDI input
   (`midi.rs`), audio recording (`record.rs`), the plugin scan (`scan.rs`), edits as data
   (`commands.rs`, described in `commands.md`) and measuring audio (`analysis.rs`).
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
@@ -116,6 +117,13 @@ __scan`), so a broken one can't crash the app, and the results are cached in
 in the project. Plugin latency is compensated, as Logic does.
 
 Builds need only the Command Line Tools: gpui compiles its Metal shaders at launch.
+
+The channel EQ, compressor and saturator are Faust (`crates/engine/faust/*.dsp`), using its
+libraries: Andy Simper's state-variable filters for the EQ, its soft-knee compressor gain computer,
+and antiderivative antialiasing for the saturator, which also runs at twice the sample rate (a
+half-band filter designed by `scripts/halfband.py`). The Rust Faust makes of them is checked in
+under `crates/engine/src/faust/`, so building tempo doesn't need Faust; after changing a .dsp, run
+`scripts/faust.sh` (with `faust` on the path, or in `~/.local/faust/bin`).
 
 ## Agents
 

@@ -7,7 +7,7 @@ use gpui::{
     prelude::*, px, rgb, size,
 };
 use tempo_engine::{
-    dsp::SatParams,
+    dsp::sat_curve,
     player::Which,
     project::{Comp, Eq, Instrument, Saturator},
 };
@@ -791,13 +791,41 @@ impl Workspace {
                     ),
             )
             .child(div().flex().justify_between().children(knobs))
+            .child(
+                // What it listens to: the peaks, or an RMS average (gentler, more like the ear).
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(TEXT_3))
+                            .child("Detector"),
+                    )
+                    .child(tray().p(px(2.)).rounded(px(7.)).children(
+                        [("Peak", false), ("RMS", true)].map(|(label, rms)| {
+                            seg(label, comp.rms == rms, 22.)
+                                .debug_selector(move || format!("comp-detector-{label}"))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, _, _, cx| {
+                                        ws.edit(cx, |ws| {
+                                            if let Some(c) = ws.strip_dsp_mut(ch).1 {
+                                                c.rms = rms;
+                                            }
+                                        })
+                                    }),
+                                )
+                        }),
+                    )),
+            )
     }
 
     /// The saturator: its curve (how hard it rounds off what comes in), and its knobs.
     fn sat_card(&self, ch: Channel, sat: Saturator, cx: &mut Context<Self>) -> Div {
         let color = self.channel_look(ch).1;
         let on = !sat.bypass;
-        let params = SatParams::new(&sat, self.session.project.sample_rate as f64);
         let curve = canvas(
             |_, _, _| {},
             move |b, _, window, _| {
@@ -829,7 +857,7 @@ impl Workspace {
                 let mut path = gpui::PathBuilder::stroke(px(2.));
                 for i in 0..=64 {
                     let x = i as f32 / 32.0 - 1.0;
-                    let y = x + (params.shape(x) - x) * sat.mix;
+                    let y = sat_curve(&sat, x);
                     match i {
                         0 => path.move_to(at(x, y)),
                         _ => path.line_to(at(x, y)),

@@ -800,8 +800,16 @@ fn the_mixer_shapes_a_channel_with_its_eq_and_compressor(cx: &mut TestAppContext
         ws.session.project.tracks[0].comp.unwrap().threshold_db
     });
     assert!(threshold < -18.0, "{threshold}");
-    // Both undo as edits.
-    cx.simulate_keystrokes("cmd-z cmd-z cmd-z cmd-z");
+    // Its detector: peaks, or an RMS average.
+    click_on(
+        cx,
+        "comp-detector-RMS",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert!(ws.read_with(cx, |ws, _| ws.session.project.tracks[0].comp.unwrap().rms));
+    // All of it undoes as edits.
+    cx.simulate_keystrokes("cmd-z cmd-z cmd-z cmd-z cmd-z");
     let (eq, comp) = ws.read_with(cx, |ws, _| {
         (
             ws.session.project.tracks[0].eq,

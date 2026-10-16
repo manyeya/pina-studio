@@ -137,6 +137,9 @@ pub struct Comp {
     pub release_ms: f32,
     #[serde(default)]
     pub makeup_db: f32,
+    /// Its level is an RMS average over 15 ms rather than the peak: gentler, more like the ear.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rms: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub bypass: bool,
 }
@@ -149,6 +152,7 @@ impl Default for Comp {
             attack_ms: 10.0,
             release_ms: 120.0,
             makeup_db: 0.0,
+            rms: false,
             bypass: false,
         }
     }

@@ -21,7 +21,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::{
     drums::Drums,
-    dsp::{CompParams, CompState, EqFilters, EqState, SatParams, SatState},
+    dsp::Strip,
     peaks::Peaks,
     plugin::{AUDIO_MODULE, Module, Note, Plugin, Processor},
     project::{
@@ -158,46 +158,29 @@ impl Arrangement {
     }
 }
 
-/// A channel's built-in EQ, compressor and saturator at a rate, unless absent or bypassed.
-fn strip_dsp(eq: Option<&Eq>, comp: Option<&Comp>, sat: Option<&Saturator>, rate: f64) -> StripDsp {
+/// A channel's built-in EQ, compressor and saturator, unless absent or bypassed.
+fn strip_dsp(eq: Option<&Eq>, comp: Option<&Comp>, sat: Option<&Saturator>) -> StripDsp {
     StripDsp {
-        eq: eq.filter(|e| !e.bypass).map(|e| EqFilters::new(e, rate)),
-        comp: comp.filter(|c| !c.bypass).map(|c| CompParams::new(c, rate)),
-        sat: sat.filter(|s| !s.bypass).map(|s| SatParams::new(s, rate)),
+        eq: eq.filter(|e| !e.bypass).copied(),
+        comp: comp.filter(|c| !c.bypass).copied(),
+        sat: sat.filter(|s| !s.bypass).copied(),
     }
 }
 
-/// What a channel's built-in EQ, compressor and saturator do.
+/// What a channel's built-in EQ, compressor and saturator are set to; the lane's `Strip` (or the
+/// engine's, for the master) runs them.
 #[derive(Default)]
 struct StripDsp {
-    eq: Option<EqFilters>,
-    comp: Option<CompParams>,
-    sat: Option<SatParams>,
+    eq: Option<Eq>,
+    comp: Option<Comp>,
+    sat: Option<Saturator>,
 }
 
-/// Their memory, kept with the lane (or the engine, for the master) through edits.
-#[derive(Default)]
-struct StripState {
-    eq: EqState,
-    comp: CompState,
-    sat: SatState,
-}
-
-impl StripState {
-    /// Runs a block through the EQ, compressor and saturator in place; returns the compressor's
-    /// gain reduction, in dB.
-    fn process(&mut self, dsp: &StripDsp, l: &mut [f32], r: &mut [f32]) -> f32 {
-        if let Some(eq) = &dsp.eq {
-            self.eq.process(eq, l, r);
-        }
-        let reduction = match &dsp.comp {
-            Some(c) => self.comp.process(c, l, r),
-            None => 0.0,
-        };
-        if let Some(sat) = &dsp.sat {
-            self.sat.process(sat, l, r);
-        }
-        reduction
+impl Strip {
+    /// Runs a block through the strip as `dsp` has it; returns the compressor's gain reduction,
+    /// in dB.
+    fn run(&mut self, dsp: &StripDsp, l: &mut [f32], r: &mut [f32]) -> f32 {
+        self.process(dsp.eq.as_ref(), dsp.comp.as_ref(), dsp.sat.as_ref(), l, r)
     }
 }
 
@@ -404,7 +387,7 @@ pub struct Lane {
     /// change waiting for its sample.
     cell: Option<(usize, u64)>,
     queued: Option<(Option<usize>, u64)>,
-    strip: StripState,
+    strip: Box<Strip>,
 }
 
 /// The main-thread halves of a lane's plugins.
@@ -474,7 +457,7 @@ pub fn make_lane(
         post: Delay::new(),
         cell: None,
         queued: None,
-        strip: StripState::default(),
+        strip: Box::new(Strip::new(rate)),
     };
     Ok((lane, plugins, latency))
 }
@@ -606,7 +589,7 @@ pub fn compile(
                 .and_then(|bus| project.auxes.iter().position(|a| a.bus == bus)),
             // Through an aux, the aux's own compensation lines it up.
             direct: if t.output.is_some() { 0 } else { pdc.direct },
-            dsp: strip_dsp(t.eq.as_ref(), t.comp.as_ref(), t.sat.as_ref(), rate),
+            dsp: strip_dsp(t.eq.as_ref(), t.comp.as_ref(), t.sat.as_ref()),
         });
     }
     let auxes = project
@@ -619,7 +602,7 @@ pub fn compile(
             AuxPlan {
                 slot,
                 gain: balance(g, a.pan),
-                dsp: strip_dsp(a.eq.as_ref(), a.comp.as_ref(), a.sat.as_ref(), rate),
+                dsp: strip_dsp(a.eq.as_ref(), a.comp.as_ref(), a.sat.as_ref()),
                 delay,
             }
         })
@@ -637,7 +620,6 @@ pub fn compile(
             project.master_eq.as_ref(),
             project.master_comp.as_ref(),
             project.master_sat.as_ref(),
-            rate,
         ),
         cycle: project
             .cycle
@@ -872,7 +854,7 @@ pub struct Engine {
     /// Notes asked for by `Msg::Note`, for the next block.
     pending: [(usize, Note); LIVE_NOTES],
     pending_len: usize,
-    master_strip: StripState,
+    master_strip: Box<Strip>,
     /// The metronome's click sounding: samples left, and its pitch.
     click: (u32, f32),
     /// Where the next block reads from if playback carries on; reading anywhere else is a jump.
@@ -892,7 +874,7 @@ impl Engine {
             link: None,
             pending: [(0, Note::default()); LIVE_NOTES],
             pending_len: 0,
-            master_strip: StripState::default(),
+            master_strip: Box::new(Strip::new(rate)),
             click: (0, 0.0),
             next_read: 0,
         }
@@ -1259,7 +1241,7 @@ impl Engine {
                     p.process([&mut *l, &mut *r], frames, notes);
                 }
             }
-            let reduction = lane.strip.process(&plan.dsp, l, r);
+            let reduction = lane.strip.run(&plan.dsp, l, r);
             for (i, p) in lane.inserts.iter_mut().enumerate() {
                 plan.automate(Which::Insert(i), p, (from, to));
                 p.set_transport(playing, from, tempo);
@@ -1324,7 +1306,7 @@ impl Engine {
             };
             l.copy_from_slice(&arrangement.buses[aux][0][..frames]);
             r.copy_from_slice(&arrangement.buses[aux][1][..frames]);
-            let reduction = lane.strip.process(&plan.dsp, l, r);
+            let reduction = lane.strip.run(&plan.dsp, l, r);
             for p in &mut lane.inserts {
                 p.set_transport(playing, from, tempo);
                 p.process([&mut *l, &mut *r], frames, &[]);
@@ -1342,7 +1324,7 @@ impl Engine {
             }
         }
 
-        let reduction = self.master_strip.process(
+        let reduction = self.master_strip.run(
             &arrangement.master_strip,
             &mut out_l[..frames],
             &mut out_r[..frames],

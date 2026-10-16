@@ -100,11 +100,14 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   the channel's built-in EQ, before its inserts: a low cut (Hz; 20 or less is off), two bells and
   a high shelf. Leave out what you don't change; `"bypass": true` keeps it but stops it; no `eq`
   takes it out. `channel` is `{"track": i}`, `{"aux": i}` or `"master"`.
-- `set_comp` `{"channel": {"track": 1}, "comp": {"threshold_db": -18, "ratio": 4, "attack_ms": 10, "release_ms": 120, "makeup_db": 3}}`:
-  the built-in compressor, after the EQ. Same rules as `set_eq`.
+- `set_comp` `{"channel": {"track": 1}, "comp": {"threshold_db": -18, "ratio": 4, "attack_ms": 10, "release_ms": 120, "makeup_db": 3, "rms": false}}`:
+  the built-in compressor, after the EQ: a 6 dB soft knee, both sides turned down together.
+  `"rms": true` makes it listen to an RMS average over 15 ms rather than the peaks: gentler, more
+  like the ear. Same rules as `set_eq`.
 - `set_saturator` `{"channel": {"track": 1}, "sat": {"drive_db": 9, "tone": 0.2, "mix": 0.35, "output_db": -1}}`:
   the built-in saturator, after the compressor: `drive_db` 0-24 (quiet sounds keep their level,
-  loud ones round off), `tone` -1 darker to 1 brighter, `mix` 0 dry to 1. Same rules as `set_eq`.
+  loud ones round off; oversampled and antialiased, so hard drive stays clean), `tone` -1 darker
+  to 1 brighter, `mix` 0 dry to 1. Same rules as `set_eq`.
 - `edit_notes` `{"track": 1, "region": 0, "edit": {"kind": "quantize", "grid": 240, "strength": 1, "swing": 50}}`:
   changes a MIDI region's notes in one go (or one note, with `"note": 3`). `kind` is `quantize`
   (`strength` 0-1, `swing` 50 straight to 75), `humanize` (`timing` ticks, `velocity`, `seed`),
