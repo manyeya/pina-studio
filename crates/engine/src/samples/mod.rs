@@ -7,7 +7,9 @@
 //! - `search`: finding samples by words, filters, likeness and fit; building kits.
 
 pub mod analyze;
+pub mod dsp;
 pub mod library;
+pub mod pitch;
 pub mod place;
 pub mod search;
 

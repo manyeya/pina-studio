@@ -20,3 +20,5 @@ hound = "3.5"
 midir = "0.11"
 signalsmith-stretch = "0.1"
 clap-sys = "0.5"
+symphonia = { version = "0.6.1", default-features = false, features = ["aiff", "flac", "mp3", "wav", "pcm", "adpcm", "opt-simd"] }
+rustfft = "6.4"

@@ -1861,8 +1861,8 @@ fn time_stretch(data: &AudioData, ratio: f64, rate: f64, semitones: i8) -> Audio
     AudioData { channels }
 }
 
-// ponytail: WAV only, at the engine's rate; add symphonia and rubato for AIFF/MP3 and resampling.
-/// A WAV file's audio at `rate`: converted, if it was recorded at another.
+/// An audio file's audio (WAV, AIFF, FLAC or MP3) at `rate`: converted, if it was recorded at
+/// another.
 pub(crate) fn load_wav(path: &Path, rate: f64) -> Result<AudioData, String> {
     let (sides, from) = read_audio(path)?;
     let channels = sides
@@ -1878,8 +1878,21 @@ pub fn load_audio(path: &Path, rate: f64) -> Result<AudioData, String> {
     load_wav(path, rate)
 }
 
-/// An audio file's first two channels (one, if it's mono) at its own rate, and that rate.
+/// An audio file's first two channels (one, if it's mono) at its own rate, and that rate. WAV is
+/// read with hound; AIFF, FLAC, MP3, and WAVs hound can't read, with Symphonia.
 pub fn read_audio(path: &Path) -> Result<(Vec<Vec<f32>>, f64), String> {
+    let wav = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("wav") || e.eq_ignore_ascii_case("wave"));
+    match wav.then(|| read_wav(path)) {
+        Some(Ok(audio)) => Ok(audio),
+        Some(Err(e)) => decode(path).map_err(|_| e),
+        None => decode(path),
+    }
+}
+
+fn read_wav(path: &Path) -> Result<(Vec<Vec<f32>>, f64), String> {
     let err = |e: hound::Error| format!("{}: {e}", path.display());
     let mut wav = hound::WavReader::open(path).map_err(err)?;
     let spec = wav.spec();
@@ -1901,6 +1914,75 @@ pub fn read_audio(path: &Path) -> Result<(Vec<Vec<f32>>, f64), String> {
         .map(|c| samples.iter().skip(c).step_by(n).copied().collect())
         .collect();
     Ok((sides, spec.sample_rate as f64))
+}
+
+/// Decodes a file with Symphonia: its first audio track's first two channels.
+fn decode(path: &Path) -> Result<(Vec<Vec<f32>>, f64), String> {
+    use symphonia::core::{
+        codecs::audio::AudioDecoderOptions,
+        errors::Error,
+        formats::{FormatOptions, TrackType, probe::Hint},
+        io::MediaSourceStream,
+        meta::MetadataOptions,
+    };
+    let err = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    let file = std::fs::File::open(path).map_err(|e| err(&e))?;
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let stream = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut format = symphonia::default::get_probe()
+        .probe(
+            &hint,
+            stream,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
+        .map_err(|e| err(&e))?;
+    let track = format
+        .default_track(TrackType::Audio)
+        .ok_or_else(|| err(&"no audio in it"))?;
+    let id = track.id;
+    let params = track
+        .codec_params
+        .as_ref()
+        .and_then(|p| p.audio())
+        .ok_or_else(|| err(&"no audio in it"))?;
+    let mut decoder = symphonia::default::get_codecs()
+        .make_audio_decoder(params, &AudioDecoderOptions::default())
+        .map_err(|e| err(&e))?;
+    let (mut sides, mut block, mut rate) = (Vec::<Vec<f32>>::new(), Vec::new(), 0);
+    loop {
+        let packet = match format.next_packet() {
+            Ok(Some(packet)) => packet,
+            Ok(None) => break,
+            // A file cut short: keep what was read.
+            Err(Error::IoError(_)) if !sides.is_empty() => break,
+            Err(e) => return Err(err(&e)),
+        };
+        if packet.track_id != id {
+            continue;
+        }
+        match decoder.decode(&packet) {
+            Ok(audio) => {
+                rate = audio.spec().rate();
+                audio.copy_to_vecs_planar::<f32>(&mut block);
+                if sides.is_empty() {
+                    sides = vec![Vec::new(); block.len().min(2)];
+                }
+                for (side, part) in sides.iter_mut().zip(&block) {
+                    side.extend_from_slice(part);
+                }
+            }
+            Err(Error::DecodeError(_)) => continue,
+            Err(e) => return Err(err(&e)),
+        }
+    }
+    if sides.is_empty() || rate == 0 {
+        return Err(err(&"no audio in it"));
+    }
+    Ok((sides, rate as f64))
 }
 
 /// Audio at `from` Hz, at `to` Hz, band-limited: a Blackman-windowed sinc, 32 taps a side, its

@@ -83,13 +83,13 @@ fn to_db(power: f64) -> f32 {
 
 /// A biquad filter, run over a whole signal.
 #[derive(Clone, Copy)]
-struct Biquad {
+pub(crate) struct Biquad {
     b: [f64; 3],
     a: [f64; 2],
 }
 
 impl Biquad {
-    fn run(&self, x: &[f64]) -> Vec<f64> {
+    pub(crate) fn run(&self, x: &[f64]) -> Vec<f64> {
         let (mut x1, mut x2, mut y1, mut y2) = (0.0, 0.0, 0.0, 0.0);
         x.iter()
             .map(|&x0| {
@@ -122,7 +122,7 @@ impl Biquad {
 
 /// BS.1770's K-weighting: a high shelf for the head, then a high-pass, at any sample rate (as
 /// libebur128 derives them).
-fn k_weighting(rate: f64) -> [Biquad; 2] {
+pub(crate) fn k_weighting(rate: f64) -> [Biquad; 2] {
     let (f0, gain, q) = (1681.974450955533, 3.999843853973347, 0.7071752369554196);
     let k = (std::f64::consts::PI * f0 / rate).tan();
     let vh = 10f64.powf(gain / 20.0);
