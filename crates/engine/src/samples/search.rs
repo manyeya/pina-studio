@@ -379,19 +379,47 @@ fn key_fit(s: &Sample, key: Key) -> (f32, Option<i32>, String) {
                 .unwrap();
             let score = |share: f32| ((share - 0.5) / 0.42).clamp(0.0, 1.0);
             let named = s.analysis.key.as_ref().map(|k| k.name.clone());
-            if best != 0 && best_fit - here > 0.08 {
+            let by_notes = if best != 0 && best_fit - here > 0.08 {
                 let why = match &named {
                     Some(k) => format!("in {k}: {best:+} semitones fits {}", key.name()),
                     None => format!("{best:+} semitones fits {}", key.name()),
                 };
                 (score(here).max(score(best_fit) * 0.85), Some(best), why)
             } else {
-                let why = match named {
-                    Some(k) if k == key.name() => format!("in {k}"),
+                let why = match &named {
+                    Some(k) if *k == key.name() => format!("in {k}"),
                     Some(k) => format!("in {k}, which fits {}", key.name()),
                     None => format!("its notes fit {}", key.name()),
                 };
                 (score(here), None, why)
+            };
+            // The key analysis is sure of: in the key (or its relative) it fits as it is, ahead
+            // of anything moved into it, however busy its notes; a step or two off, moved.
+            let by_key = s
+                .analysis
+                .key
+                .as_ref()
+                .filter(|k| k.confidence >= 0.3)
+                .and_then(|k| {
+                    let sure = 0.9 + 0.1 * k.confidence.min(1.0);
+                    match super::place::transpose_to(&s.analysis, key).round() as i32 {
+                        0 if k.name == key.name() => Some((sure, None, format!("in {}", k.name))),
+                        0 => Some((
+                            sure,
+                            None,
+                            format!("in {}, which fits {}", k.name, key.name()),
+                        )),
+                        t if t.abs() <= reach => Some((
+                            sure * 0.85,
+                            Some(t),
+                            format!("in {}: {t:+} semitones fits {}", k.name, key.name()),
+                        )),
+                        _ => None,
+                    }
+                });
+            match by_key {
+                Some(k) if k.0 > by_notes.0 => k,
+                _ => by_notes,
             }
         }
     }
@@ -548,6 +576,8 @@ pub fn find(samples: &[Sample], q: &Query) -> Vec<Hit> {
         .chain(&words.categories)
         .copied()
         .collect();
+    // Traits picked keep to them; traits in words rank, since how a sound comes across is
+    // judged, not measured.
     let traits: Vec<&String> = q.traits.iter().chain(&words.traits).collect();
     let kind = q.kind.or(words.kind);
     let key = q.key.as_deref().and_then(Key::parse).or(words.key);
@@ -568,7 +598,7 @@ pub fn find(samples: &[Sample], q: &Query) -> Vec<Hit> {
             let a = &s.analysis;
             kind.is_none_or(|k| a.kind == k)
                 && (categories.is_empty() || categories.contains(&a.category))
-                && traits.iter().all(|t| a.traits.contains(t))
+                && q.traits.iter().all(|t| a.traits.contains(t))
                 && q.folder
                     .as_ref()
                     .is_none_or(|f| s.folder.to_lowercase().contains(&f.to_lowercase()))
@@ -666,7 +696,11 @@ pub fn find(samples: &[Sample], q: &Query) -> Vec<Hit> {
                 }
                 parts.push((total / with.len() as f32, 2.0));
             }
-            for t in &traits {
+            let has: Vec<&&String> = traits.iter().filter(|t| a.traits.contains(t)).collect();
+            if !words.traits.is_empty() {
+                parts.push((has.len() as f32 / traits.len() as f32, 1.0));
+            }
+            for t in has {
                 reasons.push((*t).clone());
             }
             let weight: f32 = parts.iter().map(|p| p.1).sum();
@@ -1127,7 +1161,11 @@ mod tests {
             text: text.into(),
             ..Default::default()
         };
-        assert_eq!(names(&lib, &find(&lib, &q("punchy kick"))), ["Kick_01"]);
+        // How it sounds ranks: the punchy kick, then the other.
+        assert_eq!(
+            names(&lib, &find(&lib, &q("punchy kick"))),
+            ["Kick_01", "Kick_02"]
+        );
         assert_eq!(names(&lib, &find(&lib, &q("snare pack b"))), ["Snare_02"]);
         // A key and tempo: the C minor loop at 95 fits as it is; F# major at 96 fits two
         // semitones up (A flat major is C minor's sixth), so it comes after, saying so; D minor at
@@ -1140,6 +1178,51 @@ mod tests {
             hits[0].reasons
         );
         assert_eq!((hits[0].transpose, hits[1].transpose), (None, Some(2)));
+    }
+
+    #[test]
+    fn a_loop_found_in_the_key_ranks_above_one_moved_into_it() {
+        // A busy riff, its notes all over, that analysis is sure is in C minor; and D minor
+        // chords, which fit two semitones down.
+        let mut riff = melodic("C minor", Kind::Loop, Some(95.0));
+        riff.chroma = chroma_of("C minor").map(|c| c + 0.1);
+        let lib = vec![
+            sample("Riff_Cm", "A", riff),
+            sample("Keys_Dm", "A", melodic("D minor", Kind::Loop, Some(95.0))),
+        ];
+        let hits = find(
+            &lib,
+            &Query {
+                text: "keys loop in C minor".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(names(&lib, &hits), ["Riff_Cm", "Keys_Dm"]);
+        assert_eq!((hits[0].transpose, hits[1].transpose), (None, Some(-2)));
+    }
+
+    #[test]
+    fn words_for_character_rank_rather_than_rule_out() {
+        let mut dusty = melodic("C minor", Kind::Loop, Some(95.0));
+        dusty.traits = vec!["lo-fi".into()];
+        let lib = vec![
+            sample(
+                "Keys_Clean",
+                "A",
+                melodic("C minor", Kind::Loop, Some(95.0)),
+            ),
+            sample("Keys_Dusty", "A", dusty),
+        ];
+        let q = |text: &str, traits: Vec<String>| Query {
+            text: text.into(),
+            traits,
+            ..Default::default()
+        };
+        let hits = find(&lib, &q("dusty keys loop", Vec::new()));
+        assert_eq!(names(&lib, &hits), ["Keys_Dusty", "Keys_Clean"]);
+        // A trait picked as a filter keeps to it.
+        let hits = find(&lib, &q("keys loop", vec!["lo-fi".into()]));
+        assert_eq!(names(&lib, &hits), ["Keys_Dusty"]);
     }
 
     #[test]
