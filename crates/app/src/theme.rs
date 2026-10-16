@@ -193,6 +193,8 @@ pub enum Icon {
     Back,
     Forward,
     Shuffle,
+    Expand,
+    PanelRight,
 }
 
 impl Icon {
@@ -288,6 +290,12 @@ impl Icon {
             Icon::Rescan => r##"<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4"/>"##,
             Icon::Back => r##"<path d="M14.5 6l-6 6 6 6"/>"##,
             Icon::Forward => r##"<path d="M9.5 6l6 6-6 6"/>"##,
+            Icon::Expand => {
+                r##"<path d="M14 4.5h5.5V10M10 19.5H4.5V14M19.5 4.5l-6 6M4.5 19.5l6-6"/>"##
+            }
+            Icon::PanelRight => {
+                r##"<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/>"##
+            }
             Icon::Shuffle => {
                 r##"<path d="M4 7h3.5c4.5 0 4.5 10 9 10H20M17.5 14.5L20 17l-2.5 2.5M4 17h3.5c1.6 0 2.6-1.3 3.4-3M13.1 10c.8-1.7 1.8-3 3.4-3H20M17.5 4.5L20 7l-2.5 2.5"/>"##
             }

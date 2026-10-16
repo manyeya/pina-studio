@@ -1,11 +1,16 @@
-//! The sample browser, a pane under the tracks. On the left, what to look for: words, one-shots
-//! or loops, what they are, their key and tempo, their character. In the middle, what's found: a
-//! list, a map of sound (near dots sound alike) or a kit of what goes together. On the right, the
-//! selected sample in detail, and what sounds like it.
+//! The sample browser, as a page of its own in the tracks' place (as the mixer is) and as a
+//! compact list beside the tracks to drag sounds from.
+//!
+//! The page: on the left, what to look for: words, one-shots or loops, what they are, their key
+//! and tempo, their character. In the middle, what's found: a list, a map of sound (near dots
+//! sound alike) or a kit of what goes together. On the right, the selected sample in detail, and
+//! what sounds like it. The compact browser: a search, what kind, the song's fit and what sounds,
+//! a list, and the picked sound with what's like it.
 //!
 //! A click hears a sample (in the song's key, with Play in Key on); up and down hear the next.
 //! Add to Song, or a drag onto the tracks, puts it in the song: a loop as audio, in time; a
-//! one-shot on a sampler's note, in tune. The library loads and scans in the background.
+//! one-shot on a sampler's note, in tune. A drag out of the page brings the tracks back to drop
+//! it on. The library loads and scans in the background.
 
 use std::{
     cell::Cell,
@@ -31,7 +36,7 @@ use tempo_engine::{
     music::Key,
     project::{At, Instrument, Sampler},
     samples::{
-        Analysis, Category, Kind, Pitch, Sample, TRAITS,
+        Analysis, Category, Kind, NOTES, Pitch, Sample, TRAITS,
         library::Library,
         note_name,
         place::{loop_ticks, place_zone, transpose_to},
@@ -43,14 +48,15 @@ use crate::{
     menu::{Menu, MenuAction},
     text::{TextEvent, TextInput},
     theme::*,
-    workspace::{Bottom, Drag, Slider, Workspace, pt},
+    workspace::{Drag, Slider, View, Workspace, pt},
 };
 
 /// Takes a filter off, when nothing was found.
 type Loosen = Box<dyn Fn(&mut Workspace)>;
 
-/// How tall the pane opens: room for the filters and a sample's details.
-const SAMPLES_H: f32 = 460.0;
+/// The compact browser's width, and its rows' height.
+const PANEL_W: f32 = 320.0;
+const PANEL_ROW_H: f32 = 44.0;
 const DETAILS_W: f32 = 312.0;
 const ROW_H: f32 = 44.0;
 const WAVE_W: f32 = 104.0;
@@ -171,6 +177,9 @@ pub struct Browser {
     heard: HashMap<PathBuf, Arc<tempo_engine::engine::AudioData>>,
     wanted: Option<usize>,
     pub list: UniformListScrollHandle,
+    pub panel_list: UniformListScrollHandle,
+    /// The compact list shows what sounds like this sample, not the results.
+    pub like: Option<(usize, Vec<Hit>)>,
     /// The song's key and tempo when the results were last found.
     seen: (Option<Key>, f64),
     _subscriptions: [Subscription; 2],
@@ -184,6 +193,7 @@ impl Browser {
             let text = input.read(cx).text().trim().to_string();
             if text != ws.browser.text {
                 ws.browser.text = text;
+                ws.browser.like = None;
                 ws.find_samples();
                 cx.notify();
             }
@@ -230,6 +240,8 @@ impl Browser {
             heard: HashMap::new(),
             wanted: None,
             list: UniformListScrollHandle::new(),
+            panel_list: UniformListScrollHandle::new(),
+            like: None,
             seen: (None, 0.0),
             _subscriptions: [typed, done],
         }
@@ -565,6 +577,7 @@ impl Workspace {
         }
         b.hovered = None;
         b.area = None;
+        b.like = None;
         // The map can take a while for a big library.
         let samples = b.library.samples.clone();
         let map = cx.background_spawn(async move { search::map(&samples) });
@@ -782,8 +795,12 @@ impl Workspace {
 
     /// A filter changed: find again, and keep the list at the top.
     fn refilter(&mut self, cx: &mut Context<Self>) {
+        self.browser.like = None;
         self.find_samples();
         self.browser.list.scroll_to_item(0, ScrollStrategy::Top);
+        self.browser
+            .panel_list
+            .scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
     }
 
@@ -967,8 +984,10 @@ impl Workspace {
     /// Up and down: the next sample in the results, heard as it's picked.
     pub fn step_sample(&mut self, by: i32, cx: &mut Context<Self>) {
         let b = &self.browser;
-        let order: Vec<usize> = match b.view {
-            Results::Kit => b
+        let panel = self.view == View::Arrange;
+        let order: Vec<usize> = match (&b.like, b.view) {
+            (Some((_, like)), _) if panel => like.iter().map(|h| h.index).collect(),
+            (_, Results::Kit) if !panel => b
                 .kit
                 .iter()
                 .filter_map(|k| k.hit().map(|h| h.index))
@@ -984,23 +1003,72 @@ impl Workspace {
             None if by > 0 => 0,
             None => order.len() - 1,
         };
-        if b.view != Results::Kit {
+        if panel {
+            b.panel_list.scroll_to_item(next, ScrollStrategy::Nearest);
+        } else if b.view != Results::Kit {
             b.list.scroll_to_item(next, ScrollStrategy::Nearest);
         }
         self.select_sample(order[next], true, cx);
     }
 
-    /// The pane opens: tall enough for its columns, with the search field ready to type in.
-    pub fn open_samples(&mut self) {
-        self.editor_h = self.editor_h.max(SAMPLES_H);
-        self.browser.focus_search = true;
+    /// The browser shows: as its page, or beside the tracks.
+    pub fn browser_open(&self) -> bool {
+        self.view == View::Samples || (self.view == View::Arrange && self.show_samples)
+    }
+
+    /// F: the compact browser beside the tracks, or not; from the page or the mixer, the
+    /// tracks with it beside them. It opens with the search field ready to type in.
+    pub fn toggle_samples(&mut self, cx: &mut Context<Self>) {
+        self.show_samples = self.view != View::Arrange || !self.show_samples;
+        self.view = View::Arrange;
+        self.browser.focus_search = self.show_samples;
+        cx.notify();
+    }
+
+    /// ⇧F: the browser's page, in the tracks' place, or the tracks again.
+    pub fn toggle_samples_page(&mut self, cx: &mut Context<Self>) {
+        self.view = match self.view {
+            View::Samples => View::Arrange,
+            _ => View::Samples,
+        };
+        self.browser.focus_search = self.view == View::Samples;
+        cx.notify();
+    }
+
+    /// The compact list shows what sounds like a sample, or (again) the results.
+    pub fn like_sample(&mut self, index: usize, cx: &mut Context<Self>) {
+        let b = &self.browser;
+        let like = match (&b.like, b.sample(index)) {
+            (Some((i, _)), _) if *i == index => None,
+            (_, None) => None,
+            (_, Some(s)) => Some((
+                index,
+                search::similar(&b.library.samples, &s.path, b.aspects, 31)
+                    .into_iter()
+                    .filter(|h| h.index != index)
+                    .take(30)
+                    .collect(),
+            )),
+        };
+        self.browser.like = like;
+        self.browser
+            .panel_list
+            .scroll_to_item(0, ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    /// What the compact list shows: what sounds like a sample, or the results.
+    fn panel_hits(&self) -> &[Hit] {
+        match &self.browser.like {
+            Some((_, like)) => like,
+            None => &self.browser.hits,
+        }
     }
 
     /// Each frame: who has the keyboard, whether the preview has ended, and whether the song's
     /// key or tempo moved under results that follow them.
     pub fn browser_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let open =
-            self.bottom == Some(Bottom::Samples) && self.view == crate::workspace::View::Arrange;
+        let open = self.browser_open();
         let focus = self.browser.search.focus_handle(cx);
         if std::mem::take(&mut self.browser.focus_search) && open {
             window.focus(&focus, cx);
@@ -1206,17 +1274,24 @@ impl Workspace {
 
     /// A sample or a map box being dragged.
     pub fn drag_sample(&mut self, p: Point<f32>, cx: &mut Context<Self>) {
+        let mut out = false;
         match &mut self.drag {
             Some(Drag::Sample {
                 from, at, moved, ..
             }) => {
                 *at = p;
-                if (p.x - from.x).hypot(p.y - from.y) > 4.0 {
-                    *moved = true;
-                }
+                let far = (p.x - from.x).hypot(p.y - from.y);
+                *moved |= far > 4.0;
+                out = far > 40.0;
             }
             Some(Drag::MapBox { to, .. }) => *to = p,
             _ => {}
+        }
+        // Dragged out of the page: the tracks come back to drop it on, the compact browser
+        // beside them.
+        if out && self.view == View::Samples {
+            self.view = View::Arrange;
+            self.show_samples = true;
         }
         cx.notify();
     }
@@ -1529,39 +1604,11 @@ impl Workspace {
             )
     }
 
-    pub fn samples_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let middle = match self.browser.view {
-            Results::List => self.results_list(cx).into_any_element(),
-            Results::Map => self.results_map(cx).into_any_element(),
-            Results::Kit => self.kit_view(cx).into_any_element(),
-        };
-        div()
-            .flex_1()
-            .min_h(px(0.))
-            .flex()
-            .bg(rgb(LANE))
-            .child(self.filters(cx))
-            .child(div().flex_1().min_w(px(0.)).flex().flex_col().child(middle))
-            .child(self.details(cx))
-    }
-
-    /// The left column: what to look for, and the library.
-    fn filters(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The search field: words, as they're typed.
+    fn search_field(&self, cx: &mut Context<Self>) -> Div {
         let b = &self.browser;
-        let kind = |label: &'static str, k: Option<Kind>, on: bool, cx: &mut Context<Self>| {
-            seg(label, on, 24.)
-                .flex_1()
-                .debug_selector(move || format!("kind-{k:?}"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        ws.browser.kind = k;
-                        ws.refilter(cx);
-                    }),
-                )
-        };
         let focused = b.searching;
-        let search = div()
+        div()
             .h(px(32.))
             .px(px(10.))
             .flex()
@@ -1606,7 +1653,624 @@ impl Workspace {
                     ws.browser.focus_search = true;
                     cx.notify();
                 }),
+            )
+    }
+
+    /// All, one-shots or loops.
+    fn kind_tray(&self, cx: &mut Context<Self>) -> Div {
+        let b = &self.browser;
+        let kind = |label: &'static str, k: Option<Kind>, on: bool, cx: &mut Context<Self>| {
+            seg(label, on, 24.)
+                .flex_1()
+                .debug_selector(move || format!("kind-{k:?}"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| {
+                        ws.browser.kind = k;
+                        ws.refilter(cx);
+                    }),
+                )
+        };
+        tray()
+            .p(px(2.))
+            .rounded(px(8.))
+            .child(kind("All", None, b.kind.is_none(), cx))
+            .child(kind(
+                "One-shots",
+                Some(Kind::OneShot),
+                b.kind == Some(Kind::OneShot),
+                cx,
+            ))
+            .child(kind(
+                "Loops",
+                Some(Kind::Loop),
+                b.kind == Some(Kind::Loop),
+                cx,
+            ))
+    }
+
+    /// A chip for each sound the library has, drums first, with how many it would find.
+    fn category_chips(&self, cx: &mut Context<Self>) -> Vec<Div> {
+        let b = &self.browser;
+        Category::ALL
+            .iter()
+            .copied()
+            .filter(|c| b.counts.get(c).is_some_and(|&n| n > 0) || b.categories.contains(c))
+            .map(|c| {
+                let on = b.categories.contains(&c);
+                filter_chip(
+                    c.name(),
+                    Some(b.counts.get(&c).copied().unwrap_or(0)),
+                    on,
+                    Some(category_color(c)),
+                )
+                .debug_selector(move || format!("category-{}", c.name()))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| ws.toggle_category(c, cx)),
+                )
+            })
+            .collect()
+    }
+
+    /// The browser's own page, in the tracks' place as the mixer is: what to look for, what's
+    /// found (a list, the map or a kit), and the selected sample in detail.
+    pub fn samples_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let toolbar = div()
+            .h(px(40.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .px(px(16.))
+            .bg(rgb(SURFACE))
+            .border_b_1()
+            .border_color(rgb(LINE))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Samples"),
+            )
+            .child(
+                div()
+                    .font_family(MONO)
+                    .text_size(px(11.))
+                    .text_color(rgb(TEXT_3))
+                    .child(self.samples_detail()),
+            )
+            .child(div().flex_1())
+            .child(self.samples_controls(cx))
+            .child(
+                button("Compact", false)
+                    .child(icon(Icon::PanelRight, 13.).text_color(rgb(TEXT_3)))
+                    .flex_row_reverse()
+                    .debug_selector(|| "samples-compact".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, _, _, cx| ws.toggle_samples(cx)),
+                    ),
             );
+        div()
+            .flex_1()
+            .min_w(px(0.))
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(toolbar)
+            .child(self.samples_body(cx))
+    }
+
+    /// The compact browser, beside the tracks: a search, what kind, the song's fit and what
+    /// sounds; a list to hear and drag onto the tracks; and the picked sound. Its page has the
+    /// rest.
+    pub fn samples_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let b = &self.browser;
+        let p = &self.session.project;
+        let song = match p.song_key() {
+            Some(k) => format!("Fits {} · {:.0}", k.short(), p.tempo),
+            None => format!("Fits {:.0} BPM", p.tempo),
+        };
+        let fits = self.fits_song();
+        let in_key = b.play_in_key;
+        let header = div()
+            .h(px(40.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .pl(px(12.))
+            .pr(px(7.))
+            .border_b_1()
+            .border_color(rgb(LINE))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Samples"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .font_family(MONO)
+                    .text_size(px(11.))
+                    .text_color(rgb(TEXT_3))
+                    .whitespace_nowrap()
+                    .child(self.samples_detail()),
+            )
+            .child(
+                icon_seg(Icon::Expand, false, 26.)
+                    .debug_selector(|| "samples-page".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, _, _, cx| ws.toggle_samples_page(cx)),
+                    ),
+            )
+            .child(
+                icon_seg(Icon::Close, false, 26.)
+                    .debug_selector(|| "close-samples".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, _, _, cx| {
+                            ws.show_samples = false;
+                            cx.notify();
+                        }),
+                    ),
+            );
+        let toggles = div()
+            .flex()
+            .gap(px(6.))
+            .child(
+                filter_chip(song, None, fits, None)
+                    .flex_1()
+                    .justify_center()
+                    .debug_selector(|| "fits-song".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| ws.set_fits_song(!fits, cx)),
+                    ),
+            )
+            .child(
+                filter_chip("Play in key", None, in_key, None)
+                    .flex_1()
+                    .justify_center()
+                    .debug_selector(|| "play-in-key".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, _, _, cx| {
+                            ws.browser.play_in_key = !ws.browser.play_in_key;
+                            cx.notify();
+                        }),
+                    ),
+            );
+        let chips: Vec<Div> = self
+            .category_chips(cx)
+            .into_iter()
+            .map(|c| c.flex_none())
+            .collect();
+        let like = b
+            .like
+            .as_ref()
+            .and_then(|(i, _)| b.sample(*i))
+            .map(|s| s.name.clone());
+        let shown = self.panel_hits().len();
+        let list_head = div()
+            .h(px(28.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(12.))
+            .border_t_1()
+            .border_b_1()
+            .border_color(rgb(LINE_SOFT))
+            .text_size(px(11.))
+            .text_color(rgb(TEXT_3))
+            .whitespace_nowrap()
+            .child(match &like {
+                Some(name) => div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .text_color(rgb(ACCENT_TEXT))
+                    .child(format!("Sounds like {name}")),
+                None => div()
+                    .flex_1()
+                    .child(format!("{shown} sounds · best match first")),
+            })
+            .when(like.is_some(), |d| {
+                d.child(
+                    link("Back")
+                        .debug_selector(|| "like-back".into())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, _, _, cx| {
+                                ws.browser.like = None;
+                                cx.notify();
+                            }),
+                        ),
+                )
+            });
+        let list = match shown {
+            0 if like.is_none() => self.empty_results(cx).into_any_element(),
+            n => uniform_list(
+                "sample-panel-list",
+                n,
+                cx.processor(|ws, range: Range<usize>, _, cx| ws.panel_rows(range, cx)),
+            )
+            .track_scroll(&self.browser.panel_list)
+            .flex_1()
+            .into_any_element(),
+        };
+        div()
+            .w(px(PANEL_W))
+            .flex_none()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(SURFACE))
+            .border_l_1()
+            .border_color(rgb(LINE))
+            .child(header)
+            .child(
+                div()
+                    .flex_none()
+                    .p(px(10.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(self.search_field(cx))
+                    .child(self.kind_tray(cx))
+                    .child(toggles)
+                    .when(!chips.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .id("panel-categories")
+                                .flex()
+                                .gap(px(5.))
+                                .overflow_x_scroll()
+                                .children(chips),
+                        )
+                    }),
+            )
+            .child(list_head)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .flex()
+                    .flex_col()
+                    .bg(rgb(LANE))
+                    .child(list),
+            )
+            .children(self.panel_footer(cx))
+    }
+
+    /// Rows of the compact list, as the list draws them.
+    fn panel_rows(
+        &mut self,
+        range: Range<usize>,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::Stateful<Div>> {
+        range
+            .filter_map(|pos| {
+                let hit = self.panel_hits().get(pos)?.clone();
+                Some(self.panel_row(pos, &hit, cx))
+            })
+            .collect()
+    }
+
+    /// How far through its preview a sample is, 0 to 1, while it's heard.
+    fn heard(&self, index: usize) -> Option<f32> {
+        let (_, since, seconds) = self.browser.audition.filter(|a| a.0 == index)?;
+        Some((since.elapsed().as_secs_f32() / seconds.max(0.01)).min(1.0))
+    }
+
+    /// A row of the compact list: its outline, name and what it is, its key or note, and its
+    /// tempo. A click hears it, a drag puts it on a track, a double-click adds it to the song.
+    fn panel_row(&self, pos: usize, hit: &Hit, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        let b = &self.browser;
+        let index = hit.index;
+        let s = &b.library.samples[index];
+        let a = &s.analysis;
+        let color = category_color(a.category);
+        let selected = b.selected == Some(index);
+        let heard = self.heard(index);
+        let semis = self.sample_transpose(index).round();
+        let mut what = match (a.kind, a.bars) {
+            (Kind::Loop, Some(bars)) => {
+                let n = match (bars - bars.round()).abs() < 0.05 {
+                    true => format!("{bars:.0}"),
+                    false => format!("{bars:.1}"),
+                };
+                let s = if n == "1" { "" } else { "s" };
+                format!("{} loop · {n} bar{s}", a.category.name())
+            }
+            (Kind::Loop, None) => {
+                format!("{} loop · {}", a.category.name(), seconds_text(a.seconds))
+            }
+            (Kind::OneShot, _) => format!("{} · {}", a.category.name(), seconds_text(a.seconds)),
+        };
+        if let Some(t) = a.traits.first() {
+            what = format!("{what} · {t}");
+        }
+        // Its key, short, or its note.
+        let tone = a
+            .key
+            .as_ref()
+            .map(|k| {
+                let mode = if k.minor { "min" } else { "maj" };
+                format!("{} {mode}", NOTES[k.tonic as usize % 12])
+            })
+            .or_else(|| a.pitch.map(|p| note_name(p.note)));
+        div()
+            .id(("panel-row", pos))
+            .w_full()
+            .h(px(PANEL_ROW_H))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(9.))
+            .relative()
+            .border_b_1()
+            .border_color(rgb(LINE_SOFT))
+            .bg(if selected {
+                alpha(ACCENT, 0.12)
+            } else {
+                gpui::transparent_black()
+            })
+            .when(!selected, |d| d.hover(|s| s.bg(rgb(HEADERS))))
+            .cursor_pointer()
+            .debug_selector(move || format!("panel-row-{pos}"))
+            .when(selected, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .w(px(2.))
+                        .h_full()
+                        .bg(rgb(ACCENT)),
+                )
+            })
+            .child(
+                div()
+                    .w(px(52.))
+                    .h(px(26.))
+                    .flex_none()
+                    .relative()
+                    .child(wave(
+                        a.waveform.clone(),
+                        color,
+                        if selected || heard.is_some() {
+                            1.0
+                        } else {
+                            0.7
+                        },
+                    ))
+                    .when_some(heard, |d, f| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left(relative(f))
+                                .w(px(1.5))
+                                .h_full()
+                                .bg(rgb(TEXT)),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(if selected { TEXT } else { TEXT_2 }))
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(s.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .min_w(px(0.))
+                            .child(
+                                div()
+                                    .size(px(6.))
+                                    .flex_none()
+                                    .rounded(px(3.))
+                                    .bg(rgb(color)),
+                            )
+                            .child(
+                                div()
+                                    .min_w(px(0.))
+                                    .text_size(px(10.5))
+                                    .text_color(rgb(TEXT_3))
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(what),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .items_end()
+                    .gap(px(2.))
+                    .font_family(MONO)
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(if tone.is_some() { TEXT_2 } else { TEXT_4 }))
+                            .child(tone.unwrap_or_else(|| "—".into())),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(5.))
+                            .text_size(px(10.))
+                            .when(semis != 0.0, |d| {
+                                d.child(div().text_color(rgb(ACCENT_TEXT)).child(semis_text(semis)))
+                            })
+                            .when_some(a.bpm, |d, bpm| {
+                                d.child(
+                                    div().text_color(rgb(TEXT_3)).child(format!("{bpm:.0} BPM")),
+                                )
+                            }),
+                    ),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                    if e.click_count == 2 {
+                        ws.add_sample(index, cx);
+                        return;
+                    }
+                    ws.select_sample(index, true, cx);
+                    let at = pt(e.position);
+                    ws.begin_drag(
+                        Drag::Sample {
+                            index,
+                            from: at,
+                            at,
+                            moved: false,
+                        },
+                        cx,
+                    );
+                }),
+            )
+    }
+
+    /// Under the compact list: the picked sound, to hear, add to the song, or find more like.
+    fn panel_footer(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let b = &self.browser;
+        let index = b.selected?;
+        let s = b.sample(index)?;
+        let a = &s.analysis;
+        let color = category_color(a.category);
+        let heard = self.heard(index);
+        let liking = b.like.as_ref().is_some_and(|l| l.0 == index);
+        Some(
+            div()
+                .flex_none()
+                .p(px(10.))
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .border_t_1()
+                .border_color(rgb(LINE))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(chip(a.category.name(), color))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .text_size(px(12.5))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(s.name.clone()),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(TEXT_3))
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(search::describe(s)),
+                )
+                .child(
+                    div()
+                        .h(px(34.))
+                        .relative()
+                        .cursor_pointer()
+                        .debug_selector(|| "panel-wave".into())
+                        .child(wave(a.waveform.clone(), color, 0.9))
+                        .when_some(heard, |d, f| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .left(relative(f))
+                                    .w(px(1.5))
+                                    .h_full()
+                                    .bg(rgb(TEXT)),
+                            )
+                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| ws.audition_sample(index, cx)),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(6.))
+                        .child(
+                            primary("Add to song")
+                                .flex_1()
+                                .child(icon(Icon::Plus, 14.).text_color(rgb(0xffffff)))
+                                .flex_row_reverse()
+                                .debug_selector(|| "panel-add".into())
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, _, _, cx| ws.add_sample(index, cx)),
+                                ),
+                        )
+                        .child(
+                            button("More like it", liking)
+                                .h(px(30.))
+                                .debug_selector(|| "panel-like".into())
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, _, _, cx| ws.like_sample(index, cx)),
+                                ),
+                        ),
+                ),
+        )
+    }
+
+    pub fn samples_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let middle = match self.browser.view {
+            Results::List => self.results_list(cx).into_any_element(),
+            Results::Map => self.results_map(cx).into_any_element(),
+            Results::Kit => self.kit_view(cx).into_any_element(),
+        };
+        div()
+            .flex_1()
+            .min_h(px(0.))
+            .flex()
+            .bg(rgb(LANE))
+            .child(self.filters(cx))
+            .child(div().flex_1().min_w(px(0.)).flex().flex_col().child(middle))
+            .child(self.details(cx))
+    }
+
+    /// The left column: what to look for, and the library.
+    fn filters(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let b = &self.browser;
+        let search = self.search_field(cx);
         let song_key = self.session.project.song_key();
         let tempo = self.session.project.tempo;
         let fits = self.fits_song();
@@ -1719,26 +2383,7 @@ impl Workspace {
                 .child(tempo_seg("Any".into(), !b.song_tempo, false, cx))
                 .child(tempo_seg(format!("{tempo:.0} BPM"), b.song_tempo, true, cx)),
         );
-        // What the library has, drums first: each with how many it would find.
-        let categories: Vec<Div> = Category::ALL
-            .iter()
-            .copied()
-            .filter(|c| b.counts.get(c).is_some_and(|&n| n > 0) || b.categories.contains(c))
-            .map(|c| {
-                let on = b.categories.contains(&c);
-                filter_chip(
-                    c.name(),
-                    Some(b.counts.get(&c).copied().unwrap_or(0)),
-                    on,
-                    Some(category_color(c)),
-                )
-                .debug_selector(move || format!("category-{}", c.name()))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| ws.toggle_category(c, cx)),
-                )
-            })
-            .collect();
+        let categories = self.category_chips(cx);
         let traits: Vec<Div> = TRAITS
             .iter()
             .map(|(t, _)| *t)
@@ -1833,24 +2478,7 @@ impl Workspace {
                     .flex_col()
                     .gap(px(10.))
                     .child(search)
-                    .child(
-                        tray()
-                            .p(px(2.))
-                            .rounded(px(8.))
-                            .child(kind("All", None, b.kind.is_none(), cx))
-                            .child(kind(
-                                "One-shots",
-                                Some(Kind::OneShot),
-                                b.kind == Some(Kind::OneShot),
-                                cx,
-                            ))
-                            .child(kind(
-                                "Loops",
-                                Some(Kind::Loop),
-                                b.kind == Some(Kind::Loop),
-                                cx,
-                            )),
-                    )
+                    .child(self.kind_tray(cx))
                     .child(fits_row)
                     .child(div().flex().flex_col().child(key_row).child(tempo_row))
                     .child(

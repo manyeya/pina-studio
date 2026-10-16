@@ -1,6 +1,5 @@
 //! The editor under the tracks: a bar naming what's being edited, with a tab for each editor
-//! (piano roll, step sequencer, score, takes, Live Loops, the sample browser) and that editor's
-//! own controls; and the
+//! (piano roll, step sequencer, score, takes, Live Loops) and that editor's own controls; and the
 //! editor itself, its left column lined up with the track headers so its grid meets the lanes.
 //! Drag its top edge to make it taller or shorter; double-click the edge for its usual height.
 
@@ -29,7 +28,6 @@ impl Workspace {
                 format!("{} tracks", self.session.project.tracks.len()),
                 ACCENT,
             ),
-            (Bottom::Samples, _) => ("Samples".to_string(), self.samples_detail(), ACCENT),
             (_, Some(at)) => {
                 let t = &self.session.project.tracks[at.0];
                 let r = &t.regions[at.1];
@@ -46,7 +44,6 @@ impl Workspace {
         let controls = match pane {
             Bottom::PianoRoll => Some(self.roll_controls(cx)),
             Bottom::Steps => self.steps_controls(cx),
-            Bottom::Samples => Some(self.samples_controls(cx)),
             _ => None,
         };
         let bar = div()
@@ -111,8 +108,7 @@ impl Workspace {
                             .child(tab("Step Sequencer", Bottom::Steps, cx))
                             .child(tab("Score", Bottom::Score, cx))
                             .child(tab("Takes", Bottom::Takes, cx))
-                            .child(tab("Live Loops", Bottom::Loops, cx))
-                            .child(tab("Samples", Bottom::Samples, cx)),
+                            .child(tab("Live Loops", Bottom::Loops, cx)),
                     )
                     .child(div().flex_1())
                     .children(controls)
@@ -134,7 +130,6 @@ impl Workspace {
             Bottom::Score => self.score_body(cx).into_any_element(),
             Bottom::Takes => self.takes_body(cx).into_any_element(),
             Bottom::Loops => self.loops_body(cx).into_any_element(),
-            Bottom::Samples => self.samples_body(cx).into_any_element(),
         };
         let height = self.editor_height();
         let resizing = matches!(self.drag, Some(Drag::Editor { .. }));

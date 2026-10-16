@@ -64,6 +64,7 @@ actions!(
         ToggleMetronome,
         Export,
         ToggleSamples,
+        ToggleSamplesPage,
         PreviousSample,
         NextSample,
     ]
@@ -92,6 +93,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("c", ToggleCycle, Some("Arrange")),
         KeyBinding::new("k", ToggleMetronome, Some("Arrange")),
         KeyBinding::new("f", ToggleSamples, Some("Arrange")),
+        KeyBinding::new("shift-f", ToggleSamplesPage, Some("Arrange")),
         // In the sample browser, as Splice: the next sound plays as it's picked.
         KeyBinding::new("up", PreviousSample, Some("Samples")),
         KeyBinding::new("down", NextSample, Some("Samples")),
@@ -294,14 +296,14 @@ pub enum Bottom {
     Score,
     Takes,
     Loops,
-    Samples,
 }
 
-/// The arrangement, or the mixer in its place.
+/// The arrangement, or the mixer or the sample browser's page in its place.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum View {
     Arrange,
     Mixer,
+    Samples,
 }
 
 /// What a name being typed is for.
@@ -469,6 +471,8 @@ pub struct Workspace {
     pub view: View,
     pub bottom: Option<Bottom>,
     pub show_inspector: bool,
+    /// The compact sample browser, beside the tracks.
+    pub show_samples: bool,
     pub side: Side,
     pub tool: Tool,
     pub snap: Snap,
@@ -590,6 +594,7 @@ impl Workspace {
             view: View::Arrange,
             bottom: None,
             show_inspector: true,
+            show_samples: false,
             side: Side::Inspector,
             tool: Tool::Pointer,
             snap: Snap::Smart,
@@ -1590,22 +1595,17 @@ impl Workspace {
         } else {
             Some(pane)
         };
-        match self.bottom {
-            Some(Bottom::PianoRoll) => self.focus_roll(),
-            Some(Bottom::Samples) => self.open_samples(),
-            _ => {}
+        if self.bottom == Some(Bottom::PianoRoll) {
+            self.focus_roll();
         }
         cx.notify();
     }
 
     pub fn show_bottom(&mut self, pane: Bottom, cx: &mut Context<Self>) {
         self.view = View::Arrange;
-        let opening = self.bottom != Some(pane);
         self.bottom = Some(pane);
-        match pane {
-            Bottom::PianoRoll => self.focus_roll(),
-            Bottom::Samples if opening => self.open_samples(),
-            _ => {}
+        if pane == Bottom::PianoRoll {
+            self.focus_roll();
         }
         cx.notify();
     }
@@ -1613,7 +1613,7 @@ impl Workspace {
     pub fn toggle_mixer(&mut self, cx: &mut Context<Self>) {
         self.view = match self.view {
             View::Mixer => View::Arrange,
-            View::Arrange => View::Mixer,
+            _ => View::Mixer,
         };
         cx.notify();
     }
@@ -2018,6 +2018,15 @@ impl Workspace {
             (View::Mixer, ..) => {
                 "Click a slot to open it · right-click a send for pre or post · drag a fader, ⌥-click to reset · double-click a name to rename"
             }
+            (View::Samples, ..) if self.browser.view == crate::browser::Results::Map => {
+                "Hover a dot to hear it · click to pick it · drag a box to keep what's in it · ⌘-scroll to zoom"
+            }
+            (View::Samples, ..) => {
+                "Click a sound to hear it · ↑ ↓ for the next · drag one out to put it on a track · F for the compact browser"
+            }
+            (_, _, None) if self.show_samples => {
+                "Click a sound to hear it · ↑ ↓ for the next · drag it onto a track, or double-click to add it · F hides it"
+            }
             (_, Tool::Pencil, _) => {
                 "Click an empty lane for a new region · in the piano roll, a note"
             }
@@ -2025,12 +2034,6 @@ impl Workspace {
             (_, Tool::Eraser, _) => "Click a region or note to delete it",
             (_, _, Some(Bottom::PianoRoll)) => {
                 "Double-click to add a note · drag to move · drag its end to resize"
-            }
-            (_, _, Some(Bottom::Samples)) if self.browser.view == crate::browser::Results::Map => {
-                "Hover a dot to hear it · click to pick it · drag a box to keep what's in it · ⌘-scroll to zoom"
-            }
-            (_, _, Some(Bottom::Samples)) => {
-                "Click a sound to hear it · ↑ ↓ for the next · drag it onto a track · F hides the browser"
             }
             _ if self.show_automation => {
                 "Click a lane to add a point · ⌥-click a point to delete it · pick Touch or Latch to record while playing"
@@ -2218,11 +2221,10 @@ impl Render for Workspace {
                     _ => "Workspace Arrange",
                 };
                 // Up and down pick sounds while the browser shows.
-                let context =
-                    match self.bottom == Some(Bottom::Samples) && self.view == View::Arrange {
-                        true => format!("{context} Samples"),
-                        false => context.to_string(),
-                    };
+                let context = match self.browser_open() {
+                    true => format!("{context} Samples"),
+                    false => context.to_string(),
+                };
                 gpui::KeyContext::parse(&context).unwrap_or_default()
             })
             .on_key_down(cx.listener(|ws, e: &KeyDownEvent, _, cx| ws.type_key(e, cx)))
@@ -2244,9 +2246,8 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|ws, _: &ToggleLoops, _, cx| ws.toggle_bottom(Bottom::Loops, cx)),
             )
-            .on_action(
-                cx.listener(|ws, _: &ToggleSamples, _, cx| ws.toggle_bottom(Bottom::Samples, cx)),
-            )
+            .on_action(cx.listener(|ws, _: &ToggleSamples, _, cx| ws.toggle_samples(cx)))
+            .on_action(cx.listener(|ws, _: &ToggleSamplesPage, _, cx| ws.toggle_samples_page(cx)))
             .on_action(cx.listener(|ws, _: &PreviousSample, _, cx| ws.step_sample(-1, cx)))
             .on_action(cx.listener(|ws, _: &NextSample, _, cx| ws.step_sample(1, cx)))
             .on_action(cx.listener(|ws, _: &CreateStack, _, cx| {
@@ -2290,6 +2291,9 @@ impl Render for Workspace {
                     .min_h(px(0.))
                     .flex()
                     .when(self.view == View::Mixer, |d| d.child(self.mixer_view(cx)))
+                    .when(self.view == View::Samples, |d| {
+                        d.child(self.samples_page(cx))
+                    })
                     .when(self.view == View::Arrange, |d| {
                         d.when(self.show_inspector, |d| d.child(self.inspector(cx)))
                             .child(
@@ -2303,6 +2307,7 @@ impl Render for Workspace {
                                         d.child(self.editor(pane, cx))
                                     }),
                             )
+                            .when(self.show_samples, |d| d.child(self.samples_panel(cx)))
                     }),
             )
             .child(self.status_bar())

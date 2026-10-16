@@ -19,8 +19,9 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   `topbar.rs` (transport and display), `inspector.rs` (the side panel: inspector, browser,
   agent), `tracks.rs` (tools, markers, ruler, headers, regions, automation), `editor.rs` (the
   editor under the tracks) with `pianoroll.rs`, `steps.rs` (the step sequencer), `score.rs`,
-  `takes.rs` (take folders), `liveloops.rs` and `browser.rs` (the sample browser: search,
-  filters, the sound map, kits, adding samples to the song); `mixer.rs`, `strip.rs` (channel strips),
+  `takes.rs` (take folders), `liveloops.rs` and `browser.rs` (the sample browser, a page of
+  its own (⇧F) and a compact list beside the tracks to drag from (F): search, filters, the sound
+  map, kits, adding samples to the song); `mixer.rs`, `strip.rs` (channel strips),
   `record.rs` (recording takes), `menu.rs`, `text.rs` (the text field names are typed in),
   `theme.rs` (colors, Geist, icons, controls),
   `server.rs` (the project's socket), `cli.rs` (the commands for agents), `mcp.rs`, and
@@ -77,7 +78,10 @@ In the app, mostly as in Logic:
 - ⌘T splits the selected region at the playhead, delete deletes it, ⌘Z and ⇧⌘Z undo and redo,
   ⌥⌘N adds a track and ⌘⌫ deletes the selected one, ⌘S saves.
 - X shows the mixer, P the piano roll (or double-click a MIDI region), A automation lanes, I the
-  side panel; ⌘K turns on musical typing (A to K play a C major scale from C3, W E T Y U the
+  side panel, F the sample browser beside the tracks (click a sound to hear it, ↑ ↓ for the next,
+  drag it onto a track or double-click it to add it, More Like It for what sounds like it) and ⇧F
+  its page (filters, the sound map, kits, the details; drag a sound out of it and the tracks come
+  back to drop it on); ⌘K turns on musical typing (A to K play a C major scale from C3, W E T Y U the
   sharps, Z and X change octave). ⌘B exports the song to `Bounces/` in the project.
 - The side panel's Inspector shows the selected region with its playback settings, as Logic's:
   Loop (it plays over and over until the next region on its track, its repeats drawn after it),

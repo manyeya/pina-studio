@@ -1434,7 +1434,7 @@ fn little_library(dir: &Path) -> tempo_engine::samples::library::Library {
     }
 }
 
-/// The demo (a copy), with the browser open on a little library.
+/// The demo (a copy), with the browser's page open on a little library.
 fn open_browser<'a>(
     cx: &'a mut TestAppContext,
     name: &str,
@@ -1443,8 +1443,8 @@ fn open_browser<'a>(
     let library = little_library(&dir.join("Library"));
     let (ws, cx) = open_at(cx, &dir);
     ws.update(cx, |ws, cx| ws.set_library(library, cx));
-    cx.simulate_keystrokes("f");
-    assert_eq!(ws.read_with(cx, |ws, _| ws.bottom), Some(Bottom::Samples));
+    cx.simulate_keystrokes("shift-f");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Samples);
     (ws, cx, dir)
 }
 
@@ -1635,7 +1635,8 @@ fn a_kit_becomes_a_sampler_track_and_samples_drag_onto_tracks(cx: &mut TestAppCo
     let bass = s.zones.iter().find(|z| z.name == "808").unwrap();
     assert_eq!((bass.note, bass.high, bass.root), (0, Some(35), Some(31)));
 
-    // Drag the snare from the list onto Drums (an audio track) at bar 2.
+    // Drag the snare out of the page's list: the tracks come back, the compact browser beside
+    // them, to drop it on Drums (an audio track) at bar 2.
     click_on(cx, "results-List", Modifiers::none(), MouseButton::Left);
     click_on(cx, "category-Snare", Modifiers::none(), MouseButton::Left);
     let row = cx.debug_bounds("sample-row-0").unwrap().center();
@@ -1647,7 +1648,17 @@ fn a_kit_becomes_a_sampler_track_and_samples_drag_onto_tracks(cx: &mut TestAppCo
         ws.read_with(cx, |ws, _| ws.session.project.tracks[drums].regions.len())
     };
     let before = regions(cx);
-    drag(cx, row, spot(&ws, cx, BAR + 30, drums));
+    let none = Modifiers::none();
+    cx.simulate_mouse_down(row, MouseButton::Left, none);
+    cx.run_until_parked();
+    cx.simulate_mouse_move(row + point(px(0.), px(80.)), MouseButton::Left, none);
+    cx.run_until_parked();
+    let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_samples));
+    assert_eq!(shown, (View::Arrange, true));
+    let to = spot(&ws, cx, BAR + 30, drums);
+    cx.simulate_mouse_move(to, MouseButton::Left, none);
+    cx.simulate_mouse_up(to, MouseButton::Left, none);
+    cx.run_until_parked();
     assert_eq!(regions(cx), before + 1);
     let start = ws.read_with(cx, |ws, _| {
         ws.session.project.tracks[drums]
@@ -1657,6 +1668,88 @@ fn a_kit_becomes_a_sampler_track_and_samples_drag_onto_tracks(cx: &mut TestAppCo
             .start
     });
     assert_eq!(start, BAR);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn the_compact_browser_hears_finds_alike_and_drags_onto_tracks(cx: &mut TestAppContext) {
+    use tempo_engine::project::Instrument;
+    let dir = demo_copy("browser-compact");
+    let library = little_library(&dir.join("Library"));
+    let (ws, cx) = open_at(cx, &dir);
+    ws.update(cx, |ws, cx| ws.set_library(library, cx));
+    // F: beside the tracks, with the search field ready to type in.
+    cx.simulate_keystrokes("f");
+    let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_samples));
+    assert_eq!(shown, (View::Arrange, true));
+    cx.simulate_input("kick");
+    assert_eq!(found(&ws, cx), ["Kick_01", "Kick_02"]);
+    cx.simulate_keystrokes("escape");
+
+    // A click hears a sound, down the next.
+    click_on(cx, "panel-row-0", Modifiers::none(), MouseButton::Left);
+    let first = ws.read_with(cx, |ws, _| ws.browser.hits[0].index);
+    let heard = ws.read_with(cx, |ws, _| {
+        (ws.browser.selected, ws.browser.audition.map(|a| a.0))
+    });
+    assert_eq!(heard, (Some(first), Some(first)));
+    cx.simulate_keystrokes("down");
+    let second = ws.read_with(cx, |ws, _| ws.browser.hits[1].index);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.browser.selected), Some(second));
+    // More like it: the list holds what sounds like it (not itself); Back, the results again.
+    click_on(cx, "panel-like", Modifiers::none(), MouseButton::Left);
+    let (of, like) = ws.read_with(cx, |ws, _| {
+        let (of, hits) = ws.browser.like.as_ref().unwrap();
+        (*of, hits.iter().map(|h| h.index).collect::<Vec<_>>())
+    });
+    assert_eq!(of, second);
+    assert!(!like.is_empty() && !like.contains(&second), "{like:?}");
+    click_on(cx, "like-back", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.browser.like.is_none()));
+
+    // A double-click adds the snare: Keys (a synth) selected, on a new sampler track after it.
+    click_on(cx, "category-Snare", Modifiers::none(), MouseButton::Left);
+    assert_eq!(found(&ws, cx), ["Snare_01"]);
+    ws.update(cx, |ws, _| ws.select_track(0));
+    let tracks = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    let row = cx.debug_bounds("panel-row-0").unwrap().center();
+    double_click(cx, row);
+    let (n, instrument) = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        (p.tracks.len(), p.tracks[1].instrument.clone())
+    });
+    assert_eq!(n, tracks + 1);
+    let Some(Instrument::Sampler(s)) = instrument else {
+        panic!("{instrument:?}")
+    };
+    assert_eq!(s.zones.len(), 1);
+
+    // A kick dragged from the list onto Drums (an audio track) at bar 2.
+    click_on(cx, "category-Snare", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "category-Kick", Modifiers::none(), MouseButton::Left);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    let regions = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[drums].regions.clone())
+    };
+    let before = regions(cx).len();
+    let row = cx.debug_bounds("panel-row-0").unwrap().center();
+    drag(cx, row, spot(&ws, cx, BAR + 30, drums));
+    let after = regions(cx);
+    assert_eq!(after.len(), before + 1);
+    assert_eq!(after.last().unwrap().start, BAR);
+
+    // ⇧F: the page; its Compact button, beside the tracks again; F hides it.
+    cx.simulate_keystrokes("shift-f");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Samples);
+    click_on(cx, "samples-compact", Modifiers::none(), MouseButton::Left);
+    let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_samples));
+    assert_eq!(shown, (View::Arrange, true));
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("f");
+    assert!(!ws.read_with(cx, |ws, _| ws.show_samples));
     std::fs::remove_dir_all(dir).unwrap();
 }
 
