@@ -21,8 +21,8 @@ A zone is a sample on a note (a drum kit has one each), or with `"high"` a range
 played across, repitched from `"root"` (the note it sounds at: an 808 or a bass). Drum hits play
 to their end; `"gate": true` stops it with its note (fading over `"release_ms"`). Zones with the
 same `"choke"` group cut each other off, as a closed hat cuts an open one. `"gain_db"` and
-`"pan"` set its level. Samples are copied into the project, and any WAV works: other sample
-rates are converted.
+`"pan"` set its level, `"tune_cents"` its fine tuning. Samples are copied into the project, and
+any WAV works: other sample rates are converted.
 
 Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]}`,
 `{"bus": 1}`), `{}`, or an error saying what's wrong.

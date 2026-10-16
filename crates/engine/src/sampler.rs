@@ -141,7 +141,8 @@ impl Sampler {
             }
         }
         let root = zone.root.unwrap_or(zone.note);
-        let step = 2f64.powf((n.pitch as f64 - root as f64) / 12.0);
+        let semitones = n.pitch as f64 - root as f64 + zone.tune_cents as f64 / 100.0;
+        let step = 2f64.powf(semitones / 12.0);
         // A free voice, else the oldest.
         let v = match self.voices.iter().position(|v| !v.on) {
             Some(i) => i,
@@ -236,6 +237,10 @@ mod tests {
         // Let go: gone within its millisecond.
         let out = run(&mut s, &[note(0, 48, 0.0)]);
         assert!(out[0] > 0.0 && out[60] == 0.0);
+        // Tuned up an octave, its root reads twice as fast too.
+        s.zones[0].zone.tune_cents = 1200.0;
+        let out = run(&mut s, &[note(0, 36, 1.0)]);
+        assert!((out[100] - 200.0 / 4800.0).abs() < 1e-4, "{}", out[100]);
     }
 
     #[test]

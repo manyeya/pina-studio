@@ -968,6 +968,17 @@ impl Engine {
         let (mut modules, mut plugins, mut lanes) = (Modules::new(), Vec::new(), Vec::new());
         let mut add = |instrument: Option<&Instrument>, inserts: &[PluginRef]| {
             let (lane, p, latency) = make_lane(instrument, inserts, rate, &mut modules, dir)?;
+            // The parameters the project sets, as the player gives them live.
+            let instrument_ref = match instrument {
+                Some(Instrument::Vst3(r)) => Some(r),
+                _ => None,
+            };
+            let refs = instrument_ref.into_iter().zip(&p.instrument);
+            for (r, plugin) in refs.chain(inserts.iter().zip(&p.inserts)) {
+                for (&id, &v) in &r.params {
+                    plugin.set_param(id, v);
+                }
+            }
             lanes.push(Some(Box::new(lane)));
             plugins.push(p);
             Ok::<_, String>((lanes.len() - 1, latency))
@@ -2499,6 +2510,13 @@ mod tests {
             });
         let soft = peak(&render(&quiet, Path::new("."), BEAT * 2)[0][BEAT..]);
         assert!(loud > 0.01 && soft < loud / 4.0, "{loud} {soft}");
+        // A value the project sets, as Smart Controls and agents do, holds in a render too.
+        let mut set = p.clone();
+        if let Some(Instrument::Vst3(r)) = &mut set.tracks[0].instrument {
+            r.params.insert(volume.id, 0.0);
+        }
+        let held = peak(&render(&set, Path::new("."), BEAT * 2)[0][BEAT..]);
+        assert!(held < loud / 4.0, "{loud} {held}");
         // Off, the automation is ignored.
         quiet.tracks[0].automation.mode = AutoMode::Off;
         let off = peak(&render(&quiet, Path::new("."), BEAT * 2)[0][BEAT..]);

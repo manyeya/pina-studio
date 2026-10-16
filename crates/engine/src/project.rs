@@ -666,6 +666,9 @@ pub struct Zone {
     /// The note the sample sounds at as recorded; `note` by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<u8>,
+    /// Fine tuning, in cents: a sample a little sharp of its root comes down by this.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub tune_cents: f32,
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub gain_db: f32,
     /// -1 left to 1 right.
