@@ -1,13 +1,14 @@
 //! The editor under the tracks: a bar naming what's being edited, with a tab for each editor
 //! (piano roll, step sequencer, score, takes, Live Loops) and that editor's own controls; and the
 //! editor itself, its left column lined up with the track headers so its grid meets the lanes.
+//! Drag its top edge to make it taller or shorter; double-click the edge for its usual height.
 
-use gpui::{Context, FontWeight, MouseButton, div, prelude::*, px, rgb};
+use gpui::{Context, FontWeight, MouseButton, MouseDownEvent, div, prelude::*, px, rgb};
 use tempo_engine::project::Content;
 
 use crate::{
     theme::*,
-    workspace::{Bottom, Workspace},
+    workspace::{Bottom, Drag, Workspace, pt},
 };
 
 impl Workspace {
@@ -129,13 +130,49 @@ impl Workspace {
             Bottom::Takes => self.takes_body(cx).into_any_element(),
             Bottom::Loops => self.loops_body(cx).into_any_element(),
         };
+        let height = self.editor_height();
+        let resizing = matches!(self.drag, Some(Drag::Editor { .. }));
+        // The top edge: a strip to grab, lit while it's held or under the pointer.
+        let edge = div()
+            .id("editor-edge")
+            .absolute()
+            .top(px(-4.))
+            .left_0()
+            .w_full()
+            .h(px(8.))
+            .flex()
+            .items_center()
+            .cursor_row_resize()
+            .child(
+                div()
+                    .w_full()
+                    .h(px(2.))
+                    .when(resizing, |d| d.bg(rgb(ACCENT))),
+            )
+            .hover(|s| s.bg(alpha(ACCENT, 0.35)))
+            .debug_selector(|| "editor-edge".into())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    if e.click_count == 2 {
+                        ws.editor_h = EDITOR_H;
+                        cx.notify();
+                        return;
+                    }
+                    let y = pt(e.position).y;
+                    ws.begin_drag(Drag::Editor { y, height }, cx);
+                }),
+            );
         div()
-            .h(px(EDITOR_H))
+            .h(px(height))
             .flex_none()
+            .relative()
             .flex()
             .flex_col()
             .bg(rgb(LANE))
             .child(bar)
             .child(body)
+            .child(edge)
     }
 }

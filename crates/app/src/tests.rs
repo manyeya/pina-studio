@@ -18,7 +18,12 @@ use tempo_engine::{
     session::Session,
 };
 
-use crate::{pianoroll::KEY_H, theme::LANE_H, tracks::auto_to_y, workspace::*};
+use crate::{
+    pianoroll::KEY_H,
+    theme::{CONTROL_BAR_H, LANE_H, MARKERS_H, RULER_H, STATUS_H},
+    tracks::auto_to_y,
+    workspace::*,
+};
 
 const BAR: u64 = PPQ * 4;
 
@@ -1259,4 +1264,35 @@ fn the_piano_roll_ruler_moves_the_playhead(cx: &mut TestAppContext) {
     });
     cx.simulate_click(point(px(x + 2.), ruler.center().y), Modifiers::none());
     until(cx, &ws, |ws| ws.playhead() == BAR * 2);
+}
+
+#[gpui::test]
+fn the_editor_is_resized_by_its_top_edge(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    cx.simulate_click(spot(&ws, cx, PPQ, 0), Modifiers::none());
+    cx.simulate_keystrokes("p");
+    let height = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.editor_height());
+    assert_eq!(height(cx), crate::theme::EDITOR_H);
+    // Up 80: taller by 80, the lanes shorter.
+    let lanes = ws.read_with(cx, |ws, _| ws.lanes_bounds.get().size.height);
+    let edge = cx.debug_bounds("editor-edge").unwrap().center();
+    drag(cx, edge, edge - point(px(0.), px(80.)));
+    assert_eq!(height(cx), crate::theme::EDITOR_H + 80.0);
+    let shorter = ws.read_with(cx, |ws, _| ws.lanes_bounds.get().size.height);
+    assert_eq!(shorter, lanes - px(80.));
+    // Not past what leaves the tracks room, nor shorter than its tools.
+    let edge = cx.debug_bounds("editor-edge").unwrap().center();
+    drag(cx, edge, edge - point(px(0.), px(5000.)));
+    let tallest = ws.read_with(cx, |ws, _| {
+        ws.viewport_h - CONTROL_BAR_H - STATUS_H - MARKERS_H - RULER_H - LANE_H * 2.0
+    });
+    assert_eq!(height(cx), tallest);
+    let edge = cx.debug_bounds("editor-edge").unwrap().center();
+    drag(cx, edge, edge + point(px(0.), px(5000.)));
+    assert_eq!(height(cx), crate::theme::EDITOR_MIN_H);
+    // Double-click: back to its usual height. None of it is an edit.
+    let edge = cx.debug_bounds("editor-edge").unwrap().center();
+    double_click(cx, edge);
+    assert_eq!(height(cx), crate::theme::EDITOR_H);
+    assert!(!ws.read_with(cx, |ws, _| ws.session.edited));
 }

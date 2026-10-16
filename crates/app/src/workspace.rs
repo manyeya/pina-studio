@@ -254,6 +254,11 @@ pub enum Drag {
         channel: Channel,
         band: usize,
     },
+    /// The editor's top edge, from the y and height it had.
+    Editor {
+        y: f32,
+        height: f32,
+    },
 }
 
 /// What the pane under the tracks shows.
@@ -455,6 +460,8 @@ pub struct Workspace {
     pub roll_bounds: Rc<Cell<Bounds<Pixels>>>,
     pub roll: RollSettings,
     pub show_automation: bool,
+    /// How tall the editor under the tracks stands, as dragged.
+    pub editor_h: f32,
     /// Which parameter each track's automation shows, by track id.
     pub params: HashMap<u64, Param>,
     /// What each group of aliases played after the last edit, to tell which one changed.
@@ -555,6 +562,7 @@ impl Workspace {
                 scale: true,
             },
             show_automation: false,
+            editor_h: EDITOR_H,
             params: HashMap::new(),
             links,
             writing: HashMap::new(),
@@ -709,6 +717,13 @@ impl Workspace {
             .copied()
             .or_else(|| t.automation.params().first().copied())
             .unwrap_or_default()
+    }
+
+    /// The editor's height: as dragged, but never so tall the tracks lose their room, nor so
+    /// short its tools don't fit.
+    pub fn editor_height(&self) -> f32 {
+        let room = self.viewport_h - CONTROL_BAR_H - STATUS_H - MARKERS_H - RULER_H - LANE_H * 2.0;
+        self.editor_h.min(room).max(EDITOR_MIN_H)
     }
 
     /// A plugin's name on a track, from its bundle.
@@ -973,6 +988,7 @@ impl Workspace {
                     slider: Slider::Strength | Slider::Swing | Slider::Zoom,
                     ..
                 }
+                | Drag::Editor { .. }
         );
         if edits {
             self.session.checkpoint();
@@ -1155,6 +1171,12 @@ impl Workspace {
                 }
             }
             Some(Drag::EqBand { channel, band }) => self.drag_band(channel, band, p),
+            Some(Drag::Editor { y, height }) => {
+                self.editor_h = height - (p.y - y);
+                self.editor_h = self.editor_height();
+                cx.notify();
+                return;
+            }
             Some(Drag::Key { .. }) | None => return,
         }
         self.changed(cx);

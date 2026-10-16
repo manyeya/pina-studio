@@ -67,6 +67,8 @@ pub const LANE_H: f32 = 60.0;
 /// An automation lane, under its track.
 pub const AUTO_H: f32 = 44.0;
 pub const EDITOR_H: f32 = 296.0;
+/// The shortest the editor can be dragged.
+pub const EDITOR_MIN_H: f32 = 160.0;
 pub const EDITOR_BAR_H: f32 = 40.0;
 pub const PANEL_W: f32 = 360.0;
 
