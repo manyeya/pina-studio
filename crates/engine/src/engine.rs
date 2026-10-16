@@ -68,7 +68,7 @@ pub struct AudioFiles {
     rate: f64,
     files: HashMap<PathBuf, (Arc<AudioData>, Arc<Peaks>)>,
     /// Flexed copies, by file and stretch.
-    stretched: HashMap<(PathBuf, u64), Arc<AudioData>>,
+    stretched: HashMap<(PathBuf, u64, i8), Arc<AudioData>>,
 }
 
 impl AudioFiles {
@@ -81,16 +81,23 @@ impl AudioFiles {
         }
     }
 
-    /// A file stretched in time, its pitch kept; computed once per stretch.
-    fn stretched(&mut self, file: &Path, stretch: f64) -> Result<Arc<AudioData>, String> {
-        if stretch == 1.0 {
+    /// A file stretched in time (its pitch kept) and moved in pitch by `semitones` (its length
+    /// kept); computed once for each.
+    fn stretched(
+        &mut self,
+        file: &Path,
+        stretch: f64,
+        semitones: i8,
+    ) -> Result<Arc<AudioData>, String> {
+        if stretch == 1.0 && semitones == 0 {
             return self.get(file);
         }
-        let key = (file.to_path_buf(), stretch.to_bits());
+        let key = (file.to_path_buf(), stretch.to_bits(), semitones);
         if let Some(data) = self.stretched.get(&key) {
             return Ok(data.clone());
         }
-        let data = Arc::new(time_stretch(&*self.get(file)?, stretch, self.rate));
+        let source = self.get(file)?;
+        let data = Arc::new(time_stretch(&source, stretch, self.rate, semitones));
         self.stretched.insert(key, data.clone());
         Ok(data)
     }
@@ -934,7 +941,7 @@ fn play_region(
             let skip = project.samples((begin - at) as u64, rate);
             let start = project.samples(region.start + begin as u64, rate);
             let end = project.samples(region.start + to, rate);
-            match files.stretched(file, *stretch) {
+            match files.stretched(file, *stretch, region.transpose) {
                 Ok(data) => clips.push(Clip {
                     start,
                     len: end - start,
@@ -1835,7 +1842,7 @@ fn click(
 }
 
 /// Stretches audio by `ratio` in time with Signalsmith Stretch, keeping its pitch.
-fn time_stretch(data: &AudioData, ratio: f64, rate: f64) -> AudioData {
+fn time_stretch(data: &AudioData, ratio: f64, rate: f64, semitones: i8) -> AudioData {
     let channels = data.channels.len();
     let frames = data.channels[0].len();
     let input: Vec<f32> = (0..frames)
@@ -1844,6 +1851,9 @@ fn time_stretch(data: &AudioData, ratio: f64, rate: f64) -> AudioData {
     let out_frames = (frames as f64 * ratio).round() as usize;
     let mut output = vec![0f32; out_frames * channels];
     let mut stretch = signalsmith_stretch::Stretch::preset_default(channels as u32, rate as u32);
+    if semitones != 0 {
+        stretch.set_transpose_factor_semitones(semitones as f32, None);
+    }
     stretch.exact(&input, &mut output);
     let channels = (0..channels)
         .map(|c| output.iter().skip(c).step_by(channels).copied().collect())
@@ -2362,6 +2372,50 @@ mod tests {
             .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
             .count();
         assert!((ups as i64 - 441).abs() <= 3, "{ups}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_transposed_audio_region_moves_in_pitch_not_length() {
+        // A second of 441 Hz, an octave up: 882 Hz, still a second.
+        let dir = scratch_dir("transpose");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(dir.join("tone.wav"), spec).unwrap();
+        for i in 0..48_000 {
+            w.write_sample(0.5 * (std::f32::consts::TAU * 441.0 * i as f32 / 48_000.0).sin())
+                .unwrap();
+        }
+        w.finalize().unwrap();
+        let region = Region {
+            start: 0,
+            length: PPQ * 2,
+            transpose: 12,
+            content: Content::Audio {
+                file: "tone.wav".into(),
+                offset: 0,
+                stretch: 1.0,
+            },
+            ..Default::default()
+        };
+        let p = project(vec![Track {
+            name: "a".into(),
+            regions: vec![region],
+            ..Default::default()
+        }]);
+        let [l, _] = render(&p, &dir, BEAT * 3);
+        let second = &l[6_000..42_000];
+        let ups = second
+            .windows(2)
+            .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
+            .count();
+        assert!((ups as i64 - 661).abs() <= 8, "{ups}"); // 882 Hz over 0.75 s
+        assert!(peak(&l[BEAT * 2 - 4_000..BEAT * 2 - 1_000]) > 0.2);
+        assert!(peak(&l[BEAT * 2 + 3_000..]) < 0.05);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

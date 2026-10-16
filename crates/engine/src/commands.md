@@ -99,7 +99,8 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `set_region` `{"track": 0, "region": 0, "name": "Hook", "loop": true, "transpose": 12, "velocity": -10, "quantize": 240}`:
   any of them. A looped region plays over and over until the next region on its track (or the end
   of the song). `transpose` (semitones), `velocity` (added) and `quantize` (a grid in ticks; 0 is
-  off) change how a MIDI or pattern region plays, not its notes, as Logic's region inspector does.
+  off) change how a MIDI or pattern region plays, not its notes, as Logic's region inspector does;
+  `transpose` moves an audio region's pitch too, keeping its length (a loop into the song's key).
 - `add_alias` `{"track": 0, "region": 0, "start": 7680, "to_track": 0}`: an alias of a MIDI or
   pattern region: a copy linked to it (both get the same `"link"` number), so editing the notes or
   steps of either edits both. Its place, length and playback settings are its own. Splitting it,

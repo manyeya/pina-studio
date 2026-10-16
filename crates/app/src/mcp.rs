@@ -104,6 +104,54 @@ fn tools() -> Value {
                 },
                 "required": ["project", "channel", "plugin"]
             }
+        },
+        {
+            "name": "samples_find",
+            "description": "Finds samples in the library (analysed for kind, category, pitch, key, tempo, envelope, spectrum and traits), best first, each with why it matched and, for a one-shot, a sampler zone to play it in tune. `query` is words (\"dusty keys loop in C minor 95 bpm\", \"punchy dark kick\") or a query object: text, kind (one_shot|loop), categories, traits, key, bpm, tonal, min_seconds, max_seconds, folder, like (a path: sounds like it), aspects ({timbre, pitch, envelope, spectrum} weights for like), with (paths it should go with), limit. `project` fills the key and tempo from a song.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "description": "Words, or a query object." },
+                    "project": project
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "name": "samples_similar",
+            "description": "The samples most like one, weighing timbre, pitch, envelope and spectrum as `aspects` says (each 0-1).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "aspects": { "type": "object" },
+                    "limit": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "samples_kit",
+            "description": "Builds a kit that goes together (kick, snare, clap, hats, perc, 808, keys by default): each pick fits the key and tempo and the picks before it (no clashes, one sound, one pack where it can), with alternatives. `seed` is words or {key, bpm, text, traits, like, folder, roles, alternatives, keep}; `project` fills the key and tempo from a song.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "seed": { "description": "Words, or a kit seed object." },
+                    "project": project
+                }
+            }
+        },
+        {
+            "name": "samples_library",
+            "description": "The sample library: `status` (its folders and what's in them), `scan` (analyse what's new or changed), `add` or `remove` a folder (`path`), or `info` on a sample (`path`).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["status", "scan", "add", "remove", "info"] },
+                    "path": { "type": "string" }
+                },
+                "required": ["action"]
+            }
         }
     ])
 }
@@ -167,6 +215,56 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
                 serde_json::from_value(parse("plugin")).map_err(|e| format!("`plugin`: {e}"))?;
             cli::params(&path(args, "project")?, channel, plugin)
         }
+        "samples_find" => {
+            let q = match args.get("query") {
+                Some(Value::String(words)) => tempo_engine::samples::search::Query {
+                    text: words.clone(),
+                    ..Default::default()
+                },
+                Some(v) => {
+                    serde_json::from_value(v.clone()).map_err(|e| format!("`query`: {e}"))?
+                }
+                None => return Err("`query` is required".into()),
+            };
+            let project = args
+                .get("project")
+                .and_then(Value::as_str)
+                .map(PathBuf::from);
+            crate::samples_cli::find(q, project.as_deref())
+        }
+        "samples_similar" => {
+            let aspects = match args.get("aspects") {
+                Some(v) => {
+                    serde_json::from_value(v.clone()).map_err(|e| format!("`aspects`: {e}"))?
+                }
+                None => Default::default(),
+            };
+            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
+            crate::samples_cli::similar(&path(args, "path")?, aspects, limit)
+        }
+        "samples_kit" => {
+            let seed = match args.get("seed") {
+                Some(Value::String(words)) => tempo_engine::samples::search::KitSeed {
+                    text: words.clone(),
+                    ..Default::default()
+                },
+                Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("`seed`: {e}"))?,
+                None => Default::default(),
+            };
+            let project = args
+                .get("project")
+                .and_then(Value::as_str)
+                .map(PathBuf::from);
+            crate::samples_cli::kit(seed, project.as_deref())
+        }
+        "samples_library" => match args.get("action").and_then(Value::as_str) {
+            Some("status") => crate::samples_cli::status(),
+            Some("scan") => crate::samples_cli::scan(),
+            Some("add") => crate::samples_cli::add_folder(&path(args, "path")?),
+            Some("remove") => crate::samples_cli::remove_folder(&path(args, "path")?),
+            Some("info") => crate::samples_cli::info(&path(args, "path")?),
+            _ => Err("`action` is one of status, scan, add, remove, info".into()),
+        },
         "presets" => {
             let parse = |key: &str| args.get(key).cloned().unwrap_or_default();
             let channel =
@@ -268,7 +366,11 @@ mod tests {
                 "transport",
                 "plugins",
                 "params",
-                "presets"
+                "presets",
+                "samples_find",
+                "samples_similar",
+                "samples_kit",
+                "samples_library"
             ]
         );
 

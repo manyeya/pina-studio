@@ -7,6 +7,7 @@ mod menu;
 mod mixer;
 mod pianoroll;
 mod record;
+mod samples_cli;
 mod score;
 mod server;
 mod steps;
@@ -53,6 +54,16 @@ const USAGE: &str = "usage:
   tempo presets <project> --aux N|--master [--insert N] [--save <name>]
                                    a plugin's presets, to load with set_preset; or
                                    save its settings as one
+  tempo samples                    the sample library: its folders and what's in them
+  tempo samples scan|add <folder>|remove <folder>
+                                   analyse what's new; add or take out a folder
+  tempo samples find <words or JSON> [--for <project>] [--limit N]
+                                   samples by words, kind, key, tempo, traits, likeness
+                                   (\"dusty keys loop in C minor 95 bpm\"); --for fits a song
+  tempo samples similar <file>     the samples most like one
+  tempo samples kit [<words or JSON>] [--for <project>]
+                                   a kit that goes together, with alternatives
+  tempo samples info <file>        what a sample is
   tempo mcp                        an MCP server on stdin and stdout";
 
 fn main() {
@@ -104,6 +115,7 @@ fn main() {
                 (None, _) => Err(USAGE.to_string()),
             }
         }
+        ["samples", rest @ ..] => print(samples_cli::command(rest)),
         ["mcp"] => mcp::serve(),
         // What a plugin bundle holds, as JSON: run by the plugin scan, one bundle per process.
         ["__scan", bundle] => tempo_engine::scan::inspect(p(bundle))

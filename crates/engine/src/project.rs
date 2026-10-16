@@ -902,7 +902,7 @@ pub struct Region {
     pub looped: bool,
     /// Playback settings, as Logic's region inspector has: MIDI plays moved by `transpose`
     /// semitones, `velocity` louder, and started on a `quantize` grid (ticks), its notes kept as
-    /// they are.
+    /// they are. Audio is moved by `transpose` too, its length kept.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub transpose: i8,
     #[serde(default, skip_serializing_if = "is_zero")]
