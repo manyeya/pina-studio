@@ -356,7 +356,7 @@ impl Workspace {
                     .child(row("Range", mono(range)))
                     .child(row("Notes", mono(format!("{}", notes.len()))));
             }
-            Content::Pattern { step, rows } => {
+            Content::Pattern { step, rows, .. } => {
                 let steps = rows.iter().map(|r| r.cells.len()).max().unwrap_or(0);
                 d = d
                     .child(row(

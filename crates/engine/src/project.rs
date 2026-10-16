@@ -624,7 +624,73 @@ pub enum Instrument {
     Synth,
     /// The built-in drum kit, on the General MIDI drum notes.
     Drums,
+    /// The built-in sampler: samples on notes.
+    Sampler(Sampler),
     Vst3(PluginRef),
+}
+
+impl Instrument {
+    /// Whether its notes are sounds rather than pitches: a drum kit, or a sampler with a sample
+    /// on each note. A key change leaves them be, and they don't count towards the key.
+    pub fn is_kit(&self) -> bool {
+        match self {
+            Instrument::Drums => true,
+            Instrument::Sampler(s) => {
+                !s.zones.is_empty() && s.zones.iter().all(|z| z.high.is_none())
+            }
+            _ => false,
+        }
+    }
+}
+
+/// The built-in sampler, as Logic's Quick Sampler or an MPC's pads: a sample on each note, as a
+/// drum kit, or one sample played across a range of notes, repitched, as an 808 or a bass.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Sampler {
+    pub zones: Vec<Zone>,
+}
+
+/// A sample, and the notes it plays on.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Zone {
+    /// Relative to the project folder.
+    pub file: PathBuf,
+    /// What it's called: "Kick".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// The note it plays on; with `high`, the lowest of a range.
+    pub note: u8,
+    /// The highest note of its range, if it has one: across it, it's repitched from `root`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub high: Option<u8>,
+    /// The note the sample sounds at as recorded; `note` by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<u8>,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub gain_db: f32,
+    /// -1 left to 1 right.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub pan: f32,
+    /// Stops when the note does (fading over `release_ms`), rather than playing to its end as a
+    /// drum hit does.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gate: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_ms: Option<f32>,
+    /// Sounds in one group cut each other off, as a closed hat cuts off an open one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choke: Option<u8>,
+}
+
+impl Zone {
+    /// Whether it plays a note.
+    pub fn covers(&self, note: u8) -> bool {
+        (self.note..=self.high.unwrap_or(self.note)).contains(&note)
+    }
+}
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -728,6 +794,10 @@ pub enum Content {
         #[serde(default = "sixteenth")]
         step: u64,
         rows: Vec<PatternRow>,
+        /// How late every second step comes, as MPC swing: 50 is straight, 66 a triplet feel,
+        /// up to 75.
+        #[serde(default = "straight", skip_serializing_if = "is_straight")]
+        swing: f32,
     },
     /// A take folder: every take recorded over the region, and the comp of them that plays.
     Takes {
@@ -756,6 +826,14 @@ fn sixteenth() -> u64 {
     PPQ / 4
 }
 
+fn straight() -> f32 {
+    50.0
+}
+
+fn is_straight(v: &f32) -> bool {
+    *v == 50.0
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PatternRow {
     pub pitch: u8,
@@ -763,8 +841,11 @@ pub struct PatternRow {
     pub cells: Vec<u8>,
 }
 
-/// The notes a pattern plays over `length` ticks, its steps repeating.
-pub fn pattern_notes(step: u64, rows: &[PatternRow], length: u64) -> Vec<Note> {
+/// The notes a pattern plays over `length` ticks, its steps repeating, every second step late by
+/// its swing.
+pub fn pattern_notes(step: u64, rows: &[PatternRow], length: u64, swing: f32) -> Vec<Note> {
+    // Swing is where in a pair of steps the second lands: at 50% exactly between.
+    let late = ((swing.clamp(50.0, 75.0) - 50.0) / 50.0 * step as f32) as i64;
     let steps = rows.iter().map(|r| r.cells.len()).max().unwrap_or(0) as u64;
     let mut notes = Vec::new();
     if steps == 0 || step == 0 {
@@ -774,7 +855,8 @@ pub fn pattern_notes(step: u64, rows: &[PatternRow], length: u64) -> Vec<Note> {
         for row in rows {
             let velocity = row.cells.get((k % steps) as usize).copied().unwrap_or(0);
             if velocity > 0 {
-                let (start, length) = ((k * step) as i64, (step * 3 / 4).max(1));
+                let swung = if k % 2 == 1 { late } else { 0 };
+                let (start, length) = ((k * step) as i64 + swung, (step * 3 / 4).max(1));
                 notes.push(Note {
                     start,
                     length,
@@ -808,7 +890,9 @@ impl Content {
     pub fn notes(&self, length: u64) -> Option<Cow<'_, [Note]>> {
         match self {
             Content::Midi { notes } => Some(Cow::Borrowed(notes)),
-            Content::Pattern { step, rows } => Some(Cow::Owned(pattern_notes(*step, rows, length))),
+            Content::Pattern { step, rows, swing } => {
+                Some(Cow::Owned(pattern_notes(*step, rows, length, *swing)))
+            }
             _ => None,
         }
     }
@@ -987,9 +1071,7 @@ impl Project {
                     Content::Audio { .. } => {}
                 }
             }
-            let pitched = |t: &&mut Track| {
-                t.instrument.is_some() && !matches!(t.instrument, Some(Instrument::Drums))
-            };
+            let pitched = |t: &&mut Track| t.instrument.as_ref().is_some_and(|i| !i.is_kit());
             for t in self.tracks.iter_mut().filter(pitched) {
                 for r in &mut t.regions {
                     shift(&mut r.content, &from, &to);
@@ -1011,7 +1093,7 @@ impl Project {
         for t in self
             .tracks
             .iter()
-            .filter(|t| !matches!(t.instrument, Some(Instrument::Drums)))
+            .filter(|t| !t.instrument.as_ref().is_some_and(Instrument::is_kit))
         {
             for r in &t.regions {
                 if let Some(list) = r.content.notes(r.length) {
@@ -1931,5 +2013,22 @@ mod tests {
         // Back to working it out: nothing moves.
         p.set_key(None, true);
         assert_eq!((pitches(&p, 0), p.key.clone()), (vec![60, 63, 67], None));
+    }
+
+    #[test]
+    fn swing_makes_every_second_step_late() {
+        let rows = [PatternRow {
+            pitch: 42,
+            cells: vec![100; 4],
+        }];
+        let starts = |swing| {
+            pattern_notes(PPQ / 4, &rows, PPQ, swing)
+                .iter()
+                .map(|n| n.start)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(starts(50.0), [0, 240, 480, 720]);
+        // 66%: the second of each pair two thirds of the way through it, a triplet feel.
+        assert_eq!(starts(66.0), [0, 316, 480, 796]);
     }
 }

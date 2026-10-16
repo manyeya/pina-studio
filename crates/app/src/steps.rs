@@ -2,7 +2,7 @@
 //! tracks. Click a step to turn it on or off, option-click for an accent; "+ Sound" adds a row.
 //! On the drum kit a row is a drum; on any other instrument, a note.
 
-use gpui::{Context, MouseButton, MouseDownEvent, div, prelude::*, px, rgb};
+use gpui::{Context, Div, MouseButton, MouseDownEvent, div, prelude::*, px, rgb};
 use tempo_engine::{
     drums,
     music::Key,
@@ -32,13 +32,44 @@ fn scale_notes(key: Option<Key>) -> Vec<u8> {
     (48..=72).rev().filter(|&p| key.contains(p)).collect()
 }
 
-/// A row's name: a drum on the kit, else a note, spelled by the key.
-fn row_name(drums: bool, key: Option<Key>, pitch: u8) -> String {
-    match drums {
-        true => drums::name(pitch),
-        false => crate::pianoroll::name_in(key, pitch),
+/// A row's name: a drum on the kit, a sampler's sound on its note, else a note, spelled by the
+/// key.
+fn row_name(instrument: Option<&Instrument>, key: Option<Key>, pitch: u8) -> String {
+    match instrument {
+        Some(Instrument::Drums) => drums::name(pitch),
+        Some(Instrument::Sampler(s)) => match s.zones.iter().find(|z| z.covers(pitch)) {
+            Some(z) if z.high.is_none() && !z.name.is_empty() => z.name.clone(),
+            Some(z) if z.high.is_none() => z
+                .file
+                .file_stem()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+            _ => crate::pianoroll::name_in(key, pitch),
+        },
+        _ => crate::pianoroll::name_in(key, pitch),
     }
 }
+
+/// The sounds a kit has to add rows for: the drum kit's, or a sampler's.
+fn kit_sounds(instrument: Option<&Instrument>) -> Option<Vec<(u8, String)>> {
+    match instrument {
+        Some(Instrument::Drums) => Some(
+            drums::SOUNDS
+                .iter()
+                .map(|&(pitch, name)| (pitch, name.to_string()))
+                .collect(),
+        ),
+        Some(i @ Instrument::Sampler(s)) if i.is_kit() => Some(
+            s.zones
+                .iter()
+                .map(|z| (z.note, row_name(Some(i), None, z.note)))
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// The swings the step sequencer offers, as MPC's: straight to a heavy shuffle.
+const SWINGS: [f32; 6] = [50.0, 54.0, 58.0, 62.0, 66.0, 71.0];
 
 impl Workspace {
     /// The pattern region the pane shows: the selected one, if it's a pattern.
@@ -66,8 +97,11 @@ impl Workspace {
         let bar = self.session.project.bar();
         let start = self.playhead() / bar * bar;
         // A drum kit starts with kick, snare and hats; anything else with the key's chord.
-        let starting: Vec<u8> = match tracks[self.track].instrument {
-            Some(Instrument::Drums) => STARTING_ROWS.to_vec(),
+        let instrument = tracks[self.track].instrument.as_ref();
+        let starting: Vec<u8> = match (instrument, kit_sounds(instrument)) {
+            (Some(Instrument::Drums), _) => STARTING_ROWS.to_vec(),
+            // A sampler kit: its first few sounds.
+            (_, Some(sounds)) => sounds.iter().take(6).map(|s| s.0).collect(),
             _ => {
                 let key = self.session.project.song_key().unwrap_or(Key {
                     root: 0,
@@ -95,6 +129,7 @@ impl Workspace {
                 content: Content::Pattern {
                     step: PPQ / 4,
                     rows,
+                    swing: 50.0,
                 },
                 ..Default::default()
             });
@@ -118,21 +153,55 @@ impl Workspace {
         });
     }
 
+    /// The step sequencer's own control in the editor's bar: the pattern's swing.
+    pub fn steps_controls(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+        let at = self.pattern()?;
+        let Content::Pattern { swing, .. } = self.session.project.region(at).content else {
+            return None;
+        };
+        let segs = SWINGS.map(|s| {
+            seg(format!("{s:.0}"), (swing - s).abs() < 0.5, 22.)
+                .px(px(7.))
+                .font_family(MONO)
+                .text_size(px(10.5))
+                .debug_selector(move || format!("swing-{s:.0}"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| {
+                        ws.edit(cx, |ws| {
+                            let r = &mut ws.session.project.tracks[at.0].regions[at.1];
+                            if let Content::Pattern { swing, .. } = &mut r.content {
+                                *swing = s;
+                            }
+                        })
+                    }),
+                )
+        });
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .text_size(px(11.))
+                .text_color(rgb(TEXT_3))
+                .child("Swing")
+                .child(tray().p(px(2.)).rounded(px(7.)).children(segs)),
+        )
+    }
+
     pub fn steps_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let at = self.pattern();
         let mut labels = Vec::new();
         let mut grid = Vec::new();
         if let Some(at) = at {
             let region = self.session.project.region(at);
-            let Content::Pattern { step, rows } = &region.content else {
+            let Content::Pattern { step, rows, .. } = &region.content else {
                 unreachable!()
             };
             let steps = rows.iter().map(|r| r.cells.len()).max().unwrap_or(16);
             let track_color = self.color(at.0);
-            let kit = matches!(
-                self.session.project.tracks[at.0].instrument,
-                Some(Instrument::Drums)
-            );
+            let instrument = self.session.project.tracks[at.0].instrument.as_ref();
+            let key = self.session.project.song_key();
             // The step under the playhead, while playing in the region.
             let tick = self.playhead();
             let now = (self.player.playing()
@@ -146,7 +215,7 @@ impl Workspace {
                         .items_center()
                         .px_2()
                         .text_size(px(11.))
-                        .child(row_name(kit, self.session.project.song_key(), row.pitch)),
+                        .child(row_name(instrument, key, row.pitch)),
                 );
                 let cells = row.cells.iter().enumerate().map(|(k, &v)| {
                     let beat_start = k % 4 == 0;
@@ -188,14 +257,13 @@ impl Workspace {
                     MouseButton::Left,
                     cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                         let project = &ws.session.project;
-                        let items = match project.tracks[at.0].instrument {
-                            Some(Instrument::Drums) => drums::SOUNDS
-                                .iter()
-                                .map(|&(pitch, name)| {
-                                    (name.to_string(), MenuAction::AddRow { at, pitch })
-                                })
+                        let instrument = project.tracks[at.0].instrument.as_ref();
+                        let items = match kit_sounds(instrument) {
+                            Some(sounds) => sounds
+                                .into_iter()
+                                .map(|(pitch, name)| (name, MenuAction::AddRow { at, pitch }))
                                 .collect(),
-                            _ => scale_notes(project.song_key())
+                            None => scale_notes(project.song_key())
                                 .into_iter()
                                 .map(|pitch| {
                                     let key = project.song_key();

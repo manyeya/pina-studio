@@ -43,6 +43,7 @@ impl Workspace {
         };
         let controls = match pane {
             Bottom::PianoRoll => Some(self.roll_controls(cx)),
+            Bottom::Steps => self.steps_controls(cx),
             _ => None,
         };
         let bar = div()

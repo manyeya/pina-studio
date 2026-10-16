@@ -516,7 +516,7 @@ impl Workspace {
     }
 
     fn has_builtin_instrument(&self, ch: Channel) -> bool {
-        matches!(ch, Channel::Track(i) if matches!(self.session.project.tracks[i].instrument, Some(Instrument::Synth | Instrument::Drums)))
+        matches!(ch, Channel::Track(i) if matches!(self.session.project.tracks[i].instrument, Some(Instrument::Synth | Instrument::Drums | Instrument::Sampler(_))))
     }
 
     /// Shows a channel in the mixer, its effects in the side panel.
@@ -846,6 +846,9 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                     dot,
                     cx,
                 ),
+                Some(Instrument::Sampler(_)) => {
+                    plugin_slot("Sampler".into(), true, ch, Which::Instrument, 24., dot, cx)
+                }
                 Some(Instrument::Drums) => {
                     plugin_slot("Drum Kit".into(), true, ch, Which::Instrument, 24., dot, cx)
                 }

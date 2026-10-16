@@ -119,6 +119,7 @@ pub fn track_icon(track: &Track) -> Icon {
     let has = |words: &[&str]| words.iter().any(|w| name.contains(w));
     match &track.instrument {
         Some(Instrument::Drums) => Icon::Drum,
+        Some(i) if i.is_kit() => Icon::Drum,
         _ if has(&["drum", "beat", "perc", "kick", "snare"]) => Icon::Drum,
         _ if has(&["vox", "vocal", "voice", "sing"]) => Icon::Mic,
         _ if has(&["fx", "riser", "impact", "sfx"]) => Icon::Burst,

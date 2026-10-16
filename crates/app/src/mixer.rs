@@ -290,6 +290,11 @@ impl Workspace {
                     Some(Instrument::Drums) => {
                         ("Drum Kit".into(), "Instrument · built in".into(), false)
                     }
+                    Some(Instrument::Sampler(s)) => (
+                        crate::tracks::sampler_name(s),
+                        format!("Sampler · built in · {} samples", s.zones.len()),
+                        false,
+                    ),
                     Some(Instrument::Vst3(r)) => {
                         (r.class.clone(), "Instrument · VST3".into(), true)
                     }

@@ -15,7 +15,14 @@ order `tempo show` lists them. Levels are in dB (0 is unity, -144 silent); pan i
 (right). A note is `{"start": ticks from the region's start, "length": ticks, "pitch": 0-127,
 "velocity": 1-127}`; middle C is 60. An instrument is `"synth"` (the built-in sine) or
 `"drums"` (the built-in kit, on the General MIDI drum notes) or
-`{"vst3": {"path": "/path/to/Plugin.vst3", "class": "Plugin Name"}}` (see `tempo plugins`).
+`{"vst3": {"path": "/path/to/Plugin.vst3", "class": "Plugin Name"}}` (see `tempo plugins`) or
+the built-in sampler: `{"sampler": {"zones": [{"file": "/path/Kick.wav", "name": "Kick", "note": 36}]}}`.
+A zone is a sample on a note (a drum kit has one each), or with `"high"` a range of notes it's
+played across, repitched from `"root"` (the note it sounds at: an 808 or a bass). Drum hits play
+to their end; `"gate": true` stops it with its note (fading over `"release_ms"`). Zones with the
+same `"choke"` group cut each other off, as a closed hat cuts an open one. `"gain_db"` and
+`"pan"` set its level. Samples are copied into the project, and any WAV works: other sample
+rates are converted.
 
 Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]}`,
 `{"bus": 1}`), `{}`, or an error saying what's wrong.
@@ -42,11 +49,13 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   `value`, tempo stops setting it and it goes back to what it was.
 - `add_midi_region` `{"track": 0, "start": 0, "length": 3840, "notes": [{"start": 0, "length": 960, "pitch": 60, "velocity": 100}]}`
 - `set_notes` `{"track": 0, "region": 0, "notes": […]}`: replaces all of a region's notes.
-- `add_pattern_region` `{"track": 0, "start": 0, "length": 3840, "step": 240, "rows": [{"pitch": 36, "cells": [110, 0, 0, 0, 100, 0, 0, 0, 110, 0, 0, 0, 100, 0, 0, 0]}]}`:
+- `add_pattern_region` `{"track": 0, "start": 0, "length": 3840, "step": 240, "swing": 58, "rows": [{"pitch": 36, "cells": [110, 0, 0, 0, 100, 0, 0, 0, 110, 0, 0, 0, 100, 0, 0, 0]}]}`:
   a step-sequencer pattern: each row a note, each cell a step's velocity (0 rests), looping over
-  the region. `step` is ticks per step (240, a sixteenth, by default). On a `"drums"` track:
+  the region. `step` is ticks per step (240, a sixteenth, by default); `swing` (50 straight, up
+  to 75) makes every second step late, as an MPC does. On a `"drums"` track:
   36 kick, 38 snare, 37 side stick, 39 clap, 42 closed hat, 46 open hat, 41/45/48 toms, 49 crash.
-- `set_pattern` `{"track": 0, "region": 0, "rows": […]}`: replaces a pattern's rows.
+- `set_pattern` `{"track": 0, "region": 0, "rows": […], "swing": 62}`: replaces a pattern's
+  rows, or its swing.
 - `add_audio_region` `{"track": 2, "file": "/path/take.wav", "start": 0, "offset": 0, "length": 7680}`:
   a WAV at the project's sample rate, copied into `Audio Files`; `offset` (samples into the file)
   and `length` (ticks; the rest of the file by default) are optional.

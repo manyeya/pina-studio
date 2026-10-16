@@ -89,12 +89,18 @@ pub enum Command {
         #[serde(default)]
         step: Option<u64>,
         rows: Vec<PatternRow>,
+        /// 50 (straight) to 75.
+        #[serde(default)]
+        swing: Option<f32>,
     },
-    /// Replaces a pattern region's rows.
+    /// Replaces a pattern region's rows, or sets its swing.
     SetPattern {
         track: usize,
         region: usize,
-        rows: Vec<PatternRow>,
+        #[serde(default)]
+        rows: Option<Vec<PatternRow>>,
+        #[serde(default)]
+        swing: Option<f32>,
     },
     /// A WAV file, copied into the project's `Audio Files` if it's elsewhere.
     AddAudioRegion {
@@ -410,6 +416,10 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             index,
         } => {
             let index = index.unwrap_or(p.tracks.len()).min(p.tracks.len());
+            let mut instrument = instrument;
+            if let Some(i) = &mut instrument {
+                import_instrument(dir, i)?;
+            }
             p.add_track(
                 index,
                 Track {
@@ -453,6 +463,8 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             track: t,
             instrument,
         } => {
+            let mut instrument = instrument;
+            import_instrument(dir, &mut instrument)?;
             let t = track(p, t)?;
             if t.regions
                 .iter()
@@ -516,6 +528,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             length,
             step,
             rows,
+            swing,
         } => {
             let tr = track(p, t)?;
             if tr.instrument.is_none() {
@@ -526,6 +539,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             let content = Content::Pattern {
                 step: step.unwrap_or(PPQ / 4).max(1),
                 rows,
+                swing: finite("swing", swing.unwrap_or(50.0))?.clamp(50.0, 75.0),
             };
             tr.regions.push(Region {
                 start,
@@ -539,10 +553,18 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             track: t,
             region: r,
             rows: new,
+            swing: new_swing,
         } => {
             region_at(p, t, r)?;
             match &mut p.tracks[t].regions[r].content {
-                Content::Pattern { rows, .. } => *rows = new,
+                Content::Pattern { rows, swing, .. } => {
+                    if let Some(new) = new {
+                        *rows = new;
+                    }
+                    if let Some(v) = new_swing {
+                        *swing = finite("swing", v)?.clamp(50.0, 75.0);
+                    }
+                }
                 _ => return Err("that isn't a pattern region".into()),
             }
         }
@@ -561,15 +583,9 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             let file = import(dir, &file)?;
             let wav = hound::WavReader::open(dir.join(&file))
                 .map_err(|e| format!("{}: {e}", file.display()))?;
-            if wav.spec().sample_rate != p.sample_rate {
-                return Err(format!(
-                    "{}: {} Hz, but the project is {} Hz",
-                    file.display(),
-                    wav.spec().sample_rate,
-                    p.sample_rate
-                ));
-            }
-            let frames = wav.duration() as u64;
+            // Played at the project's rate, converted if it was recorded at another.
+            let frames =
+                wav.duration() as u64 * p.sample_rate as u64 / wav.spec().sample_rate as u64;
             let length = length.unwrap_or_else(|| p.ticks(frames.saturating_sub(offset)).max(1));
             let content = Content::Audio {
                 file,
@@ -983,12 +999,42 @@ fn import(dir: &Path, file: &Path) -> Result<PathBuf, String> {
     let name = file
         .file_name()
         .ok_or_else(|| format!("{shown}: not a file"))?;
-    let to = PathBuf::from(AUDIO_DIR).join(name);
     std::fs::create_dir_all(dir.join(AUDIO_DIR)).map_err(|e| e.to_string())?;
-    if !dir.join(&to).exists() {
-        std::fs::copy(file, dir.join(&to)).map_err(|e| format!("{shown}: {e}"))?;
+    let bytes = std::fs::read(file).map_err(|e| format!("{shown}: {e}"))?;
+    // The same name from elsewhere, with other audio, gets a number: Kick.wav, Kick 2.wav.
+    let stem = Path::new(name)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let ext = Path::new(name)
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy();
+    for n in 1.. {
+        let to = match n {
+            1 => PathBuf::from(AUDIO_DIR).join(name),
+            n => PathBuf::from(AUDIO_DIR).join(format!("{stem} {n}.{ext}")),
+        };
+        match std::fs::read(dir.join(&to)) {
+            Ok(there) if there == bytes => return Ok(to),
+            Ok(_) => continue,
+            Err(_) => {
+                std::fs::write(dir.join(&to), &bytes).map_err(|e| format!("{shown}: {e}"))?;
+                return Ok(to);
+            }
+        }
     }
-    Ok(to)
+    unreachable!()
+}
+
+/// Brings a sampler's samples into the project, as `import` does audio.
+fn import_instrument(dir: &Path, instrument: &mut Instrument) -> Result<(), String> {
+    if let Instrument::Sampler(s) = instrument {
+        for z in &mut s.zones {
+            z.file = import(dir, &z.file)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

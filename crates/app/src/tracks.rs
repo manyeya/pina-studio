@@ -93,12 +93,33 @@ fn region_name(track: &str, region: &Region) -> String {
     }
 }
 
+/// A sampler's name: a kit of its sounds, or the sample it plays across the keys.
+pub fn sampler_name(s: &tempo_engine::project::Sampler) -> String {
+    match (s.zones.len(), s.zones.first()) {
+        (0, _) => "Sampler".into(),
+        (1, Some(z)) if z.high.is_some() => {
+            let stem = z.file.file_stem().map(|n| n.to_string_lossy().into_owned());
+            format!(
+                "Sampler · {}",
+                if z.name.is_empty() {
+                    stem.unwrap_or_default()
+                } else {
+                    z.name.clone()
+                }
+            )
+        }
+        (n, _) if s.zones.iter().all(|z| z.high.is_none()) => format!("Sampler · {n}-piece kit"),
+        (n, _) => format!("Sampler · {n} zones"),
+    }
+}
+
 /// The instrument's name, under a track's.
 pub fn instrument_name(i: Option<&Instrument>) -> String {
     match i {
         None => "Audio".into(),
         Some(Instrument::Synth) => "Sine Synth".into(),
         Some(Instrument::Drums) => "Drum Kit".into(),
+        Some(Instrument::Sampler(s)) => sampler_name(s),
         Some(Instrument::Vst3(r)) => r.class.clone(),
     }
 }

@@ -28,6 +28,7 @@ use crate::{
         AutoMode, AutoPoint, Comp, Content, Eq, Instrument, PluginRef, Project, Region, Saturator,
         Which, comp_segments, value_at,
     },
+    sampler::Sampler,
     synth::Synth,
 };
 
@@ -47,7 +48,16 @@ pub const MASTER: usize = SLOTS;
 /// An audio file in memory, one or two channels.
 // ponytail: whole files in RAM; stream from disk when sessions outgrow memory.
 pub struct AudioData {
-    channels: Vec<Vec<f32>>,
+    pub(crate) channels: Vec<Vec<f32>>,
+}
+
+impl AudioData {
+    #[cfg(test)]
+    pub(crate) fn mono(samples: Vec<f32>) -> Self {
+        AudioData {
+            channels: vec![samples],
+        }
+    }
 }
 
 /// The audio files a project uses, each loaded once, with its waveform overview.
@@ -429,6 +439,7 @@ enum Source {
     Audio,
     Synth(Synth),
     Drums(Box<Drums>),
+    Sampler(Box<Sampler>),
     Plugin(Processor),
 }
 
@@ -493,6 +504,9 @@ pub fn make_lane(
         None => Source::Audio,
         Some(Instrument::Synth) => Source::Synth(Synth::new(rate)),
         Some(Instrument::Drums) => Source::Drums(Box::new(Drums::new(rate))),
+        Some(Instrument::Sampler(s)) => {
+            Source::Sampler(Box::new(Sampler::load(&s.zones, dir, rate)?))
+        }
         Some(Instrument::Vst3(r)) => {
             let (plugin, processor) = instantiate(r)?;
             plugins.instrument = Some(plugin);
@@ -1278,6 +1292,7 @@ impl Engine {
                 Source::Audio => {}
                 Source::Synth(s) => s.process([&mut *l, &mut *r], frames, notes),
                 Source::Drums(d) => d.process([&mut *l, &mut *r], frames, notes),
+                Source::Sampler(s) => s.process([&mut *l, &mut *r], frames, notes),
                 Source::Plugin(p) => {
                     plan.automate(Which::Instrument, p, (from, to));
                     p.set_transport(playing, from, tempo);
@@ -1546,17 +1561,11 @@ fn time_stretch(data: &AudioData, ratio: f64, rate: f64) -> AudioData {
 }
 
 // ponytail: WAV only, at the engine's rate; add symphonia and rubato for AIFF/MP3 and resampling.
-fn load_wav(path: &Path, rate: f64) -> Result<AudioData, String> {
+/// A WAV file's audio at `rate`: converted, if it was recorded at another.
+pub(crate) fn load_wav(path: &Path, rate: f64) -> Result<AudioData, String> {
     let err = |e: hound::Error| format!("{}: {e}", path.display());
     let mut wav = hound::WavReader::open(path).map_err(err)?;
     let spec = wav.spec();
-    if spec.sample_rate as f64 != rate {
-        return Err(format!(
-            "{}: {} Hz, but the project runs at {rate} Hz",
-            path.display(),
-            spec.sample_rate
-        ));
-    }
     let samples: Vec<f32> = match spec.sample_format {
         hound::SampleFormat::Float => wav
             .samples::<f32>()
@@ -1572,9 +1581,49 @@ fn load_wav(path: &Path, rate: f64) -> Result<AudioData, String> {
     };
     let n = spec.channels as usize;
     let channels = (0..n.min(2))
-        .map(|c| samples.iter().skip(c).step_by(n).copied().collect())
+        .map(|c| {
+            let side: Vec<f32> = samples.iter().skip(c).step_by(n).copied().collect();
+            resample(&side, spec.sample_rate as f64, rate)
+        })
         .collect();
     Ok(AudioData { channels })
+}
+
+/// Audio at `from` Hz, at `to` Hz, band-limited: a Blackman-windowed sinc, 32 taps a side, its
+/// cutoff a little under the lower Nyquist, so going down doesn't alias and going up doesn't
+/// image.
+// ponytail: computed straight, 64 taps an output sample; a polyphase table if loading gets slow.
+pub(crate) fn resample(samples: &[f32], from: f64, to: f64) -> Vec<f32> {
+    if from == to || samples.is_empty() {
+        return samples.to_vec();
+    }
+    const TAPS: i64 = 32;
+    let ratio = from / to;
+    let cutoff = (to / from).min(1.0) * 0.96;
+    let sinc = |x: f64| match x.abs() < 1e-9 {
+        true => 1.0,
+        false => (std::f64::consts::PI * x).sin() / (std::f64::consts::PI * x),
+    };
+    let blackman = |t: f64| {
+        let a = std::f64::consts::PI * t;
+        0.42 + 0.5 * a.cos() + 0.08 * (2.0 * a).cos()
+    };
+    let n = (samples.len() as f64 / ratio).round() as usize;
+    (0..n)
+        .map(|i| {
+            let x = i as f64 * ratio;
+            let c = x.floor() as i64;
+            let mut acc = 0.0;
+            for k in (c - TAPS + 1).max(0)..=(c + TAPS).min(samples.len() as i64 - 1) {
+                let d = x - k as f64;
+                acc += samples[k as usize] as f64
+                    * cutoff
+                    * sinc(cutoff * d)
+                    * blackman(d / TAPS as f64);
+            }
+            acc as f32
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1886,6 +1935,7 @@ mod tests {
             content: Content::Pattern {
                 step: PPQ / 4,
                 rows,
+                swing: 50.0,
             },
             ..Default::default()
         };
@@ -2453,5 +2503,29 @@ mod tests {
         quiet.tracks[0].automation.mode = AutoMode::Off;
         let off = peak(&render(&quiet, Path::new("."), BEAT * 2)[0][BEAT..]);
         assert!((off - loud).abs() < loud * 0.1, "{loud} {off}");
+    }
+
+    #[test]
+    fn audio_at_another_rate_is_converted() {
+        // A 1 kHz sine at 44.1 kHz, converted to 48 kHz: the same second, the same pitch.
+        let sine: Vec<f32> = (0..44_100)
+            .map(|i| (2.0 * std::f64::consts::PI * 1000.0 * i as f64 / 44_100.0).sin() as f32)
+            .collect();
+        let out = resample(&sine, 44_100.0, 48_000.0);
+        assert_eq!(out.len(), 48_000);
+        let level = |f: f64| {
+            let (mut re, mut im) = (0.0, 0.0);
+            let tail = &out[1000..47_000];
+            for (i, &x) in tail.iter().enumerate() {
+                let w = 2.0 * std::f64::consts::PI * f * (i + 1000) as f64 / 48_000.0;
+                re += x as f64 * w.cos();
+                im += x as f64 * w.sin();
+            }
+            (re * re + im * im).sqrt() * 2.0 / tail.len() as f64
+        };
+        assert!((level(1000.0) - 1.0).abs() < 0.01, "{}", level(1000.0));
+        assert!(level(1100.0) < 0.01);
+        // And down: 48 kHz to 44.1 kHz keeps the length in time.
+        assert_eq!(resample(&out, 48_000.0, 44_100.0).len(), 44_100);
     }
 }
