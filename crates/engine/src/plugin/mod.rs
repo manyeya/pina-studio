@@ -200,6 +200,10 @@ pub struct Processor {
     links: Option<(ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>)>,
     events: ComWrapper<EventList>,
     params: ComWrapper<ParameterChanges>,
+    /// Where the plugin reports its own changes (meters, MIDI it makes), as a host must give it.
+    // ponytail: read by nothing; forward them when something shows plugin meters or MIDI out.
+    out_events: ComWrapper<EventList>,
+    out_params: ComWrapper<ParameterChanges>,
     edits: rtrb::Consumer<(ParamID, ParamValue)>,
     /// Automation for the next block: a parameter, and its value at the block's start and end.
     automation: [(ParamID, ParamValue, ParamValue); AUTOMATED],
@@ -373,6 +377,8 @@ impl Plugin {
                 links,
                 events: ComWrapper::new(EventList::with_capacity(512)),
                 params: ComWrapper::new(ParameterChanges::with_capacity(64)),
+                out_events: ComWrapper::new(EventList::with_capacity(512)),
+                out_params: ComWrapper::new(ParameterChanges::with_capacity(64)),
                 edits,
                 automation: [(0, 0.0, 0.0); AUTOMATED],
                 automated: 0,
@@ -646,6 +652,8 @@ impl Processor {
             self.params.add(id, 0, start);
             self.params.add(id, frames.saturating_sub(1) as int32, end);
         }
+        self.out_events.clear();
+        self.out_params.clear();
         for b in &mut self.outputs {
             b.silenceFlags = 0;
         }
@@ -673,9 +681,9 @@ impl Processor {
             },
             outputs: self.outputs.as_mut_ptr(),
             inputParameterChanges: com_ptr::<_, IParameterChanges>(&self.params),
-            outputParameterChanges: ptr::null_mut(),
+            outputParameterChanges: com_ptr::<_, IParameterChanges>(&self.out_params),
             inputEvents: com_ptr::<_, IEventList>(&self.events),
-            outputEvents: ptr::null_mut(),
+            outputEvents: com_ptr::<_, IEventList>(&self.out_events),
             processContext: &mut self.context,
         };
         unsafe { self.processor.process(&mut data) };

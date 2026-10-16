@@ -108,8 +108,41 @@ pub fn sampler_name(s: &tempo_engine::project::Sampler) -> String {
                 }
             )
         }
-        (n, _) if s.zones.iter().all(|z| z.high.is_none()) => format!("Sampler · {n}-piece kit"),
-        (n, _) => format!("Sampler · {n} zones"),
+        (n, _) if s.zones.iter().all(|z| z.high.is_none()) => format!("{n}-piece kit"),
+        (n, _) => multisample_name(s).unwrap_or_else(|| format!("{n} zones")),
+    }
+}
+
+/// What a multisample's files are named for, as "Moog Bass" for Moog_Bass_C1.wav,
+/// Moog_Bass_C#1.wav...: the start their names share.
+fn multisample_name(s: &tempo_engine::project::Sampler) -> Option<String> {
+    let stems: Vec<String> = s
+        .zones
+        .iter()
+        .map(|z| z.file.file_stem().map(|n| n.to_string_lossy().into_owned()))
+        .collect::<Option<_>>()?;
+    let first = stems.first()?;
+    let shared = stems.iter().fold(first.len(), |n, stem| {
+        first
+            .chars()
+            .zip(stem.chars())
+            .take_while(|(a, b)| a == b)
+            .map(|(a, _)| a.len_utf8())
+            .sum::<usize>()
+            .min(n)
+    });
+    let name = first[..shared]
+        .trim_end_matches(['_', '-', ' ', '.'])
+        .replace('_', " ");
+    (name.chars().count() >= 3).then_some(name)
+}
+
+/// The instrument's kind, in a word or two: beside a stack's chip, where a name won't fit.
+fn instrument_kind(i: Option<&Instrument>) -> String {
+    match i {
+        Some(i @ Instrument::Sampler(_)) if i.is_kit() => "Kit".into(),
+        Some(Instrument::Sampler(_)) => "Sampler".into(),
+        _ => instrument_name(i),
     }
 }
 
@@ -646,8 +679,20 @@ impl Workspace {
                                     .text_color(rgb(TEXT_3))
                                     .whitespace_nowrap()
                                     .overflow_hidden()
-                                    .child(instrument_name(t.instrument.as_ref()))
-                                    .when_some(stack, |d, name| d.child(chip(name, VIOLET))),
+                                    // The name gives way (with an ellipsis) to the stack's chip.
+                                    .child(
+                                        div()
+                                            .min_w(px(0.))
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .child(match stack {
+                                                Some(_) => instrument_kind(t.instrument.as_ref()),
+                                                None => instrument_name(t.instrument.as_ref()),
+                                            }),
+                                    )
+                                    .when_some(stack, |d, name| {
+                                        d.child(div().flex_none().child(chip(name, VIOLET)))
+                                    }),
                             ),
                     )
                     .child(
@@ -1629,5 +1674,33 @@ mod tests {
             assert!((auto_from_y(param, auto_to_y(param, v)) - v).abs() < 1e-3);
         }
         assert_eq!(auto_to_y(Param::Pan, -1.0), AUTO_PAD); // left at the top
+    }
+
+    #[test]
+    fn samplers_are_named_for_what_they_play() {
+        use tempo_engine::project::{Sampler, Zone};
+        let zone = |file: &str, high| Zone {
+            file: file.into(),
+            note: 36,
+            high,
+            ..Zone::default()
+        };
+        let multi = Sampler {
+            zones: vec![
+                zone("Moog_Bass_C1.wav", Some(36)),
+                zone("Moog_Bass_A#2.wav", Some(46)),
+            ],
+        };
+        assert_eq!(sampler_name(&multi), "Moog Bass");
+        let mixed = Sampler {
+            zones: vec![zone("Sub.wav", Some(48)), zone("Bass.wav", Some(60))],
+        };
+        assert_eq!(sampler_name(&mixed), "2 zones");
+        let kit = Sampler {
+            zones: vec![zone("Kick.wav", None), zone("Snare.wav", None)],
+        };
+        assert_eq!(sampler_name(&kit), "2-piece kit");
+        let kit = Some(Instrument::Sampler(kit));
+        assert_eq!(instrument_kind(kit.as_ref()), "Kit");
     }
 }

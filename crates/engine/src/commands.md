@@ -57,8 +57,9 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `set_pattern` `{"track": 0, "region": 0, "rows": […], "swing": 62}`: replaces a pattern's
   rows, or its swing.
 - `add_audio_region` `{"track": 2, "file": "/path/take.wav", "start": 0, "offset": 0, "length": 7680}`:
-  a WAV at the project's sample rate, copied into `Audio Files`; `offset` (samples into the file)
-  and `length` (ticks; the rest of the file by default) are optional.
+  a WAV (at any sample rate: it's converted to the project's), copied into `Audio Files`; `offset`
+  (samples into it, at the project's rate) and `length` (ticks; the rest of the file by default)
+  are optional.
 - `move_region` `{"track": 0, "region": 0, "start": 3840, "to_track": 1}`: MIDI regions go on
   instrument tracks, audio regions on audio tracks.
 - `trim_region` `{"track": 0, "region": 0, "start": 960, "end": 7680}`: either edge; content

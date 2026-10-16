@@ -302,22 +302,23 @@ pub enum Command {
         on: bool,
     },
     /// A channel's built-in EQ (low cut, two bells, high shelf); without `eq`, takes it out.
+    /// Only the fields given change (see `set_effect`).
     SetEq {
         channel: ChannelRef,
         #[serde(default)]
-        eq: Option<Eq>,
+        eq: Option<Value>,
     },
     /// A channel's built-in compressor, after its EQ; without `comp`, takes it out.
     SetComp {
         channel: ChannelRef,
         #[serde(default)]
-        comp: Option<Comp>,
+        comp: Option<Value>,
     },
     /// A channel's built-in saturator, after its compressor; without `sat`, takes it out.
     SetSaturator {
         channel: ChannelRef,
         #[serde(default)]
-        sat: Option<Saturator>,
+        sat: Option<Value>,
     },
     /// Quantizes, humanizes, makes legato, chops, arpeggiates, transposes or changes the
     /// velocity of a MIDI region's notes (or one of them, with `note`).
@@ -934,9 +935,9 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                 off: !on,
             });
         }
-        Command::SetEq { channel, eq } => *strip(p, channel)?.eq = eq,
-        Command::SetComp { channel, comp } => *strip(p, channel)?.comp = comp,
-        Command::SetSaturator { channel, sat } => *strip(p, channel)?.sat = sat,
+        Command::SetEq { channel, eq } => set_effect(strip(p, channel)?.eq, eq)?,
+        Command::SetComp { channel, comp } => set_effect(strip(p, channel)?.comp, comp)?,
+        Command::SetSaturator { channel, sat } => set_effect(strip(p, channel)?.sat, sat)?,
         Command::EditNotes {
             track: t,
             region: r,
@@ -953,6 +954,33 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         }
     }
     Ok(json!({}))
+}
+
+/// Sets a built-in effect from the fields given (a band's too), the rest staying as they were,
+/// or as the effect's defaults if it wasn't there. `None` takes it out.
+fn set_effect<T>(slot: &mut Option<T>, changes: Option<Value>) -> Result<(), String>
+where
+    T: Serialize + serde::de::DeserializeOwned + Default + Clone,
+{
+    let Some(changes) = changes else {
+        *slot = None;
+        return Ok(());
+    };
+    fn overlay(base: &mut Value, changes: Value) {
+        match (base, changes) {
+            (Value::Object(base), Value::Object(changes)) => {
+                for (k, v) in changes {
+                    overlay(base.entry(k).or_insert(Value::Null), v);
+                }
+            }
+            (base, changes) => *base = changes,
+        }
+    }
+    let current = slot.clone().unwrap_or_default();
+    let mut value = serde_json::to_value(current).map_err(|e| e.to_string())?;
+    overlay(&mut value, changes);
+    *slot = Some(serde_json::from_value(value).map_err(|e| e.to_string())?);
+    Ok(())
 }
 
 /// A channel's built-in effects.
@@ -1103,6 +1131,75 @@ mod tests {
         assert_eq!(p.tracks[0].regions.len(), 2);
         assert_eq!(p.auxes[0].name, "Verb");
         assert_eq!(p.tracks[0].automation.volume[0].tick, 0);
+    }
+
+    #[test]
+    fn effects_change_only_what_is_given() {
+        let mut p = Project::new(48_000);
+        run(&mut p, r#"{"op": "add_track", "name": "Keys"}"#).unwrap();
+        let ch = r#""channel": {"track": 0}"#;
+        run(
+            &mut p,
+            &format!(r#"{{"op": "set_eq", {ch}, "eq": {{"low_cut": 150}}}}"#),
+        )
+        .unwrap();
+        let shelf = r#"{"high_shelf": {"gain_db": 2.5}}"#;
+        run(
+            &mut p,
+            &format!(r#"{{"op": "set_eq", {ch}, "eq": {shelf}}}"#),
+        )
+        .unwrap();
+        let eq = p.tracks[0].eq.unwrap();
+        assert_eq!(eq.low_cut, 150.0);
+        // The shelf keeps its frequency and Q.
+        assert_eq!((eq.high_shelf.freq, eq.high_shelf.gain_db), (10_000.0, 2.5));
+        assert_eq!(eq.high_shelf.q, Eq::default().high_shelf.q);
+        let comp = r#"{"threshold_db": -9, "ratio": 2, "rms": true}"#;
+        run(
+            &mut p,
+            &format!(r#"{{"op": "set_comp", {ch}, "comp": {comp}}}"#),
+        )
+        .unwrap();
+        run(
+            &mut p,
+            &format!(r#"{{"op": "set_comp", {ch}, "comp": {{"makeup_db": 6}}}}"#),
+        )
+        .unwrap();
+        let c = p.tracks[0].comp.unwrap();
+        assert_eq!(
+            (c.threshold_db, c.ratio, c.makeup_db, c.rms),
+            (-9.0, 2.0, 6.0, true)
+        );
+        let sat = r#"{"drive_db": 7, "mix": 0.45}"#;
+        run(
+            &mut p,
+            &format!(r#"{{"op": "set_saturator", {ch}, "sat": {sat}}}"#),
+        )
+        .unwrap();
+        run(
+            &mut p,
+            &format!(r#"{{"op": "set_saturator", {ch}, "sat": {{"tone": 0.1}}}}"#),
+        )
+        .unwrap();
+        let s = p.tracks[0].sat.unwrap();
+        assert_eq!((s.drive_db, s.mix, s.tone), (7.0, 0.45, 0.1));
+        // Bypassed and back, and taken out.
+        run(
+            &mut p,
+            &format!(r#"{{"op": "set_comp", {ch}, "comp": {{"bypass": true}}}}"#),
+        )
+        .unwrap();
+        assert!(p.tracks[0].comp.unwrap().bypass);
+        assert_eq!(p.tracks[0].comp.unwrap().ratio, 2.0);
+        run(&mut p, &format!(r#"{{"op": "set_comp", {ch}}}"#)).unwrap();
+        assert!(p.tracks[0].comp.is_none());
+        assert!(
+            run(
+                &mut p,
+                &format!(r#"{{"op": "set_eq", {ch}, "eq": {{"low_cut": "x"}}}}"#)
+            )
+            .is_err()
+        );
     }
 
     #[test]

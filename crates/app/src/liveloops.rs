@@ -110,7 +110,9 @@ impl Workspace {
                 let waiting = launched.is_some() && !playing;
                 let label = cell.map(|c| {
                     let bars = c.region.length as f32 / bar_ticks as f32;
+                    // Its name, or what kind of loop it is.
                     let kind = match c.region.content {
+                        _ if !c.region.name.is_empty() => c.region.name.as_str(),
                         Content::Audio { .. } => "Audio",
                         Content::Pattern { .. } => "Pattern",
                         Content::Takes { .. } => "Takes",

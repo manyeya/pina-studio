@@ -2109,6 +2109,48 @@ mod tests {
     }
 
     #[test]
+    fn a_launched_audio_cell_plays_its_loop() {
+        use crate::project::Cell;
+        // A quarter second of tone, as a beat-long loop on an audio track with no regions.
+        let dir = scratch_dir("audio-cell");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(dir.join("loop.wav"), spec).unwrap();
+        (0..12_000).for_each(|i| w.write_sample((i as f32 * 0.06).sin() * 0.5).unwrap());
+        w.finalize().unwrap();
+        let region = Region {
+            start: 0,
+            length: PPQ,
+            content: Content::Audio {
+                file: "loop.wav".into(),
+                offset: 0,
+                stretch: 1.0,
+            },
+            ..Default::default()
+        };
+        let t = Track {
+            name: "a".into(),
+            cells: vec![Cell { scene: 0, region }],
+            ..Default::default()
+        };
+        let (mut engine, _) = Engine::load(&project(vec![t]), &dir, RATE).unwrap();
+        engine.play();
+        engine.launch(0, Some(0), BEAT as u64);
+        let [l, _] = run(&mut engine, BEAT * 3);
+        assert_eq!(peak(&l[..BEAT]), 0.0);
+        // Each beat: the tone, then the rest of the beat quiet.
+        for b in 1..3 {
+            assert!(peak(&l[b * BEAT + 100..b * BEAT + 11_000]) > 0.4);
+            assert!(peak(&l[b * BEAT + 13_000..(b + 1) * BEAT]) < 0.01);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn stopping_releases_held_notes() {
         let p = project(vec![synth_track("a", vec![note(0, PPQ * 8, 69)], PPQ * 8)]);
         let (mut engine, _) = Engine::load(&p, Path::new("."), RATE).unwrap();

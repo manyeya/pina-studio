@@ -36,6 +36,17 @@ plugins, and agents as first-class collaborators. macOS first.
 plugin, opens its editor and plays an arpeggio through it.
 
 `examples/midnight-drive` was made entirely with `tempo do` commands, as an agent would make it.
+So is Corner Store Blues, a 95 BPM boom-bap beat on real samples (MusicRadar's free 90s Hip Hop
+pack, downloaded on first run: they can't be passed on, so they aren't here) with Surge XT and
+Dragonfly Room Reverb installed:
+
+    cargo build -p tempo && TEMPO=target/debug/tempo python3 examples/corner-store-blues/build.py
+
+It goes in `~/Music/tempo/Corner Store Blues`: sampler kits on swung step patterns with aliases,
+a Moog multisample bass and an 808 on the keys loop's roots, the loop flexed to half time in the
+break, a Surge XT pad whose filter opens through each hook and a gliding sine whistle, drums
+glued in a stack, two reverb sends, Live Loops scenes, and the master clipped by the saturator
+to about -13.5 LUFS.
 
 In the app, mostly as in Logic:
 

@@ -496,8 +496,9 @@ pub struct Workspace {
     pub levels: HashMap<Option<u64>, Level>,
     /// Compressor gain reduction, in dB, by channel id; None is the master.
     pub reductions: HashMap<Option<u64>, f32>,
-    /// How busy the audio thread is: 1 is all of its time.
+    /// How busy the audio thread is: 1 is all of its time; and when that was last read.
     pub load: f32,
+    load_read: Instant,
     pub status: Option<String>,
     /// What agents have done, newest last.
     pub agent: Vec<AgentEdit>,
@@ -536,6 +537,18 @@ impl Workspace {
                 .unwrap_or(true)
         });
         let links = session.project.link_contents();
+        // The CPU load and meters refresh while nothing else redraws.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         Workspace {
             session,
             player,
@@ -586,6 +599,7 @@ impl Workspace {
             levels: HashMap::new(),
             reductions: HashMap::new(),
             load: 0.0,
+            load_read: Instant::now(),
             status,
             agent: Vec::new(),
             smart: HashMap::new(),
@@ -1922,7 +1936,9 @@ impl Workspace {
             let gr = self.reductions.entry(id).or_default();
             *gr = self.player.reduction(id).max(*gr * 0.9);
         }
-        self.load = self.player.load().max(self.load * 0.97);
+        // A spike shows, then falls away by half every half second.
+        let since = std::mem::replace(&mut self.load_read, Instant::now()).elapsed();
+        self.load = (self.player.load()).max(self.load * 0.5f32.powf(since.as_secs_f32() / 0.5));
     }
 
     /// Keeps the playhead on screen while playing, a page at a time, as Logic does.
