@@ -15,4 +15,5 @@ pub mod sampler;
 pub mod samples;
 pub mod scan;
 pub mod session;
+pub mod stretch;
 pub mod synth;

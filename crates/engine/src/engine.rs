@@ -54,6 +54,15 @@ pub struct AudioData {
 }
 
 impl AudioData {
+    /// Audio from its channels (one or two), all as long.
+    pub fn new(channels: Vec<Vec<f32>>) -> Self {
+        AudioData { channels }
+    }
+
+    pub fn channels(&self) -> &[Vec<f32>] {
+        &self.channels
+    }
+
     #[cfg(test)]
     pub(crate) fn mono(samples: Vec<f32>) -> Self {
         AudioData {
@@ -1987,13 +1996,13 @@ fn decode(path: &Path) -> Result<(Vec<Vec<f32>>, f64), String> {
 
 /// Audio at `from` Hz, at `to` Hz, band-limited: a Blackman-windowed sinc, 32 taps a side, its
 /// cutoff a little under the lower Nyquist, so going down doesn't alias and going up doesn't
-/// image.
-// ponytail: computed straight, 64 taps an output sample; a polyphase table if loading gets slow.
+/// image. The filter is worked out once, at 512 points between samples, and read between them.
 pub(crate) fn resample(samples: &[f32], from: f64, to: f64) -> Vec<f32> {
     if from == to || samples.is_empty() {
         return samples.to_vec();
     }
-    const TAPS: i64 = 32;
+    const TAPS: usize = 32;
+    const PHASES: usize = 512;
     let ratio = from / to;
     let cutoff = (to / from).min(1.0) * 0.96;
     let sinc = |x: f64| match x.abs() < 1e-9 {
@@ -2004,20 +2013,33 @@ pub(crate) fn resample(samples: &[f32], from: f64, to: f64) -> Vec<f32> {
         let a = std::f64::consts::PI * t;
         0.42 + 0.5 * a.cos() + 0.08 * (2.0 * a).cos()
     };
+    // At a phase p (p / PHASES past a sample), tap j is the sample j - TAPS + 1 from it.
+    let table: Vec<[f32; 2 * TAPS]> = (0..=PHASES)
+        .map(|p| {
+            std::array::from_fn(|j| {
+                let d = p as f64 / PHASES as f64 + TAPS as f64 - 1.0 - j as f64;
+                (cutoff * sinc(cutoff * d) * blackman(d / TAPS as f64)) as f32
+            })
+        })
+        .collect();
     let n = (samples.len() as f64 / ratio).round() as usize;
     (0..n)
         .map(|i| {
             let x = i as f64 * ratio;
-            let c = x.floor() as i64;
-            let mut acc = 0.0;
-            for k in (c - TAPS + 1).max(0)..=(c + TAPS).min(samples.len() as i64 - 1) {
-                let d = x - k as f64;
-                acc += samples[k as usize] as f64
-                    * cutoff
-                    * sinc(cutoff * d)
-                    * blackman(d / TAPS as f64);
+            let c = x.floor();
+            let at = (x - c) * PHASES as f64;
+            let p = (at.floor() as usize).min(PHASES - 1);
+            let w = (at - p as f64) as f32;
+            let (lo, hi) = (&table[p], &table[p + 1]);
+            let first = c as i64 - TAPS as i64 + 1;
+            let mut acc = 0f32;
+            for j in 0..2 * TAPS {
+                let k = first + j as i64;
+                if k >= 0 && (k as usize) < samples.len() {
+                    acc += samples[k as usize] * (lo[j] + (hi[j] - lo[j]) * w);
+                }
             }
-            acc as f32
+            acc
         })
         .collect()
 }
