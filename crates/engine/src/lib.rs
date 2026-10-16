@@ -12,6 +12,7 @@ pub mod plugin;
 pub mod project;
 pub mod record;
 pub mod sampler;
+pub mod samples;
 pub mod scan;
 pub mod session;
 pub mod synth;

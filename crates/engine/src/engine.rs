@@ -976,12 +976,39 @@ pub enum Msg {
         pitch: u8,
         velocity: u8,
     },
+    /// Play a sample now, over everything, as a browser previews it; or stop the one playing.
+    Audition(Option<Box<Audition>>),
+}
+
+/// A sample being previewed: its audio, where it's got to, and how fast it's read (2 is an
+/// octave up).
+pub struct Audition {
+    data: Arc<AudioData>,
+    pos: f64,
+    step: f64,
+    gain: f32,
+}
+
+impl Audition {
+    pub fn new(data: Arc<AudioData>, semitones: f32, gain_db: f32) -> Audition {
+        Audition {
+            data,
+            pos: 0.0,
+            step: 2f64.powf(semitones as f64 / 12.0),
+            gain: 10f32.powf(gain_db / 20.0),
+        }
+    }
+
+    fn done(&self) -> bool {
+        self.pos as usize + 1 >= self.data.channels.first().map_or(0, Vec::len)
+    }
 }
 
 /// What the live engine lets go of, for the main thread to drop.
 pub enum Garbage {
     Arrangement(Box<Arrangement>),
     Lane(Box<Lane>),
+    Audition(Box<Audition>),
 }
 
 /// What the live engine reports.
@@ -1112,6 +1139,8 @@ pub struct Engine {
     click: (u32, f32),
     /// Where the next block reads from if playback carries on; reading anywhere else is a jump.
     next_read: u64,
+    /// A sample being previewed.
+    audition: Option<Box<Audition>>,
 }
 
 impl Engine {
@@ -1131,6 +1160,7 @@ impl Engine {
             master_strip: Box::new(Strip::new(rate)),
             click: (0, 0.0),
             next_read: 0,
+            audition: None,
         }
     }
 
@@ -1232,6 +1262,12 @@ impl Engine {
 
     fn receive(&mut self) {
         let Some(link) = &mut self.link else { return };
+        if self.audition.as_ref().is_some_and(|a| a.done()) {
+            trash(
+                &mut link.garbage,
+                Garbage::Audition(self.audition.take().unwrap()),
+            );
+        }
         while let Ok(msg) = link.rx.pop() {
             match msg {
                 Msg::Arrange(a) => {
@@ -1261,6 +1297,11 @@ impl Engine {
                 Msg::Launch { slot, cell, at } => {
                     if let Some(lane) = self.lanes.get_mut(slot).and_then(|l| l.as_deref_mut()) {
                         lane.queued = Some((cell, at));
+                    }
+                }
+                Msg::Audition(new) => {
+                    if let Some(old) = std::mem::replace(&mut self.audition, new) {
+                        trash(&mut link.garbage, Garbage::Audition(old));
                     }
                 }
                 Msg::Note {
@@ -1602,6 +1643,24 @@ impl Engine {
                 );
             }
         }
+        // A preview plays over the mix, after the master's fader.
+        if let Some(a) = self.audition.as_deref_mut().filter(|a| !a.done()) {
+            let channels = &a.data.channels;
+            let len = channels[0].len();
+            for i in 0..frames {
+                let at = a.pos as usize;
+                if at + 1 >= len {
+                    break;
+                }
+                let t = (a.pos - at as f64) as f32;
+                for (c, out) in [&mut *out_l, &mut *out_r].into_iter().enumerate() {
+                    let ch = &channels[c.min(channels.len() - 1)];
+                    out[i] += (ch[at] + (ch[at + 1] - ch[at]) * t) * a.gain
+                        / arrangement.master.max(1e-6);
+                }
+                a.pos += a.step;
+            }
+        }
         let mut peak = [0f32; 2];
         for (side, buf) in [&mut *out_l, &mut *out_r].into_iter().enumerate() {
             for s in buf[..frames].iter_mut() {
@@ -1795,6 +1854,16 @@ fn time_stretch(data: &AudioData, ratio: f64, rate: f64) -> AudioData {
 // ponytail: WAV only, at the engine's rate; add symphonia and rubato for AIFF/MP3 and resampling.
 /// A WAV file's audio at `rate`: converted, if it was recorded at another.
 pub(crate) fn load_wav(path: &Path, rate: f64) -> Result<AudioData, String> {
+    let (sides, from) = read_audio(path)?;
+    let channels = sides
+        .iter()
+        .map(|side| resample(side, from, rate))
+        .collect();
+    Ok(AudioData { channels })
+}
+
+/// An audio file's first two channels (one, if it's mono) at its own rate, and that rate.
+pub fn read_audio(path: &Path) -> Result<(Vec<Vec<f32>>, f64), String> {
     let err = |e: hound::Error| format!("{}: {e}", path.display());
     let mut wav = hound::WavReader::open(path).map_err(err)?;
     let spec = wav.spec();
@@ -1812,13 +1881,10 @@ pub(crate) fn load_wav(path: &Path, rate: f64) -> Result<AudioData, String> {
         }
     };
     let n = spec.channels as usize;
-    let channels = (0..n.min(2))
-        .map(|c| {
-            let side: Vec<f32> = samples.iter().skip(c).step_by(n).copied().collect();
-            resample(&side, spec.sample_rate as f64, rate)
-        })
+    let sides = (0..n.min(2))
+        .map(|c| samples.iter().skip(c).step_by(n).copied().collect())
         .collect();
-    Ok(AudioData { channels })
+    Ok((sides, spec.sample_rate as f64))
 }
 
 /// Audio at `from` Hz, at `to` Hz, band-limited: a Blackman-windowed sinc, 32 taps a side, its

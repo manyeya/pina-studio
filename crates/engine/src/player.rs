@@ -450,6 +450,18 @@ impl Player {
         }
     }
 
+    /// Previews a sample now, over whatever's playing, moved by `semitones` (to hear it in a
+    /// song's key) at `gain_db`; it stops by itself at its end, or with `stop_audition`.
+    pub fn audition(&mut self, path: &Path, semitones: f32, gain_db: f32) -> Result<(), String> {
+        let data = std::sync::Arc::new(crate::engine::load_wav(path, self.rate)?);
+        let a = crate::engine::Audition::new(data, semitones, gain_db);
+        self.send(Msg::Audition(Some(Box::new(a))))
+    }
+
+    pub fn stop_audition(&mut self) {
+        let _ = self.send(Msg::Audition(None));
+    }
+
     /// Plays or releases a note on a track now, as when clicking a key in the piano roll.
     pub fn preview(&mut self, track: u64, pitch: u8, velocity: u8) {
         if let Some(s) = self.lanes.get(&track) {
