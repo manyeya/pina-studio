@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use tempo_engine::samples::{
     Kind, Sample,
     library::Library,
-    note_name,
+    note_name, place,
     search::{self, Aspects, Hit, KitSeed, Query},
 };
 
@@ -267,9 +267,8 @@ pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Val
             length: None,
         })?;
         let region = r["region"][1].as_u64().ok_or("no region made")? as usize;
-        // In time: its bars at the song's tempo.
-        if let (Some(bpm), Some(bars)) = (a.bpm, a.bars) {
-            let length = (bars as f64 * p.bar() as f64).round() as u64;
+        // In time: its beats at the song's tempo.
+        if let (Some(bpm), Some(length)) = (a.bpm, place::loop_ticks(a, p.tempo)) {
             edit(Command::FlexRegion {
                 track: t,
                 region,
@@ -303,32 +302,28 @@ pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Val
         Some(Instrument::Sampler(s)) => Some(s.clone()),
         _ => None,
     };
+    // Kept off the notes the sampler's other zones play (a full-range sound makes room).
     match track.and_then(|t| sampler(p.tracks.get(t)?.instrument.as_ref()).map(|s| (t, s))) {
         Some((t, mut s)) => {
-            // A drum takes its note, or the next free one; a pitched sound has the keys.
-            let mut zone = search::zone(&sample, None);
-            if zone.high.is_none() {
-                while s.zones.iter().any(|z| z.covers(zone.note)) && zone.note < 127 {
-                    zone.note += 1;
-                }
-            }
-            let note = zone.note;
-            s.zones.push(zone);
+            place::place_zone(&mut s, &sample, None)?;
+            let zone = s.zones.last().unwrap();
+            let (note, high) = (zone.note, zone.high);
             edit(Command::SetInstrument {
                 track: t,
                 instrument: Instrument::Sampler(s),
             })?;
-            Ok(json!({ "track": t, "note": note }))
+            Ok(json!({ "track": t, "note": note, "high": high }))
         }
         None => {
-            let zone = search::zone(&sample, None);
-            let note = zone.note;
+            let mut s = Sampler::default();
+            place::place_zone(&mut s, &sample, None)?;
+            let (note, high) = (s.zones[0].note, s.zones[0].high);
             let made = edit(Command::AddTrack {
                 name: sample.name.clone(),
-                instrument: Some(Instrument::Sampler(Sampler { zones: vec![zone] })),
+                instrument: Some(Instrument::Sampler(s)),
                 index: None,
             })?;
-            Ok(json!({ "track": made["track"], "note": note }))
+            Ok(json!({ "track": made["track"], "note": note, "high": high }))
         }
     }
 }

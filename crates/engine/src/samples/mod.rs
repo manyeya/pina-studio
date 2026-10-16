@@ -8,6 +8,7 @@
 
 pub mod analyze;
 pub mod library;
+pub mod place;
 pub mod search;
 
 use std::path::PathBuf;

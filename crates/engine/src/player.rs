@@ -12,8 +12,8 @@ use std::{
 
 use crate::{
     engine::{
-        AudioFiles, Engine, Garbage, LanePlugins, Link, LiveNote, MASTER, MAX_BLOCK, Modules, Msg,
-        Played, SLOTS, Shared, compile, make_lane,
+        AudioData, AudioFiles, Engine, Garbage, LanePlugins, Link, LiveNote, MASTER, MAX_BLOCK,
+        Modules, Msg, Played, SLOTS, Shared, compile, make_lane,
     },
     midi::{self, LiveInput},
     peaks::Peaks,
@@ -454,6 +454,17 @@ impl Player {
     /// song's key) at `gain_db`; it stops by itself at its end, or with `stop_audition`.
     pub fn audition(&mut self, path: &Path, semitones: f32, gain_db: f32) -> Result<(), String> {
         let data = std::sync::Arc::new(crate::engine::load_wav(path, self.rate)?);
+        self.audition_audio(data, semitones, gain_db)
+    }
+
+    /// Previews audio already read at the player's rate (see `crate::engine::load_audio`), so a
+    /// browser can read files off the main thread and keep them.
+    pub fn audition_audio(
+        &mut self,
+        data: std::sync::Arc<AudioData>,
+        semitones: f32,
+        gain_db: f32,
+    ) -> Result<(), String> {
         let a = crate::engine::Audition::new(data, semitones, gain_db);
         self.send(Msg::Audition(Some(Box::new(a))))
     }

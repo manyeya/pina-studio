@@ -1872,6 +1872,12 @@ pub(crate) fn load_wav(path: &Path, rate: f64) -> Result<AudioData, String> {
     Ok(AudioData { channels })
 }
 
+/// An audio file's audio at `rate`, converted if it's at another: for previews read off the
+/// audio and main threads.
+pub fn load_audio(path: &Path, rate: f64) -> Result<AudioData, String> {
+    load_wav(path, rate)
+}
+
 /// An audio file's first two channels (one, if it's mono) at its own rate, and that rate.
 pub fn read_audio(path: &Path) -> Result<(Vec<Vec<f32>>, f64), String> {
     let err = |e: hound::Error| format!("{}: {e}", path.display());

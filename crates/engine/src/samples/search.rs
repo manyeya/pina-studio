@@ -27,6 +27,9 @@ pub struct Query {
     /// Fitting this key ("C minor"): melodic samples that clash with it are left out, the rest
     /// ranked by how well they fit, with a transposition where one would help.
     pub key: Option<String>,
+    /// With `key`, keys that go with it too: its relative and its neighbours round the circle of
+    /// fifths, ranked a little after it.
+    pub compatible: bool,
     /// Loops at this tempo, or half or double it, near enough to stretch to it.
     pub bpm: Option<f32>,
     pub tonal: Option<bool>,
@@ -51,6 +54,7 @@ impl Default for Query {
             categories: Vec::new(),
             traits: Vec::new(),
             key: None,
+            compatible: false,
             bpm: None,
             tonal: None,
             min_seconds: None,
@@ -601,8 +605,21 @@ pub fn find(samples: &[Sample], q: &Query) -> Vec<Hit> {
             }
             let mut transpose = None;
             if let Some(key) = key {
-                let (fit, t, why) = key_fit(s, key);
-                if fit < 0.4 {
+                let (fit, t, why) = match q.compatible {
+                    // The best of the key and those that go with it, its own a little ahead.
+                    true => super::place::related(key)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, k)| {
+                            let (fit, t, why) = key_fit(s, k);
+                            (if i == 0 { fit } else { fit * 0.92 }, t, why)
+                        })
+                        .max_by(|a, b| a.0.total_cmp(&b.0))
+                        .unwrap(),
+                    false => key_fit(s, key),
+                };
+                // Strictly in the key, or loosely with those that go with it.
+                if fit < if q.compatible { 0.4 } else { 0.6 } {
                     return None;
                 }
                 transpose = t;
