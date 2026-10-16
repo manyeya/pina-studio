@@ -2,16 +2,23 @@
 //! key, tempo, sound and character) and kept in an index, so people and agents can find what
 //! they want, and what sounds good together.
 //!
-//! - `analyze`: what a sample is, from its audio (and its name, for hints).
+//! - `analyze`: what a sample is, from its audio (and its name, for hints): `features` measures
+//!   it (with `dsp`, `pitch`, `rhythm` and `tonal`), `classify` names it with the fitted
+//!   constants in `model`.
 //! - `library`: the folders, the index, and keeping it up to date in the background.
 //! - `search`: finding samples by words, filters, likeness and fit; building kits.
 
 pub mod analyze;
+pub mod classify;
 pub mod dsp;
+pub mod features;
 pub mod library;
+pub mod model;
 pub mod pitch;
 pub mod place;
+pub mod rhythm;
 pub mod search;
+pub mod tonal;
 
 use std::path::PathBuf;
 
@@ -76,7 +83,7 @@ pub const EMBEDDING: usize = 32;
 pub const WAVEFORM: usize = 96;
 /// Which analysis made an index: when the analysis changes, this goes up, and a library indexed
 /// by an older one is analysed again.
-pub const ANALYSIS_VERSION: u32 = 1;
+pub const ANALYSIS_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]

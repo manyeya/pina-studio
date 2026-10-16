@@ -190,7 +190,11 @@ The sample library is the folders in `~/Library/Application Support/tempo/librar
 (`~/Music/tempo/Samples` to start; `tempo samples add <folder>`), each sample analysed once (what
 it is, its note or key, tempo, envelope, spectrum, stereo width, traits like punchy or lo-fi, and
 a timbre fingerprint) and indexed in `~/Library/Caches/tempo/samples.json`; `tempo samples scan`
-analyses what's new or changed, on every core.
+analyses what's new or changed, on every core. The analysis (`crates/engine/src/samples/`) reads
+WAV, AIFF, FLAC and MP3, and names a sample from its audio with small models fitted on free
+MusicRadar packs (`model.rs`), its file name a strong hint on top;
+`cargo run --release -p tempo-engine --example sample_eval` measures it against the 90s Hip Hop
+pack's names (held out from the fit) and, with `--fit`, fits the models again.
 
 `tempo mcp` is the same as an MCP server on stdio, for agents without a shell (Claude Desktop,
 claude.ai and the like): its tools list themselves with typed inputs, and a user can allow them

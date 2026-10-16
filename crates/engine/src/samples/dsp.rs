@@ -49,11 +49,6 @@ impl Spectra {
             *o = b.norm_sqr();
         }
     }
-
-    /// The complex spectrum of `x` (already the right length), unwindowed, in place of `buf`.
-    pub fn complex(&mut self, x: &mut [Complex32]) {
-        self.fft.process_with_scratch(x, &mut self.scratch);
-    }
 }
 
 /// A short-time spectrum: frames `hop` apart, each a power spectrum of `size` points.
@@ -239,6 +234,22 @@ pub fn loudness(channels: &[Vec<f32>], rate: f64, short: bool) -> f32 {
         }
     };
     lufs(result).max(-70.0)
+}
+
+/// Takes out DC and anything under a few hertz (a one-pole high-pass at 5 Hz): some samples
+/// carry an offset, which would otherwise read as their loudest, lowest sound.
+pub fn dc_block(x: &[f32], rate: f32) -> Vec<f32> {
+    let r = 1.0 - std::f32::consts::TAU * 5.0 / rate;
+    // Started from its average, so a steady offset is gone from the first sample.
+    let mean = x.iter().sum::<f32>() / x.len().max(1) as f32;
+    let (mut last_in, mut last_out) = (mean, 0.0);
+    x.iter()
+        .map(|&v| {
+            let y = v - last_in + r * last_out;
+            (last_in, last_out) = (v, y);
+            y
+        })
+        .collect()
 }
 
 /// A level envelope: the peak magnitude in each `step`-sample block.
