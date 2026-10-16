@@ -273,6 +273,11 @@ pub enum Drag {
         y: f32,
         height: f32,
     },
+    /// The compact sample browser's left edge, from the x and width it had.
+    Panel {
+        x: f32,
+        width: f32,
+    },
     /// A sample from the browser, by its index in the library, on its way to the tracks: where
     /// it was picked up, and where it is.
     Sample {
@@ -496,6 +501,8 @@ pub struct Workspace {
     pub show_automation: bool,
     /// How tall the editor under the tracks stands, as dragged.
     pub editor_h: f32,
+    /// The compact sample browser's width, as dragged.
+    pub panel_w: f32,
     /// Which parameter each track's automation shows, by track id.
     pub params: HashMap<u64, Param>,
     /// What each group of aliases played after the last edit, to tell which one changed.
@@ -616,6 +623,7 @@ impl Workspace {
             },
             show_automation: false,
             editor_h: EDITOR_H,
+            panel_w: crate::browser::PANEL_W,
             params: HashMap::new(),
             links,
             writing: HashMap::new(),
@@ -1050,6 +1058,7 @@ impl Workspace {
                     ..
                 }
                 | Drag::Editor { .. }
+                | Drag::Panel { .. }
                 | Drag::Sample { .. }
                 | Drag::MapBox { .. }
         );
@@ -1237,6 +1246,12 @@ impl Workspace {
             Some(Drag::Editor { y, height }) => {
                 self.editor_h = height - (p.y - y);
                 self.editor_h = self.editor_height();
+                cx.notify();
+                return;
+            }
+            Some(Drag::Panel { x, width }) => {
+                self.panel_w = width - (p.x - x);
+                self.panel_w = self.panel_width();
                 cx.notify();
                 return;
             }

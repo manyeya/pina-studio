@@ -54,8 +54,11 @@ use crate::{
 /// Takes a filter off, when nothing was found.
 type Loosen = Box<dyn Fn(&mut Workspace)>;
 
-/// The compact browser's width, and its rows' height.
-const PANEL_W: f32 = 320.0;
+/// The compact browser's usual and least width, and its rows' height.
+pub const PANEL_W: f32 = 320.0;
+const PANEL_MIN_W: f32 = 260.0;
+/// The lanes keep at least this much beside the compact browser.
+const LANES_MIN_W: f32 = 240.0;
 const PANEL_ROW_H: f32 = 44.0;
 const DETAILS_W: f32 = 312.0;
 const ROW_H: f32 = 44.0;
@@ -1057,6 +1060,18 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The compact browser's width: as dragged, but never so wide the lanes lose their room,
+    /// nor so narrow its controls don't fit.
+    pub fn panel_width(&self) -> f32 {
+        let inspector = if self.show_inspector {
+            INSPECTOR_W
+        } else {
+            0.0
+        };
+        let room = self.viewport_w - inspector - HEADER_W - LANES_MIN_W;
+        self.panel_w.min(room).max(PANEL_MIN_W)
+    }
+
     /// What the compact list shows: what sounds like a sample, or the results.
     fn panel_hits(&self) -> &[Hit] {
         match &self.browser.like {
@@ -1904,10 +1919,45 @@ impl Workspace {
             .flex_1()
             .into_any_element(),
         };
+        let width = self.panel_width();
+        let resizing = matches!(self.drag, Some(Drag::Panel { .. }));
+        // The left edge: a strip to grab, lit while it's held or under the pointer.
+        let edge = div()
+            .id("panel-edge")
+            .absolute()
+            .left(px(-4.))
+            .top_0()
+            .h_full()
+            .w(px(8.))
+            .flex()
+            .justify_center()
+            .cursor_col_resize()
+            .child(
+                div()
+                    .h_full()
+                    .w(px(2.))
+                    .when(resizing, |d| d.bg(rgb(ACCENT))),
+            )
+            .hover(|s| s.bg(alpha(ACCENT, 0.35)))
+            .debug_selector(|| "panel-edge".into())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    if e.click_count == 2 {
+                        ws.panel_w = PANEL_W;
+                        cx.notify();
+                        return;
+                    }
+                    let x = pt(e.position).x;
+                    ws.begin_drag(Drag::Panel { x, width }, cx);
+                }),
+            );
         div()
-            .w(px(PANEL_W))
+            .w(px(width))
             .flex_none()
             .h_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(rgb(SURFACE))
@@ -1946,6 +1996,7 @@ impl Workspace {
                     .child(list),
             )
             .children(self.panel_footer(cx))
+            .child(edge)
     }
 
     /// Rows of the compact list, as the list draws them.

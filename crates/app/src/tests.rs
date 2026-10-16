@@ -1332,6 +1332,37 @@ fn the_editor_is_resized_by_its_top_edge(cx: &mut TestAppContext) {
     assert!(!ws.read_with(cx, |ws, _| ws.session.edited));
 }
 
+#[gpui::test]
+fn the_compact_browser_is_resized_by_its_left_edge(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    cx.simulate_keystrokes("f");
+    cx.simulate_keystrokes("escape");
+    let width = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.panel_width());
+    assert_eq!(width(cx), crate::browser::PANEL_W);
+    // Left 100: wider by 100, the lanes narrower.
+    let lanes = ws.read_with(cx, |ws, _| ws.lanes_bounds.get().size.width);
+    let edge = cx.debug_bounds("panel-edge").unwrap().center();
+    drag(cx, edge, edge - point(px(100.), px(0.)));
+    assert_eq!(width(cx), crate::browser::PANEL_W + 100.0);
+    let narrower = ws.read_with(cx, |ws, _| ws.lanes_bounds.get().size.width);
+    assert_eq!(narrower, lanes - px(100.));
+    // Not past what leaves the lanes room, nor narrower than its controls.
+    let edge = cx.debug_bounds("panel-edge").unwrap().center();
+    drag(cx, edge, edge - point(px(5000.), px(0.)));
+    let widest = ws.read_with(cx, |ws, _| {
+        ws.viewport_w - crate::theme::INSPECTOR_W - crate::theme::HEADER_W - 240.0
+    });
+    assert_eq!(width(cx), widest);
+    let edge = cx.debug_bounds("panel-edge").unwrap().center();
+    drag(cx, edge, edge + point(px(5000.), px(0.)));
+    assert_eq!(width(cx), 260.0);
+    // Double-click: back to its usual width. None of it is an edit.
+    let edge = cx.debug_bounds("panel-edge").unwrap().center();
+    double_click(cx, edge);
+    assert_eq!(width(cx), crate::browser::PANEL_W);
+    assert!(!ws.read_with(cx, |ws, _| ws.session.edited));
+}
+
 /// A copy of the demo in a folder of its own, so what's added to it lands there.
 fn demo_copy(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("tempo-test-{name}-{}", std::process::id()));
