@@ -370,8 +370,11 @@ impl Workspace {
                 stretch,
                 flex,
                 follow,
+                formants,
+                warps,
                 ..
             } => {
+                let (formants, warped) = (*formants, warps.len());
                 let name = file
                     .file_name()
                     .map_or(String::new(), |n| n.to_string_lossy().into_owned());
@@ -432,7 +435,43 @@ impl Workspace {
                     .child(row(
                         "Transpose",
                         stepper(signed(region.transpose), at, Field::Transpose, cx),
-                    ));
+                    ))
+                    // A voice moved in pitch sounds like itself, not a chipmunk.
+                    .child(row(
+                        "Keep formants",
+                        switch(formants)
+                            .debug_selector(|| "region-formants".into())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    ws.edit(cx, |ws| {
+                                        let r = &mut ws.session.project.tracks[at.0].regions[at.1];
+                                        if let Content::Audio { formants, .. } = &mut r.content {
+                                            *formants ^= true;
+                                        }
+                                    })
+                                }),
+                            ),
+                    ))
+                    .when(warped > 0, |d| {
+                        d.child(row(
+                            "Warp markers",
+                            button(format!("Clear {warped}"), false)
+                                .debug_selector(|| "region-unwarp".into())
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, _, _, cx| {
+                                        ws.edit(cx, |ws| {
+                                            let r =
+                                                &mut ws.session.project.tracks[at.0].regions[at.1];
+                                            if let Content::Audio { warps, .. } = &mut r.content {
+                                                warps.clear();
+                                            }
+                                        })
+                                    }),
+                                ),
+                        ))
+                    });
             }
             Content::Takes { takes, .. } => {
                 d = d

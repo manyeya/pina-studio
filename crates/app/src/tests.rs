@@ -1402,6 +1402,53 @@ fn an_audio_regions_flex_and_tempo_following_are_set_in_its_inspector(cx: &mut T
     assert_eq!(audio(&ws, cx).2, 1.0);
 }
 
+#[gpui::test]
+fn a_hit_dragged_in_an_audio_region_makes_a_warp_marker(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    cx.simulate_click(spot(&ws, cx, PPQ, drums), Modifiers::none());
+    let at = (drums, 0);
+    let hits = ws.read_with(cx, |ws, _| ws.warping(at).map(|w| w.hits.to_vec()));
+    let hits = hits.expect("the drums are loaded");
+    assert!(hits.len() >= 3, "{hits:?}");
+    let from = hits[1] as u64;
+    let name: &'static str = format!("warp-{}-0-{from}", drums).leak();
+    // A sixteenth later: a marker there, the hits either side pinned where they were.
+    let handle = cx
+        .debug_bounds(name)
+        .expect("a handle for the hit")
+        .center();
+    let sixteenth = ws.read_with(cx, |ws, _| ws.px_per_tick() * (PPQ / 4) as f32);
+    drag(cx, handle, handle + point(px(sixteenth), px(0.)));
+    let warps = |ws: &Entity<Workspace>, cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| match &ws.session.project.region(at).content {
+            Content::Audio { warps, .. } => warps.clone(),
+            c => panic!("{c:?}"),
+        })
+    };
+    let made = warps(&ws, cx);
+    assert_eq!(made.len(), 3, "{made:?}");
+    assert_eq!(
+        made.iter().map(|m| m[0]).collect::<Vec<_>>(),
+        [hits[0] as u64, from, hits[2] as u64]
+    );
+    let w = ws.read_with(cx, |ws, _| ws.warping(at).unwrap());
+    let moved = w.tick(from as usize);
+    assert!(
+        moved > 0.0 && (moved / (PPQ / 4) as f64).fract().abs() < 1e-6,
+        "{moved}"
+    );
+    // A double-click takes the marker out; undo puts it back.
+    let handle = cx.debug_bounds(name).unwrap().center();
+    double_click(cx, handle);
+    assert_eq!(warps(&ws, cx).len(), 2);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(warps(&ws, cx).len(), 3);
+}
+
 /// A copy of the demo in a folder of its own, so what's added to it lands there.
 fn demo_copy(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("tempo-test-{name}-{}", std::process::id()));

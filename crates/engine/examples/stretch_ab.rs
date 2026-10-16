@@ -9,7 +9,7 @@ use std::{path::Path, time::Instant};
 
 use tempo_engine::{
     engine::{AudioData, load_audio},
-    stretch::{Flex, onsets, render},
+    stretch::{Fit, Flex, onsets, render},
 };
 
 const RATE: f64 = 44_100.0;
@@ -123,15 +123,33 @@ fn main() {
                 ),
                 (
                     "Polyphonic",
-                    Box::new(|| render(&input, ratio, 0.0, Flex::Polyphonic, RATE)),
+                    Box::new(|| render(&input, &Fit::ratio(ratio), RATE)),
                 ),
                 (
                     "Slicing",
-                    Box::new(|| render(&input, ratio, 0.0, Flex::Slicing, RATE)),
+                    Box::new(|| {
+                        render(
+                            &input,
+                            &Fit {
+                                flex: Flex::Slicing,
+                                ..Fit::ratio(ratio)
+                            },
+                            RATE,
+                        )
+                    }),
                 ),
                 (
                     "Speed",
-                    Box::new(|| render(&input, ratio, 0.0, Flex::Speed, RATE)),
+                    Box::new(|| {
+                        render(
+                            &input,
+                            &Fit {
+                                flex: Flex::Speed,
+                                ..Fit::ratio(ratio)
+                            },
+                            RATE,
+                        )
+                    }),
                 ),
             ];
             for (way, f) in ways {

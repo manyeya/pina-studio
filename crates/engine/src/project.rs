@@ -969,6 +969,13 @@ pub enum Content {
         /// stretches it, so its beats stay on the song's.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         follow: bool,
+        /// Moved in pitch, its formants kept, as a voice wants.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        formants: bool,
+        /// Warp markers, as Logic's flex markers: [a frame of the file, where it plays in the
+        /// stretched audio], both at the project's rate. The audio between is fitted to them.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warps: Vec<[u64; 2]>,
     },
     /// A step pattern, as Logic's step sequencer makes: rows of steps, looped over the region.
     Pattern {
@@ -1365,10 +1372,15 @@ impl Project {
                 Content::Audio {
                     stretch,
                     follow: true,
+                    warps,
                     ..
                 } => {
                     // Rounded, so going back to a tempo comes back to the same stretch.
+                    let was = *stretch;
                     *stretch = (*stretch * by * 1e9).round() / 1e9;
+                    for w in warps {
+                        w[1] = (w[1] as f64 * *stretch / was).round() as u64;
+                    }
                 }
                 Content::Takes { takes, .. } => {
                     for take in takes {
@@ -1581,14 +1593,19 @@ impl Project {
     /// as it was recorded.
     pub fn flex(&mut self, at: At, length: u64) -> Result<(), String> {
         let r = &mut self.tracks[at.0].regions[at.1];
-        let Content::Audio { stretch, .. } = &mut r.content else {
+        let old = r.length;
+        let Content::Audio { stretch, warps, .. } = &mut r.content else {
             return Err("only audio regions flex".into());
         };
-        // The stretch that fills `length`, within limits, and the length that gives.
-        let wanted = *stretch * length.max(1) as f64 / r.length as f64;
+        // The stretch that fills `length`, within limits, and the length that gives; warp
+        // markers stretch with it.
+        let wanted = *stretch * length.max(1) as f64 / old as f64;
         let ratio = wanted.clamp(0.25, 4.0);
-        r.length = (length.max(1) as f64 * ratio / wanted).round() as u64;
+        for w in warps.iter_mut() {
+            w[1] = (w[1] as f64 * ratio / *stretch).round() as u64;
+        }
         *stretch = ratio;
+        r.length = (length.max(1) as f64 * ratio / wanted).round() as u64;
         Ok(())
     }
 
@@ -1666,23 +1683,16 @@ impl Project {
                 let from = (a as i64).max(take.start);
                 if let (
                     Content::Audio {
-                        file,
-                        offset,
-                        stretch,
-                        flex,
-                        follow,
+                        offset, stretch, ..
                     },
                     true,
                 ) = (&take.content, from < b as i64)
                 {
                     let skip = self.samples((from - take.start) as u64, rate);
-                    let content = Content::Audio {
-                        file: file.clone(),
-                        offset: offset + (skip as f64 / stretch) as u64,
-                        stretch: *stretch,
-                        flex: *flex,
-                        follow: *follow,
-                    };
+                    let mut content = take.content.clone();
+                    if let Content::Audio { offset: o, .. } = &mut content {
+                        *o = offset + (skip as f64 / stretch) as u64;
+                    }
                     out.push(Region {
                         start: r.start + from as u64,
                         length: b - from as u64,
@@ -1996,8 +2006,17 @@ mod tests {
             Content::Audio { stretch, .. } => stretch,
             _ => unreachable!(),
         };
+        if let Content::Audio { warps, .. } = &mut p.tracks[0].regions[0].content {
+            warps.push([1000, 900]);
+        }
         p.set_tempo(120.0);
         assert_eq!((stretch(&p, 0), stretch(&p, 1)), (0.75, 1.0));
+        // Its warp markers move with it: a beat still lands on its beat.
+        let warp = match &p.tracks[0].regions[0].content {
+            Content::Audio { warps, .. } => warps[0],
+            _ => unreachable!(),
+        };
+        assert_eq!(warp, [1000, 750]);
         assert_eq!(p.tracks[0].regions[0].length, PPQ * 4);
         // Back where it was, exactly.
         p.set_tempo(100.0);
@@ -2014,6 +2033,8 @@ mod tests {
                 stretch: 1.0,
                 flex: Flex::default(),
                 follow: false,
+                formants: false,
+                warps: Vec::new(),
             },
             ..Default::default()
         }

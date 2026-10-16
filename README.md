@@ -153,7 +153,12 @@ Polyphonic, the default, is Rubber Band's finer engine (R3, from Rubber Band 4, 
 offline over the whole file with its hits pinned to their times, and the recording itself kept
 around every hit (the 25 ms before, where a phase vocoder smears a hit ahead of itself, and its
 first 20 ms), so drums stay as sharp as recorded with no pre-echo, and chords and voices are
-R3's. Slicing cuts at the hits and plays each as recorded at its new time; Speed is a turntable.
+R3's; transposed, the recording around each hit moves in pitch as a sampler would, unless a
+region keeps its formants (for a voice). Slicing cuts at the hits and plays each as recorded at
+its new time; Speed is a turntable. Each can be warped: a selected audio region shows its hits
+as handles along its top, and dragging one makes a warp marker there (on the sixteenth), the
+hits either side pinned, so that beat moves and the audio around it stretches to fit, as Logic's
+flex markers do; double-click a marker to take it out.
 Stretches are made off the main thread, something standing in until they're done; loops from
 the sample browser follow the tempo, and their previews play at it, in time with the song while
 it plays. `cargo run --release -p tempo-engine --example stretch_ab -- <out dir> <loop.wav>

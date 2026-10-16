@@ -273,6 +273,12 @@ pub enum Drag {
         y: f32,
         height: f32,
     },
+    /// A hit of an audio region (a frame of its file), or its warp marker, moved: a warp marker
+    /// where it's dropped.
+    Warp {
+        at: At,
+        from: u64,
+    },
     /// The compact sample browser's left edge, from the x and width it had.
     Panel {
         x: f32,
@@ -1261,6 +1267,7 @@ impl Workspace {
                 self.drag_sample(p, cx);
                 return;
             }
+            Some(Drag::Warp { at, from }) => self.drag_warp(at, from, p.x),
             Some(Drag::Key { .. }) | None => return,
         }
         self.changed(cx);

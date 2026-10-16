@@ -480,6 +480,15 @@ impl Player {
         self.send(Msg::Audition(Some(Box::new(a))))
     }
 
+    /// Where a file the project plays has its hits, in frames at the project's rate `at`; and
+    /// how long it is.
+    pub fn hits(&self, file: &Path, at: f64) -> Option<(Arc<Vec<usize>>, usize)> {
+        let to = |f: usize| (f as f64 * at / self.rate).round() as usize;
+        let hits = self.files.hits(file)?;
+        let frames = to(self.files.frames(file)?);
+        Some((Arc::new(hits.iter().map(|&h| to(h)).collect()), frames))
+    }
+
     /// Stretched audio is still being made: what plays stands in for it till it is.
     pub fn rendering(&self) -> bool {
         self.files.rendering()

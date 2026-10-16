@@ -34,7 +34,7 @@ use gpui::{
 use tempo_engine::{
     commands::{self, Command},
     music::Key,
-    project::{At, Content, Flex, Instrument, PPQ, Sampler},
+    project::{At, Content, Instrument, PPQ, Sampler},
     samples::{
         Analysis, Category, Kind, NOTES, Pitch, Sample, TRAITS,
         library::Library,
@@ -937,6 +937,7 @@ impl Workspace {
             _ => 0.0,
         };
         let ratio = self.preview_stretch(a);
+        let vocal = a.category == Category::Vocal;
         let synced = a.kind == Kind::Loop && a.bpm.is_some();
         let seconds = a.seconds * ratio as f32;
         self.browser.wanted = Some(index);
@@ -961,11 +962,14 @@ impl Workspace {
                 };
                 let heard = match ratio == 1.0 && semis == 0.0 {
                     true => raw.clone(),
+                    // A voice keeps its formants, moved into the key.
                     false => Arc::new(stretch::render(
                         &raw,
-                        ratio,
-                        semis as f64,
-                        Flex::Polyphonic,
+                        &stretch::Fit {
+                            semitones: semis as f64,
+                            formants: vocal,
+                            ..stretch::Fit::ratio(ratio)
+                        },
                         rate,
                     )),
                 };

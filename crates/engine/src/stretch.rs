@@ -11,6 +11,10 @@
 //! - Slicing: cut at the hits, each played as recorded at its new time, as a drum loop is chopped
 //!   on an MPC: slower leaves gaps between the hits, faster cuts their tails.
 //! - Speed: as a turntable or a sampler, faster is higher; nothing is stretched.
+//!
+//! Each can be warped: beats pinned where warp markers move them, the audio between stretched to
+//! fit, as Logic's flex markers and Ableton's warp markers do. Moved in pitch, the recording
+//! around the hits is moved as a sampler would (unless the formants are kept, for a voice).
 
 use serde::{Deserialize, Serialize};
 
@@ -50,20 +54,92 @@ const ATTACK: f64 = 0.020;
 const INTO_STRETCH: f64 = 0.004;
 const FROM_STRETCH: f64 = 0.002;
 
-/// `data` (at `rate`) made `ratio` times as long (2 is half speed), moved by `semitones` (its
-/// length kept; Speed ignores it, as its pitch goes with its speed).
-pub fn render(data: &AudioData, ratio: f64, semitones: f64, flex: Flex, rate: f64) -> AudioData {
+/// How audio is fitted: `ratio` times as long (2 is half speed), moved `semitones` (its length
+/// kept; Speed ignores it, its pitch going with its speed), stretched as `flex` says, its formants
+/// kept (for a voice) or moved with it, and `warps` (input frame, output frame) pinned: beats
+/// moved by warp markers, the audio between stretched to fit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Fit {
+    pub ratio: f64,
+    pub semitones: f64,
+    pub flex: Flex,
+    pub formants: bool,
+    pub warps: Vec<(usize, usize)>,
+}
+
+impl Fit {
+    /// Just longer or shorter, Polyphonic.
+    pub fn ratio(ratio: f64) -> Fit {
+        Fit {
+            ratio,
+            semitones: 0.0,
+            flex: Flex::Polyphonic,
+            formants: false,
+            warps: Vec::new(),
+        }
+    }
+}
+
+/// `data` (at `rate`) fitted as `fit` says.
+pub fn render(data: &AudioData, fit: &Fit, rate: f64) -> AudioData {
     let input = &data.channels;
-    let channels = match flex {
-        _ if input.is_empty() || input[0].is_empty() => input.clone(),
-        Flex::Speed => input
-            .iter()
-            .map(|c| fit(resample(c, rate, rate * ratio), out_len(c.len(), ratio)))
-            .collect(),
-        Flex::Slicing => slicing(input, ratio, semitones, rate),
-        Flex::Polyphonic => polyphonic(input, ratio, semitones, rate),
+    if input.is_empty() || input[0].is_empty() {
+        return AudioData {
+            channels: input.clone(),
+        };
+    }
+    let n = input[0].len();
+    let map = Map::new(n, out_len(n, fit.ratio), &fit.warps);
+    let channels = match fit.flex {
+        Flex::Speed => input.iter().map(|c| speed(c, &map, rate)).collect(),
+        Flex::Slicing => slicing(input, &map, fit.semitones, rate),
+        Flex::Polyphonic => polyphonic(input, &map, fit, rate),
     };
     AudioData { channels }
+}
+
+/// Where each input frame lands in the output: on straight lines between the pinned points, the
+/// ends and the warps (those that keep both in order).
+pub struct Map {
+    pub points: Vec<(usize, usize)>,
+}
+
+impl Map {
+    /// `n` frames in, `len` out, with `warps` (input frame, output frame) pinned.
+    pub fn new(n: usize, len: usize, warps: &[(usize, usize)]) -> Map {
+        let mut warps = warps.to_vec();
+        warps.sort();
+        let mut points = vec![(0, 0)];
+        for (i, o) in warps {
+            let last = *points.last().unwrap();
+            if i > last.0 && o > last.1 && i < n && o < len {
+                points.push((i, o));
+            }
+        }
+        points.push((n, len));
+        Map { points }
+    }
+
+    fn len(&self) -> usize {
+        self.points.last().unwrap().1
+    }
+
+    /// Where input frame `i` lands.
+    pub fn at(&self, i: usize) -> usize {
+        let k = self
+            .points
+            .windows(2)
+            .position(|w| i < w[1].0)
+            .unwrap_or(self.points.len() - 2);
+        let (a, b) = (self.points[k], self.points[k + 1]);
+        let t = (i as f64 - a.0 as f64) / (b.0 - a.0).max(1) as f64;
+        (a.1 as f64 + t * (b.1 - a.1) as f64).round() as usize
+    }
+
+    /// The points warps pin, inside the ends.
+    fn warps(&self) -> &[(usize, usize)] {
+        &self.points[1..self.points.len() - 1]
+    }
 }
 
 fn out_len(frames: usize, ratio: f64) -> usize {
@@ -148,15 +224,19 @@ fn rubber_band(
     input: &[Vec<f32>],
     ratio: f64,
     pitch: f64,
+    formants: bool,
     rate: f64,
     keys: &[(usize, usize)],
 ) -> Vec<Vec<f32>> {
     use rubberband::{Options, Stretcher};
     let n = input[0].len();
-    let options = Options::PROCESS_OFFLINE
+    let mut options = Options::PROCESS_OFFLINE
         | Options::ENGINE_FINER
         | Options::TRANSIENTS_CRISP
         | Options::THREADING_NEVER;
+    if formants {
+        options |= Options::FORMANT_PRESERVED;
+    }
     let mut st = Stretcher::new(rate as u32, input.len() as u32, options, ratio, pitch);
     st.set_expected_input_duraction(n as u32);
     if !keys.is_empty() {
@@ -175,7 +255,8 @@ fn rubber_band(
             }
         }
     };
-    const BLOCK: usize = 8192;
+    // Small, since R3 steers toward the next pinned point between calls.
+    const BLOCK: usize = 256;
     let mut at = 0;
     while at < n {
         let end = (at + BLOCK).min(n);
@@ -188,21 +269,26 @@ fn rubber_band(
     out.into_iter().map(|c| fit(c, out_len(n, ratio))).collect()
 }
 
-/// Rubber Band with the hits pinned, and (unmoved in pitch) the recording around each.
-fn polyphonic(input: &[Vec<f32>], ratio: f64, semitones: f64, rate: f64) -> Vec<Vec<f32>> {
+/// Rubber Band with the hits and warps pinned, and the recording around each hit (moved in pitch
+/// as a sampler would, if it's moved).
+fn polyphonic(input: &[Vec<f32>], map: &Map, fit: &Fit, rate: f64) -> Vec<Vec<f32>> {
     let n = input[0].len();
-    let len = out_len(n, ratio);
-    let place = |i: usize| out_len(i, ratio);
+    let len = map.len();
+    let place = |i: usize| map.at(i);
     let hits = onsets(input, rate);
-    let keys: Vec<(usize, usize)> = hits
+    let mut keys: Vec<(usize, usize)> = hits
         .iter()
         .filter(|&&h| h > 0)
         .map(|&h| (h, place(h)))
+        .chain(map.warps().iter().copied())
         .collect();
-    let pitch = 2f64.powf(semitones / 12.0);
-    let mut out = rubber_band(input, ratio, pitch, rate, &keys);
-    // Moved in pitch, the recording would be in the old key.
-    if semitones != 0.0 || ratio == 1.0 {
+    keys.sort();
+    keys.dedup_by_key(|k| k.0);
+    let pitch = 2f64.powf(fit.semitones / 12.0);
+    let mut out = rubber_band(input, fit.ratio, pitch, fit.formants, rate, &keys);
+    // A voice's formants are kept by Rubber Band; around its hits as a sampler moves them, they
+    // wouldn't be.
+    if fit.semitones != 0.0 && fit.formants {
         return out;
     }
     let frames = |s: f64| (s * rate) as usize;
@@ -214,47 +300,84 @@ fn polyphonic(input: &[Vec<f32>], ratio: f64, semitones: f64, rate: f64) -> Vec<
     );
     for (k, &h) in hits.iter().enumerate() {
         let o = place(h);
-        // Not into the hits either side, here or there.
+        // Not into the hits either side, here or there, nor past either end of the recording.
         let prev = k.checked_sub(1).map(|p| hits[p]);
         let (prev_in, prev_out) = prev.map_or((h, o), |p| (h - p, o - place(p)));
         let next_in = hits.get(k + 1).map_or(n, |&x| x) - h;
         let next_out = hits.get(k + 1).map_or(len, |&x| place(x)) - o;
-        let back = before.min(prev_in / 3).min(prev_out / 3);
+        let room_before = ((h as f64 / pitch) as usize).saturating_sub(into);
+        let room_after = (((n - h) as f64 / pitch) as usize).saturating_sub(after);
+        let back = before
+            .min(prev_in / 3)
+            .min(prev_out / 3)
+            .min(room_before)
+            .min(o.saturating_sub(into));
         let keep = attack
             .min(next_in.saturating_sub(after))
-            .min(next_out.saturating_sub(after));
+            .min(next_out.saturating_sub(after))
+            .min(room_after);
         if keep == 0 {
             continue;
         }
-        let (o0, h0) = (o - back, h - back);
+        // The recording from `into` before what's kept to `after` past it: as it is, or moved in
+        // pitch as a sampler would, the hit at `at` in it.
+        let (lead, tail) = (back + into, keep + after);
         for (side, src) in out.iter_mut().zip(input) {
-            if h0 >= into && o0 >= into {
-                for j in 0..into {
-                    let w = (j + 1) as f32 / (into + 1) as f32;
-                    let (oi, ii) = (o0 - into + j, h0 - into + j);
-                    side[oi] = side[oi] * (1.0 - w) + src[ii] * w;
+            let moved;
+            let (piece, at): (&[f32], usize) = match pitch == 1.0 {
+                true => (src, h),
+                false => {
+                    let a = h.saturating_sub((lead as f64 * pitch).ceil() as usize + 64);
+                    let b = (h + (tail as f64 * pitch).ceil() as usize + 64).min(n);
+                    moved = resample(&src[a..b], rate * pitch, rate);
+                    (&moved, ((h - a) as f64 / pitch).round() as usize)
                 }
-            }
-            let span = (back + keep).min(len - o0).min(n - h0);
-            side[o0..o0 + span].copy_from_slice(&src[h0..h0 + span]);
-            for j in 0..after {
-                let (oi, ii) = (o + keep + j, h + keep + j);
-                if oi >= len || ii >= n {
+            };
+            for j in 0..lead + tail {
+                // Right at the start there may be less before it than the blend wants.
+                let (Some(oi), Some(pi)) = ((o + j).checked_sub(lead), (at + j).checked_sub(lead))
+                else {
+                    continue;
+                };
+                if oi >= len || pi >= piece.len() {
                     break;
                 }
-                let w = (j + 1) as f32 / (after + 1) as f32;
-                side[oi] = src[ii] * (1.0 - w) + side[oi] * w;
+                let w = match j {
+                    j if j < into => (j + 1) as f32 / (into + 1) as f32,
+                    j if j < lead + keep => 1.0,
+                    j => 1.0 - (j - lead - keep + 1) as f32 / (after + 1) as f32,
+                };
+                side[oi] = side[oi] * (1.0 - w) + piece[pi] * w;
             }
         }
     }
     out
 }
 
+/// A turntable: each stretch of it between pinned points read faster or slower to fit.
+fn speed(c: &[f32], map: &Map, rate: f64) -> Vec<f32> {
+    // A little either side of each piece, so the filter has the sound it's read through.
+    const MARGIN: usize = 64;
+    let mut out = Vec::with_capacity(map.len());
+    for w in map.points.windows(2) {
+        let ((i0, o0), (i1, o1)) = (w[0], w[1]);
+        let ratio = (o1 - o0) as f64 / (i1 - i0).max(1) as f64;
+        let (a, b) = (i0.saturating_sub(MARGIN), (i1 + MARGIN).min(c.len()));
+        let read = resample(&c[a..b], rate, rate * ratio);
+        let skip = ((i0 - a) as f64 * ratio).round() as usize;
+        let piece = read.get(skip..).unwrap_or(&[]);
+        let want = o1 - o0;
+        out.extend(piece.iter().take(want));
+        out.resize(o1, 0.0);
+    }
+    out
+}
+
 /// Cut at the hits, each slice played as recorded (moved in pitch by speed, as a sampler would)
 /// from its hit's new time: what's left of its slot is silence, what's over it fades away.
-fn slicing(input: &[Vec<f32>], ratio: f64, semitones: f64, rate: f64) -> Vec<Vec<f32>> {
+fn slicing(input: &[Vec<f32>], map: &Map, semitones: f64, rate: f64) -> Vec<Vec<f32>> {
     let n = input[0].len();
-    let len = out_len(n, ratio);
+    let len = map.len();
     let mut starts = onsets(input, rate);
     if starts.first() != Some(&0) {
         starts.insert(0, 0);
@@ -264,8 +387,8 @@ fn slicing(input: &[Vec<f32>], ratio: f64, semitones: f64, rate: f64) -> Vec<Vec
     let mut out = vec![vec![0f32; len]; input.len()];
     for (k, &a) in starts.iter().enumerate() {
         let b = starts.get(k + 1).copied().unwrap_or(n);
-        let o = out_len(a, ratio);
-        let slot = starts.get(k + 1).map_or(len, |&x| out_len(x, ratio)) - o;
+        let o = map.at(a);
+        let slot = starts.get(k + 1).map_or(len, |&x| map.at(x)) - o;
         for (side, src) in out.iter_mut().zip(input) {
             let slice = match semitones == 0.0 {
                 true => src[a..b].to_vec(),
@@ -368,7 +491,7 @@ mod tests {
             channels: drums(&times, 1.0),
         };
         for ratio in [0.8, 1.25] {
-            let out = render(&input, ratio, 0.0, Flex::Polyphonic, RATE);
+            let out = render(&input, &Fit::ratio(ratio), RATE);
             assert_eq!(out.channels[0].len(), out_len(44_100, ratio));
             let found = onsets(&out.channels, RATE);
             assert_eq!(found.len(), 4, "{ratio}: {found:?}");
@@ -406,11 +529,18 @@ mod tests {
     #[test]
     fn polyphonic_keeps_a_chord_in_tune_and_moves_it_when_asked() {
         let input = AudioData { channels: pad(1.0) };
-        let out = render(&input, 1.3, 0.0, Flex::Polyphonic, RATE);
+        let out = render(&input, &Fit::ratio(1.3), RATE);
         assert_eq!(out.channels[0].len(), out_len(44_100, 1.3));
         assert!((peak_hz(&out.channels[0]) - 261.0).abs() < 3.0);
         // Up three semitones, as long as it was: C becomes Eb.
-        let up = render(&input, 1.0, 3.0, Flex::Polyphonic, RATE);
+        let up = render(
+            &input,
+            &Fit {
+                semitones: 3.0,
+                ..Fit::ratio(1.0)
+            },
+            RATE,
+        );
         assert_eq!(up.channels[0].len(), 44_100);
         assert!((peak_hz(&up.channels[0]) - 311.1).abs() < 4.0);
     }
@@ -421,7 +551,14 @@ mod tests {
         let input = AudioData {
             channels: drums(&times, 1.0),
         };
-        let out = render(&input, 1.5, 0.0, Flex::Slicing, RATE);
+        let out = render(
+            &input,
+            &Fit {
+                flex: Flex::Slicing,
+                ..Fit::ratio(1.5)
+            },
+            RATE,
+        );
         let src = &input.channels[0];
         let found = onsets(&input.channels, RATE);
         for &h in &found {
@@ -434,9 +571,92 @@ mod tests {
     }
 
     #[test]
+    fn transposed_hits_stay_sharp_and_nothing_comes_before_them() {
+        let times = [0.1, 0.35, 0.6, 0.85];
+        let input = AudioData {
+            channels: drums(&times, 1.0),
+        };
+        let fit = Fit {
+            semitones: 4.0,
+            ..Fit::ratio(1.25)
+        };
+        let out = render(&input, &fit, RATE);
+        let rms = |v: &[f32], a: f64, b: f64| {
+            let part = &v[(a * RATE) as usize..(b * RATE) as usize];
+            (part.iter().map(|s| s * s).sum::<f32>() / part.len() as f32).sqrt()
+        };
+        for t in &times[1..] {
+            let at = t * 1.25;
+            // Loud at the hit, quiet in the 20 ms before it, as recorded.
+            let (hit, before) = (
+                rms(&out.channels[0], at, at + 0.01),
+                rms(&out.channels[0], at - 0.02, at - 0.002),
+            );
+            let was = rms(&input.channels[0], t - 0.02, t - 0.002);
+            assert!(hit > 0.2, "{t}: {hit}");
+            assert!(
+                before <= was * 1.5 + 2e-3,
+                "{t}: {before} before, {was} recorded"
+            );
+        }
+    }
+
+    #[test]
+    fn warp_markers_move_a_hit_and_fit_the_rest_every_way() {
+        let times = [0.1, 0.35, 0.6, 0.85];
+        let input = AudioData {
+            channels: drums(&times, 1.0),
+        };
+        let hits = onsets(&input.channels, RATE);
+        // The third hit 60 ms late, the hits either side pinned where they are, as in Logic or
+        // Ableton: the audio between them stretches and squeezes to fit.
+        let moved = hits[2] + (0.06 * RATE) as usize;
+        for flex in Flex::ALL {
+            let fit = Fit {
+                flex,
+                warps: vec![(hits[1], hits[1]), (hits[2], moved), (hits[3], hits[3])],
+                ..Fit::ratio(1.0)
+            };
+            let out = render(&input, &fit, RATE);
+            assert_eq!(out.channels[0].len(), 44_100, "{flex:?}");
+            let found = onsets(&out.channels, RATE);
+            let near = |at: usize| found.iter().any(|&f| (f as i64 - at as i64).abs() < 90);
+            assert!(near(moved), "{flex:?}: {found:?}, wanted {moved}");
+            assert!(
+                near(hits[0]) && near(hits[1]) && near(hits[3]),
+                "{flex:?}: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_voice_keeps_its_formants_when_asked() {
+        let input = AudioData { channels: pad(1.0) };
+        let up = |formants| {
+            let fit = Fit {
+                semitones: 5.0,
+                formants,
+                ..Fit::ratio(1.0)
+            };
+            render(&input, &fit, RATE).channels[0].clone()
+        };
+        let (kept, moved) = (up(true), up(false));
+        assert_eq!(kept.len(), moved.len());
+        assert!(kept.iter().zip(&moved).any(|(a, b)| (a - b).abs() > 1e-3));
+    }
+
+    #[test]
     fn speed_is_a_turntable() {
         let input = AudioData { channels: pad(1.0) };
-        let out = render(&input, 1.25, 7.0, Flex::Speed, RATE);
+        let out = render(
+            &input,
+            &Fit {
+                semitones: 7.0,
+                flex: Flex::Speed,
+                ..Fit::ratio(1.25)
+            },
+            RATE,
+        );
         assert_eq!(out.channels[0].len(), out_len(44_100, 1.25));
         // A quarter slower: lower by that, the transposition ignored.
         assert!((peak_hz(&out.channels[0]) - 261.63 / 1.25).abs() < 3.0);

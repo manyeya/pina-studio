@@ -167,6 +167,11 @@ pub enum Command {
         flex: Option<Flex>,
         #[serde(default)]
         follow: Option<bool>,
+        #[serde(default)]
+        formants: Option<bool>,
+        /// Warp markers: [a frame of the file, where it plays in the stretched audio].
+        #[serde(default)]
+        warps: Option<Vec<[u64; 2]>>,
     },
     /// An alias of a MIDI or pattern region: a copy linked to it, so editing either edits both.
     AddAlias {
@@ -869,6 +874,8 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                 stretch: 1.0,
                 flex: Flex::default(),
                 follow: false,
+                formants: false,
+                warps: Vec::new(),
             };
             let regions = &mut track(p, t)?.regions;
             regions.push(Region {
@@ -983,18 +990,29 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             quantize,
             flex,
             follow,
+            formants,
+            warps,
         } => {
             region_at(p, t, r)?;
             let region = &mut p.tracks[t].regions[r];
-            if flex.is_some() || follow.is_some() {
+            if flex.is_some() || follow.is_some() || formants.is_some() || warps.is_some() {
                 let Content::Audio {
-                    flex: f, follow: w, ..
+                    flex: f,
+                    follow: w,
+                    formants: k,
+                    warps: m,
+                    ..
                 } = &mut region.content
                 else {
-                    return Err("flex and follow are for audio regions".into());
+                    return Err("flex, follow, formants and warps are for audio regions".into());
                 };
                 *f = flex.unwrap_or(*f);
                 *w = follow.unwrap_or(*w);
+                *k = formants.unwrap_or(*k);
+                if let Some(mut v) = warps {
+                    v.sort();
+                    *m = v;
+                }
             }
             if let Some(v) = name {
                 region.name = v;

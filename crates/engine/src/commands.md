@@ -107,6 +107,10 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   engine, with the recording kept around every hit, so drums stay sharp), `"slicing"` (cut at the
   hits, each played as recorded at its new time) or `"speed"` (a turntable: faster is higher);
   and `"follow": true` has it follow the song's tempo, as loops from the sample browser do.
+  `"formants": true` keeps a voice's formants when it's transposed. `"warps": [[48000, 52800],
+  …]` are warp markers, as Logic's flex markers: a frame of the file and where it plays in the
+  stretched audio (both at the project's rate); the audio between is stretched to fit, every
+  flex mode, and a tempo change moves them with a region that follows it.
 - `add_alias` `{"track": 0, "region": 0, "start": 7680, "to_track": 0}`: an alias of a MIDI or
   pattern region: a copy linked to it (both get the same `"link"` number), so editing the notes or
   steps of either edits both. Its place, length and playback settings are its own. Splitting it,

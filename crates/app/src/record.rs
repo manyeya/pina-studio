@@ -197,6 +197,8 @@ impl Workspace {
                         stretch: 1.0,
                         flex: Default::default(),
                         follow: false,
+                        formants: false,
+                        warps: Vec::new(),
                     };
                     (
                         track,

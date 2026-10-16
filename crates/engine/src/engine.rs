@@ -29,7 +29,7 @@ use crate::{
         Saturator, Which, chase, comp_segments, value_at,
     },
     sampler::Sampler,
-    stretch,
+    stretch::{self, Fit},
     synth::Synth,
 };
 
@@ -72,8 +72,40 @@ impl AudioData {
     }
 }
 
-/// A stretched copy of a file: the file, its stretch (as bits), transposition and flex.
-type Stretched = (PathBuf, u64, i8, Flex);
+/// A stretched copy of a file: the file, and how it's fitted.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct Stretched {
+    file: PathBuf,
+    /// The fit's numbers, as bits.
+    ratio: u64,
+    semitones: u64,
+    flex: Flex,
+    formants: bool,
+    warps: Vec<(usize, usize)>,
+}
+
+impl Stretched {
+    fn new(file: &Path, fit: &Fit) -> Stretched {
+        Stretched {
+            file: file.to_path_buf(),
+            ratio: fit.ratio.to_bits(),
+            semitones: fit.semitones.to_bits(),
+            flex: fit.flex,
+            formants: fit.formants,
+            warps: fit.warps.clone(),
+        }
+    }
+
+    fn fit(&self) -> Fit {
+        Fit {
+            ratio: f64::from_bits(self.ratio),
+            semitones: f64::from_bits(self.semitones),
+            flex: self.flex,
+            formants: self.formants,
+            warps: self.warps.clone(),
+        }
+    }
+}
 
 /// The audio files a project uses, each loaded once, with its waveform overview.
 pub struct AudioFiles {
@@ -87,6 +119,8 @@ pub struct AudioFiles {
     asked: HashSet<Stretched>,
     /// For a player that can't wait: copies made off its thread.
     renders: Option<Arc<Renders>>,
+    /// Where each file's hits are (see `stretch::onsets`), found when first asked for.
+    hits: Mutex<HashMap<PathBuf, Arc<Vec<usize>>>>,
 }
 
 /// Stretching off the main thread, two at a time, the newest wanted first: what the arrangement
@@ -134,8 +168,7 @@ fn render_thread(renders: Weak<Renders>, rate: f64) {
         let Some((key, source)) = job else {
             return;
         };
-        let (stretch, semitones, flex) = (f64::from_bits(key.1), key.2 as f64, key.3);
-        let data = Arc::new(stretch::render(&source, stretch, semitones, flex, rate));
+        let data = Arc::new(stretch::render(&source, &key.fit(), rate));
         let mut s = r.state.lock().unwrap();
         s.busy.remove(&key);
         s.made.push((key, data));
@@ -173,7 +206,25 @@ impl AudioFiles {
             stretched: HashMap::new(),
             asked: HashSet::new(),
             renders: None,
+            hits: Mutex::default(),
         }
+    }
+
+    /// A loaded file's length, in frames at the engine's rate.
+    pub fn frames(&self, file: &Path) -> Option<usize> {
+        self.files.get(file).map(|(d, _)| d.channels[0].len())
+    }
+
+    /// Where a loaded file's hits are, in frames at the engine's rate.
+    pub fn hits(&self, file: &Path) -> Option<Arc<Vec<usize>>> {
+        let mut hits = self.hits.lock().unwrap();
+        if let Some(h) = hits.get(file) {
+            return Some(h.clone());
+        }
+        let (data, _) = self.files.get(file)?;
+        let found = Arc::new(stretch::onsets(&data.channels, self.rate));
+        hits.insert(file.to_path_buf(), found.clone());
+        Some(found)
     }
 
     /// Stretches off the caller's thread: until a copy is made, a stand-in plays.
@@ -209,37 +260,31 @@ impl AudioFiles {
 
     /// It's made: copies of files it doesn't play go, and (past a few) those it doesn't ask for.
     fn end(&mut self) {
-        let files: HashSet<&PathBuf> = self.asked.iter().map(|k| &k.0).collect();
+        let files: HashSet<&PathBuf> = self.asked.iter().map(|k| &k.file).collect();
         self.stretched
-            .retain(|k, _| self.asked.contains(k) || files.contains(&k.0));
+            .retain(|k, _| self.asked.contains(k) || files.contains(&k.file));
         if self.stretched.len() > 64 {
             self.stretched.retain(|k, _| self.asked.contains(k));
         }
     }
 
-    /// A file stretched in time (its pitch kept) and moved in pitch by `semitones` (its length
-    /// kept), as `flex` says; made once for each.
-    fn stretched(
-        &mut self,
-        file: &Path,
-        stretch: f64,
-        semitones: i8,
-        flex: Flex,
-    ) -> Result<Arc<AudioData>, String> {
+    /// A file fitted as `fit` says (see `crate::stretch`), made once for each.
+    fn stretched(&mut self, file: &Path, mut fit: Fit) -> Result<Arc<AudioData>, String> {
         // Speed can't move pitch without moving time.
-        let semitones = if flex == Flex::Speed { 0 } else { semitones };
-        if stretch == 1.0 && semitones == 0 {
+        if fit.flex == Flex::Speed {
+            fit.semitones = 0.0;
+        }
+        if fit.ratio == 1.0 && fit.semitones == 0.0 && fit.warps.is_empty() {
             return self.get(file);
         }
-        let key = (file.to_path_buf(), stretch.to_bits(), semitones, flex);
+        let key = Stretched::new(file, &fit);
         self.asked.insert(key.clone());
         if let Some(data) = self.stretched.get(&key) {
             return Ok(data.clone());
         }
         let source = self.get(file)?;
         let Some(r) = &self.renders else {
-            let data = stretch::render(&source, stretch, semitones as f64, flex, self.rate);
-            let data = Arc::new(data);
+            let data = Arc::new(stretch::render(&source, &fit, self.rate));
             self.stretched.insert(key, data.clone());
             return Ok(data);
         };
@@ -256,13 +301,17 @@ impl AudioFiles {
             r.work.notify_all();
         }
         // Meanwhile: the nearest copy made (else the file), read faster or slower to fit.
-        let len = (source.channels[0].len() as f64 * stretch).round() as usize;
+        let len = (source.channels[0].len() as f64 * fit.ratio).round() as usize;
+        let alike = |k: &Stretched| {
+            k.file == key.file
+                && (k.semitones, k.flex, k.formants) == (key.semitones, key.flex, key.formants)
+        };
         let nearest = self
             .stretched
             .iter()
-            .filter(|(k, _)| k.0 == key.0 && k.2 == key.2 && k.3 == key.3)
+            .filter(|(k, _)| alike(k))
             .min_by(|a, b| {
-                let off = |k: &Stretched| (f64::from_bits(k.1) / stretch).ln().abs();
+                let off = |k: &Stretched| (f64::from_bits(k.ratio) / fit.ratio).ln().abs();
                 off(a.0).total_cmp(&off(b.0))
             })
             .map_or(source, |(_, d)| d.clone());
@@ -1101,18 +1150,44 @@ fn play_region(
             offset,
             stretch,
             flex,
+            formants,
+            warps,
             ..
         } => {
             let begin = (from as i64).max(at);
             if begin >= to as i64 {
                 return;
             }
-            // In the stretched audio, the offset is stretched too.
-            let offset = (*offset as f64 * stretch) as u64;
+            // Warps are at the project's rate; the engine may run at another.
+            let scale = rate / project.sample_rate as f64;
+            let warps: Vec<(usize, usize)> = warps
+                .iter()
+                .map(|w| {
+                    (
+                        (w[0] as f64 * scale) as usize,
+                        (w[1] as f64 * scale) as usize,
+                    )
+                })
+                .collect();
+            // In the stretched audio, the offset is stretched too (and warped, if it's warped).
+            let offset = match (warps.is_empty(), files.frames(file)) {
+                (false, Some(n)) => {
+                    let len = (n as f64 * stretch).round() as usize;
+                    stretch::Map::new(n, len, &warps).at(*offset as usize) as u64
+                }
+                _ => (*offset as f64 * stretch) as u64,
+            };
             let skip = project.samples((begin - at) as u64, rate);
             let start = project.samples(region.start + begin as u64, rate);
             let end = project.samples(region.start + to, rate);
-            match files.stretched(file, *stretch, region.transpose, *flex) {
+            let fit = Fit {
+                ratio: *stretch,
+                semitones: region.transpose as f64,
+                flex: *flex,
+                formants: *formants,
+                warps,
+            };
+            match files.stretched(file, fit) {
                 Ok(data) => clips.push(Clip {
                     start,
                     len: end - start,
@@ -2462,6 +2537,8 @@ mod tests {
                 stretch: 1.0,
                 flex: Flex::default(),
                 follow: false,
+                formants: false,
+                warps: Vec::new(),
             },
             ..Default::default()
         };
@@ -2490,6 +2567,8 @@ mod tests {
                 stretch: 1.0,
                 flex: Flex::default(),
                 follow: false,
+                formants: false,
+                warps: Vec::new(),
             },
             ..Default::default()
         };
@@ -2622,6 +2701,8 @@ mod tests {
             stretch: 1.0,
             flex: Flex::default(),
             follow: false,
+            formants: false,
+            warps: Vec::new(),
         };
         let region = Region {
             start: 0,
@@ -2672,7 +2753,7 @@ mod tests {
         let get = |files: &mut AudioFiles| {
             files.begin();
             let data = files
-                .stretched(Path::new("tone.wav"), 1.5, 0, Flex::Polyphonic)
+                .stretched(Path::new("tone.wav"), stretch::Fit::ratio(1.5))
                 .unwrap();
             files.end();
             data
@@ -2720,6 +2801,8 @@ mod tests {
                 stretch: 1.0,
                 flex: Flex::default(),
                 follow: false,
+                formants: false,
+                warps: Vec::new(),
             },
             ..Default::default()
         };
@@ -2969,6 +3052,8 @@ mod tests {
                 stretch: 1.0,
                 flex: Flex::default(),
                 follow: false,
+                formants: false,
+                warps: Vec::new(),
             },
             ..Default::default()
         };
