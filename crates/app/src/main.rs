@@ -1,3 +1,4 @@
+mod browser;
 mod cli;
 mod editor;
 mod inspector;
@@ -201,6 +202,7 @@ fn open(dir: &Path) -> Result<(), String> {
                 MenuItem::action("Mixer", ToggleMixer),
                 MenuItem::action("Piano Roll", TogglePianoRoll),
                 MenuItem::action("Live Loops", ToggleLoops),
+                MenuItem::action("Samples", ToggleSamples),
                 MenuItem::action("Score", ToggleScore),
                 MenuItem::action("Automation", ToggleAutomation),
                 MenuItem::action("Inspector", ToggleInspector),
@@ -230,6 +232,7 @@ fn open(dir: &Path) -> Result<(), String> {
                 let dir = session.dir.clone();
                 let mut ws = Workspace::new(session, player, window, cx);
                 ws.start_scan(cx);
+                ws.load_library(cx);
                 server::serve(cx.entity().downgrade(), &dir, cx);
                 ws
             })

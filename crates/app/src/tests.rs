@@ -1331,3 +1331,397 @@ fn the_editor_is_resized_by_its_top_edge(cx: &mut TestAppContext) {
     assert_eq!(height(cx), crate::theme::EDITOR_H);
     assert!(!ws.read_with(cx, |ws, _| ws.session.edited));
 }
+
+/// A copy of the demo in a folder of its own, so what's added to it lands there.
+fn demo_copy(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("tempo-test-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Audio Files")).unwrap();
+    for f in ["project.json", "Audio Files/drums.wav"] {
+        std::fs::copy(demo().join(f), dir.join(f)).unwrap();
+    }
+    dir
+}
+
+/// A mono 44.1 kHz WAV of a decaying tone.
+fn tone(path: &Path, seconds: f32, hz: f32) {
+    let n = (44_100.0 * seconds) as u32;
+    let mut bytes = Vec::new();
+    bytes.extend(b"RIFF");
+    bytes.extend((36 + n * 2).to_le_bytes());
+    bytes.extend(b"WAVEfmt ");
+    bytes.extend(16u32.to_le_bytes());
+    bytes.extend(1u16.to_le_bytes());
+    bytes.extend(1u16.to_le_bytes());
+    bytes.extend(44_100u32.to_le_bytes());
+    bytes.extend((44_100u32 * 2).to_le_bytes());
+    bytes.extend(2u16.to_le_bytes());
+    bytes.extend(16u16.to_le_bytes());
+    bytes.extend(b"data");
+    bytes.extend((n * 2).to_le_bytes());
+    for i in 0..n {
+        let t = i as f32 / 44_100.0;
+        let v = (t * hz * std::f32::consts::TAU).sin() * (-t * 3.0).exp() * 12_000.0;
+        bytes.extend((v as i16).to_le_bytes());
+    }
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// A little library: its samples' files, and what they are (set here rather than analysed, so
+/// these tests are about the browser).
+fn little_library(dir: &Path) -> tempo_engine::samples::library::Library {
+    use tempo_engine::samples::{
+        Analysis, Category as C, KeyGuess, Kind, Pitch, Sample, library::Library,
+    };
+    std::fs::create_dir_all(dir).unwrap();
+    let sample = |name: &str, category, kind, seconds: f32, traits: &[&str]| {
+        let path = dir.join(format!("{name}.wav"));
+        tone(&path, seconds, 110.0);
+        Sample {
+            path,
+            name: name.into(),
+            folder: "Pack".into(),
+            modified: 0,
+            size: 0,
+            analysis: Analysis {
+                seconds,
+                sample_rate: 44_100,
+                channels: 1,
+                kind,
+                category,
+                confidence: 0.9,
+                traits: traits.iter().map(|t| t.to_string()).collect(),
+                waveform: (0..96).map(|i| 255 - i as u8 * 2).collect(),
+                loudness: -12.0,
+                ..Default::default()
+            },
+        }
+    };
+    let mut samples = vec![
+        sample("Kick_01", C::Kick, Kind::OneShot, 0.3, &["punchy", "dark"]),
+        sample("Kick_02", C::Kick, Kind::OneShot, 0.3, &["soft"]),
+        sample("Snare_01", C::Snare, Kind::OneShot, 0.25, &["snappy"]),
+        sample("Hat_01", C::HatClosed, Kind::OneShot, 0.1, &["bright"]),
+        sample("808_G", C::Bass808, Kind::OneShot, 1.0, &["sub"]),
+        // Four beats at 90 BPM.
+        sample(
+            "Keys_Loop_90",
+            C::Keys,
+            Kind::Loop,
+            4.0 * 60.0 / 90.0,
+            &["warm"],
+        ),
+    ];
+    samples[4].analysis.tonal = 0.9;
+    samples[4].analysis.pitch = Some(Pitch {
+        note: 31,
+        cents: 12.0,
+        hz: 49.4,
+        confidence: 0.9,
+    });
+    let keys = &mut samples[5].analysis;
+    keys.bpm = Some(90.0);
+    keys.bars = Some(1.0);
+    keys.key = Some(KeyGuess {
+        tonic: 0,
+        minor: true,
+        name: "C minor".into(),
+        confidence: 0.8,
+    });
+    Library {
+        folders: vec![dir.to_path_buf()],
+        samples,
+    }
+}
+
+/// The demo (a copy), with the browser open on a little library.
+fn open_browser<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+) -> (Entity<Workspace>, &'a mut VisualTestContext, PathBuf) {
+    let dir = demo_copy(name);
+    let library = little_library(&dir.join("Library"));
+    let (ws, cx) = open_at(cx, &dir);
+    ws.update(cx, |ws, cx| ws.set_library(library, cx));
+    cx.simulate_keystrokes("f");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.bottom), Some(Bottom::Samples));
+    (ws, cx, dir)
+}
+
+/// The names of what the browser found, in order.
+fn found(ws: &Entity<Workspace>, cx: &VisualTestContext) -> Vec<String> {
+    ws.read_with(cx, |ws, _| {
+        let b = &ws.browser;
+        b.hits
+            .iter()
+            .map(|h| b.library.samples[h.index].name.clone())
+            .collect()
+    })
+}
+
+#[gpui::test]
+fn the_sample_browser_searches_filters_and_hears(cx: &mut TestAppContext) {
+    let (ws, cx, dir) = open_browser(cx, "browser-find");
+    assert_eq!(found(&ws, cx).len(), 6);
+    // The search field has the keyboard: typing finds as it goes, and doesn't reach the
+    // shortcuts ("k" would turn the metronome on).
+    cx.simulate_input("kick");
+    assert_eq!(found(&ws, cx), ["Kick_01", "Kick_02"]);
+    assert!(!ws.read_with(cx, |ws, _| ws.player.metronome()));
+    // Escape clears it and hands the keyboard back.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(found(&ws, cx).len(), 6);
+
+    // A category chip narrows the list, with how many it holds; again, and it's off.
+    click_on(cx, "category-Snare", Modifiers::none(), MouseButton::Left);
+    assert_eq!(found(&ws, cx), ["Snare_01"]);
+    click_on(cx, "category-Snare", Modifiers::none(), MouseButton::Left);
+    // One-shots or loops.
+    click_on(cx, "kind-Some(Loop)", Modifiers::none(), MouseButton::Left);
+    assert_eq!(found(&ws, cx), ["Keys_Loop_90"]);
+    click_on(cx, "kind-None", Modifiers::none(), MouseButton::Left);
+
+    // A click selects a sample and hears it; down hears the next.
+    click_on(cx, "sample-row-0", Modifiers::none(), MouseButton::Left);
+    let first = ws.read_with(cx, |ws, _| ws.browser.hits[0].index);
+    let (selected, heard, status) = ws.read_with(cx, |ws, _| {
+        let b = &ws.browser;
+        (b.selected, b.audition.map(|a| a.0), ws.status.clone())
+    });
+    assert_eq!((selected, heard, status), (Some(first), Some(first), None));
+    cx.simulate_keystrokes("down");
+    let second = ws.read_with(cx, |ws, _| ws.browser.hits[1].index);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.browser.selected), Some(second));
+    // Its details show, with what sounds like it.
+    assert!(cx.debug_bounds("add-to-song").is_some());
+    assert!(!ws.read_with(cx, |ws, _| ws.browser.similar.is_empty()));
+
+    // Play in Key: the 808 (G1, 12 cents sharp) moves to the song's key's tonic, the nearest
+    // way, and in tune.
+    ws.update(cx, |ws, cx| {
+        ws.set_sample_key(
+            crate::browser::KeyFilter::Key(tempo_engine::music::Key {
+                root: 0,
+                minor: true,
+            }),
+            cx,
+        );
+        ws.browser.play_in_key = true;
+    });
+    let i = ws.read_with(cx, |ws, _| {
+        ws.browser
+            .library
+            .samples
+            .iter()
+            .position(|s| s.name == "808_G")
+            .unwrap()
+    });
+    let semis = ws.read_with(cx, |ws, _| ws.sample_transpose(i));
+    assert!((semis - 4.88).abs() < 0.01, "{semis}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn add_to_song_puts_loops_on_audio_tracks_and_one_shots_on_samplers(cx: &mut TestAppContext) {
+    use tempo_engine::project::Instrument;
+    let (ws, cx, dir) = open_browser(cx, "browser-add");
+    let pick = |ws: &Entity<Workspace>, cx: &mut VisualTestContext, name: &str| {
+        let i = ws.read_with(cx, |ws, _| {
+            let s = &ws.browser.library.samples;
+            s.iter().position(|s| s.name == name).unwrap()
+        });
+        ws.update(cx, |ws, cx| ws.select_sample(i, false, cx));
+        cx.run_until_parked();
+    };
+    // The loop, with Drums (an audio track) selected: a region on it at the playhead, stretched
+    // from 90 BPM to the song's 100 so its four beats last a bar.
+    ws.update(cx, |ws, _| ws.select_track(2));
+    pick(&ws, cx, "Keys_Loop_90");
+    let before = ws.read_with(cx, |ws, _| ws.session.project.tracks[2].regions.len());
+    click_on(cx, "add-to-song", Modifiers::none(), MouseButton::Left);
+    let (regions, region) = ws.read_with(cx, |ws, _| {
+        let t = &ws.session.project.tracks[2];
+        (t.regions.len(), t.regions.last().unwrap().clone())
+    });
+    assert_eq!(regions, before + 1);
+    assert_eq!((region.start, region.length, region.looped), (0, BAR, true));
+    match region.content {
+        Content::Audio { file, stretch, .. } => {
+            assert!(dir.join(&file).exists(), "{file:?}");
+            assert!((stretch - 0.9).abs() < 0.01, "{stretch}");
+        }
+        c => panic!("{c:?}"),
+    }
+
+    // The 808, with Keys (a synth) selected: a new sampler track after it, played across the
+    // keys from G1, in tune.
+    ws.update(cx, |ws, _| ws.select_track(0));
+    pick(&ws, cx, "808_G");
+    click_on(cx, "add-to-song", Modifiers::none(), MouseButton::Left);
+    let (track, instrument) = ws.read_with(cx, |ws, _| {
+        let t = &ws.session.project.tracks[1];
+        (ws.track, t.instrument.clone())
+    });
+    assert_eq!(track, 1);
+    let Some(Instrument::Sampler(s)) = instrument else {
+        panic!("{instrument:?}")
+    };
+    let z = &s.zones[0];
+    assert_eq!(
+        (z.note, z.high, z.root, z.tune_cents),
+        (0, Some(127), Some(31), -12.0)
+    );
+    // Then a kick onto the same sampler (still selected): its own note, the 808 making room.
+    pick(&ws, cx, "Kick_01");
+    click_on(cx, "add-to-song", Modifiers::none(), MouseButton::Left);
+    let zones = ws.read_with(cx, |ws, _| match &ws.session.project.tracks[1].instrument {
+        Some(Instrument::Sampler(s)) => s.zones.clone(),
+        _ => unreachable!(),
+    });
+    assert_eq!(zones.len(), 2);
+    assert_eq!(
+        (zones[0].note, zones[0].high, zones[1].note),
+        (0, Some(35), 36)
+    );
+    assert_eq!(ws.read_with(cx, |ws, _| ws.session.project.tracks.len()), 4);
+    // Undo takes the kick back.
+    ws.update(cx, |ws, cx| {
+        ws.session.undo();
+        ws.changed(cx);
+    });
+    let zones = ws.read_with(cx, |ws, _| match &ws.session.project.tracks[1].instrument {
+        Some(Instrument::Sampler(s)) => s.zones.len(),
+        _ => unreachable!(),
+    });
+    assert_eq!(zones, 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn a_kit_becomes_a_sampler_track_and_samples_drag_onto_tracks(cx: &mut TestAppContext) {
+    use tempo_engine::project::Instrument;
+    let (ws, cx, dir) = open_browser(cx, "browser-kit");
+    cx.simulate_keystrokes("escape");
+    click_on(cx, "results-Kit", Modifiers::none(), MouseButton::Left);
+    let slots = ws.read_with(cx, |ws, _| {
+        ws.browser.kit.iter().filter(|k| k.hit().is_some()).count()
+    });
+    assert!(slots >= 4, "{slots}");
+    // Lock the kick: new picks keep it.
+    click_on(cx, "kit-lock-0", Modifiers::none(), MouseButton::Left);
+    let kick = ws.read_with(cx, |ws, _| ws.browser.kit[0].hit().unwrap().index);
+    click_on(cx, "shuffle-kit", Modifiers::none(), MouseButton::Left);
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.browser.kit[0].hit().unwrap().index),
+        kick
+    );
+    let tracks = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    click_on(cx, "make-kit", Modifiers::none(), MouseButton::Left);
+    let (n, instrument) = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        (p.tracks.len(), p.tracks[ws.track].instrument.clone())
+    });
+    assert_eq!(n, tracks + 1);
+    let Some(Instrument::Sampler(s)) = instrument else {
+        panic!("{instrument:?}")
+    };
+    assert_eq!(s.zones.len(), slots);
+    let note = |name: &str| s.zones.iter().find(|z| z.name == name).map(|z| z.note);
+    assert_eq!(
+        (note("Kick"), note("Snare"), note("Closed Hat")),
+        (Some(36), Some(38), Some(42))
+    );
+    // The 808 across the notes under the drums, in tune.
+    let bass = s.zones.iter().find(|z| z.name == "808").unwrap();
+    assert_eq!((bass.note, bass.high, bass.root), (0, Some(35), Some(31)));
+
+    // Drag the snare from the list onto Drums (an audio track) at bar 2.
+    click_on(cx, "results-List", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "category-Snare", Modifiers::none(), MouseButton::Left);
+    let row = cx.debug_bounds("sample-row-0").unwrap().center();
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    let regions = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[drums].regions.len())
+    };
+    let before = regions(cx);
+    drag(cx, row, spot(&ws, cx, BAR + 30, drums));
+    assert_eq!(regions(cx), before + 1);
+    let start = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[drums]
+            .regions
+            .last()
+            .unwrap()
+            .start
+    });
+    assert_eq!(start, BAR);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn the_library_loads_and_scans_in_the_background(cx: &mut TestAppContext) {
+    // The only test that reads a library from disk: one of its own.
+    let dir = demo_copy("browser-scan");
+    let samples = dir.join("Library");
+    std::fs::create_dir_all(samples.join("Pack")).unwrap();
+    tone(&samples.join("Pack/Kick_01.wav"), 0.2, 60.0);
+    tone(&samples.join("Pack/Snare_01.wav"), 0.2, 200.0);
+    // SAFETY: no other test reads TEMPO_LIBRARY.
+    unsafe { std::env::set_var("TEMPO_LIBRARY", dir.join("config")) };
+    tempo_engine::samples::library::Library {
+        folders: vec![samples.canonicalize().unwrap()],
+        samples: Vec::new(),
+    }
+    .save()
+    .unwrap();
+    let (ws, cx) = open_at(cx, &dir);
+    ws.update(cx, |ws, cx| ws.load_library(cx));
+    until(cx, &ws, |ws| {
+        ws.browser.loaded && ws.browser.scan.is_none() && ws.browser.library.samples.len() == 2
+    });
+    cx.simulate_keystrokes("f");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(found(&ws, cx).len(), 2);
+    assert!(dir.join("config/samples.json").exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn the_sound_map_boxes_in_samples_and_similar_weighs_aspects(cx: &mut TestAppContext) {
+    let (ws, cx, dir) = open_browser(cx, "browser-map");
+    cx.simulate_keystrokes("escape");
+    click_on(cx, "results-Map", Modifiers::none(), MouseButton::Left);
+    // A box round the whole map keeps everything; a click on empty space shows all again.
+    let map = cx.debug_bounds("sample-map").unwrap();
+    let inset = point(px(2.), px(2.));
+    drag(cx, map.origin + inset, map.bottom_right() - inset);
+    let boxed = ws.read_with(cx, |ws, _| ws.browser.area.as_ref().map(|a| a.len()));
+    assert_eq!(boxed, Some(6));
+    assert_eq!(found(&ws, cx).len(), 6);
+    // A small box in a corner holds nothing: nothing found, with a way back.
+    drag(cx, map.origin + inset, map.origin + point(px(12.), px(12.)));
+    assert_eq!(found(&ws, cx).len(), 0);
+    click_on(cx, "clear-area", Modifiers::none(), MouseButton::Left);
+    assert_eq!(found(&ws, cx).len(), 6);
+
+    // Similar: a slider sets how much timbre counts.
+    click_on(cx, "results-List", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "sample-row-0", Modifiers::none(), MouseButton::Left);
+    // The sliders are down the details column: scroll to them.
+    let column = cx.debug_bounds("add-to-song").unwrap().center();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: column,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-2000.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    let slider = cx.debug_bounds("aspect-0").unwrap();
+    let left = point(slider.origin.x + px(1.), slider.center().y);
+    drag(cx, left, left);
+    let timbre = ws.read_with(cx, |ws, _| ws.browser.aspects.timbre);
+    assert!(timbre < 0.1, "{timbre}");
+    assert!(!ws.read_with(cx, |ws, _| ws.session.edited));
+    std::fs::remove_dir_all(dir).unwrap();
+}

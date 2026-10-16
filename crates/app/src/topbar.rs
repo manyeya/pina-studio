@@ -368,7 +368,8 @@ impl Workspace {
                     .child(
                         icon_seg(
                             Icon::PanelBottom,
-                            self.bottom.is_some_and(|b| b != Bottom::Loops)
+                            self.bottom
+                                .is_some_and(|b| b != Bottom::Loops && b != Bottom::Samples)
                                 && self.view == View::Arrange,
                             30.,
                         )
@@ -377,7 +378,7 @@ impl Workspace {
                             cx.listener(|ws, _, _, cx| {
                                 ws.view = View::Arrange;
                                 ws.bottom = match ws.bottom {
-                                    Some(b) if b != Bottom::Loops => None,
+                                    Some(b) if b != Bottom::Loops && b != Bottom::Samples => None,
                                     _ => Some(Bottom::PianoRoll),
                                 };
                                 ws.focus_roll();
@@ -402,6 +403,18 @@ impl Workspace {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|ws, _, _, cx| ws.toggle_bottom(Bottom::Loops, cx)),
+                        ),
+                    )
+                    .child(
+                        icon_seg(
+                            Icon::Samples,
+                            self.bottom == Some(Bottom::Samples) && self.view == View::Arrange,
+                            30.,
+                        )
+                        .debug_selector(|| "samples".into())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, _, _, cx| ws.toggle_bottom(Bottom::Samples, cx)),
                         ),
                     ),
             )

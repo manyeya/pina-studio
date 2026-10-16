@@ -1046,6 +1046,7 @@ impl Workspace {
             .children(take)
             .children(lines)
             .children(self.agent_marker())
+            .children(self.sample_drop_view())
             .when(tracks == 0, |d| {
                 d.child(
                     div()

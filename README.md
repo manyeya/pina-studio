@@ -19,7 +19,8 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   `topbar.rs` (transport and display), `inspector.rs` (the side panel: inspector, browser,
   agent), `tracks.rs` (tools, markers, ruler, headers, regions, automation), `editor.rs` (the
   editor under the tracks) with `pianoroll.rs`, `steps.rs` (the step sequencer), `score.rs`,
-  `takes.rs` (take folders) and `liveloops.rs`; `mixer.rs`, `strip.rs` (channel strips),
+  `takes.rs` (take folders), `liveloops.rs` and `browser.rs` (the sample browser: search,
+  filters, the sound map, kits, adding samples to the song); `mixer.rs`, `strip.rs` (channel strips),
   `record.rs` (recording takes), `menu.rs`, `text.rs` (the text field names are typed in),
   `theme.rs` (colors, Geist, icons, controls),
   `server.rs` (the project's socket), `cli.rs` (the commands for agents), `mcp.rs`, and

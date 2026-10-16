@@ -162,6 +162,10 @@ pub enum MenuAction {
     DeleteMarker(usize),
     Save,
     Export,
+    /// The key the sample browser keeps to.
+    SampleKey(crate::browser::KeyFilter),
+    /// Whether the sample browser counts related keys too. Reopens the key menu.
+    SampleCompatible(Point<Pixels>),
 }
 
 /// What markers are usually called.
@@ -182,6 +186,13 @@ impl Workspace {
         self.menu = None;
         match action {
             MenuAction::Nothing => {}
+            MenuAction::SampleKey(key) => self.set_sample_key(key, cx),
+            MenuAction::SampleCompatible(at) => {
+                self.browser.compatible = !self.browser.compatible;
+                self.find_samples();
+                self.menu = Some(self.sample_key_menu(at));
+                cx.notify();
+            }
             MenuAction::Instrument { track, instrument } => {
                 let t = &self.session.project.tracks[track];
                 let audio = t

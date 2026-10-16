@@ -63,6 +63,9 @@ actions!(
         ToggleCycle,
         ToggleMetronome,
         Export,
+        ToggleSamples,
+        PreviousSample,
+        NextSample,
     ]
 );
 
@@ -88,6 +91,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("a", ToggleAutomation, Some("Arrange")),
         KeyBinding::new("c", ToggleCycle, Some("Arrange")),
         KeyBinding::new("k", ToggleMetronome, Some("Arrange")),
+        KeyBinding::new("f", ToggleSamples, Some("Arrange")),
+        // In the sample browser, as Splice: the next sound plays as it's picked.
+        KeyBinding::new("up", PreviousSample, Some("Samples")),
+        KeyBinding::new("down", NextSample, Some("Samples")),
         KeyBinding::new("r", Record, Some("Workspace")),
         KeyBinding::new("cmd-k", ToggleTyping, Some("Workspace")),
         KeyBinding::new("cmd-shift-d", CreateStack, Some("Workspace")),
@@ -149,7 +156,12 @@ pub enum Slider {
     Strength,
     Swing,
     Zoom,
-    Send { track: usize, index: usize },
+    Send {
+        track: usize,
+        index: usize,
+    },
+    /// How much one aspect of a sound counts in the sample browser's Similar list.
+    Aspect(usize),
 }
 
 /// A mouse drag in progress. Edits checkpoint when they start, so a drag is one undo step.
@@ -259,6 +271,19 @@ pub enum Drag {
         y: f32,
         height: f32,
     },
+    /// A sample from the browser, by its index in the library, on its way to the tracks: where
+    /// it was picked up, and where it is.
+    Sample {
+        index: usize,
+        from: Point<f32>,
+        at: Point<f32>,
+        moved: bool,
+    },
+    /// A box being drawn on the sample browser's map, from corner to corner.
+    MapBox {
+        from: Point<f32>,
+        to: Point<f32>,
+    },
 }
 
 /// What the pane under the tracks shows.
@@ -269,6 +294,7 @@ pub enum Bottom {
     Score,
     Takes,
     Loops,
+    Samples,
 }
 
 /// The arrangement, or the mixer in its place.
@@ -485,8 +511,8 @@ pub struct Workspace {
     pub pending_name: Option<Name>,
     /// Which track records and hears the MIDI keyboard.
     pub arm: Arm,
-    /// Give the workspace back the keyboard on the next frame (after naming).
-    refocus: bool,
+    /// Give the workspace back the keyboard on the next frame (after naming, or searching).
+    pub refocus: bool,
     /// Live Loops launched, by track id: the scene (None, stopped) and the sample it begins at.
     pub live: HashMap<u64, (Option<usize>, u64)>,
     /// The plugins installed, once the scan is done.
@@ -514,6 +540,8 @@ pub struct Workspace {
     pub viewport_w: f32,
     /// Where each slider was drawn last frame.
     pub slider_bounds: Rc<RefCell<HashMap<Slider, Bounds<Pixels>>>>,
+    /// The sample browser: the library, what's searched for, and what's found.
+    pub browser: crate::browser::Browser,
     title: String,
 }
 
@@ -537,6 +565,7 @@ impl Workspace {
                 .unwrap_or(true)
         });
         let links = session.project.link_contents();
+        let browser = crate::browser::Browser::new(cx);
         // The CPU load and meters refresh while nothing else redraws.
         cx.spawn(async move |this, cx| {
             loop {
@@ -609,6 +638,7 @@ impl Workspace {
             slider_bounds: Rc::new(RefCell::new(HashMap::new())),
             viewport_h: 900.0,
             viewport_w: 1440.0,
+            browser,
             title: String::new(),
         }
     }
@@ -1010,7 +1040,13 @@ impl Workspace {
                     slider: Slider::Strength | Slider::Swing | Slider::Zoom,
                     ..
                 }
+                | Drag::Slider {
+                    slider: Slider::Aspect(_),
+                    ..
+                }
                 | Drag::Editor { .. }
+                | Drag::Sample { .. }
+                | Drag::MapBox { .. }
         );
         if edits {
             self.session.checkpoint();
@@ -1199,6 +1235,10 @@ impl Workspace {
                 cx.notify();
                 return;
             }
+            Some(Drag::Sample { .. } | Drag::MapBox { .. }) => {
+                self.drag_sample(p, cx);
+                return;
+            }
             Some(Drag::Key { .. }) | None => return,
         }
         self.changed(cx);
@@ -1301,6 +1341,10 @@ impl Workspace {
         }) = self.drag
         {
             self.changed(cx);
+        }
+        if let Some(Drag::Sample { .. } | Drag::MapBox { .. }) = self.drag {
+            let drag = self.drag.take();
+            self.drop_sample(drag, cx);
         }
         // Release whatever note the drag was sounding.
         match self.drag {
@@ -1546,17 +1590,22 @@ impl Workspace {
         } else {
             Some(pane)
         };
-        if self.bottom == Some(Bottom::PianoRoll) {
-            self.focus_roll();
+        match self.bottom {
+            Some(Bottom::PianoRoll) => self.focus_roll(),
+            Some(Bottom::Samples) => self.open_samples(),
+            _ => {}
         }
         cx.notify();
     }
 
     pub fn show_bottom(&mut self, pane: Bottom, cx: &mut Context<Self>) {
         self.view = View::Arrange;
+        let opening = self.bottom != Some(pane);
         self.bottom = Some(pane);
-        if pane == Bottom::PianoRoll {
-            self.focus_roll();
+        match pane {
+            Bottom::PianoRoll => self.focus_roll(),
+            Bottom::Samples if opening => self.open_samples(),
+            _ => {}
         }
         cx.notify();
     }
@@ -1577,6 +1626,10 @@ impl Workspace {
     /// Musical typing, as in Logic: A to K are white keys from C, W E T Y U O P the black ones;
     /// Z and X shift the octave.
     fn type_key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
+        // Typing a search is typing, not notes.
+        if self.browser.searching {
+            return;
+        }
         if self.naming.is_none() && self.menu_key(e, cx) {
             cx.stop_propagation();
             return;
@@ -1758,6 +1811,7 @@ impl Workspace {
                 let db = self.session.project.tracks[track].sends[index].level_db;
                 strip::fader_pos(db)
             }
+            Slider::Aspect(i) => *crate::browser::aspect(&mut self.browser.aspects.clone(), i),
         }
     }
 
@@ -1771,6 +1825,10 @@ impl Workspace {
             }
             Slider::Send { track, index } => {
                 self.session.project.tracks[track].sends[index].level_db = strip::fader_db(v)
+            }
+            Slider::Aspect(i) => {
+                *crate::browser::aspect(&mut self.browser.aspects, i) = (v * 20.0).round() / 20.0;
+                self.find_similar();
             }
         }
     }
@@ -1968,6 +2026,12 @@ impl Workspace {
             (_, _, Some(Bottom::PianoRoll)) => {
                 "Double-click to add a note · drag to move · drag its end to resize"
             }
+            (_, _, Some(Bottom::Samples)) if self.browser.view == crate::browser::Results::Map => {
+                "Hover a dot to hear it · click to pick it · drag a box to keep what's in it · ⌘-scroll to zoom"
+            }
+            (_, _, Some(Bottom::Samples)) => {
+                "Click a sound to hear it · ↑ ↓ for the next · drag it onto a track · F hides the browser"
+            }
             _ if self.show_automation => {
                 "Click a lane to add a point · ⌥-click a point to delete it · pick Touch or Latch to record while playing"
             }
@@ -2083,6 +2147,7 @@ impl Render for Workspace {
         if let Some(what) = self.pending_name.take() {
             self.start_naming(what, window, cx);
         }
+        self.browser_frame(window, cx);
         if std::mem::take(&mut self.refocus) && self.naming.is_none() {
             self.focus.focus(window, cx);
         }
@@ -2107,7 +2172,8 @@ impl Render for Workspace {
             || !self.writing.is_empty()
             || self.levels.values().any(Level::moving)
             || self.reductions.values().any(|&g| g > 0.01)
-            || self.agent_presence().is_some();
+            || self.agent_presence().is_some()
+            || self.browser.auditioning();
         if busy || self.drag.is_some() {
             window.request_animation_frame();
         }
@@ -2139,17 +2205,26 @@ impl Render for Workspace {
             .text_size(px(12.))
             .font_weight(FontWeight::NORMAL)
             .track_focus(&self.focus)
-            .key_context(
-                match (
+            .key_context({
+                let context = match (
                     &self.naming,
                     self.menu.as_ref().is_some_and(|m| m.searchable),
                 ) {
                     (Some(_), _) => "Naming",
                     (None, true) => "Menu",
+                    // The search field has the keyboard: letters and space type.
+                    _ if self.browser.searching => "Search",
                     _ if self.typing.is_some() => "Workspace Typing",
                     _ => "Workspace Arrange",
-                },
-            )
+                };
+                // Up and down pick sounds while the browser shows.
+                let context =
+                    match self.bottom == Some(Bottom::Samples) && self.view == View::Arrange {
+                        true => format!("{context} Samples"),
+                        false => context.to_string(),
+                    };
+                gpui::KeyContext::parse(&context).unwrap_or_default()
+            })
             .on_key_down(cx.listener(|ws, e: &KeyDownEvent, _, cx| ws.type_key(e, cx)))
             .on_key_up(cx.listener(|ws, e: &KeyUpEvent, _, cx| ws.release_key(e, cx)))
             .on_action(
@@ -2169,6 +2244,11 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|ws, _: &ToggleLoops, _, cx| ws.toggle_bottom(Bottom::Loops, cx)),
             )
+            .on_action(
+                cx.listener(|ws, _: &ToggleSamples, _, cx| ws.toggle_bottom(Bottom::Samples, cx)),
+            )
+            .on_action(cx.listener(|ws, _: &PreviousSample, _, cx| ws.step_sample(-1, cx)))
+            .on_action(cx.listener(|ws, _: &NextSample, _, cx| ws.step_sample(1, cx)))
             .on_action(cx.listener(|ws, _: &CreateStack, _, cx| {
                 // A summing stack of the selected track, as Logic's ⇧⌘D makes of the selection.
                 if ws.track < ws.session.project.tracks.len() {
@@ -2227,6 +2307,7 @@ impl Render for Workspace {
             )
             .child(self.status_bar())
             .when(self.drag.is_some(), |d| d.child(self.drag_listener(cx)))
+            .children(self.sample_ghost())
             .children(self.menu_view(cx))
     }
 }

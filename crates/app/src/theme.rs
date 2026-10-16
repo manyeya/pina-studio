@@ -185,6 +185,14 @@ pub enum Icon {
     Search,
     Link,
     Loop,
+    Samples,
+    Lock,
+    Unlock,
+    Folder,
+    Rescan,
+    Back,
+    Forward,
+    Shuffle,
 }
 
 impl Icon {
@@ -264,6 +272,24 @@ impl Icon {
             }
             Icon::Loop => {
                 r##"<path d="M4 12a5 5 0 0 1 5-5h9M15 4l3 3-3 3M20 12a5 5 0 0 1-5 5H6M9 20l-3-3 3-3"/>"##
+            }
+            Icon::Samples => {
+                r##"<path d="M3.5 12h1.5M7.5 8.5v7M11 5.5v13"/><circle cx="16.5" cy="11" r="3.5"/><path d="M19 13.5l2.5 2.5"/>"##
+            }
+            Icon::Lock => {
+                r##"<rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/>"##
+            }
+            Icon::Unlock => {
+                r##"<rect x="5" y="10.5" width="14" height="9.5" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 6.8-1.2"/>"##
+            }
+            Icon::Folder => {
+                r##"<path d="M3.5 7.5a2 2 0 0 1 2-2h3.8l2 2.2h7.2a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>"##
+            }
+            Icon::Rescan => r##"<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4"/>"##,
+            Icon::Back => r##"<path d="M14.5 6l-6 6 6 6"/>"##,
+            Icon::Forward => r##"<path d="M9.5 6l6 6-6 6"/>"##,
+            Icon::Shuffle => {
+                r##"<path d="M4 7h3.5c4.5 0 4.5 10 9 10H20M17.5 14.5L20 17l-2.5 2.5M4 17h3.5c1.6 0 2.6-1.3 3.4-3M13.1 10c.8-1.7 1.8-3 3.4-3H20M17.5 4.5L20 7l-2.5 2.5"/>"##
             }
         }
     }

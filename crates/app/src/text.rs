@@ -1,6 +1,7 @@
-//! A one-line text field, for naming tracks, regions, markers and buses. It takes typing through
-//! the platform's input handler, so accents and other input methods work; Enter confirms, Escape
-//! cancels, and losing focus confirms too. Adapted from gpui's input example.
+//! A one-line text field, for naming tracks, regions, markers and buses, and for searching. It
+//! takes typing through the platform's input handler, so accents and other input methods work;
+//! Enter confirms, Escape cancels, and losing focus confirms too. Adapted from gpui's input
+//! example.
 
 use std::ops::Range;
 
@@ -73,6 +74,9 @@ pub struct TextInput {
     selecting: bool,
     /// Confirmed or cancelled already, so losing focus afterwards does nothing.
     done: bool,
+    /// A search field: it stays, so Enter and Escape tell every time; whoever holds it draws its
+    /// box, and it says what to type while it's empty.
+    search: Option<SharedString>,
 }
 
 impl EventEmitter<TextEvent> for TextInput {}
@@ -90,12 +94,32 @@ impl TextInput {
             last_bounds: None,
             selecting: false,
             done: false,
+            search: None,
         }
     }
 
-    /// Confirms what's typed, once.
+    /// An empty search field, saying what to type in it.
+    pub fn search(placeholder: &str, cx: &mut Context<Self>) -> Self {
+        TextInput {
+            search: Some(placeholder.to_string().into()),
+            ..TextInput::new("", cx)
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.content
+    }
+
+    pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.content = text.to_string().into();
+        self.selected = text.len()..text.len();
+        self.marked = None;
+        cx.notify();
+    }
+
+    /// Confirms what's typed, once (a search field, every time).
     pub fn confirm(&mut self, cx: &mut Context<Self>) {
-        if !std::mem::replace(&mut self.done, true) {
+        if !std::mem::replace(&mut self.done, true) || self.search.is_some() {
             cx.emit(TextEvent::Confirm(self.content.trim().to_string()));
         }
     }
@@ -105,7 +129,7 @@ impl TextInput {
     }
 
     fn on_cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        if !std::mem::replace(&mut self.done, true) {
+        if !std::mem::replace(&mut self.done, true) || self.search.is_some() {
             cx.emit(TextEvent::Cancel);
         }
     }
@@ -456,10 +480,15 @@ impl Element for TextElement {
             input.cursor(),
         );
         let style = window.text_style();
+        // An empty search field says what to type, faintly.
+        let (content, color) = match &input.search {
+            Some(hint) if content.is_empty() => (hint.clone(), rgb(TEXT_4).into()),
+            _ => (content, style.color),
+        };
         let run = TextRun {
             len: content.len(),
             font: style.font(),
-            color: style.color,
+            color,
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -566,11 +595,13 @@ impl Render for TextInput {
             .items_center()
             .w_full()
             .h(px(22.))
-            .px(px(6.))
-            .rounded(px(5.))
-            .bg(rgb(FIELD))
-            .border_1()
-            .border_color(rgb(ACCENT))
+            .when(self.search.is_none(), |d| {
+                d.px(px(6.))
+                    .rounded(px(5.))
+                    .bg(rgb(FIELD))
+                    .border_1()
+                    .border_color(rgb(ACCENT))
+            })
             .overflow_hidden()
             .key_context("TextInput")
             .track_focus(&self.focus)
@@ -597,7 +628,11 @@ impl Render for TextInput {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_move(cx.listener(Self::mouse_move))
             // A click anywhere else keeps what's typed, whatever it lands on.
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.confirm(cx)))
+            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                if this.focus.is_focused(window) {
+                    this.confirm(cx)
+                }
+            }))
             .child(TextElement { input: cx.entity() })
     }
 }
