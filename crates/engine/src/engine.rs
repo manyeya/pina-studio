@@ -2893,6 +2893,32 @@ mod tests {
     }
 
     #[test]
+    fn an_audition_plays_over_the_mix_and_lets_go_at_its_end() {
+        let (mut tx, rx) = rtrb::RingBuffer::new(16);
+        let (gtx, mut garbage) = rtrb::RingBuffer::new(16);
+        let (_live, live_rx) = rtrb::RingBuffer::new(16);
+        let (played_tx, _played) = rtrb::RingBuffer::new(16);
+        let link = Link {
+            rx,
+            garbage: gtx,
+            shared: Arc::new(Shared::new()),
+            live: live_rx,
+            played: played_tx,
+        };
+        let mut engine = Engine::live(RATE, link);
+        // A thousand samples of 0.5, an octave up: five hundred samples of it, stopped or not.
+        let data = Arc::new(AudioData::mono(vec![0.5; 1000]));
+        let a = Audition::new(data, 12.0, 0.0);
+        assert!(tx.push(Msg::Audition(Some(Box::new(a)))).is_ok());
+        let [l, r] = run(&mut engine, MAX_BLOCK * 2);
+        assert!((l[10] - 0.5).abs() < 1e-6 && (r[490] - 0.5).abs() < 1e-6);
+        assert_eq!(peak(&l[502..]), 0.0);
+        // Done, it goes back to the main thread to be dropped.
+        run(&mut engine, MAX_BLOCK);
+        assert!(matches!(garbage.pop(), Ok(Garbage::Audition(_))));
+    }
+
+    #[test]
     fn the_metronome_clicks_on_the_beat_while_playing() {
         let (mut tx, rx) = rtrb::RingBuffer::new(16);
         let (gtx, _garbage) = rtrb::RingBuffer::new(16);
