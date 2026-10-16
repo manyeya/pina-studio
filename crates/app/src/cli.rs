@@ -5,11 +5,11 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 use tempo_engine::{
-    analysis::{self, Analysis},
+    analysis,
     commands::{self, ChannelRef, Command, PluginSource},
     engine::{Engine, load_plugin},
     plugin::{Plugin, PluginApi, Processor, named_values},
-    project::{Project, Which},
+    project::{Content, Project, Region, Track, Which},
     scan,
     session::Session,
 };
@@ -109,14 +109,14 @@ fn length(p: &Project) -> u64 {
     p.samples(p.end(), rate) + (TAIL * rate) as u64
 }
 
-fn measure(p: &Project, dir: &Path) -> Result<Analysis, String> {
-    let rate = p.sample_rate as f64;
-    let (mut engine, _plugins) = Engine::load(p, dir, rate)?;
-    let [l, r] = engine.render(length(p));
-    Ok(analysis::analyze(&l, &r, rate))
+/// `p` rendered for `samples`.
+fn mixed(p: &Project, dir: &Path, samples: u64) -> Result<[Vec<f32>; 2], String> {
+    let (mut engine, _plugins) = Engine::load(p, dir, p.sample_rate as f64)?;
+    Ok(engine.render(samples))
 }
 
-/// Measures a WAV file, or a project: the mix, then each track soloed.
+/// Measures a WAV file, or a project: the mix, each section (marker to marker), then each track
+/// soloed.
 pub fn analyze(path: &Path) -> Result<Value, String> {
     if path
         .extension()
@@ -126,18 +126,58 @@ pub fn analyze(path: &Path) -> Result<Value, String> {
         return json(analysis::analyze(&l, &r, rate));
     }
     let p = project(path)?;
-    let mix = measure(&p, path)?;
+    let rate = p.sample_rate as f64;
+    let [l, r] = mixed(&p, path, length(&p))?;
+    let mix = analysis::analyze(&l, &r, rate);
+    let at = |tick: u64| (p.samples(tick, rate) as usize).min(l.len());
+    let sections: Vec<Value> = p
+        .markers
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            let end = p.markers.get(i + 1).map_or(l.len(), |next| at(next.tick));
+            let (a, b) = (at(m.tick), end);
+            (b > a).then(|| {
+                json!({
+                    "name": m.name,
+                    "tick": m.tick,
+                    "analysis": analysis::analyze(&l[a..b], &r[a..b], rate),
+                })
+            })
+        })
+        .collect();
     let mut tracks = Vec::new();
     for (i, t) in p.tracks.iter().enumerate() {
+        // Alone, through the auxes and master it plays into. The others stay as silent
+        // placeholders (their regions empty, so the song ends and loops run as before), so
+        // their plugins and audio don't run for nothing.
         let mut alone = p.clone();
-        alone
-            .tracks
-            .iter_mut()
-            .enumerate()
-            .for_each(|(j, t)| t.solo = j == i);
-        tracks.push(json!({ "track": i, "name": t.name, "analysis": measure(&alone, path)? }));
+        for (j, other) in alone.tracks.iter_mut().enumerate() {
+            if j == i {
+                other.solo = false;
+                other.mute = false;
+                continue;
+            }
+            *other = Track {
+                id: other.id,
+                mute: true,
+                regions: other
+                    .regions
+                    .iter()
+                    .map(|r| Region {
+                        content: Content::default(),
+                        ..r.clone()
+                    })
+                    .collect(),
+                ..Track::default()
+            };
+        }
+        // As long as the song: a looped region plays past its own end.
+        let [l, r] = mixed(&alone, path, length(&p))?;
+        let analysis = analysis::analyze(&l, &r, rate);
+        tracks.push(json!({ "track": i, "name": t.name, "analysis": analysis }));
     }
-    Ok(json!({ "mix": mix, "tracks": tracks }))
+    Ok(json!({ "mix": mix, "sections": sections, "tracks": tracks }))
 }
 
 /// Bounces the project (as the app has it, if open) to a WAV file.

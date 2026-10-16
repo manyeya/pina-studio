@@ -172,8 +172,14 @@ An agent can't hear, so tempo measures:
     tempo analyze <file.wav>
 
 Each gives the length, peak (dBFS) and RMS per channel, integrated loudness (LUFS, as
-ITU-R BS.1770), clipped samples, and how the energy splits between lows (< 250 Hz), mids and
-highs (> 4 kHz), in dB below the total. `tempo render <project> <out.wav>` bounces it to listen to.
+ITU-R BS.1770) and the loudest 3 seconds' (`loudest_lufs`), crest (peak over RMS: small is
+squashed), clipped samples, how the energy splits between lows (< 250 Hz), mids and highs
+(> 4 kHz) and, finer, `spectrum_db` (sub < 60 Hz, bass, low mid, mid, presence, air > 8 kHz),
+all in dB below the total; stereo `correlation` (1 mono, below 0 cancelling in mono) and
+`width_db` (sides against middle); and the `notes` sounding, each pitch class's share of the
+tonal energy, with the key they fit best and how well (`key_fit`, above 0.7 is clear). A
+project's analysis also has each section, marker to marker, so a hook can be compared with a
+verse. `tempo render <project> <out.wav>` bounces it to listen to.
 
 `tempo params` and `tempo presets` answer from the app when it has the project open, and
 otherwise load the one plugin asked about.

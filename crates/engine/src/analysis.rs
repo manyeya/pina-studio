@@ -1,4 +1,5 @@
-//! Measuring audio, for agents, which can't listen: level, loudness and tonal balance.
+//! Measuring audio, for agents, which can't listen: level, loudness, dynamics, tonal balance,
+//! stereo, and the notes sounding.
 
 use serde::Serialize;
 
@@ -14,6 +15,49 @@ pub struct Analysis {
     pub clipped: usize,
     /// Energy below 250 Hz, between, and above 4 kHz, in dB relative to the total.
     pub bands_db: Bands,
+    /// Finer: energy in six bands, in dB relative to the total.
+    pub spectrum_db: Spectrum,
+    /// The loudest 3 seconds (short-term loudness), in LUFS.
+    pub loudest_lufs: f32,
+    /// Peak over RMS, in dB: how much the loudest moments stand out (a squashed mix is small).
+    pub crest_db: f32,
+    pub stereo: Stereo,
+    /// The notes sounding (by pitch class, C to B), each its share of the tonal energy in
+    /// percent, and the key they fit best.
+    pub notes: Notes,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct Spectrum {
+    /// Under 60 Hz: sub, an 808's weight.
+    pub sub: f32,
+    /// 60-250 Hz: bass and kick.
+    pub bass: f32,
+    /// 250 Hz-1 kHz: body, and mud.
+    pub low_mid: f32,
+    /// 1-4 kHz: presence, the ear's most sensitive range.
+    pub mid: f32,
+    /// 4-8 kHz: bite, sibilance.
+    pub presence: f32,
+    /// Over 8 kHz: air.
+    pub air: f32,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct Stereo {
+    /// 1 is mono, 0 unrelated sides, below 0 sides that cancel when summed to mono.
+    pub correlation: f32,
+    /// The sides' energy against the middle's, in dB: very low is near mono.
+    pub width_db: f32,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct Notes {
+    pub classes: [(String, f32); 12],
+    /// Like "C minor"; empty when there's nothing tonal to go on.
+    pub key: String,
+    /// How well it fits, -1 to 1 (above 0.7 is a clear key).
+    pub key_fit: f32,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -135,6 +179,157 @@ fn loudness(l: &[f32], r: &[f32], rate: f64) -> f32 {
     (lufs(gated) as f32).max(-70.0)
 }
 
+/// The FFT's twiddles for `n` points: `e^(-2πik/n)` for k below n/2.
+fn twiddles(n: usize) -> Vec<(f64, f64)> {
+    (0..n / 2)
+        .map(|k| {
+            let (s, c) = (-std::f64::consts::TAU * k as f64 / n as f64).sin_cos();
+            (c, s)
+        })
+        .collect()
+}
+
+/// An in-place radix-2 FFT of `re` and `im` (their length a power of two, `twiddles` for it).
+fn fft(re: &mut [f64], im: &mut [f64], twiddles: &[(f64, f64)]) {
+    let n = re.len();
+    let mut j = 0;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j |= bit;
+        if i < j {
+            re.swap(i, j);
+            im.swap(i, j);
+        }
+    }
+    let mut len = 2;
+    while len <= n {
+        let stride = n / len;
+        for start in (0..n).step_by(len) {
+            for k in 0..len / 2 {
+                let (c, s) = twiddles[k * stride];
+                let (a, b) = (start + k, start + k + len / 2);
+                let (tr, ti) = (re[b] * c - im[b] * s, re[b] * s + im[b] * c);
+                (re[b], im[b]) = (re[a] - tr, im[a] - ti);
+                re[a] += tr;
+                im[a] += ti;
+            }
+        }
+        len <<= 1;
+    }
+}
+
+/// The power spectrum averaged over Hann windows of `N` samples, half overlapped: bin `k` is
+/// `k * rate / N` Hz.
+const N: usize = 8192;
+
+fn power_spectrum(x: &[f64]) -> Vec<f64> {
+    let mut sum = vec![0.0; N / 2];
+    let hann: Vec<f64> = (0..N)
+        .map(|i| 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / N as f64).cos())
+        .collect();
+    let turns = twiddles(N);
+    let mut frames = 0;
+    let mut start = 0;
+    while start + N <= x.len() || (frames == 0 && !x.is_empty()) {
+        let mut re: Vec<f64> = (0..N)
+            .map(|i| x.get(start + i).copied().unwrap_or(0.0) * hann[i])
+            .collect();
+        let mut im = vec![0.0; N];
+        fft(&mut re, &mut im, &turns);
+        for k in 0..N / 2 {
+            sum[k] += re[k] * re[k] + im[k] * im[k];
+        }
+        frames += 1;
+        start += N / 2;
+    }
+    sum.iter_mut().for_each(|p| *p /= frames.max(1) as f64);
+    sum
+}
+
+/// Major and minor key profiles (Krumhansl and Kessler), from the tonic up.
+const MAJOR: [f64; 12] = [
+    6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88,
+];
+const MINOR: [f64; 12] = [
+    6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
+];
+const NAMES: [&str; 12] = [
+    "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B",
+];
+
+/// The pitch classes in a power spectrum (55 Hz to 4 kHz, where notes are clear), and the key
+/// they fit best.
+fn notes(spectrum: &[f64], rate: f64) -> Notes {
+    let mut classes = [0f64; 12];
+    for (k, &p) in spectrum.iter().enumerate() {
+        let f = k as f64 * rate / N as f64;
+        if (55.0..4000.0).contains(&f) {
+            let midi = (69.0 + 12.0 * (f / 440.0).log2()).round() as i64;
+            classes[midi.rem_euclid(12) as usize] += p.sqrt();
+        }
+    }
+    let total: f64 = classes.iter().sum();
+    let corr = |a: &[f64; 12], b: &[f64]| {
+        let (ma, mb) = (a.iter().sum::<f64>() / 12.0, b.iter().sum::<f64>() / 12.0);
+        let (mut num, mut da, mut db) = (0.0, 0.0, 0.0);
+        for i in 0..12 {
+            num += (a[i] - ma) * (b[i] - mb);
+            da += (a[i] - ma).powi(2);
+            db += (b[i] - mb).powi(2);
+        }
+        if da > 0.0 && db > 0.0 {
+            num / (da * db).sqrt()
+        } else {
+            0.0
+        }
+    };
+    let mut best = (f64::MIN, String::new());
+    if total > 0.0 {
+        for tonic in 0..12 {
+            for (profile, mode) in [(&MAJOR, "major"), (&MINOR, "minor")] {
+                let rotated: Vec<f64> = (0..12).map(|i| profile[(i + 12 - tonic) % 12]).collect();
+                let c = corr(&classes, &rotated);
+                if c > best.0 {
+                    best = (c, format!("{} {mode}", NAMES[tonic]));
+                }
+            }
+        }
+    }
+    Notes {
+        classes: std::array::from_fn(|i| {
+            let share = if total > 0.0 {
+                classes[i] / total * 100.0
+            } else {
+                0.0
+            };
+            (NAMES[i].to_string(), (share * 10.0).round() as f32 / 10.0)
+        }),
+        key: best.1,
+        key_fit: if total > 0.0 { best.0 as f32 } else { 0.0 },
+    }
+}
+
+/// The loudest short-term (3 s) loudness, stepping a second at a time.
+fn loudest(l: &[f32], r: &[f32], rate: f64) -> f32 {
+    let (window, step) = ((3.0 * rate) as usize, rate as usize);
+    if l.len() <= window {
+        return loudness(l, r, rate);
+    }
+    (0..=(l.len() - window) / step)
+        .map(|i| {
+            loudness(
+                &l[i * step..i * step + window],
+                &r[i * step..i * step + window],
+                rate,
+            )
+        })
+        .fold(-70.0, f32::max)
+}
+
 pub fn analyze(l: &[f32], r: &[f32], rate: f64) -> Analysis {
     let per = |x: &[f32]| {
         let peak = x.iter().fold(0f32, |m, s| m.max(s.abs()));
@@ -152,6 +347,28 @@ pub fn analyze(l: &[f32], r: &[f32], rate: f64) -> Analysis {
     let low = energy(&Biquad::pass(rate, 250.0, false).run(&mono));
     let high = energy(&Biquad::pass(rate, 4000.0, true).run(&mono));
     let relative = |e: f64| if total > 0.0 { to_db(e / total) } else { FLOOR };
+    let spectrum = power_spectrum(&mono);
+    let band = |lo: f64, hi: f64| {
+        let all: f64 = spectrum.iter().sum();
+        let part: f64 = spectrum
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| (lo..hi).contains(&(*k as f64 * rate / N as f64)))
+            .map(|(_, p)| p)
+            .sum();
+        if all > 0.0 { to_db(part / all) } else { FLOOR }
+    };
+    let (mut lr, mut ll, mut rr2, mut side) = (0.0, 0.0, 0.0, 0.0);
+    for (&a, &b) in l.iter().zip(r) {
+        let (a, b) = (a as f64, b as f64);
+        lr += a * b;
+        ll += a * a;
+        rr2 += b * b;
+        side += ((a - b) / 2.0).powi(2);
+    }
+    let mid = energy(&mono);
+    let peak = l.iter().chain(r).fold(0f32, |m, s| m.max(s.abs()));
+    let rms = ((ll + rr2) / (2 * l.len()).max(1) as f64).sqrt();
     Analysis {
         seconds: l.len() as f64 / rate,
         peak_db: [pl, pr],
@@ -163,6 +380,29 @@ pub fn analyze(l: &[f32], r: &[f32], rate: f64) -> Analysis {
             mid: relative((total - low - high).max(0.0)),
             high: relative(high),
         },
+        spectrum_db: Spectrum {
+            sub: band(0.0, 60.0),
+            bass: band(60.0, 250.0),
+            low_mid: band(250.0, 1000.0),
+            mid: band(1000.0, 4000.0),
+            presence: band(4000.0, 8000.0),
+            air: band(8000.0, rate),
+        },
+        loudest_lufs: loudest(l, r, rate),
+        crest_db: if rms > 0.0 {
+            (20.0 * (peak as f64 / rms).log10()) as f32
+        } else {
+            0.0
+        },
+        stereo: Stereo {
+            correlation: if ll > 0.0 && rr2 > 0.0 {
+                (lr / (ll * rr2).sqrt()) as f32
+            } else {
+                1.0
+            },
+            width_db: if mid > 0.0 { to_db(side / mid) } else { FLOOR },
+        },
+        notes: notes(&spectrum, rate),
     }
 }
 
@@ -237,6 +477,38 @@ mod tests {
             "{:?}",
             a.bands_db
         );
+    }
+
+    #[test]
+    fn the_spectrum_stereo_and_notes_say_what_is_playing() {
+        // An A minor chord, A C E, with an 808-ish 50 Hz under it.
+        let chord: Vec<f32> = (0..RATE as usize * 2)
+            .map(|i| {
+                let t = i as f64 / RATE;
+                let n = |f: f64| (std::f64::consts::TAU * f * t).sin();
+                (0.2 * (n(220.0) + n(261.63) + n(329.63)) + 0.3 * n(50.0)) as f32
+            })
+            .collect();
+        let a = analyze(&chord, &chord, RATE);
+        assert!(
+            a.spectrum_db.sub > -6.0 && a.spectrum_db.air < -40.0,
+            "{:?}",
+            a.spectrum_db
+        );
+        assert!((a.stereo.correlation - 1.0).abs() < 1e-6 && a.stereo.width_db < -100.0);
+        assert!(
+            a.notes.key == "A minor" || a.notes.key == "C major",
+            "{}",
+            a.notes.key
+        );
+        let share = |name: &str| a.notes.classes.iter().find(|(n, _)| n == name).unwrap().1;
+        assert!(share("A") > 15.0 && share("C") > 15.0 && share("E") > 15.0 && share("F#") < 5.0);
+        // A sine is 3 dB of crest; opposite sides cancel.
+        let tone = sine(440.0, 0.5, 1.0);
+        let flipped: Vec<f32> = tone.iter().map(|x| -x).collect();
+        let a = analyze(&tone, &flipped, RATE);
+        assert!((a.crest_db - 3.01).abs() < 0.05, "{}", a.crest_db);
+        assert!(a.stereo.correlation < -0.99);
     }
 
     #[test]
