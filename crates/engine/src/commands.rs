@@ -280,10 +280,13 @@ pub enum Command {
     DeleteMarker {
         marker: usize,
     },
-    /// The song's key, like "A minor"; without one, tempo works it out from the notes.
+    /// The song's key, like "A minor"; without one, tempo works it out from the notes. With
+    /// `move_notes`, the music moves into the new key.
     SetKey {
         #[serde(default)]
         key: Option<String>,
+        #[serde(default)]
+        move_notes: bool,
     },
     /// Loops playback from `start` to `end` (ticks); `on: false` keeps the range without looping.
     SetCycle {
@@ -896,14 +899,15 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             }
             p.markers.remove(marker);
         }
-        Command::SetKey { key } => match key {
-            None => p.key = None,
-            Some(k) => {
-                let parsed = Key::parse(&k)
-                    .ok_or_else(|| format!("{k:?} isn't a key: try \"A minor\" or \"Eb major\""))?;
-                p.key = Some(parsed.name());
-            }
-        },
+        Command::SetKey { key, move_notes } => {
+            let parsed = match key {
+                None => None,
+                Some(k) => Some(Key::parse(&k).ok_or_else(|| {
+                    format!("{k:?} isn't a key: try \"A minor\" or \"Eb major\"")
+                })?),
+            };
+            p.set_key(parsed, move_notes);
+        }
         Command::SetCycle { start, end, on } => {
             if end <= start {
                 return Err("a cycle's end must be after its start".into());

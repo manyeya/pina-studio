@@ -960,6 +960,48 @@ impl Project {
         bus
     }
 
+    /// Sets the song's key, or with None has it worked out from the notes. With `move_notes`, the
+    /// music moves into the new key (`Key::move_pitch`): every note and pattern row, in regions,
+    /// take folders and Live Loops cells, on every pitched instrument. Drums and audio stay put.
+    pub fn set_key(&mut self, key: Option<crate::music::Key>, move_notes: bool) {
+        if let (true, Some(from), Some(to)) = (move_notes, self.song_key(), key)
+            && from != to
+        {
+            fn shift(content: &mut Content, from: &crate::music::Key, to: &crate::music::Key) {
+                match content {
+                    Content::Midi { notes } => {
+                        for n in notes {
+                            n.pitch = from.move_pitch(n.pitch, to);
+                        }
+                    }
+                    Content::Pattern { rows, .. } => {
+                        for row in rows {
+                            row.pitch = from.move_pitch(row.pitch, to);
+                        }
+                    }
+                    Content::Takes { takes, .. } => {
+                        for take in takes {
+                            shift(&mut take.content, from, to);
+                        }
+                    }
+                    Content::Audio { .. } => {}
+                }
+            }
+            let pitched = |t: &&mut Track| {
+                t.instrument.is_some() && !matches!(t.instrument, Some(Instrument::Drums))
+            };
+            for t in self.tracks.iter_mut().filter(pitched) {
+                for r in &mut t.regions {
+                    shift(&mut r.content, &from, &to);
+                }
+                for c in &mut t.cells {
+                    shift(&mut c.region.content, &from, &to);
+                }
+            }
+        }
+        self.key = key.map(|k| k.name());
+    }
+
     /// The song's key: the one set, or else the one its notes suggest (drums aside).
     pub fn song_key(&self) -> Option<crate::music::Key> {
         if let Some(k) = self.key.as_deref().and_then(crate::music::Key::parse) {
@@ -1853,5 +1895,41 @@ mod tests {
                 .unwrap()
                 .contains("time_signature")
         );
+    }
+
+    #[test]
+    fn changing_the_key_can_move_the_music_into_it() {
+        let mut p = project(vec![midi(0, 960, &[(0, 60), (240, 64), (480, 67)])], true);
+        p.add_track(
+            1,
+            Track {
+                instrument: Some(Instrument::Drums),
+                regions: vec![midi(0, 960, &[(0, 36)])],
+                ..Default::default()
+            },
+        );
+        let key = |s: &str| crate::music::Key::parse(s);
+        let pitches = |p: &Project, t: usize| match &p.tracks[t].regions[0].content {
+            Content::Midi { notes } => notes.iter().map(|n| n.pitch).collect::<Vec<_>>(),
+            _ => unreachable!(),
+        };
+        assert_eq!(p.song_key(), key("C major")); // a C major chord
+        // Just naming it: nothing moves.
+        let mut named = p.clone();
+        named.set_key(key("D major"), false);
+        assert_eq!(pitches(&named, 0), [60, 64, 67]);
+        // Moving into D major: a D major chord; into C minor: C minor's. Drums stay.
+        let mut d = p.clone();
+        d.set_key(key("D major"), true);
+        assert_eq!(
+            (pitches(&d, 0), d.key.as_deref()),
+            (vec![62, 66, 69], Some("D major"))
+        );
+        assert_eq!(pitches(&d, 1), [36]);
+        p.set_key(key("C minor"), true);
+        assert_eq!(pitches(&p, 0), [60, 63, 67]);
+        // Back to working it out: nothing moves.
+        p.set_key(None, true);
+        assert_eq!((pitches(&p, 0), p.key.clone()), (vec![60, 63, 67], None));
     }
 }

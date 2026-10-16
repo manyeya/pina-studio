@@ -32,11 +32,11 @@ fn scale_notes(key: Option<Key>) -> Vec<u8> {
     (48..=72).rev().filter(|&p| key.contains(p)).collect()
 }
 
-/// A row's name: a drum on the kit, else a note.
-fn row_name(drums: bool, pitch: u8) -> String {
+/// A row's name: a drum on the kit, else a note, spelled by the key.
+fn row_name(drums: bool, key: Option<Key>, pitch: u8) -> String {
     match drums {
         true => drums::name(pitch),
-        false => crate::pianoroll::name(pitch),
+        false => crate::pianoroll::name_in(key, pitch),
     }
 }
 
@@ -146,7 +146,7 @@ impl Workspace {
                         .items_center()
                         .px_2()
                         .text_size(px(11.))
-                        .child(row_name(kit, row.pitch)),
+                        .child(row_name(kit, self.session.project.song_key(), row.pitch)),
                 );
                 let cells = row.cells.iter().enumerate().map(|(k, &v)| {
                     let beat_start = k % 4 == 0;
@@ -198,7 +198,8 @@ impl Workspace {
                             _ => scale_notes(project.song_key())
                                 .into_iter()
                                 .map(|pitch| {
-                                    let label = crate::pianoroll::name(pitch);
+                                    let key = project.song_key();
+                                    let label = crate::pianoroll::name_in(key, pitch);
                                     (label, MenuAction::AddRow { at, pitch })
                                 })
                                 .collect(),

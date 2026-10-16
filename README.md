@@ -47,8 +47,13 @@ In the app, mostly as in Logic:
   ruler's top.
 - Song plays the arrangement; Pattern (as in FL Studio) loops the selected region alone.
 - The display shows the position, the time, the tempo (drag it), the time signature (pick one:
-  4/4, 3/4, 6/8, 7/8…) and the key: worked out from the notes, or chosen from its menu. The piano
-  roll shades the rows out of the key. The window narrows to 1120 points with all of it showing.
+  4/4, 3/4, 6/8, 7/8…) and the key: worked out from the notes, or chosen from its menu. Choosing
+  one moves the music into it (each step of the scale onto the new scale's, so major to minor
+  changes the mode; drums and audio stay), unless the menu's last row is turned off. The piano
+  roll shades the rows out of the key and marks it down its keyboard, notes are named as the key
+  spells them, and the score shows its signature. The window narrows to 1120 points with all of
+  it showing.
+- In Pattern mode, selecting another region plays it at once, from the same place in its loop.
 - Markers sit over the ruler: double-click to add one (and type its name), drag to move it, click
   to go there, double-click to rename it, right-click for a quick name or to delete it.
 - Double-click a track's name, or a strip's name plate in the mixer, to rename it; a region's name

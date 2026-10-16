@@ -879,18 +879,51 @@ fn pattern_mode_loops_the_selected_region_alone(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_key_is_worked_out_or_chosen(cx: &mut TestAppContext) {
+fn choosing_a_key_moves_the_music_into_it_or_just_names_it(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     let key = |cx: &VisualTestContext| {
         ws.read_with(cx, |ws, _| ws.session.project.song_key().map(|k| k.name()))
     };
+    let lowest = |cx: &VisualTestContext| keys_notes(&ws, cx, 0).iter().map(|n| n.1).min();
     assert_eq!(key(cx).as_deref(), Some("C major")); // the demo's chords
+    let c = lowest(cx).unwrap();
+    // A major, from the menu: the chords move down a minor third into it.
     click_on(cx, "key", Modifiers::none(), MouseButton::Left);
-    click_on(cx, "menu-10", Modifiers::none(), MouseButton::Left); // after the notes, C major on
+    click_on(cx, "menu-10", Modifiers::none(), MouseButton::Left);
     assert_eq!(key(cx).as_deref(), Some("A major"));
+    assert_eq!(lowest(cx), Some(c - 3));
+    // Worked out from the notes again, they say A major now.
     click_on(cx, "key", Modifiers::none(), MouseButton::Left);
-    click_on(cx, "menu-0", Modifiers::none(), MouseButton::Left); // back to the notes
-    assert_eq!(key(cx).as_deref(), Some("C major"));
+    click_on(cx, "menu-0", Modifiers::none(), MouseButton::Left);
+    assert_eq!(key(cx).as_deref(), Some("A major"));
+    // With moving turned off (the menu's last row; it stays open), a key only names it.
+    click_on(cx, "key", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "menu-tail", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| !ws.key_moves_notes && ws.menu.is_some()));
+    click_on(cx, "menu-1", Modifiers::none(), MouseButton::Left); // C major
+    assert_eq!(
+        (key(cx).as_deref(), lowest(cx)),
+        (Some("C major"), Some(c - 3))
+    );
+    // Each was one edit.
+    cx.simulate_keystrokes("cmd-z cmd-z cmd-z");
+    assert_eq!((key(cx).as_deref(), lowest(cx)), (Some("C major"), Some(c)));
+}
+
+#[gpui::test]
+fn pattern_mode_plays_whichever_region_is_selected_at_once(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    // The first drum loop (bar 1), as a pattern, playing.
+    cx.simulate_click(spot(&ws, cx, PPQ, 2), Modifiers::none());
+    click_on(cx, "pattern-mode", Modifiers::none(), MouseButton::Left);
+    cx.simulate_keystrokes("space");
+    until(cx, &ws, |ws| ws.player.playing() && ws.playhead() > 0);
+    // Selecting the third (bar 3) plays it now, from the same place in its loop.
+    cx.simulate_click(spot(&ws, cx, BAR * 2 + PPQ, 2), Modifiers::none());
+    until(cx, &ws, |ws| (BAR * 2..BAR * 3).contains(&ws.playhead()));
+    let looped = ws.read_with(cx, |ws, _| ws.pattern.map(|p| p.0));
+    assert_eq!(looped, ws.read_with(cx, |ws, _| ws.region));
+    cx.simulate_keystrokes("space");
 }
 
 fn drag_with(

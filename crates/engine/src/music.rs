@@ -110,6 +110,90 @@ impl Key {
     pub fn is_root(&self, pitch: u8) -> bool {
         pitch % 12 == self.root
     }
+
+    /// The scale's seven steps, in semitones above the tonic.
+    fn scale(&self) -> [u8; 7] {
+        match self.minor {
+            true => [0, 2, 3, 5, 7, 8, 10],
+            false => [0, 2, 4, 5, 7, 9, 11],
+        }
+    }
+
+    /// Where a pitch goes when the music moves from this key to `to`: the tonic moves the nearest
+    /// way (up to a fifth up or a tritone down), and each step of the scale lands on the same step
+    /// of the new one, so changing between major and minor changes the mode, not just the pitch.
+    /// Notes outside the scale keep their place beside the step under them.
+    pub fn move_pitch(&self, pitch: u8, to: &Key) -> u8 {
+        let shift = (to.root as i32 - self.root as i32).rem_euclid(12);
+        let shift = if shift >= 6 { shift - 12 } else { shift };
+        let rel = (pitch as i32 - self.root as i32).rem_euclid(12);
+        let (from, onto) = (self.scale(), to.scale());
+        let degree = (0..7).rev().find(|&i| from[i] as i32 <= rel).unwrap();
+        let moved = onto[degree] as i32 + rel - from[degree] as i32;
+        (pitch as i32 - rel + shift + moved).clamp(0, 127) as u8
+    }
+
+    /// The key signature: sharps (positive) or flats (negative), as the tonic is spelled.
+    pub fn signature(&self) -> i8 {
+        // The relative major's place on the circle of fifths, from C.
+        let major = (self.root + if self.minor { 3 } else { 0 }) % 12;
+        let fifths = (major as i8 * 7).rem_euclid(12); // 0 C, 1 G, 2 D ... 11 F
+        let sharps = if fifths > 6 { fifths - 12 } else { fifths };
+        // Spelled with flats (as `tonic` does), a key with six sharps would be six flats.
+        match (sharps, self.tonic().contains('b')) {
+            (6, true) => -6,
+            (s, _) => s,
+        }
+    }
+
+    /// A pitch as this key's signature spells it: its letter (C is 0, B 6), octave (middle C's
+    /// is 4), and how far it's raised or lowered from the letter (1 a sharp, -1 a flat).
+    pub fn spell(&self, pitch: u8) -> (i32, i32, i8) {
+        const NATURAL: [u8; 7] = [0, 2, 4, 5, 7, 9, 11];
+        let sig = self.signature();
+        let pc = pitch % 12;
+        let octave = pitch as i32 / 12 - 1;
+        // The letter the signature alters to make this pitch, if it does.
+        let altered = |letter: usize| {
+            const SHARPS: [usize; 7] = [3, 0, 4, 1, 5, 2, 6]; // F C G D A E B
+            const FLATS: [usize; 7] = [6, 2, 5, 1, 4, 0, 3]; // B E A D G C F
+            match sig {
+                s if s > 0 => SHARPS[..s as usize].contains(&letter).then_some(1),
+                s if s < 0 => FLATS[..(-s) as usize].contains(&letter).then_some(-1),
+                _ => None,
+            }
+        };
+        // In the key: spelled as its signature has it (E# and Cb included).
+        for (letter, &natural) in NATURAL.iter().enumerate() {
+            if let Some(alter) = altered(letter) {
+                let sounding = (natural as i8 + alter).rem_euclid(12) as u8;
+                if sounding == pc {
+                    let octave = octave + (natural as i32 + alter as i32 - pc as i32) / -12;
+                    return (letter as i32, octave, alter);
+                }
+            }
+        }
+        if let Some(letter) = NATURAL.iter().position(|&n| n == pc) {
+            return (letter as i32, octave, 0);
+        }
+        // A black key outside the signature: flats in flat keys, else sharps.
+        let (letter, alter) = match sig < 0 {
+            true => (NATURAL.iter().position(|&n| n == pc + 1).unwrap(), -1),
+            false => (NATURAL.iter().position(|&n| n + 1 == pc).unwrap(), 1),
+        };
+        (letter as i32, octave, alter)
+    }
+
+    /// What the signature already does to a letter: 1 sharpens it, -1 flattens it.
+    pub fn signature_on(&self, letter: i32) -> i8 {
+        const SHARPS: [i32; 7] = [3, 0, 4, 1, 5, 2, 6];
+        const FLATS: [i32; 7] = [6, 2, 5, 1, 4, 0, 3];
+        match self.signature() {
+            s if s > 0 && SHARPS[..s as usize].contains(&letter) => 1,
+            s if s < 0 && FLATS[..(-s) as usize].contains(&letter) => -1,
+            _ => 0,
+        }
+    }
 }
 
 /// The key that best fits some notes, as (pitch, length in ticks): Krumhansl and Kessler's
@@ -460,5 +544,61 @@ mod tests {
         assert_eq!((notes[0].pitch, notes[1].pitch), (60, 74));
         NoteEdit::Velocity { by: 50 }.apply(&mut notes, None);
         assert_eq!(notes[0].velocity, 127);
+    }
+
+    #[test]
+    fn music_moves_to_another_key() {
+        let key = |s: &str| Key::parse(s).unwrap();
+        // C major to D major: up a tone; to G major: down a fourth, the nearer way.
+        assert_eq!(key("C").move_pitch(60, &key("D")), 62);
+        assert_eq!(key("C").move_pitch(64, &key("G")), 59);
+        // To the parallel minor: E and A and B come down a semitone; C and G stay.
+        let minor: Vec<u8> = [60, 62, 64, 65, 67, 69, 71]
+            .map(|p| key("C").move_pitch(p, &key("C minor")))
+            .to_vec();
+        assert_eq!(minor, [60, 62, 63, 65, 67, 68, 70]);
+        // A minor to C minor: the same scale steps, a minor third up.
+        assert_eq!(key("Am").move_pitch(57, &key("Cm")), 60);
+        assert_eq!(key("Am").move_pitch(60, &key("Cm")), 63);
+        // A note outside the scale keeps its place: C# in C major is D# in D major.
+        assert_eq!(key("C").move_pitch(61, &key("D")), 63);
+        // And back again, it's where it was.
+        for p in 40..90 {
+            let there = key("C").move_pitch(p, &key("E minor"));
+            if key("C").contains(p) {
+                assert_eq!(key("E minor").move_pitch(there, &key("C")), p);
+            }
+        }
+    }
+
+    #[test]
+    fn keys_have_their_signatures_and_spell_by_them() {
+        let key = |s: &str| Key::parse(s).unwrap();
+        let sig = |s: &str| key(s).signature();
+        assert_eq!(
+            [sig("C"), sig("G"), sig("D"), sig("F"), sig("Bb"), sig("Eb")],
+            [0, 1, 2, -1, -2, -3]
+        );
+        assert_eq!(
+            [
+                sig("A minor"),
+                sig("E minor"),
+                sig("D minor"),
+                sig("C minor")
+            ],
+            [0, 1, -1, -3]
+        );
+        assert_eq!([sig("F# major"), sig("Db major")], [6, -5]);
+        // Bb in F major is a B flat, in the signature; in G major, D# is a sharp outside it.
+        assert_eq!(key("F").spell(70), (6, 4, -1));
+        assert_eq!(key("F").signature_on(6), -1);
+        assert_eq!(key("G").spell(63), (1, 4, 1));
+        // In Eb major a black key outside the signature is a flat: Gb.
+        assert_eq!(key("Eb").spell(66), (4, 4, -1));
+        // F# major spells F as E#.
+        assert_eq!(key("F# major").spell(65), (2, 4, 1));
+        // C major: plain.
+        assert_eq!(key("C").spell(60), (0, 4, 0));
+        assert_eq!(key("C").spell(61), (0, 4, 1));
     }
 }

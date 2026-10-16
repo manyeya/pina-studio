@@ -470,7 +470,7 @@ impl Workspace {
     }
 
     /// The keys to choose from, and going back to working it out.
-    fn key_menu(&self, at: gpui::Point<gpui::Pixels>) -> Menu {
+    pub fn key_menu(&self, at: gpui::Point<gpui::Pixels>) -> Menu {
         let detected = {
             let mut p = self.session.project.clone();
             p.key = None;
@@ -483,13 +483,29 @@ impl Workspace {
             },
             MenuAction::Key(None),
         )];
-        // Majors in one column, minors in the other.
-        items.extend(Key::all().map(|k| (k.name(), MenuAction::Key(Some(k.name())))));
+        // Majors in one column, minors in the other, the key now ticked.
+        let now = self.session.project.key.as_deref().and_then(Key::parse);
+        items.extend(Key::all().map(|k| {
+            let label = match now == Some(k) {
+                true => format!("✓ {}", k.name()),
+                false => k.name(),
+            };
+            (label, MenuAction::Key(Some(k.name())))
+        }));
+        // Across the bottom: whether choosing one moves the music into it.
+        let tail = (
+            match self.key_moves_notes {
+                true => "✓ Move the notes into the new key".to_string(),
+                false => "    Move the notes into the new key".to_string(),
+            },
+            MenuAction::KeyMovesNotes(at),
+        );
         Menu {
             at,
             items,
             columns: 2,
             lead: 1,
+            tail: Some(tail),
             ..Default::default()
         }
     }

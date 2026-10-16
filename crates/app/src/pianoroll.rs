@@ -9,7 +9,7 @@ use gpui::{
     ScrollWheelEvent, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 use tempo_engine::{
-    music::NoteEdit,
+    music::{Key, NoteEdit},
     project::{At, Content, Note, PPQ},
 };
 
@@ -42,6 +42,29 @@ pub fn name(pitch: u8) -> String {
         "C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B",
     ];
     format!("{}{}", NAMES[pitch as usize % 12], pitch as i32 / 12 - 2)
+}
+
+/// A pitch's name as a key spells it (B♭ in F major, A♯ in E major), middle C being C3 as in
+/// Logic; with no key, sharps.
+pub fn name_in(key: Option<Key>, pitch: u8) -> String {
+    let Some(key) = key else {
+        return name(pitch);
+    };
+    let (letter, octave, alter) = key.spell(pitch);
+    let accidental = match alter {
+        1 => "♯",
+        -1 => "♭",
+        _ => "",
+    };
+    let letter = ["C", "D", "E", "F", "G", "A", "B"][letter as usize];
+    format!("{letter}{accidental}{}", octave - 1)
+}
+
+impl Workspace {
+    /// A pitch's name in the song's key.
+    pub fn note_name(&self, pitch: u8) -> String {
+        name_in(self.session.project.song_key(), pitch)
+    }
 }
 
 impl Workspace {
@@ -269,6 +292,8 @@ impl Workspace {
         });
         let track = at.map(|at| project.tracks[at.0].id);
         let key = self.roll.scale.then(|| project.song_key()).flatten();
+        // Names spelled by the key, scale shown or not.
+        let spelling = project.song_key();
 
         // Pitches sounding now: the region's notes under the playhead, and a key held down.
         let tick = self.playhead();
@@ -444,7 +469,7 @@ impl Workspace {
                             Tool::Scissors => gpui::CursorStyle::IBeam,
                             _ => gpui::CursorStyle::OpenHand,
                         })
-                        .when(w >= 26.0, |d| d.child(name(n.pitch)))
+                        .when(w >= 26.0, |d| d.child(name_in(spelling, n.pitch)))
                         .debug_selector(move || format!("note-{i}"))
                         .child(
                             div()
@@ -520,7 +545,11 @@ impl Workspace {
                             .text_size(px(10.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .whitespace_nowrap()
-                            .child(format!("{} · vel {}", name(n.pitch), n.velocity)),
+                            .child(format!(
+                                "{} · vel {}",
+                                name_in(spelling, n.pitch),
+                                n.velocity
+                            )),
                     );
                 }
             }
@@ -559,6 +588,19 @@ impl Workspace {
                 }
                 for row in first..=last.min(127) {
                     let pitch = (127 - row) as u8;
+                    // The song's scale down the keys' edge: its notes marked, its tonic bright.
+                    if let Some(k) = key.filter(|k| k.contains(pitch)) {
+                        let y = b.origin.y + px(row as f32 * KEY_H - sy + 1.0);
+                        let mark = Bounds::new(
+                            point(b.origin.x + px(w - 4.0), y),
+                            size(px(4.), px(KEY_H - 2.)),
+                        );
+                        let c = match k.is_root(pitch) {
+                            true => Hsla::from(rgb(ACCENT)),
+                            false => alpha(ACCENT, 0.45),
+                        };
+                        window.paint_quad(fill(mark, c));
+                    }
                     if black(pitch) {
                         let y = b.origin.y + px(row as f32 * KEY_H - sy + 1.0);
                         let key =
@@ -580,18 +622,22 @@ impl Workspace {
         )
         .absolute()
         .size_full();
-        let labels = (0..=127u8).filter(|p| p % 12 == 0).map(|p| {
-            div()
-                .absolute()
-                .right(px(5.))
-                .top(px((127 - p) as f32 * KEY_H - sy + 1.))
-                .font_family(MONO)
-                .text_size(px(9.))
-                .line_height(px(10.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(0x5a5a64))
-                .child(name(p))
-        });
+        // Every C, and the song's tonic, named.
+        let tonic = |p: u8| key.is_some_and(|k| k.is_root(p));
+        let labels = (0..=127u8)
+            .filter(|&p| p % 12 == 0 || (tonic(p) && !black(p)))
+            .map(|p| {
+                div()
+                    .absolute()
+                    .right(px(7.))
+                    .top(px((127 - p) as f32 * KEY_H - sy + 1.))
+                    .font_family(MONO)
+                    .text_size(px(9.))
+                    .line_height(px(10.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(if tonic(p) { ACCENT } else { 0x5a5a64 }))
+                    .child(name_in(spelling, p))
+            });
         let keyboard = div()
             .w(px(KEYS_W))
             .flex_none()
@@ -940,4 +986,20 @@ fn grab_note(
         };
         ws.begin_drag(drag, cx);
     })
+}
+
+#[cfg(test)]
+mod spelling {
+    use super::*;
+
+    #[test]
+    fn notes_are_named_as_the_key_spells_them() {
+        let key = |s: &str| Key::parse(s);
+        assert_eq!(name_in(None, 60), "C3"); // middle C, as Logic numbers it
+        assert_eq!(name_in(None, 70), "A♯3");
+        assert_eq!(name_in(key("Eb major"), 70), "B♭3");
+        assert_eq!(name_in(key("Eb major"), 63), "E♭3");
+        assert_eq!(name_in(key("E major"), 70), "A♯3");
+        assert_eq!(name_in(key("C major"), 72), "C4");
+    }
 }

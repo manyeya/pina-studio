@@ -347,11 +347,9 @@ impl Workspace {
                     notes.iter().map(|n| n.pitch).min(),
                     notes.iter().map(|n| n.pitch).max(),
                 ) {
-                    (Some(lo), Some(hi)) => format!(
-                        "{}–{}",
-                        crate::pianoroll::name(lo),
-                        crate::pianoroll::name(hi)
-                    ),
+                    (Some(lo), Some(hi)) => {
+                        format!("{}–{}", self.note_name(lo), self.note_name(hi))
+                    }
                     _ => "—".into(),
                 };
                 d = d

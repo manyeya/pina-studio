@@ -446,8 +446,12 @@ pub struct Workspace {
     pub side: Side,
     pub tool: Tool,
     pub snap: Snap,
-    /// Playing the selected region alone, looped, as FL Studio's pattern mode.
+    /// Playing the selected region alone, looped, as FL Studio's pattern mode; and the region it
+    /// plays, with the start and length it had then.
     pub pattern_mode: bool,
+    pub pattern: Option<(At, u64, u64)>,
+    /// Whether choosing a key moves the music into it, or only names it.
+    pub key_moves_notes: bool,
     /// The channel the mixer's side panel shows.
     pub channel: Channel,
     pub channels: Channels,
@@ -548,6 +552,8 @@ impl Workspace {
             tool: Tool::Pointer,
             snap: Snap::Smart,
             pattern_mode: false,
+            pattern: None,
+            key_moves_notes: true,
             channel: Channel::Track(0),
             channels: Channels::All,
             mixer_rows: [true; 3],
@@ -656,7 +662,9 @@ impl Workspace {
     /// What the engine plays: the project, or in pattern mode just the selected region, looped.
     fn engine_project(&self) -> Cow<'_, Project> {
         let project = &self.session.project;
-        let Some((t, r)) = self.region.filter(|_| self.pattern_mode) else {
+        let Some(((t, r), ..)) = self.pattern.filter(|&((t, r), ..)| {
+            self.pattern_mode && project.tracks.get(t).is_some_and(|t| r < t.regions.len())
+        }) else {
             return Cow::Borrowed(project);
         };
         let mut p = project.clone();
@@ -1409,10 +1417,32 @@ impl Workspace {
         }
         self.pattern_mode = on;
         if on && let Some(at) = self.region {
-            let start = self.session.project.region(at).start;
+            let r = self.session.project.region(at);
+            let start = r.start;
+            self.pattern = Some((at, r.start, r.length));
             self.locate_tick(start, cx);
         }
         self.changed(cx);
+    }
+
+    /// In Pattern mode, selecting another region plays it straight away, from the same place in
+    /// its loop as the last one was at (or its start, if it's longer than that).
+    fn follow_pattern(&mut self, cx: &mut Context<Self>) {
+        let Some(at) = self.region.filter(|_| self.pattern_mode) else {
+            return;
+        };
+        if self.pattern.is_some_and(|(p, ..)| p == at) {
+            return;
+        }
+        let tick = self.playhead();
+        let into = self.pattern.map_or(0, |(_, start, length)| {
+            tick.saturating_sub(start) % length.max(1)
+        });
+        let r = self.session.project.region(at);
+        let (start, length) = (r.start, r.length.max(1));
+        self.pattern = Some((at, start, length));
+        self.changed(cx);
+        self.locate_tick(start + into % length, cx);
     }
 
     fn undo(&mut self, cx: &mut Context<Self>) {
@@ -1997,8 +2027,8 @@ impl Workspace {
                         .child(icon(Icon::Keys, 12.).text_color(rgb(ACCENT_TEXT)))
                         .child(format!(
                             "Musical Typing · {}–{} · Z X octave · ⌘K off",
-                            crate::pianoroll::name(low),
-                            crate::pianoroll::name(high)
+                            self.note_name(low),
+                            self.note_name(high)
                         )),
                 )
             })
@@ -2041,6 +2071,7 @@ impl Render for Workspace {
         self.viewport_h = f32::from(window.viewport_size().height);
         self.viewport_w = f32::from(window.viewport_size().width);
         self.player.collect();
+        self.follow_pattern(cx);
         self.read_meters();
         self.capture(cx);
         self.keep_writing(cx);

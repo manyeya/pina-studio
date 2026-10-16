@@ -115,8 +115,11 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `add_marker` `{"tick": 15360, "name": "Chorus"}`: names a place in the song; answers with its
   index, markers being numbered in time order.
 - `set_marker` `{"marker": 0, "name": "Verse 2", "tick": 7680}`, `delete_marker` `{"marker": 0}`
-- `set_key` `{"key": "A minor"}`: the song's key, which the piano roll shows as a scale. Without
-  `key`, tempo works it out from the notes.
+- `set_key` `{"key": "A minor", "move_notes": true}`: the song's key, which the piano roll shows
+  as a scale and the score as its signature. With `"move_notes": true` the music moves into it:
+  every note and pattern row on pitched instruments goes up or down to the new tonic (the nearer
+  way), each step of the old scale landing on the same step of the new, so major to minor changes
+  the mode; drums and audio stay. Without `key`, tempo works it out from the notes.
 - `set_cycle` `{"start": 0, "end": 15360, "on": true}`: playback loops over that range (ticks);
   `"on": false` keeps the range without looping.
 

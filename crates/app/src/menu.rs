@@ -23,6 +23,8 @@ pub struct Menu {
     /// Side by side, after `lead` items across the top: majors beside minors.
     pub columns: usize,
     pub lead: usize,
+    /// An item across the bottom, after a rule: a setting for the rest.
+    pub tail: Option<(String, MenuAction)>,
 }
 
 /// Most items a menu draws at once; typing narrows the rest down.
@@ -108,8 +110,11 @@ pub enum MenuAction {
     NewTrack {
         instrument: Option<Instrument>,
     },
-    /// The song's key, or None to work it out from the notes.
+    /// The song's key, or None to work it out from the notes; the music moves into a new key
+    /// unless that's been turned off.
     Key(Option<String>),
+    /// Whether choosing a key moves the music into it, or only names it. Reopens the key menu.
+    KeyMovesNotes(Point<Pixels>),
     Snap(Snap),
     /// The track whose notes the piano roll shows faintly, by id.
     Ghost(Option<u64>),
@@ -284,7 +289,15 @@ impl Workspace {
                 }
             }),
             MenuAction::NewTrack { instrument } => self.new_track(instrument, cx),
-            MenuAction::Key(key) => self.edit(cx, |ws| ws.session.project.key = key),
+            MenuAction::Key(key) => {
+                let key = key.as_deref().and_then(tempo_engine::music::Key::parse);
+                let moves = self.key_moves_notes;
+                self.edit(cx, |ws| ws.session.project.set_key(key, moves));
+            }
+            MenuAction::KeyMovesNotes(at) => {
+                self.key_moves_notes ^= true;
+                self.menu = Some(self.key_menu(at));
+            }
             MenuAction::Snap(snap) => self.snap = snap,
             MenuAction::Ghost(id) => self.roll.ghost = id,
             MenuAction::AutoParam(track, param) => {
@@ -349,35 +362,38 @@ impl Workspace {
         let menu = self.menu.as_ref()?;
         let shown = menu.shown();
         let more = shown.len().saturating_sub(SHOWN);
+        let row = |name: String, label: &String, action: &MenuAction, cx: &mut Context<Self>| {
+            let action = action.clone();
+            let inert = matches!(action, MenuAction::Nothing);
+            div()
+                .h(px(28.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .rounded(px(6.))
+                .text_size(px(12.5))
+                .whitespace_nowrap()
+                .text_color(rgb(if inert { TEXT_3 } else { TEXT }))
+                .when(!inert, |d| {
+                    d.cursor_pointer()
+                        .hover(|s| s.bg(rgb(ACCENT)).text_color(rgb(0xffffff)))
+                })
+                .debug_selector(move || name.clone())
+                .child(label.clone())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| {
+                        cx.stop_propagation();
+                        ws.choose(action.clone(), cx);
+                    }),
+                )
+        };
         let mut items: Vec<_> = shown
             .into_iter()
             .take(SHOWN)
-            .map(|i| (i, &menu.items[i]))
-            .map(|(i, (label, action))| {
-                let action = action.clone();
-                let inert = matches!(action, MenuAction::Nothing);
-                div()
-                    .h(px(28.))
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(6.))
-                    .text_size(px(12.5))
-                    .whitespace_nowrap()
-                    .text_color(rgb(if inert { TEXT_3 } else { TEXT }))
-                    .when(!inert, |d| {
-                        d.cursor_pointer()
-                            .hover(|s| s.bg(rgb(ACCENT)).text_color(rgb(0xffffff)))
-                    })
-                    .debug_selector(move || format!("menu-{i}"))
-                    .child(label.clone())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            cx.stop_propagation();
-                            ws.choose(action.clone(), cx);
-                        }),
-                    )
+            .map(|i| {
+                let (label, action) = &menu.items[i];
+                row(format!("menu-{i}"), label, action, cx)
             })
             .collect();
         // In columns: the lead items across the top, the rest split evenly beside each other.
@@ -391,6 +407,10 @@ impl Workspace {
                 columns = columns.child(div().flex_1().flex().flex_col().children(column));
             }
             items.push(columns);
+        }
+        if let Some((label, action)) = &menu.tail {
+            items.push(div().h(px(1.)).my(px(4.)).bg(rgb(LINE_STRONG)));
+            items.push(row("menu-tail".into(), label, action, cx));
         }
         let list = div()
             .id("menu")
