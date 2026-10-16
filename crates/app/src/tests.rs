@@ -1582,9 +1582,12 @@ fn the_sample_browser_searches_filters_and_hears(cx: &mut TestAppContext) {
     assert_eq!(found(&ws, cx).len(), 6);
     // The search field has the keyboard: typing finds as it goes, and doesn't reach the
     // shortcuts ("k" would turn the metronome on).
-    cx.simulate_input("kick");
+    cx.simulate_input("punchy kick");
     assert_eq!(found(&ws, cx), ["Kick_01", "Kick_02"]);
     assert!(!ws.read_with(cx, |ws, _| ws.player.metronome()));
+    // The words light their chips; clicked, a chip's words come out of the search.
+    click_on(cx, "category-Kick", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.browser.text.clone()), "punchy");
     // Escape clears it and hands the keyboard back.
     cx.simulate_keystrokes("escape");
     assert_eq!(found(&ws, cx).len(), 6);

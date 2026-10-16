@@ -1782,25 +1782,39 @@ impl Workspace {
     /// A chip for each sound the library has, drums first, with how many it would find.
     fn category_chips(&self, cx: &mut Context<Self>) -> Vec<Div> {
         let b = &self.browser;
+        // What the search's words name lights too; clicked, those words come out of it.
+        let said = search::named(&b.text).0;
         Category::ALL
             .iter()
             .copied()
             .filter(|c| b.counts.get(c).is_some_and(|&n| n > 0) || b.categories.contains(c))
             .map(|c| {
-                let on = b.categories.contains(&c);
+                let picked = b.categories.contains(&c);
+                let worded = said.contains(&c) && !picked;
                 filter_chip(
                     c.name(),
                     Some(b.counts.get(&c).copied().unwrap_or(0)),
-                    on,
+                    picked || worded,
                     Some(category_color(c)),
                 )
                 .debug_selector(move || format!("category-{}", c.name()))
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| ws.toggle_category(c, cx)),
+                    cx.listener(move |ws, _, _, cx| match worded {
+                        true => ws.unsay(Some(c), None, cx),
+                        false => ws.toggle_category(c, cx),
+                    }),
                 )
             })
             .collect()
+    }
+
+    /// Takes the words naming a category or trait out of the search.
+    fn unsay(&mut self, c: Option<Category>, t: Option<&'static str>, cx: &mut Context<Self>) {
+        let text = search::unsay(&self.browser.text, c, t);
+        self.browser
+            .search
+            .update(cx, |i, cx| i.set_text(&text, cx));
     }
 
     /// The browser's own page, in the tracks' place as the mixer is: what to look for, what's
@@ -2510,6 +2524,7 @@ impl Workspace {
                 .child(tempo_seg(format!("{tempo:.0} BPM"), b.song_tempo, true, cx)),
         );
         let categories = self.category_chips(cx);
+        let said_traits = search::named(&b.text).1;
         let traits: Vec<Div> = TRAITS
             .iter()
             .map(|(t, _)| *t)
@@ -2517,12 +2532,16 @@ impl Workspace {
                 b.trait_counts.get(*t).is_some_and(|&n| n > 0) || b.traits.iter().any(|x| x == t)
             })
             .map(|t| {
-                let on = b.traits.iter().any(|x| x == t);
-                filter_chip(t, b.trait_counts.get(t).copied(), on, None)
+                let picked = b.traits.iter().any(|x| x == t);
+                let worded = said_traits.iter().any(|x| x == t) && !picked;
+                filter_chip(t, b.trait_counts.get(t).copied(), picked || worded, None)
                     .debug_selector(move || format!("trait-{t}"))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| ws.toggle_trait(t, cx)),
+                        cx.listener(move |ws, _, _, cx| match worded {
+                            true => ws.unsay(None, Some(t), cx),
+                            false => ws.toggle_trait(t, cx),
+                        }),
                     )
             })
             .collect();
