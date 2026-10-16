@@ -8,10 +8,11 @@ use serde_json::{Value, json};
 
 use crate::{
     music::{Key, NoteEdit},
+    plugin::{PluginApi, PluginParam, value_from_text},
     project::{
-        AUDIO_DIR, AutoMode, AutoPoint, AuxSend, BEAT_UNITS, Cell, Comp, Content, Cycle, Eq, Input,
-        Instrument, Marker, Note, PPQ, Param, PatternRow, PluginRef, Project, Region, Saturator,
-        Track, Which,
+        AUDIO_DIR, AutoMode, AutoPoint, AuxSend, BEAT_UNITS, Cell, Comp, Content, ControlPoint,
+        Cycle, Eq, Input, Instrument, Marker, Note, PPQ, Param, PatternRow, PluginRef, Preset,
+        PresetSource, Project, Region, Saturator, Track, Which,
     },
 };
 
@@ -74,6 +75,14 @@ pub enum Command {
         length: u64,
         #[serde(default)]
         notes: Vec<Note>,
+        #[serde(default)]
+        controls: Vec<ControlPoint>,
+    },
+    /// Replaces a MIDI region's controller, pitch bend, pressure and expression moves.
+    SetControls {
+        track: usize,
+        region: usize,
+        controls: Vec<ControlPoint>,
     },
     SetNotes {
         track: usize,
@@ -253,10 +262,10 @@ pub enum Command {
         #[serde(default)]
         plugin: Option<Which>,
         #[serde(default)]
-        id: Option<u32>,
+        id: Option<ParamRef>,
         #[serde(default)]
         name: Option<String>,
-        points: Vec<AutoPoint>,
+        points: Vec<PointIn>,
     },
     /// How a track follows its automation: off, read, touch or latch.
     SetAutomationMode {
@@ -267,9 +276,28 @@ pub enum Command {
     SetPluginParam {
         channel: ChannelRef,
         plugin: Which,
-        param: u32,
+        param: ParamRef,
         #[serde(default)]
         value: Option<f64>,
+        /// The value as the plugin shows it ("850 Hz", "Sine"), instead of `value`.
+        #[serde(default)]
+        text: Option<String>,
+    },
+    /// Loads a preset into a plugin: by name, or `{"program": n}` (and `"list"`) or
+    /// `{"file": path}`; without `preset`, its settings go back to before.
+    SetPreset {
+        channel: ChannelRef,
+        plugin: Which,
+        #[serde(default)]
+        preset: Option<PresetChoice>,
+    },
+    /// What an insert with a sidechain input hears there: a track's output, or (without
+    /// `from`) nothing.
+    SetSidechain {
+        channel: ChannelRef,
+        insert: usize,
+        #[serde(default)]
+        from: Option<usize>,
     },
     /// Names a place in the song; answers with the marker's index, in time order.
     AddMarker {
@@ -335,6 +363,207 @@ fn yes() -> bool {
     true
 }
 
+/// A plugin parameter, by its id or its name.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum ParamRef {
+    Id(u32),
+    Name(String),
+}
+
+/// An automation point: its value, or its value as the plugin shows it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PointIn {
+    pub tick: u64,
+    #[serde(default)]
+    pub value: Option<f32>,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+/// A preset, by name or where it comes from.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum PresetChoice {
+    Name(String),
+    Found(Preset),
+    From(PresetSource),
+}
+
+/// What `resolve` asks of the plugins a command names: one, loaded.
+pub trait PluginSource {
+    fn plugin(
+        &mut self,
+        project: &Project,
+        channel: ChannelRef,
+        which: Which,
+    ) -> Result<&dyn PluginApi, String>;
+}
+
+/// Puts what a command says in words into what tempo keeps: a parameter's name into its id, a
+/// value as the plugin shows it ("850 Hz") into its value, a preset's name into the preset.
+/// Asks `plugins` for a plugin only when the command needs one.
+pub fn resolve(
+    p: &Project,
+    cmd: Command,
+    plugins: &mut dyn PluginSource,
+) -> Result<Command, String> {
+    Ok(match cmd {
+        Command::SetPluginParam {
+            channel,
+            plugin,
+            param,
+            value,
+            text,
+        } if matches!(param, ParamRef::Name(_)) || text.is_some() => {
+            let found = plugins.plugin(p, channel, plugin)?;
+            let info = find_param(&found.params(), &param)?;
+            let value = match text {
+                Some(t) => Some(value_from_text(found, &info, &t)?),
+                None => value,
+            };
+            Command::SetPluginParam {
+                channel,
+                plugin,
+                param: ParamRef::Id(info.id),
+                value,
+                text: None,
+            }
+        }
+        Command::SetAutomation {
+            track,
+            param,
+            plugin: Some(which),
+            id: Some(id),
+            name,
+            points,
+        } if matches!(id, ParamRef::Name(_)) || points.iter().any(|p| p.text.is_some()) => {
+            let found = plugins.plugin(p, ChannelRef::Track(track), which)?;
+            let info = find_param(&found.params(), &id)?;
+            let points = points
+                .into_iter()
+                .map(|pt| {
+                    Ok(PointIn {
+                        value: match &pt.text {
+                            Some(t) => Some(value_from_text(found, &info, t)? as f32),
+                            None => pt.value,
+                        },
+                        text: None,
+                        ..pt
+                    })
+                })
+                .collect::<Result<_, String>>()?;
+            Command::SetAutomation {
+                track,
+                param,
+                plugin: Some(which),
+                id: Some(ParamRef::Id(info.id)),
+                name: name.or(Some(info.name)),
+                points,
+            }
+        }
+        Command::SetPreset {
+            channel,
+            plugin,
+            preset: Some(choice),
+        } if !matches!(choice, PresetChoice::Found(_)) => {
+            let found = plugins.plugin(p, channel, plugin)?;
+            let presets = found.presets();
+            let preset = match choice {
+                PresetChoice::Name(name) => find_named(&presets, &name, |p| &p.name, "preset")?,
+                PresetChoice::From(source) => presets
+                    .into_iter()
+                    .find(|p| p.source == source)
+                    .unwrap_or_else(|| Preset {
+                        name: match &source {
+                            PresetSource::File { file } => file
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                            PresetSource::Program { program, .. } => format!("Program {program}"),
+                        },
+                        source,
+                    }),
+                PresetChoice::Found(p) => p,
+            };
+            Command::SetPreset {
+                channel,
+                plugin,
+                preset: Some(PresetChoice::Found(preset)),
+            }
+        }
+        Command::SetSidechain {
+            channel,
+            insert,
+            from: Some(from),
+        } => {
+            let found = plugins.plugin(p, channel, Which::Insert(insert))?;
+            if !found.sidechain() {
+                return Err(format!("{} has no sidechain input", found.name()));
+            }
+            Command::SetSidechain {
+                channel,
+                insert,
+                from: Some(from),
+            }
+        }
+        other => other,
+    })
+}
+
+/// The plugin on a channel, if there's one there.
+pub fn plugin_ref(p: &Project, channel: ChannelRef, which: Which) -> Option<&PluginRef> {
+    match (channel, which) {
+        (ChannelRef::Track(i), w) => p.tracks.get(i)?.plugin(w),
+        (ChannelRef::Aux(i), Which::Insert(n)) => p.auxes.get(i)?.inserts.get(n),
+        (ChannelRef::Master, Which::Insert(n)) => p.master_inserts.get(n),
+        _ => None,
+    }
+}
+
+/// A parameter by id, or by name: the same name ignoring case, else the only one whose name has
+/// it in.
+pub fn find_param(params: &[PluginParam], which: &ParamRef) -> Result<PluginParam, String> {
+    match which {
+        ParamRef::Id(id) => params
+            .iter()
+            .find(|p| p.id == *id)
+            .cloned()
+            .ok_or_else(|| format!("no parameter {id}")),
+        ParamRef::Name(name) => find_named(params, name, |p| &p.name, "parameter"),
+    }
+}
+
+fn find_named<T: Clone>(
+    items: &[T],
+    name: &str,
+    of: impl Fn(&T) -> &String,
+    what: &str,
+) -> Result<T, String> {
+    let lower = name.trim().to_lowercase();
+    if let Some(t) = items.iter().find(|t| of(t).to_lowercase() == lower) {
+        return Ok(t.clone());
+    }
+    let near: Vec<&T> = items
+        .iter()
+        .filter(|t| of(t).to_lowercase().contains(&lower))
+        .collect();
+    match near[..] {
+        [one] => Ok(one.clone()),
+        [] => Err(format!("no {what} called {name:?}")),
+        _ => Err(format!(
+            "{} {what}s have {name:?} in their names: {}",
+            near.len(),
+            near.iter()
+                .take(8)
+                .map(|t| format!("{:?}", of(t)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelRef {
@@ -349,6 +578,30 @@ pub enum AutoParam {
     Volume,
     Pan,
     Plugin,
+}
+
+/// What a command that names a plugin's parameter, value or preset in words says when it hasn't
+/// been through `resolve` (which the CLI and the app do).
+const UNRESOLVED: &str = "send it through `tempo do` or the app, which load it";
+
+/// The plugin on a channel: a track's instrument or insert, an aux's or the master's insert.
+fn plugin_mut(
+    p: &mut Project,
+    channel: ChannelRef,
+    which: Which,
+) -> Result<&mut PluginRef, String> {
+    match channel {
+        ChannelRef::Track(i) => track(p, i)?.plugin_mut(which),
+        ChannelRef::Aux(i) => match which {
+            Which::Insert(n) => aux(p, i)?.inserts.get_mut(n),
+            Which::Instrument => None,
+        },
+        ChannelRef::Master => match which {
+            Which::Insert(n) => p.master_inserts.get_mut(n),
+            Which::Instrument => None,
+        },
+    }
+    .ok_or_else(|| "no plugin there".to_string())
 }
 
 fn track(p: &mut Project, i: usize) -> Result<&mut Track, String> {
@@ -499,6 +752,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             start,
             length,
             notes,
+            mut controls,
         } => {
             let tr = track(p, t)?;
             if tr.instrument.is_none() {
@@ -506,13 +760,24 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                     "track {t} is an audio track: MIDI goes on instrument tracks"
                 ));
             }
+            controls.sort_by_key(|c| c.start);
             tr.regions.push(Region {
                 start,
                 length: length.max(1),
-                content: Content::Midi { notes },
+                content: Content::Midi { notes, controls },
                 ..Default::default()
             });
             return Ok(json!({ "region": [t, tr.regions.len() - 1] }));
+        }
+        Command::SetControls {
+            track: t,
+            region: r,
+            mut controls,
+        } => {
+            region_at(p, t, r)?;
+            controls.sort_by_key(|c| c.start);
+            let only = "only MIDI regions have controller moves: that's audio, a pattern or takes";
+            *p.controls_mut((t, r)).ok_or(only)? = controls;
         }
         Command::SetNotes {
             track: t,
@@ -841,7 +1106,19 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             name,
             points,
         } => {
-            let mut points = points;
+            let mut points = points
+                .into_iter()
+                .map(|pt| match (pt.value, &pt.text) {
+                    (Some(value), _) => Ok(AutoPoint {
+                        tick: pt.tick,
+                        value,
+                    }),
+                    (None, Some(t)) => {
+                        Err(format!("{t:?} needs the plugin to be read: {UNRESOLVED}"))
+                    }
+                    (None, None) => Err("each point needs a `value` (or a `text`)".to_string()),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             points.sort_by_key(|p| p.tick);
             let param = match param {
                 AutoParam::Volume => Param::Volume,
@@ -849,6 +1126,11 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                 AutoParam::Plugin => {
                     let (Some(plugin), Some(id)) = (plugin, id) else {
                         return Err("a plugin parameter needs `plugin` and `id`".into());
+                    };
+                    let ParamRef::Id(id) = id else {
+                        return Err(format!(
+                            "a parameter by name needs the plugin: {UNRESOLVED}"
+                        ));
                     };
                     if track(p, t)?.plugin(plugin).is_none() {
                         return Err(format!("track {t} has no plugin there"));
@@ -872,24 +1154,56 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             plugin,
             param,
             value,
+            text,
         } => {
-            let r = match channel {
-                ChannelRef::Track(i) => track(p, i)?.plugin_mut(plugin),
-                ChannelRef::Aux(i) => match plugin {
-                    Which::Insert(n) => aux(p, i)?.inserts.get_mut(n),
-                    Which::Instrument => None,
-                },
-                ChannelRef::Master => match plugin {
-                    Which::Insert(n) => p.master_inserts.get_mut(n),
-                    Which::Instrument => None,
-                },
+            let ParamRef::Id(param) = param else {
+                return Err(format!(
+                    "a parameter by name needs the plugin: {UNRESOLVED}"
+                ));
+            };
+            if text.is_some() {
+                return Err(format!("a value as text needs the plugin: {UNRESOLVED}"));
             }
-            .ok_or("no plugin there")?;
+            let r = plugin_mut(p, channel, plugin)?;
             match value {
                 Some(v) if v.is_finite() => drop(r.params.insert(param, v.clamp(0.0, 1.0))),
                 Some(_) => return Err("value must be a number from 0 to 1".into()),
                 None => drop(r.params.remove(&param)),
             }
+        }
+        Command::SetPreset {
+            channel,
+            plugin,
+            preset,
+        } => {
+            let preset = match preset {
+                Some(PresetChoice::Found(preset)) => Some(preset),
+                Some(_) => {
+                    return Err(format!(
+                        "a preset needs the plugin to be found: {UNRESOLVED}"
+                    ));
+                }
+                None => None,
+            };
+            let r = plugin_mut(p, channel, plugin)?;
+            // A preset is a whole new sound: what was set over the old one goes, and the old
+            // settings with it.
+            if preset.is_some() {
+                r.params.clear();
+                r.state = None;
+            }
+            r.preset = preset;
+        }
+        Command::SetSidechain {
+            channel,
+            insert,
+            from,
+        } => {
+            let id = match from {
+                Some(t) => Some(track(p, t)?.id),
+                None => None,
+            };
+            plugin_mut(p, channel, Which::Insert(insert))?.sidechain = id;
         }
         Command::AddMarker { tick, name } => {
             let at = p.markers.partition_point(|m| m.tick <= tick);
@@ -1133,6 +1447,129 @@ mod tests {
         assert_eq!(p.tracks[0].automation.volume[0].tick, 0);
     }
 
+    /// A plugin that only shows things: a cutoff from 0 to 1000 Hz, a three-way wave, two
+    /// presets. It reads no text itself, so `resolve` reads its display.
+    struct Shown;
+
+    impl PluginApi for Shown {
+        fn name(&self) -> &str {
+            "Shown"
+        }
+        fn params(&self) -> Vec<PluginParam> {
+            let param = |id, name: &str, steps| PluginParam {
+                id,
+                name: name.into(),
+                steps,
+                ..Default::default()
+            };
+            vec![param(3, "Filter Cutoff", 0), param(9, "Wave", 2)]
+        }
+        fn set_param(&self, _: u32, _: f64) {}
+        fn show_param(&self, _: u32, _: f64) {}
+        fn param_value(&self, _: u32) -> f64 {
+            0.0
+        }
+        fn param_text(&self, id: u32, v: f64) -> String {
+            match id {
+                3 => format!("{:.1} Hz", v * 1000.0),
+                _ => ["Saw", "Square", "Sine"][(v * 2.0).round() as usize].into(),
+            }
+        }
+        fn param_from_text(&self, _: u32, _: &str) -> Option<f64> {
+            None
+        }
+        fn state(&self) -> Option<Vec<u8>> {
+            None
+        }
+        fn set_state(&self, _: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn presets(&self) -> Vec<Preset> {
+            let program = |n| PresetSource::Program {
+                list: 0,
+                program: n,
+            };
+            vec![
+                Preset {
+                    name: "Warm Pad".into(),
+                    source: program(0),
+                },
+                Preset {
+                    name: "Sub Bass".into(),
+                    source: program(1),
+                },
+            ]
+        }
+        fn load_preset(&self, _: &Preset) -> Result<(), String> {
+            Ok(())
+        }
+        fn save_preset(&self, _: &str) -> Result<PathBuf, String> {
+            Err("no".into())
+        }
+        fn open_editor(&self, _: objc2::MainThreadMarker) -> Result<crate::plugin::Editor, String> {
+            Err("no".into())
+        }
+    }
+
+    impl PluginSource for Shown {
+        fn plugin(
+            &mut self,
+            _: &Project,
+            _: ChannelRef,
+            _: Which,
+        ) -> Result<&dyn PluginApi, String> {
+            Ok(self)
+        }
+    }
+
+    #[test]
+    fn parameters_and_presets_are_named_in_words() {
+        let mut p = Project::new(48_000);
+        run(
+            &mut p,
+            r#"{"op": "add_track", "name": "Pad", "instrument": "synth"}"#,
+        )
+        .unwrap();
+        p.tracks[0].instrument = Some(Instrument::Plugin(PluginRef::default()));
+        let said = |p: &mut Project, json: &str| {
+            let cmd: Command = serde_json::from_str(json).unwrap();
+            let cmd = resolve(p, cmd, &mut Shown)?;
+            apply(p, Path::new("."), cmd)
+        };
+        let ch = r#""channel": {"track": 0}, "plugin": "instrument""#;
+        let set = |what: &str| format!(r#"{{"op": "set_plugin_param", {ch}, {what}}}"#);
+        said(&mut p, &set(r#""param": "cutoff", "text": "250 Hz""#)).unwrap();
+        said(&mut p, &set(r#""param": "Wave", "text": "square""#)).unwrap();
+        let r = p.tracks[0].plugin(Which::Instrument).unwrap().clone();
+        assert!((r.params.get(&3).unwrap() - 0.25).abs() < 1e-3);
+        assert_eq!(r.params.get(&9), Some(&0.5));
+        // Set in that order, and kept in it.
+        assert_eq!(
+            r.params.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            [3, 9]
+        );
+        let wrong = said(&mut p, &set(r#""param": "Wave", "text": "Triangle""#));
+        assert!(wrong.unwrap_err().contains("Saw, Square, Sine"));
+        let far = said(&mut p, &set(r#""param": "cutoff", "text": "5 kHz""#));
+        assert!(far.unwrap_err().contains("out of its range"));
+        // A preset by part of its name: it replaces what was set.
+        let preset = format!(r#"{{"op": "set_preset", {ch}, "preset": "sub"}}"#);
+        said(&mut p, &preset).unwrap();
+        let r = p.tracks[0].plugin(Which::Instrument).unwrap();
+        assert_eq!(r.preset.as_ref().unwrap().name, "Sub Bass");
+        assert!(r.params.is_empty());
+        // Automation points by text, the parameter by name.
+        let auto = r#"{"op": "set_automation", "track": 0, "param": "plugin", "plugin": "instrument",
+            "id": "Filter Cutoff", "points": [{"tick": 0, "text": "100 Hz"}, {"tick": 960, "value": 1}]}"#;
+        said(&mut p, auto).unwrap();
+        let lane = &p.tracks[0].automation.plugins[0];
+        assert_eq!((lane.param, lane.name.as_str()), (3, "Filter Cutoff"));
+        assert!((lane.points[0].value - 0.1).abs() < 1e-3);
+        // Unresolved, a name can't be applied.
+        let raw: Command = serde_json::from_str(&set(r#""param": "Wave", "value": 1"#)).unwrap();
+        assert!(apply(&mut p, Path::new("."), raw).is_err());
+    }
+
     #[test]
     fn effects_change_only_what_is_given() {
         let mut p = Project::new(48_000);
@@ -1299,6 +1736,9 @@ mod tests {
             "set_input",
             "set_automation_mode",
             "set_plugin_param",
+            "set_controls",
+            "set_preset",
+            "set_sidechain",
         ];
         for op in samples {
             assert!(

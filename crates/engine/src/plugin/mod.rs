@@ -17,7 +17,7 @@ use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use crate::project::PluginRef;
-pub use crate::project::{Format, Preset, PresetSource};
+pub use crate::project::{ExpressionKind, Format, Preset, PresetSource};
 
 /// A note for an instrument, `offset` samples into the block.
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
@@ -51,24 +51,6 @@ pub enum ControlKind {
         kind: ExpressionKind,
         value: f32,
     },
-}
-
-/// Per-note expression, as VST3 and CLAP have it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ExpressionKind {
-    /// Semitones up or down, -120 to 120.
-    Tuning,
-    /// Gain, 0 to 4 (1 is as played).
-    Volume,
-    /// -1 left to 1 right.
-    Pan,
-    /// 0 to 1.
-    Brightness,
-    /// 0 to 1.
-    Vibrato,
-    /// 0 to 1.
-    Expression,
 }
 
 /// A plugin parameter: its id and name, and its value, default and steps from 0 to 1.
@@ -113,6 +95,10 @@ pub trait PluginApi {
     fn open_editor(&self, mtm: MainThreadMarker) -> Result<Editor, String>;
     /// Work the plugin asked to do on the main thread. Call it often.
     fn idle(&self) {}
+    /// Whether it has a sidechain input (as its processor says, for `set_sidechain`).
+    fn sidechain(&self) -> bool {
+        false
+    }
 }
 
 /// A plugin's audio-thread side. Dropping it shuts the plugin down, so it's dropped back on the
@@ -291,15 +277,38 @@ pub fn edit_queue(mut stepped: Vec<u32>) -> (EditSender, EditReceiver) {
 /// steadily).
 pub fn value_from_text(p: &dyn PluginApi, param: &PluginParam, text: &str) -> Result<f64, String> {
     let text = text.trim();
-    if let Some(v) = p.param_from_text(param.id, text).filter(|v| v.is_finite()) {
-        return Ok(v.clamp(0.0, 1.0));
-    }
     let shown = |v: f64| p.param_text(param.id, v);
+    // The plugin's reading, if what it then shows agrees: some ignore units ("1 kHz" as 1 Hz).
+    let agrees = |v: f64| {
+        let back = shown(v);
+        match (number(text), number(&back)) {
+            (Some(a), Some(b)) => {
+                let (a, b) = (a * scale(text), b * scale(&back));
+                (a - b).abs() <= 0.02 * a.abs().max(b.abs()).max(1e-6)
+            }
+            _ => back.trim().eq_ignore_ascii_case(text),
+        }
+    };
+    if let Some(v) = p
+        .param_from_text(param.id, text)
+        .filter(|v| v.is_finite())
+        .map(|v| v.clamp(0.0, 1.0))
+        .filter(|&v| agrees(v))
+    {
+        return Ok(v);
+    }
     let same = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
-    if param.steps > 0 && param.steps <= 1024 {
-        let step = (0..=param.steps).find(|&s| same(&shown(s as f64 / param.steps as f64), text));
-        if let Some(s) = step {
-            return Ok(s as f64 / param.steps as f64);
+    if let Some(named) = named_values(p, param) {
+        if let Some((_, v)) = named.iter().find(|(name, _)| same(name, text)) {
+            return Ok(*v);
+        }
+        if number(text).is_none() {
+            let names: Vec<&str> = named.iter().map(|(n, _)| n.as_str()).collect();
+            return Err(format!(
+                "{}: no setting reads {text:?}; it's one of {}",
+                param.name,
+                names.join(", ")
+            ));
         }
     }
     let want = number(text).ok_or_else(|| {
@@ -354,13 +363,52 @@ pub fn value_from_text(p: &dyn PluginApi, param: &PluginParam, text: &str) -> Re
     })
 }
 
-/// The first number in a display, like -6.5 in "-6.5 dB"; "-inf" counts as very low.
+/// The values a parameter shows as names ("Classic", "Sine", "Wavetable"), with a value that
+/// gives each: its steps' names, or for a parameter that doesn't say it has steps but shows only
+/// words, each word's span of values (by its middle).
+pub fn named_values(p: &dyn PluginApi, param: &PluginParam) -> Option<Vec<(String, f64)>> {
+    let shown = |v: f64| p.param_text(param.id, v);
+    if (1..=128).contains(&param.steps) {
+        let steps = param.steps as f64;
+        return Some(
+            (0..=param.steps)
+                .map(|s| (shown(s as f64 / steps), s as f64 / steps))
+                .collect(),
+        );
+    }
+    if param.steps != 0 || [0.0, 0.5, 1.0].iter().any(|&v| number(&shown(v)).is_some()) {
+        return None;
+    }
+    let samples = 256;
+    let mut runs: Vec<(String, f64, f64)> = Vec::new();
+    for i in 0..=samples {
+        let v = i as f64 / samples as f64;
+        let text = shown(v);
+        if number(&text).is_some() {
+            return None;
+        }
+        match runs.last_mut() {
+            Some(run) if run.0 == text => run.2 = v,
+            _ => runs.push((text, v, v)),
+        }
+    }
+    (runs.len() <= 128).then(|| {
+        runs.into_iter()
+            .map(|(t, a, b)| (t, (a + b) / 2.0))
+            .collect()
+    })
+}
+
+/// The number a display starts with, like -6.5 in "-6.5 dB" (not the 2 in "FM2"); "-inf"
+/// counts as very low.
 fn number(s: &str) -> Option<f64> {
-    if s.to_lowercase().contains("-inf") || s.contains("-∞") {
+    let rest = s.trim_start();
+    if rest.to_lowercase().starts_with("-inf") || rest.starts_with("-∞") {
         return Some(-1e9);
     }
-    let start = s.find(|c: char| c.is_ascii_digit() || c == '-' || c == '+' || c == '.')?;
-    let rest = &s[start..];
+    if !rest.starts_with(|c: char| c.is_ascii_digit() || "+-.".contains(c)) {
+        return None;
+    }
     let end = rest
         .char_indices()
         .skip(1)
@@ -451,6 +499,7 @@ mod tests {
         assert_eq!(scale("12 ms"), 1.0);
         assert_eq!(number("-inf dB"), Some(-1e9));
         assert_eq!(number("Sine"), None);
+        assert_eq!(number("FM2"), None);
         assert_eq!(number("50.00 % (Center)"), Some(50.0));
     }
 

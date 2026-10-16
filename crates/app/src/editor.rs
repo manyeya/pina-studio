@@ -32,7 +32,7 @@ impl Workspace {
                 let t = &self.session.project.tracks[at.0];
                 let r = &t.regions[at.1];
                 let detail = match &r.content {
-                    Content::Midi { notes } => format!("{} notes", notes.len()),
+                    Content::Midi { notes, .. } => format!("{} notes", notes.len()),
                     Content::Pattern { rows, .. } => format!("{} sounds", rows.len()),
                     Content::Takes { takes, .. } => format!("{} takes", takes.len()),
                     Content::Audio { .. } => "Audio".into(),

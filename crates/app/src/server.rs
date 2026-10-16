@@ -16,8 +16,10 @@ use gpui::{App, Context, WeakEntity};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempo_engine::{
-    commands::{self, ChannelRef, Command},
-    project::Which,
+    commands::{self, ChannelRef, Command, PluginSource},
+    player::Player,
+    plugin::PluginApi,
+    project::{Project, Which},
 };
 
 use crate::{
@@ -51,6 +53,41 @@ pub enum Request {
         channel: ChannelRef,
         plugin: Which,
     },
+    /// What a plugin can load: its programs and preset files.
+    Presets {
+        channel: ChannelRef,
+        plugin: Which,
+    },
+    /// Saves a plugin's settings as a preset file.
+    SavePreset {
+        channel: ChannelRef,
+        plugin: Which,
+        name: String,
+    },
+}
+
+/// The running plugins, for `commands::resolve`.
+struct Running<'a> {
+    player: &'a Player,
+    ids: Vec<(ChannelRef, u64)>,
+}
+
+impl PluginSource for Running<'_> {
+    fn plugin(
+        &mut self,
+        _project: &Project,
+        channel: ChannelRef,
+        which: Which,
+    ) -> Result<&dyn PluginApi, String> {
+        let id = self
+            .ids
+            .iter()
+            .find(|(c, _)| *c == channel)
+            .map(|(_, id)| *id)
+            .ok_or("no such channel")?;
+        let plugin = self.player.plugin(id, which).ok_or("no plugin there")?;
+        Ok(&**plugin)
+    }
 }
 
 pub type Reply = Result<Value, String>;
@@ -171,10 +208,35 @@ impl Workspace {
         }
     }
 
+    /// A plugin running on a channel.
+    fn running_plugin(&self, channel: ChannelRef, which: Which) -> Result<&dyn PluginApi, String> {
+        let p = &self.session.project;
+        let ch = match channel {
+            ChannelRef::Track(i) if i < p.tracks.len() => Channel::Track(i),
+            ChannelRef::Aux(i) if i < p.auxes.len() => Channel::Aux(i),
+            ChannelRef::Master => Channel::Master,
+            _ => return Err("no such channel".into()),
+        };
+        let plugin = self.player.plugin(self.owner_id(ch), which);
+        Ok(&**plugin.ok_or("no plugin there")?)
+    }
+
     pub fn handle(&mut self, request: Request, cx: &mut Context<Self>) -> Reply {
         let ok = Ok(json!({}));
         match request {
             Request::Edit { command } => {
+                let p = &self.session.project;
+                let ids = (0..p.tracks.len())
+                    .map(|i| (ChannelRef::Track(i), Channel::Track(i)))
+                    .chain((0..p.auxes.len()).map(|i| (ChannelRef::Aux(i), Channel::Aux(i))))
+                    .chain([(ChannelRef::Master, Channel::Master)])
+                    .map(|(r, c)| (r, self.owner_id(c)))
+                    .collect();
+                let mut running = Running {
+                    player: &self.player,
+                    ids,
+                };
+                let command = commands::resolve(p, command, &mut running)?;
                 self.session.checkpoint();
                 let dir = self.session.dir.clone();
                 let asked = serde_json::to_value(&command).unwrap_or_default();
@@ -220,21 +282,20 @@ impl Workspace {
                 ok
             }
             Request::Params { channel, plugin } => {
-                let p = &self.session.project;
-                let ch = match channel {
-                    ChannelRef::Track(i) if i < p.tracks.len() => Channel::Track(i),
-                    ChannelRef::Aux(i) if i < p.auxes.len() => Channel::Aux(i),
-                    ChannelRef::Master => Channel::Master,
-                    _ => return Err("no such channel".into()),
-                };
-                let id = self.owner_id(ch);
-                let params = self.player.params(id, plugin);
-                if params.is_empty() {
-                    return Err("no plugin there, or it has no parameters".into());
-                }
-                Ok(crate::cli::params_json(&params, |param, v| {
-                    self.player.param_text(id, plugin, param, v)
-                }))
+                let found = self.running_plugin(channel, plugin)?;
+                Ok(crate::cli::params_json(found))
+            }
+            Request::Presets { channel, plugin } => {
+                let found = self.running_plugin(channel, plugin)?;
+                Ok(crate::cli::presets_json(found))
+            }
+            Request::SavePreset {
+                channel,
+                plugin,
+                name,
+            } => {
+                let found = self.running_plugin(channel, plugin)?;
+                Ok(json!({ "file": found.save_preset(&name)? }))
             }
             Request::Undo | Request::Redo => {
                 let done = match request {

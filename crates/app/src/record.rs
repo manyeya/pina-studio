@@ -168,7 +168,10 @@ impl Workspace {
                     .unwrap();
                 let bar = self.session.project.bar();
                 let length = end.saturating_sub(start).max(last).div_ceil(bar).max(1) * bar;
-                let content = Content::Midi { notes };
+                let content = Content::Midi {
+                    notes,
+                    controls: Vec::new(),
+                };
                 (
                     track,
                     Region {

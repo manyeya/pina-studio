@@ -75,18 +75,32 @@ fn tools() -> Value {
         },
         {
             "name": "plugins",
-            "description": "The VST3 plugins installed, for set_instrument and set_insert.",
+            "description": "The plugins installed (VST3, CLAP, VST2 and Audio Units), each as set_instrument and set_insert take it: format, path, class and (for some formats) uid.",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
             "name": "params",
-            "description": "A plugin's parameters (id, name, value 0-1, and as the plugin shows it), for set_plugin_param and plugin automation.",
+            "description": "A plugin's parameters (id, name, value 0-1 and as the plugin shows it, default, unit, steps and each step's name), for set_plugin_param and plugin automation, which take a parameter by id or name and a value 0-1 or as text (\"850 Hz\").",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "project": project,
                     "channel": { "description": "{\"track\": i}, {\"aux\": i} or \"master\"." },
                     "plugin": { "description": "\"instrument\" or {\"insert\": i}." }
+                },
+                "required": ["project", "channel", "plugin"]
+            }
+        },
+        {
+            "name": "presets",
+            "description": "A plugin's presets (its own programs, and preset files of its format), for set_preset; or, with `save`, saves its settings as a preset file of that name and says where.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": project,
+                    "channel": { "description": "{\"track\": i}, {\"aux\": i} or \"master\"." },
+                    "plugin": { "description": "\"instrument\" or {\"insert\": i}." },
+                    "save": { "type": "string", "description": "A name to save its settings as." }
                 },
                 "required": ["project", "channel", "plugin"]
             }
@@ -152,6 +166,18 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
             let plugin =
                 serde_json::from_value(parse("plugin")).map_err(|e| format!("`plugin`: {e}"))?;
             cli::params(&path(args, "project")?, channel, plugin)
+        }
+        "presets" => {
+            let parse = |key: &str| args.get(key).cloned().unwrap_or_default();
+            let channel =
+                serde_json::from_value(parse("channel")).map_err(|e| format!("`channel`: {e}"))?;
+            let plugin =
+                serde_json::from_value(parse("plugin")).map_err(|e| format!("`plugin`: {e}"))?;
+            let project = path(args, "project")?;
+            match args.get("save").and_then(Value::as_str) {
+                Some(name) => cli::save_preset(&project, channel, plugin, name),
+                None => cli::presets(&project, channel, plugin),
+            }
         }
         _ => Err(format!("no tool called {name}")),
     }
@@ -241,7 +267,8 @@ mod tests {
                 "render",
                 "transport",
                 "plugins",
-                "params"
+                "params",
+                "presets"
             ]
         );
 

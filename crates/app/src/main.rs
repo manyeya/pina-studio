@@ -45,10 +45,14 @@ const USAGE: &str = "usage:
   tempo stop|save|undo|redo <project>, tempo locate <project> <tick>,
   tempo launch <project> <track> [scene]
                                    drive the app that has the project open
-  tempo plugins                    the VST3 plugins installed
+  tempo plugins                    the plugins installed: VST3, CLAP, VST2, Audio Units
   tempo params <project> <track> [--insert N]
   tempo params <project> --aux N|--master [--insert N]
                                    a plugin's parameters, to automate or set
+  tempo presets <project> <track> [--insert N] [--save <name>]
+  tempo presets <project> --aux N|--master [--insert N] [--save <name>]
+                                   a plugin's presets, to load with set_preset; or
+                                   save its settings as one
   tempo mcp                        an MCP server on stdin and stdout";
 
 fn main() {
@@ -87,6 +91,19 @@ fn main() {
             Some((channel, plugin)) => print(cli::params(p(dir), channel, plugin)),
             None => Err(USAGE.to_string()),
         },
+        ["presets", dir, rest @ ..] => {
+            let (rest, save) = match rest {
+                [rest @ .., "--save", name] => (rest, Some(*name)),
+                _ => (rest, None),
+            };
+            match (params_args(rest), save) {
+                (Some((channel, plugin)), None) => print(cli::presets(p(dir), channel, plugin)),
+                (Some((channel, plugin)), Some(name)) => {
+                    print(cli::save_preset(p(dir), channel, plugin, name))
+                }
+                (None, _) => Err(USAGE.to_string()),
+            }
+        }
         ["mcp"] => mcp::serve(),
         // What a plugin bundle holds, as JSON: run by the plugin scan, one bundle per process.
         ["__scan", bundle] => tempo_engine::scan::inspect(p(bundle))
@@ -211,7 +228,7 @@ fn open(dir: &Path) -> Result<(), String> {
 /// Plays a project through the default output, without the app.
 fn play(dir: &Path) -> Result<(), String> {
     let project = Project::load(dir)?;
-    let rate = project.sample_rate as f64;
+    let rate = tempo_engine::engine::output_rate(project.sample_rate)? as f64;
     let (mut engine, _plugins) = Engine::load(&project, dir, rate)?;
     let frames = project.samples(project.end(), rate) + (cli::TAIL * rate) as u64;
     let seconds = frames as f64 / rate;

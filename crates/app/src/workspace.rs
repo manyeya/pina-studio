@@ -1981,14 +1981,16 @@ impl Workspace {
         };
         let rate = self.player.rate();
         let buffer = self.player.buffer();
+        // 48 kHz, 44.1 kHz.
+        let khz = format!("{:.1}", rate / 1000.0);
+        let khz = khz.trim_end_matches(".0");
         let format = if buffer > 0 {
             format!(
-                "{:.0} kHz · {buffer} smp · {:.1} ms",
-                rate / 1000.0,
+                "{khz} kHz · {buffer} smp · {:.1} ms",
                 buffer as f64 / rate * 1000.0
             )
         } else {
-            format!("{:.0} kHz", rate / 1000.0)
+            format!("{khz} kHz")
         };
         let agent = self
             .agent
@@ -2087,6 +2089,7 @@ impl Render for Workspace {
         self.viewport_h = f32::from(window.viewport_size().height);
         self.viewport_w = f32::from(window.viewport_size().width);
         self.player.collect();
+        self.player.idle();
         self.follow_pattern(cx);
         self.read_meters();
         self.capture(cx);

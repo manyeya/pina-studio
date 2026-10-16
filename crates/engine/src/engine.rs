@@ -23,10 +23,10 @@ use crate::{
     drums::Drums,
     dsp::Strip,
     peaks::Peaks,
-    plugin::{self, Libraries, Note, Plugin, Processor},
+    plugin::{self, Control, ControlKind, Libraries, Note, Plugin, Processor},
     project::{
         AutoMode, AutoPoint, Comp, Content, Eq, Instrument, PluginRef, Project, Region, Saturator,
-        Which, comp_segments, value_at,
+        Which, chase, comp_segments, value_at,
     },
     sampler::Sampler,
     synth::Synth,
@@ -36,6 +36,8 @@ use crate::{
 pub const MAX_BLOCK: usize = 512;
 /// Most note events one lane takes in one block; more are dropped.
 const BLOCK_NOTES: usize = 256;
+/// Most controller moves an instrument hears a block.
+const BLOCK_CONTROLS: usize = 256;
 /// Most live or previewed notes the engine takes in one block.
 const LIVE_NOTES: usize = 64;
 /// The longest delay compensation for one lane, in samples.
@@ -129,6 +131,13 @@ struct Event {
     velocity: f32,
 }
 
+/// A controller move, pitch bend, pressure or note expression, at a sample.
+#[derive(Clone, Copy, Debug)]
+struct ControlEvent {
+    at: u64,
+    kind: ControlKind,
+}
+
 /// What every lane plays, and how loud.
 pub struct Arrangement {
     tempo: f64,
@@ -143,8 +152,13 @@ pub struct Arrangement {
     master_strip: StripDsp,
     /// Where playback loops, in samples, while the cycle is on.
     cycle: Option<(u64, u64)>,
-    /// The lane holding the master's plugins.
+    /// The lane holding the master's plugins, and the track each of them hears as a sidechain.
     master_lane: Option<usize>,
+    master_sidechains: Vec<Option<usize>>,
+    /// The order tracks are worked out in: a sidechain's source before what hears it.
+    order: Vec<usize>,
+    /// Each track's output this block, kept for the plugins that hear it as a sidechain.
+    sidechains: Vec<[Vec<f32>; 2]>,
     /// A beat, in quarter notes, and beats to a bar: for the metronome.
     beat: f64,
     beats_per_bar: u64,
@@ -162,6 +176,9 @@ impl Arrangement {
             master_strip: StripDsp::default(),
             cycle: None,
             master_lane: None,
+            master_sidechains: Vec::new(),
+            order: Vec::new(),
+            sidechains: Vec::new(),
             beat: 1.0,
             beats_per_bar: 4,
         }
@@ -197,6 +214,7 @@ impl Strip {
 /// What a Live Loops cell plays, from 0, over `length` samples.
 struct CellPlan {
     events: Vec<Event>,
+    controls: Vec<ControlEvent>,
     clips: Vec<Clip>,
     length: u64,
 }
@@ -262,16 +280,51 @@ fn sounding(events: &[Event], at: u64, pitch: u8) -> bool {
 /// Adds what `events` and `clips` play from `from` to `to` (samples) into a block, `into`
 /// samples into it.
 #[allow(clippy::too_many_arguments)]
+/// Where a block's notes and controller moves are gathered.
+struct Gathered {
+    notes: [Note; BLOCK_NOTES],
+    n: usize,
+    controls: [Control; BLOCK_CONTROLS],
+    m: usize,
+}
+
+impl Gathered {
+    fn new() -> Self {
+        Gathered {
+            notes: [Note::default(); BLOCK_NOTES],
+            n: 0,
+            controls: [Control {
+                offset: 0,
+                kind: ControlKind::Aftertouch(0.0),
+            }; BLOCK_CONTROLS],
+            m: 0,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn gather(
     events: &[Event],
+    controls: &[ControlEvent],
     clips: &[Clip],
     (from, to): (u64, u64),
     into: usize,
-    notes: &mut [Note; BLOCK_NOTES],
-    n: &mut usize,
+    g: &mut Gathered,
     held: &mut Held,
     [l, r]: [&mut [f32]; 2],
 ) {
+    let first = controls.partition_point(|c| c.at < from);
+    for c in controls[first..].iter().take_while(|c| c.at < to) {
+        if g.m == BLOCK_CONTROLS {
+            break;
+        }
+        g.controls[g.m] = Control {
+            offset: (c.at - from) as u32 + into as u32,
+            kind: c.kind,
+        };
+        g.m += 1;
+    }
+    let (notes, n) = (&mut g.notes, &mut g.n);
     let first = events.partition_point(|e| e.at < from);
     for e in events[first..].iter().take_while(|e| e.at < to) {
         if *n == BLOCK_NOTES {
@@ -306,6 +359,18 @@ struct AuxPlan {
     dsp: StripDsp,
     /// Delay compensation after its inserts.
     delay: usize,
+    /// The track each insert hears as a sidechain, if any.
+    sidechains: Vec<Option<usize>>,
+}
+
+/// The sidechain an insert hears: its source track's output this block.
+fn sidechain<'a>(
+    buffers: &'a [[Vec<f32>; 2]],
+    source: Option<&Option<usize>>,
+    frames: usize,
+) -> Option<[&'a [f32]; 2]> {
+    let [l, r] = buffers.get((*source?)?)?;
+    Some([&l[..frames], &r[..frames]])
 }
 
 /// Plugin delay compensation: delays that line every track and aux up at the master, and how
@@ -392,8 +457,14 @@ struct Plan {
     params: Vec<(Which, u32, Vec<AutoPoint>)>,
     /// Aux index, level, and whether it's taken before the fader.
     sends: Vec<(usize, f32, bool)>,
+    /// Controller moves, sorted by time.
+    controls: Vec<ControlEvent>,
     /// Live Loops cells, in the track's order.
     cells: Vec<CellPlan>,
+    /// The track each insert hears as a sidechain, if any; and whether any plugin hears this
+    /// one.
+    sidechains: Vec<Option<usize>>,
+    feeds: bool,
     /// The aux it plays into instead of the master.
     output: Option<usize>,
     /// Delay compensation before the sends, and on the direct path after them.
@@ -459,6 +530,25 @@ pub struct Lane {
     cell: Option<(usize, u64)>,
     queued: Option<(Option<usize>, u64)>,
     strip: Box<Strip>,
+}
+
+/// One plugin of a project (whose files are in `dir`) loaded on its own, as the project sets
+/// it: its saved settings, its preset, its parameters.
+pub fn load_plugin(r: &PluginRef, dir: &Path, rate: f64) -> Result<(Plugin, Processor), String> {
+    let state = r
+        .state
+        .as_ref()
+        .and_then(|f| std::fs::read(dir.join(f)).ok());
+    let (plugin, mut processor) =
+        plugin::instantiate(&mut Libraries::new(), r, rate, MAX_BLOCK, state.as_deref())?;
+    if let (Some(preset), None) = (&r.preset, &r.state) {
+        plugin.load_preset(preset)?;
+    }
+    for (&id, &v) in &r.params {
+        plugin.set_param(id, v);
+    }
+    plugin::settle(&mut processor, MAX_BLOCK);
+    Ok((plugin, processor))
 }
 
 impl Lane {
@@ -557,8 +647,24 @@ pub fn compile(
     let pdc = compensate(&latencies(tracks), &latencies(auxes));
     let any_solo = project.tracks.iter().any(|t| t.solo);
     let mut plans = Vec::new();
+    // Which track (by its place) each plugin hears as a sidechain, by the source's id.
+    let source = |r: &PluginRef| {
+        let id = r.sidechain?;
+        project.tracks.iter().position(|t| t.id == id)
+    };
+    let mut feeds = vec![false; project.tracks.len()];
+    let mut sources = |inserts: &[PluginRef]| -> Vec<Option<usize>> {
+        let found: Vec<_> = inserts.iter().map(source).collect();
+        for &s in found.iter().flatten() {
+            feeds[s] = true;
+        }
+        found
+    };
+    let track_sidechains: Vec<_> = project.tracks.iter().map(|t| sources(&t.inserts)).collect();
+    let aux_sidechains: Vec<_> = project.auxes.iter().map(|a| sources(&a.inserts)).collect();
+    let master_sidechains = sources(&project.master_inserts);
     for (i, (t, &(slot, _))) in project.tracks.iter().zip(tracks).enumerate() {
-        let (mut clips, mut events) = (Vec::new(), Vec::new());
+        let (mut clips, mut events, mut controls) = (Vec::new(), Vec::new(), Vec::new());
         for (r, region) in t.regions.iter().enumerate() {
             // A looped region plays again from each multiple of its length, the last time cut
             // short where the loop stops.
@@ -579,7 +685,7 @@ pub fn compile(
                     rate,
                     &pass,
                     files,
-                    &mut events,
+                    (&mut events, &mut controls),
                     &mut clips,
                     &mut problems,
                 );
@@ -595,13 +701,13 @@ pub fn compile(
                     start: 0,
                     ..cell.region.clone()
                 };
-                let (mut events, mut clips) = (Vec::new(), Vec::new());
+                let (mut events, mut clips, mut controls) = (Vec::new(), Vec::new(), Vec::new());
                 play_region(
                     project,
                     rate,
                     &region,
                     files,
-                    &mut events,
+                    (&mut events, &mut controls),
                     &mut clips,
                     &mut problems,
                 );
@@ -610,8 +716,11 @@ pub fn compile(
                     e.at = e.at.min(length - 1);
                 }
                 events.sort_by_key(|e| (e.at, e.velocity > 0.0));
+                controls.retain(|c| c.at < length);
+                controls.sort_by_key(|c| c.at);
                 CellPlan {
                     events,
+                    controls,
                     clips,
                     length,
                 }
@@ -619,6 +728,7 @@ pub fn compile(
             .collect();
         // Offs first at the same sample, so back-to-back notes of one pitch both sound.
         events.sort_by_key(|e| (e.at, e.velocity > 0.0));
+        controls.sort_by_key(|c| c.at);
         clips.sort_by_key(|c| c.start);
         let in_samples = |points: &[AutoPoint]| {
             let at = |p: &AutoPoint| project.samples(p.tick, rate);
@@ -635,6 +745,9 @@ pub fn compile(
         plans.push(Plan {
             slot,
             events,
+            controls,
+            sidechains: track_sidechains[i].clone(),
+            feeds: false,
             clips,
             audible: if t.mute || (any_solo && !t.solo) {
                 0.0
@@ -675,19 +788,34 @@ pub fn compile(
         .iter()
         .zip(auxes)
         .zip(&pdc.auxes)
-        .map(|((a, &(slot, _)), &delay)| {
+        .zip(aux_sidechains)
+        .map(|(((a, &(slot, _)), &delay), sidechains)| {
             let g = if a.mute { 0.0 } else { db(a.volume_db) };
             AuxPlan {
                 slot,
                 gain: balance(g, a.pan),
                 dsp: strip_dsp(a.eq.as_ref(), a.comp.as_ref(), a.sat.as_ref()),
                 delay,
+                sidechains,
             }
         })
         .collect::<Vec<_>>();
+    for (plan, &f) in plans.iter_mut().zip(&feeds) {
+        plan.feeds = f;
+    }
+    let order = sidechain_order(&track_sidechains);
     let arrangement = Arrangement {
         tempo: project.tempo,
         master: db(project.master_volume_db),
+        sidechains: feeds
+            .iter()
+            .map(|&f| match f {
+                true => [vec![0.0; MAX_BLOCK], vec![0.0; MAX_BLOCK]],
+                false => [Vec::new(), Vec::new()],
+            })
+            .collect(),
+        master_sidechains,
+        order,
         plans,
         buses: (0..auxes.len())
             .map(|_| [vec![0.0; MAX_BLOCK], vec![0.0; MAX_BLOCK]])
@@ -710,13 +838,37 @@ pub fn compile(
     (arrangement, problems)
 }
 
-/// Adds the note events and audio clips a region plays, in samples.
+/// The order to work tracks out in, given the track each one's inserts hear as a sidechain:
+/// every source before what hears it. Sources in a loop keep their places, a block late.
+fn sidechain_order(hears: &[Vec<Option<usize>>]) -> Vec<usize> {
+    let mut order = Vec::with_capacity(hears.len());
+    let mut state = vec![0u8; hears.len()]; // 0 unseen, 1 on the way, 2 placed
+    fn visit(t: usize, hears: &[Vec<Option<usize>>], state: &mut [u8], order: &mut Vec<usize>) {
+        if state[t] != 0 {
+            return;
+        }
+        state[t] = 1;
+        for &s in hears[t].iter().flatten() {
+            if s != t {
+                visit(s, hears, state, order);
+            }
+        }
+        state[t] = 2;
+        order.push(t);
+    }
+    for t in 0..hears.len() {
+        visit(t, hears, &mut state, &mut order);
+    }
+    order
+}
+
+/// Adds the note events, controller moves and audio clips a region plays, in samples.
 fn play_region(
     project: &Project,
     rate: f64,
     region: &Region,
     files: &mut AudioFiles,
-    events: &mut Vec<Event>,
+    (events, controls): (&mut Vec<Event>, &mut Vec<ControlEvent>),
     clips: &mut Vec<Clip>,
     problems: &mut Vec<String>,
 ) {
@@ -745,6 +897,27 @@ fn play_region(
                     pitch,
                     velocity: 0.0,
                 });
+            }
+            // Controllers as they stand where this part starts, then their moves; a note's own
+            // moves follow it when the region transposes it.
+            if let Content::Midi {
+                controls: points, ..
+            } = content
+            {
+                let moved = points.iter().map(|c| crate::project::ControlPoint {
+                    start: at + c.start,
+                    ..*c
+                });
+                for mut c in chase(moved, from as i64, to as i64) {
+                    if let Some(p) = c.kind.pitch_mut() {
+                        *p = (*p as i16 + region.transpose as i16).clamp(0, 127) as u8;
+                    }
+                    let tick = region.start + c.start as u64;
+                    controls.push(ControlEvent {
+                        at: project.samples(tick, rate),
+                        kind: c.kind.to_control(),
+                    });
+                }
             }
         }
         Content::Audio {
@@ -1219,21 +1392,21 @@ impl Engine {
             bus[1][..frames].fill(0.0);
         }
 
-        for plan in &arrangement.plans {
+        for &t in &arrangement.order {
+            let plan = &arrangement.plans[t];
             let Some(lane) = self.lanes[plan.slot].as_deref_mut() else {
                 continue;
             };
             l.fill(0.0);
             r.fill(0.0);
-            let mut notes = [Note::default(); BLOCK_NOTES];
-            let mut n = 0;
+            let mut g = Gathered::new();
             if release {
-                lane.held.release(0, |_| false, &mut notes, &mut n);
-                lane.live.release(0, |_| false, &mut notes, &mut n);
+                lane.held.release(0, |_| false, &mut g.notes, &mut g.n);
+                lane.live.release(0, |_| false, &mut g.notes, &mut g.n);
             } else if rechase && lane.cell.is_none() {
                 // An edit while playing: what the song still has sounding now rings on.
                 let still = |p: u8| sounding(&plan.events, from, p);
-                lane.held.release(0, still, &mut notes, &mut n);
+                lane.held.release(0, still, &mut g.notes, &mut g.n);
             }
             // A launched cell takes over when its sample comes, held notes let go.
             if let Some((cell, at)) = lane.queued
@@ -1241,7 +1414,7 @@ impl Engine {
             {
                 lane.cell = cell.map(|c| (c, at));
                 lane.queued = None;
-                lane.held.release(0, |_| false, &mut notes, &mut n);
+                lane.held.release(0, |_| false, &mut g.notes, &mut g.n);
             }
             if playing {
                 let into = [&mut *l, &mut *r];
@@ -1257,36 +1430,29 @@ impl Engine {
                         let p0 = from.max(start).saturating_sub(start) % cell.length;
                         let first = (cell.length - p0).min(span);
                         let held = &mut lane.held;
-                        let (e, c) = (&cell.events, &cell.clips);
-                        gather(
-                            e,
-                            c,
-                            (p0, p0 + first),
-                            lead as usize,
-                            &mut notes,
-                            &mut n,
-                            held,
-                            into,
-                        );
+                        let (e, k, c) = (&cell.events, &cell.controls, &cell.clips);
+                        let lead = lead as usize;
+                        gather(e, k, c, (p0, p0 + first), lead, &mut g, held, into);
                         if first < span {
                             let into = [&mut *l, &mut *r];
-                            let at = (lead + first) as usize;
-                            gather(e, c, (0, span - first), at, &mut notes, &mut n, held, into);
+                            let at = lead + first as usize;
+                            gather(e, k, c, (0, span - first), at, &mut g, held, into);
                         }
                     }
                     None => {
-                        let (e, c, held) = (&plan.events, &plan.clips, &mut lane.held);
+                        let (e, k, c) = (&plan.events, &plan.controls, &plan.clips);
+                        let held = &mut lane.held;
                         match split {
                             Some((left, start)) => {
                                 let end = (from, from + left as u64);
-                                gather(e, c, end, 0, &mut notes, &mut n, held, into);
+                                gather(e, k, c, end, 0, &mut g, held, into);
                                 // Round to the cycle's start: what's held lets go there.
-                                held.release(left as u32, |_| false, &mut notes, &mut n);
+                                held.release(left as u32, |_| false, &mut g.notes, &mut g.n);
                                 let into = [&mut *l, &mut *r];
                                 let rest = (start, start + (frames - left) as u64);
-                                gather(e, c, rest, left, &mut notes, &mut n, held, into);
+                                gather(e, k, c, rest, left, &mut g, held, into);
                             }
-                            None => gather(e, c, (from, to), 0, &mut notes, &mut n, held, into),
+                            None => gather(e, k, c, (from, to), 0, &mut g, held, into),
                         }
                     }
                 }
@@ -1301,29 +1467,34 @@ impl Engine {
                 &[][..]
             };
             for note in now.chain(live) {
-                if n < BLOCK_NOTES {
+                if g.n < BLOCK_NOTES {
                     lane.live.apply(note.pitch, note.velocity > 0.0);
-                    notes[n] = *note;
-                    n += 1;
+                    g.notes[g.n] = *note;
+                    g.n += 1;
                 }
             }
-            let notes = &notes[..n];
+            // Notes from the song, a cell's loop and live playing can interleave.
+            g.notes[..g.n].sort_by_key(|n| n.offset);
+            g.controls[..g.m].sort_by_key(|c| c.offset);
+            let (notes, controls) = (&g.notes[..g.n], &g.controls[..g.m]);
             match &mut lane.source {
                 Source::Audio => {}
                 Source::Synth(s) => s.process([&mut *l, &mut *r], frames, notes),
                 Source::Drums(d) => d.process([&mut *l, &mut *r], frames, notes),
-                Source::Sampler(s) => s.process([&mut *l, &mut *r], frames, notes),
+                Source::Sampler(s) => s.process([&mut *l, &mut *r], frames, notes, controls),
                 Source::Plugin(p) => {
                     plan.automate(Which::Instrument, p, (from, to));
                     p.set_transport(playing, from, tempo);
-                    p.process([&mut *l, &mut *r], frames, notes, &[], None);
+                    p.process([&mut *l, &mut *r], frames, notes, controls, None);
                 }
             }
             let reduction = lane.strip.run(&plan.dsp, l, r);
+            let sidechains = &arrangement.sidechains;
             for (i, p) in lane.inserts.iter_mut().enumerate() {
                 plan.automate(Which::Insert(i), p, (from, to));
                 p.set_transport(playing, from, tempo);
-                p.process([&mut *l, &mut *r], frames, &[], &[], None);
+                let sc = sidechain(sidechains, plan.sidechains.get(i), frames);
+                p.process([&mut *l, &mut *r], frames, &[], &[], sc);
             }
             lane.pre.process(l, r, plan.delay);
             // Pre-fader sends: muting still silences them.
@@ -1352,6 +1523,12 @@ impl Engine {
                 l[i] *= g0[0] + step[0] * k;
                 r[i] *= g0[1] + step[1] * k;
                 peak = [peak[0].max(l[i].abs()), peak[1].max(r[i].abs())];
+            }
+            // What plugins hearing it as a sidechain get: it, after its fader.
+            if plan.feeds {
+                let [sl, sr] = &mut arrangement.sidechains[t];
+                sl[..frames].copy_from_slice(l);
+                sr[..frames].copy_from_slice(r);
             }
             // Post-fader sends.
             for &(aux, level, _) in plan.sends.iter().filter(|s| !s.2) {
@@ -1385,9 +1562,10 @@ impl Engine {
             l.copy_from_slice(&arrangement.buses[aux][0][..frames]);
             r.copy_from_slice(&arrangement.buses[aux][1][..frames]);
             let reduction = lane.strip.run(&plan.dsp, l, r);
-            for p in &mut lane.inserts {
+            for (i, p) in lane.inserts.iter_mut().enumerate() {
                 p.set_transport(playing, from, tempo);
-                p.process([&mut *l, &mut *r], frames, &[], &[], None);
+                let sc = sidechain(&arrangement.sidechains, plan.sidechains.get(i), frames);
+                p.process([&mut *l, &mut *r], frames, &[], &[], sc);
             }
             lane.post.process(l, r, plan.delay);
             let mut peak = [0f32; 2];
@@ -1411,14 +1589,16 @@ impl Engine {
             .master_lane
             .and_then(|s| self.lanes[s].as_deref_mut())
         {
-            for p in &mut lane.inserts {
+            for (i, p) in lane.inserts.iter_mut().enumerate() {
                 p.set_transport(playing, from, tempo);
+                let sides = arrangement.master_sidechains.get(i);
+                let sc = sidechain(&arrangement.sidechains, sides, frames);
                 p.process(
                     [&mut out_l[..frames], &mut out_r[..frames]],
                     frames,
                     &[],
                     &[],
-                    None,
+                    sc,
                 );
             }
         }
@@ -1496,8 +1676,34 @@ impl Engine {
         self.stop();
         wav.finalize().map_err(err)
     }
+}
 
-    /// Plays the engine through the default output device, set to the engine's rate.
+/// The rate to play at through the default output: `wanted` if the device can run at it, else
+/// the device's own (the live engine runs at that, converting audio as it loads it).
+pub fn output_rate(wanted: u32) -> Result<u32, String> {
+    let device = cpal::default_host()
+        .default_output_device()
+        .ok_or("no audio output device")?;
+    let can = device
+        .supported_output_configs()
+        .map_err(|e| e.to_string())?
+        .any(|c| {
+            c.sample_format() == cpal::SampleFormat::F32
+                && c.channels() >= 2
+                && (c.min_sample_rate()..=c.max_sample_rate()).contains(&wanted)
+        });
+    match can {
+        true => Ok(wanted),
+        false => device
+            .default_output_config()
+            .map(|c| c.sample_rate())
+            .map_err(|e| e.to_string()),
+    }
+}
+
+impl Engine {
+    /// Plays the engine through the default output device, set to the engine's rate (see
+    /// `output_rate`).
     pub fn start_output(mut self) -> Result<cpal::Stream, String> {
         let device = cpal::default_host()
             .default_output_device()
@@ -1668,7 +1874,10 @@ mod tests {
             regions: vec![Region {
                 start: 0,
                 length,
-                content: Content::Midi { notes },
+                content: Content::Midi {
+                    notes,
+                    controls: Vec::new(),
+                },
                 ..Default::default()
             }],
             ..Default::default()
@@ -1999,6 +2208,7 @@ mod tests {
             start: 0,
             content: Content::Midi {
                 notes: vec![note(0, PPQ / 2, pitch), note(PPQ as i64, PPQ / 2, pitch)],
+                controls: Vec::new(),
             },
         };
         let comp = vec![
@@ -2098,7 +2308,10 @@ mod tests {
         let region = Region {
             start: 0,
             length: PPQ,
-            content: Content::Midi { notes },
+            content: Content::Midi {
+                notes,
+                controls: Vec::new(),
+            },
             ..Default::default()
         };
         t.cells.push(Cell { scene: 0, region });
@@ -2121,6 +2334,175 @@ mod tests {
         engine.launch(0, None, engine.position());
         let [l, _] = run(&mut engine, BEAT);
         assert_eq!(peak(&l[RELEASE + MAX_BLOCK..]), 0.0);
+    }
+
+    /// A plugin stand-in: it notes the controls it hears (at the sample they fall on) and the
+    /// first sample its sidechain isn't silent; as an effect it passes audio through.
+    #[derive(Default, Clone)]
+    struct Probe {
+        heard: std::sync::Arc<std::sync::Mutex<Vec<(u64, ControlKind)>>>,
+        sidechain_from: std::sync::Arc<std::sync::Mutex<Option<u64>>>,
+        at: u64,
+    }
+
+    impl crate::plugin::ProcessorApi for Probe {
+        fn latency(&self) -> u32 {
+            0
+        }
+        fn set_transport(&mut self, _: bool, position: u64, _: f64) {
+            self.at = position;
+        }
+        fn automate(&mut self, _: u32, _: f64, _: f64) {}
+        fn sidechain(&self) -> bool {
+            true
+        }
+        fn pending(&self) -> bool {
+            false
+        }
+        fn process(
+            &mut self,
+            _: [&mut [f32]; 2],
+            frames: usize,
+            _: &[Note],
+            controls: &[Control],
+            sidechain: Option<[&[f32]; 2]>,
+        ) {
+            let mut heard = self.heard.lock().unwrap();
+            heard.extend(controls.iter().map(|c| (self.at + c.offset as u64, c.kind)));
+            if let Some([l, _]) = sidechain
+                && let Some(i) = l[..frames].iter().position(|x| x.abs() > 1e-3)
+            {
+                let mut from = self.sidechain_from.lock().unwrap();
+                from.get_or_insert(self.at + i as u64);
+            }
+            self.at += frames as u64;
+        }
+    }
+
+    /// An engine for `p` whose tracks have their built-in instruments, but `probe` as the
+    /// instrument of the tracks with a plugin and the insert of tracks with inserts.
+    fn probed(p: &Project, probe: &Probe) -> Engine {
+        let mut lanes = Vec::new();
+        for t in &p.tracks {
+            let built_in = t
+                .instrument
+                .as_ref()
+                .filter(|i| !matches!(i, Instrument::Plugin(_)));
+            let made = make_lane(built_in, &[], RATE, &mut Modules::new(), Path::new("."));
+            let mut lane = made.unwrap().0;
+            if matches!(t.instrument, Some(Instrument::Plugin(_))) {
+                lane.source = Source::Plugin(Box::new(probe.clone()));
+            }
+            if !t.inserts.is_empty() {
+                lane.inserts.push(Box::new(probe.clone()));
+            }
+            lanes.push(Some(Box::new(lane)));
+        }
+        let tracks: Vec<_> = (0..p.tracks.len()).map(|i| (i, 0)).collect();
+        let mut files = AudioFiles::new(Path::new("."), RATE);
+        let (arrangement, problems) = compile(p, RATE, &tracks, &[], None, &mut files);
+        assert!(problems.is_empty(), "{problems:?}");
+        Engine::new(RATE, arrangement, lanes)
+    }
+
+    #[test]
+    fn controllers_reach_the_instrument_as_they_stand_at_each_pass() {
+        use crate::project::{ControlPoint, ControlValue::Cc};
+        // A beat-long region from beat 2, looping: the mod wheel at 10 from before it starts,
+        // then 100 halfway through.
+        let controls = vec![
+            ControlPoint {
+                start: -100,
+                kind: Cc {
+                    number: 1,
+                    value: 10,
+                },
+            },
+            ControlPoint {
+                start: PPQ as i64 / 2,
+                kind: Cc {
+                    number: 1,
+                    value: 100,
+                },
+            },
+        ];
+        let region = Region {
+            start: PPQ,
+            length: PPQ,
+            looped: true,
+            content: Content::Midi {
+                notes: vec![],
+                controls,
+            },
+            ..Default::default()
+        };
+        let t = Track {
+            name: "p".into(),
+            instrument: Some(Instrument::Plugin(PluginRef::default())),
+            regions: vec![
+                region,
+                Region {
+                    start: PPQ * 3,
+                    length: PPQ,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let probe = Probe::default();
+        let mut engine = probed(&project(vec![t]), &probe);
+        engine.play();
+        run(&mut engine, BEAT * 4);
+        let wheel = |v: u8| ControlKind::Cc {
+            number: 1,
+            value: v as f32 / 127.0,
+        };
+        let half = BEAT as u64 / 2;
+        let (b1, b2) = (BEAT as u64, BEAT as u64 * 2);
+        // Each pass of the loop starts where the mod wheel stood before it, and moves halfway.
+        assert_eq!(
+            *probe.heard.lock().unwrap(),
+            [
+                (b1, wheel(10)),
+                (b1 + half, wheel(100)),
+                (b2, wheel(10)),
+                (b2 + half, wheel(100))
+            ]
+        );
+    }
+
+    #[test]
+    fn a_sidechain_hears_its_source_in_the_same_block() {
+        // The track hearing the sidechain comes first, so the source must be worked out before it.
+        let mut source = synth_track("kick", vec![note(PPQ as i64, PPQ, 45)], PPQ * 4);
+        source.id = 7;
+        let mut hears = synth_track("bass", vec![], PPQ * 4);
+        hears.inserts = vec![PluginRef {
+            sidechain: Some(7),
+            ..Default::default()
+        }];
+        let probe = Probe::default();
+        let mut engine = probed(&project(vec![hears, source]), &probe);
+        engine.play();
+        run(&mut engine, BEAT * 3);
+        let from = probe
+            .sidechain_from
+            .lock()
+            .unwrap()
+            .expect("the sidechain was silent");
+        assert!((BEAT as u64..BEAT as u64 + 64).contains(&from), "{from}");
+    }
+
+    #[test]
+    fn sidechain_sources_are_worked_out_first() {
+        assert_eq!(
+            sidechain_order(&[vec![Some(2)], vec![], vec![Some(1)]]),
+            [1, 2, 0]
+        );
+        // A loop keeps everyone, each once.
+        let mut order = sidechain_order(&[vec![Some(1)], vec![Some(0)]]);
+        order.sort();
+        assert_eq!(order, [0, 1]);
     }
 
     #[test]
@@ -2230,7 +2612,7 @@ mod tests {
         run(&mut engine, BEAT);
         // The A goes (as a key change or a deleted note would take it); the C stays.
         let mut edited = p.clone();
-        if let Content::Midi { notes } = &mut edited.tracks[0].regions[0].content {
+        if let Content::Midi { notes, .. } = &mut edited.tracks[0].regions[0].content {
             notes.retain(|n| n.pitch == 60);
         }
         assert!(tx.push(Msg::Arrange(arrange(&edited, &mut files))).is_ok());
@@ -2436,6 +2818,7 @@ mod tests {
             length: PPQ,
             content: Content::Midi {
                 notes: vec![note(0, 240, 72)],
+                controls: Vec::new(),
             },
             ..Default::default()
         });
@@ -2461,7 +2844,7 @@ mod tests {
         let p = project(vec![t]);
         let sixteenth = BEAT as u64 / 4;
         assert_eq!(note_ons(&p), [(0, 72, 100), (sixteenth, 76, 100)]);
-        let Content::Midi { notes } = &p.tracks[0].regions[0].content else {
+        let Content::Midi { notes, .. } = &p.tracks[0].regions[0].content else {
             unreachable!()
         };
         assert_eq!((notes[0].start, notes[0].pitch), (100, 60));

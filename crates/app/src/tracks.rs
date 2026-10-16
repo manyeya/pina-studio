@@ -1148,7 +1148,10 @@ impl Workspace {
             regions.push(Region {
                 start,
                 length: bar,
-                content: Content::Midi { notes: Vec::new() },
+                content: Content::Midi {
+                    notes: Vec::new(),
+                    controls: Vec::new(),
+                },
                 ..Default::default()
             });
             ws.region = Some((track, regions.len() - 1));

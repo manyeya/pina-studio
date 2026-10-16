@@ -223,6 +223,7 @@ pub fn instantiate(
 pub struct Vst3Plugin {
     pub name: String,
     vendor: String,
+    sidechain: bool,
     cid: TUID,
     component: ComPtr<IComponent>,
     controller: ComPtr<IEditController>,
@@ -426,6 +427,7 @@ impl Vst3Plugin {
             let plugin = Vst3Plugin {
                 name: class.name.clone(),
                 vendor: class.vendor.clone(),
+                sidechain,
                 cid: class.cid,
                 component: component.clone(),
                 controller: controller.clone(),
@@ -461,6 +463,10 @@ impl Vst3Plugin {
 impl PluginApi for Vst3Plugin {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn sidechain(&self) -> bool {
+        self.sidechain
     }
 
     fn params(&self) -> Vec<PluginParam> {
@@ -539,11 +545,22 @@ impl PluginApi for Vst3Plugin {
                     if units.getProgramListInfo(i, &mut list) != kResultOk {
                         continue;
                     }
-                    for program in 0..list.programCount.max(0) {
+                    let named = |program: i32| {
                         let mut name: String128 = [0; 128];
                         units.getProgramName(list.id, program, &mut name);
+                        text16(&name)
+                    };
+                    // One unnamed program is no list at all (JUCE plugins all have it).
+                    if list.programCount <= 1 && named(0).trim().is_empty() {
+                        continue;
+                    }
+                    for program in 0..list.programCount.max(0) {
+                        let name = named(program);
                         out.push(Preset {
-                            name: text16(&name),
+                            name: match name.trim().is_empty() {
+                                true => format!("Program {}", program + 1),
+                                false => name,
+                            },
                             source: PresetSource::Program {
                                 list: list.id,
                                 program: program as u32,

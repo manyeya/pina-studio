@@ -14,8 +14,10 @@ Time is in ticks: 960 to a quarter note, so in 4/4 bar `b` beat `k` starts at
 order `tempo show` lists them. Levels are in dB (0 is unity, -144 silent); pan is -1 (left) to 1
 (right). A note is `{"start": ticks from the region's start, "length": ticks, "pitch": 0-127,
 "velocity": 1-127}`; middle C is 60. An instrument is `"synth"` (the built-in sine) or
-`"drums"` (the built-in kit, on the General MIDI drum notes) or
-`{"vst3": {"path": "/path/to/Plugin.vst3", "class": "Plugin Name"}}` (see `tempo plugins`) or
+`"drums"` (the built-in kit, on the General MIDI drum notes) or a plugin,
+`{"plugin": {"format": "clap", "path": "/path/to/Plugin.clap", "class": "Plugin Name", "uid": "…"}}`,
+exactly as `tempo plugins` lists it (`format` is `vst3`, the default, `clap`, `vst2` or `au`;
+an Audio Unit is known by its `uid`, like `"aumu samp appl"`, and may have no `path`), or
 the built-in sampler: `{"sampler": {"zones": [{"file": "/path/Kick.wav", "name": "Kick", "note": 36}]}}`.
 A zone is a sample on a note (a drum kit has one each), or with `"high"` a range of notes it's
 played across, repitched from `"root"` (the note it sounds at: an 808 or a bass). Drum hits play
@@ -38,17 +40,45 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `delete_track` `{"track": 1}`
 - `set_track` `{"track": 1, "name": "Sub", "volume_db": -6, "pan": -0.3, "mute": false, "solo": false}`:
   any of them.
-- `set_instrument` `{"track": 1, "instrument": {"vst3": {"path": "…", "class": "…"}}}`
-- `set_insert` `{"channel": {"track": 1}, "index": 0, "plugin": {"path": "…", "class": "…"}}`:
+- `set_instrument` `{"track": 1, "instrument": {"plugin": {"path": "…", "class": "…"}}}`
+- `set_insert` `{"channel": {"track": 1}, "index": 0, "plugin": {"format": "au", "class": "AUDelay", "uid": "aufx dely appl"}}`:
   an effect into an insert slot (`{"aux": 0}` for an aux, `"master"` for the master, after its
   built-in effects). An index past the last adds one; leaving out `plugin` removes the one there.
   A slot's automation goes with its plugin.
-- `set_plugin_param` `{"channel": {"track": 1}, "plugin": "instrument", "param": 12, "value": 0.35}`:
-  turns a plugin's parameter (0 to 1). `plugin` is `"instrument"` or `{"insert": 0}`; the ids
-  and names are in `tempo params <project> <track>` (`--aux`, `--master`, `--insert N`). Without
-  `value`, tempo stops setting it and it goes back to what it was.
-- `add_midi_region` `{"track": 0, "start": 0, "length": 3840, "notes": [{"start": 0, "length": 960, "pitch": 60, "velocity": 100}]}`
+- `set_plugin_param` `{"channel": {"track": 1}, "plugin": "instrument", "param": "Filter Cutoff", "text": "850 Hz"}`:
+  turns a plugin's parameter: `param` by its id or its name, set to `value` (0 to 1) or to
+  `text`, a value as the plugin shows it (`"850 Hz"`, `"2.4 kHz"`, `"-6 dB"`, `"Sine"`).
+  `plugin` is `"instrument"` or `{"insert": 0}`. `tempo params <project> <track>` (`--aux`,
+  `--master`, `--insert N`) lists them all: id, name, value and how it's shown, default, unit,
+  steps, and for a choice, `options` (what each is called, and a value for it). Parameters are
+  applied in the order they're set: set an effect's type before what belongs to it. Without
+  `value` or `text`, tempo stops setting it and it goes back to what it was.
+- `set_preset` `{"channel": {"track": 1}, "plugin": "instrument", "preset": "Warm Pad"}`: loads a
+  preset: by name, or `{"program": 3}` (one of the plugin's own; with `"list"` for VST3) or
+  `{"file": "/path/Some.vstpreset"}`. `tempo presets <project> <track>` lists them: the plugin's
+  programs and the preset files of its format (`.vstpreset`, `.aupreset`, `.fxp`, CLAP's), from
+  `~/Library/Audio/Presets/<vendor>/<plugin>` and `/Library/Audio/Presets/…`; `tempo presets …
+  --save "My Bass"` saves its settings as a new one. A preset replaces the plugin's settings and
+  what was set over them; without `preset`, it goes back to its settings from before (in the
+  app; from the command line, its defaults).
+- `set_sidechain` `{"channel": {"track": 2}, "insert": 0, "from": 0}`: what a plugin with a
+  sidechain input (a compressor ducking the bass under the kick, a vocoder) hears there: track
+  `from`'s output, after its fader. Without `from`, nothing.
+- `add_midi_region` `{"track": 0, "start": 0, "length": 3840, "notes": [{"start": 0, "length": 960, "pitch": 60, "velocity": 100}], "controls": […]}`:
+  `controls`, if given, as `set_controls` takes them.
 - `set_notes` `{"track": 0, "region": 0, "notes": […]}`: replaces all of a region's notes.
+- `set_controls` `{"track": 0, "region": 0, "controls": [{"start": 0, "type": "cc", "number": 1, "value": 64}, {"start": 480, "type": "pitch_bend", "value": 8191}]}`:
+  replaces a MIDI region's controller moves, each at `start` ticks from the region's start and
+  holding until the next of its kind: `cc` (`number` 0-127: 1 mod wheel, 7 volume, 10 pan, 11
+  expression, 64 sustain; `value` 0-127), `pitch_bend` (`value` -8192 to 8191; how far that bends
+  is the instrument's range), `aftertouch` (`value` 0-127), `poly_pressure` (`pitch`, `value`
+  0-127), and `expression` for one sounding note (`pitch`, `kind`, `value`): `tuning` in
+  semitones (an 808 glide), `volume` (gain, 1 as played), `pan` (-1 to 1), `brightness`,
+  `vibrato`, `expression` (0 to 1). Plugins get them all (VST3 through the plugin's MIDI mapping;
+  Audio Units and VST2 have no per-note expression); the built-in sampler follows pitch bend
+  (two semitones either way) and each note's `tuning` and `volume`, gliding smoothly, so a few
+  tuning moves make an 808 slide. A region starting part-way, or looping, starts with each
+  controller where it stood.
 - `add_pattern_region` `{"track": 0, "start": 0, "length": 3840, "step": 240, "swing": 58, "rows": [{"pitch": 36, "cells": [110, 0, 0, 0, 100, 0, 0, 0, 110, 0, 0, 0, 100, 0, 0, 0]}]}`:
   a step-sequencer pattern: each row a note, each cell a step's velocity (0 rests), looping over
   the region. `step` is ticks per step (240, a sixteenth, by default); `swing` (50 straight, up
@@ -100,9 +130,10 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   with the others) those tracks play into. Answers with its bus.
 - `set_aux` `{"aux": 0, "name": "Reverb", "volume_db": -3, "pan": 0, "mute": false}`
 - `set_automation` `{"track": 0, "param": "volume", "points": [{"tick": 0, "value": -12}, {"tick": 3840, "value": 0}]}`:
-  `volume` in dB, `pan`, or `plugin` (with `"plugin": "instrument"` or `{"insert": 0}`, the
-  parameter's `"id"`, and optionally its `"name"`) from 0 to 1; values change in straight lines
-  between points. No points takes it out.
+  `volume` in dB, `pan`, or `plugin` (with `"plugin": "instrument"` or `{"insert": 0}`, and the
+  parameter as `"id"`: its id or its name) from 0 to 1, or as the plugin shows it (a point's
+  `"text"`, like `"2 kHz"`, instead of `"value"`); values change in straight lines between
+  points. No points takes it out.
 - `set_automation_mode` `{"track": 0, "mode": "latch"}`: `read` (the default) plays automation;
   `touch` and `latch` also record what's moved in the app while the song plays, until the control
   is let go (touch) or playback stops (latch); `off` ignores it.
@@ -143,6 +174,9 @@ An agent can't hear, so tempo measures:
 Each gives the length, peak (dBFS) and RMS per channel, integrated loudness (LUFS, as
 ITU-R BS.1770), clipped samples, and how the energy splits between lows (< 250 Hz), mids and
 highs (> 4 kHz), in dB below the total. `tempo render <project> <out.wav>` bounces it to listen to.
+
+`tempo params` and `tempo presets` answer from the app when it has the project open, and
+otherwise load the one plugin asked about.
 
 If the app is running: `tempo play`, `tempo stop`, `tempo locate <project> <tick>`,
 `tempo save`, `tempo undo` and `tempo redo` (each with the project) drive it.

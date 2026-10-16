@@ -123,7 +123,7 @@ fn roll_spot(
 fn keys_notes(ws: &Entity<Workspace>, cx: &VisualTestContext, region: usize) -> Vec<(i64, u8)> {
     ws.read_with(cx, |ws, _| {
         match &ws.session.project.tracks[0].regions[region].content {
-            Content::Midi { notes } => notes.iter().map(|n| (n.start, n.pitch)).collect(),
+            Content::Midi { notes, .. } => notes.iter().map(|n| (n.start, n.pitch)).collect(),
             _ => unreachable!(),
         }
     })

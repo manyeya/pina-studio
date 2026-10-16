@@ -196,7 +196,7 @@ impl Workspace {
         if let Some(at) = at {
             let r = self.session.project.region(at);
             span = Some((r.start, r.start + r.length));
-            if let Content::Midi { notes: list } = &r.content {
+            if let Content::Midi { notes: list, .. } = &r.content {
                 notes = list
                     .iter()
                     .enumerate()

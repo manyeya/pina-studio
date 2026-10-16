@@ -342,7 +342,7 @@ impl Workspace {
                 ));
         }
         match &region.content {
-            Content::Midi { notes } => {
+            Content::Midi { notes, .. } => {
                 let range = match (
                     notes.iter().map(|n| n.pitch).min(),
                     notes.iter().map(|n| n.pitch).max(),
@@ -1008,7 +1008,7 @@ impl Workspace {
             let r = &mut ws.session.project.tracks[at.0].regions[at.1];
             let played = r.clone();
             match &mut r.content {
-                Content::Midi { notes } => {
+                Content::Midi { notes, .. } => {
                     for n in notes.iter_mut() {
                         *n = played.played(n);
                     }

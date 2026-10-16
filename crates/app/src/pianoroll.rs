@@ -300,7 +300,7 @@ impl Workspace {
         let mut sounding = [false; 128];
         if let (Some(at), Some((start, _))) = (at, span)
             && self.player.playing()
-            && let Content::Midi { notes } = &project.region(at).content
+            && let Content::Midi { notes, .. } = &project.region(at).content
         {
             for n in notes {
                 let on = start as i64 + n.start;
@@ -432,7 +432,7 @@ impl Workspace {
         let mut stems = Vec::new();
         let mut tip = None;
         if let (Some(at), Some((start, _))) = (at, span) {
-            let Content::Midi { notes: list } = &project.region(at).content else {
+            let Content::Midi { notes: list, .. } = &project.region(at).content else {
                 unreachable!()
             };
             for (i, n) in list.iter().enumerate() {

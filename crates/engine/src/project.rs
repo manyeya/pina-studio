@@ -946,6 +946,9 @@ impl Region {
 pub enum Content {
     Midi {
         notes: Vec<Note>,
+        /// Controllers, pitch bend, pressure and per-note expression, in time order.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        controls: Vec<ControlPoint>,
     },
     /// `file` is relative to the project folder; `offset` is where in it the region starts, in
     /// samples.
@@ -980,7 +983,10 @@ pub enum Content {
 
 impl Default for Content {
     fn default() -> Self {
-        Content::Midi { notes: Vec::new() }
+        Content::Midi {
+            notes: Vec::new(),
+            controls: Vec::new(),
+        }
     }
 }
 
@@ -1059,7 +1065,7 @@ impl Content {
     /// The notes MIDI content plays over `length` ticks: its notes, or a pattern's steps.
     pub fn notes(&self, length: u64) -> Option<Cow<'_, [Note]>> {
         match self {
-            Content::Midi { notes } => Some(Cow::Borrowed(notes)),
+            Content::Midi { notes, .. } => Some(Cow::Borrowed(notes)),
             Content::Pattern { step, rows, swing } => {
                 Some(Cow::Owned(pattern_notes(*step, rows, length, *swing)))
             }
@@ -1126,6 +1132,134 @@ pub struct Note {
     pub length: u64,
     pub pitch: u8,
     pub velocity: u8,
+}
+
+/// A move of a MIDI controller, pitch bend or pressure, or of one note's expression, at `start`
+/// ticks from the region's start. It holds until the next move of the same thing.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct ControlPoint {
+    pub start: i64,
+    #[serde(flatten)]
+    pub kind: ControlValue,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ControlValue {
+    /// A MIDI controller, 0-127 (1 is the mod wheel, 7 volume, 10 pan, 11 expression, 64 the
+    /// sustain pedal), set to 0-127.
+    Cc { number: u8, value: u8 },
+    /// -8192 to 8191, 0 being none; how many semitones that is is the instrument's bend range.
+    PitchBend { value: i16 },
+    /// Channel pressure, 0-127.
+    Aftertouch { value: u8 },
+    /// One note's pressure, 0-127.
+    PolyPressure { pitch: u8, value: u8 },
+    /// One sounding note's expression (instruments that have it: VST3 and CLAP): `tuning` in
+    /// semitones (-120 to 120), `volume` as gain (0 to 4, 1 as played), `pan` -1 to 1,
+    /// `brightness`, `vibrato` and `expression` 0 to 1.
+    Expression {
+        pitch: u8,
+        kind: ExpressionKind,
+        value: f32,
+    },
+}
+
+/// The moves from `from` to `to`, led by each controller's value as it stands at `from` (its
+/// last move before, moved to `from`).
+pub fn chase(
+    points: impl Iterator<Item = ControlPoint>,
+    from: i64,
+    to: i64,
+) -> impl Iterator<Item = ControlPoint> {
+    let mut before: Vec<ControlPoint> = Vec::new();
+    let mut inside = Vec::new();
+    for p in points {
+        if p.start < from {
+            match before.iter_mut().find(|b| b.kind.same_thing(&p.kind)) {
+                Some(b) if b.start <= p.start => *b = p,
+                Some(_) => {}
+                None => before.push(p),
+            }
+        } else if p.start < to {
+            inside.push(p);
+        }
+    }
+    for b in &mut before {
+        b.start = from;
+    }
+    inside.sort_by_key(|p| p.start);
+    before.into_iter().chain(inside)
+}
+
+impl ControlValue {
+    /// Whether two moves are of the same thing: the same controller, or the same note's
+    /// pressure or expression.
+    pub fn same_thing(&self, other: &ControlValue) -> bool {
+        use ControlValue::*;
+        match (self, other) {
+            (Cc { number: a, .. }, Cc { number: b, .. }) => a == b,
+            (PitchBend { .. }, PitchBend { .. }) | (Aftertouch { .. }, Aftertouch { .. }) => true,
+            (PolyPressure { pitch: a, .. }, PolyPressure { pitch: b, .. }) => a == b,
+            (
+                Expression {
+                    pitch: a, kind: x, ..
+                },
+                Expression {
+                    pitch: b, kind: y, ..
+                },
+            ) => a == b && x == y,
+            _ => false,
+        }
+    }
+
+    /// What it means to an instrument.
+    pub fn to_control(self) -> crate::plugin::ControlKind {
+        use crate::plugin::ControlKind as K;
+        match self {
+            ControlValue::Cc { number, value } => K::Cc {
+                number: number.min(127),
+                value: value.min(127) as f32 / 127.0,
+            },
+            ControlValue::PitchBend { value } => {
+                K::PitchBend((value as f32 / 8192.0).clamp(-1.0, 1.0))
+            }
+            ControlValue::Aftertouch { value } => K::Aftertouch(value.min(127) as f32 / 127.0),
+            ControlValue::PolyPressure { pitch, value } => K::PolyPressure {
+                pitch,
+                value: value.min(127) as f32 / 127.0,
+            },
+            ControlValue::Expression { pitch, kind, value } => K::Expression { pitch, kind, value },
+        }
+    }
+
+    /// The note it's about, if it's about one.
+    pub fn pitch_mut(&mut self) -> Option<&mut u8> {
+        match self {
+            ControlValue::PolyPressure { pitch, .. } | ControlValue::Expression { pitch, .. } => {
+                Some(pitch)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Per-note expression, as VST3 and CLAP have it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExpressionKind {
+    /// Semitones up or down, -120 to 120.
+    Tuning,
+    /// Gain, 0 to 4 (1 is as played).
+    Volume,
+    /// -1 left to 1 right.
+    Pan,
+    /// 0 to 1.
+    Brightness,
+    /// 0 to 1.
+    Vibrato,
+    /// 0 to 1.
+    Expression,
 }
 
 /// Where a region is: its track and its index there.
@@ -1223,9 +1357,12 @@ impl Project {
         {
             fn shift(content: &mut Content, from: &crate::music::Key, to: &crate::music::Key) {
                 match content {
-                    Content::Midi { notes } => {
+                    Content::Midi { notes, controls } => {
                         for n in notes {
                             n.pitch = from.move_pitch(n.pitch, to);
+                        }
+                        for p in controls.iter_mut().filter_map(|c| c.kind.pitch_mut()) {
+                            *p = from.move_pitch(*p, to);
                         }
                     }
                     Content::Pattern { rows, .. } => {
@@ -1339,7 +1476,15 @@ impl Project {
     /// A MIDI region's notes, if it is one.
     pub fn notes_mut(&mut self, at: At) -> Option<&mut Vec<Note>> {
         match &mut self.tracks.get_mut(at.0)?.regions.get_mut(at.1)?.content {
-            Content::Midi { notes } => Some(notes),
+            Content::Midi { notes, .. } => Some(notes),
+            Content::Audio { .. } | Content::Takes { .. } | Content::Pattern { .. } => None,
+        }
+    }
+
+    /// A MIDI region's controller moves, if it is one.
+    pub fn controls_mut(&mut self, at: At) -> Option<&mut Vec<ControlPoint>> {
+        match &mut self.tracks.get_mut(at.0)?.regions.get_mut(at.1)?.content {
+            Content::Midi { controls, .. } => Some(controls),
             Content::Audio { .. } | Content::Takes { .. } | Content::Pattern { .. } => None,
         }
     }
@@ -1449,7 +1594,7 @@ impl Project {
         let segments = comp_segments(comp, takes.len(), r.length);
         let mut out = Vec::new();
         if r.content.is_midi() {
-            let mut notes = Vec::new();
+            let (mut notes, mut controls) = (Vec::new(), Vec::new());
             for &(a, b, t) in &segments {
                 let take = &takes[t];
                 if let Some(n) = take.content.notes((b as i64 - take.start).max(0) as u64) {
@@ -1459,11 +1604,19 @@ impl Project {
                         ..*n
                     }));
                 }
+                // Each piece's controllers, as they stand where it begins.
+                if let Content::Midi { controls: c, .. } = &take.content {
+                    let moved = c.iter().map(|c| ControlPoint {
+                        start: take.start + c.start,
+                        ..*c
+                    });
+                    controls.extend(chase(moved, a as i64, b as i64));
+                }
             }
             out.push(Region {
                 start: r.start,
                 length: r.length,
-                content: Content::Midi { notes },
+                content: Content::Midi { notes, controls },
                 ..Default::default()
             });
         } else {
@@ -1548,10 +1701,13 @@ impl Project {
         let r = &mut self.tracks[at.0].regions[at.1];
         match &mut r.content {
             // Its notes move, so an alias trimmed at the start becomes a region of its own.
-            Content::Midi { notes } => {
+            Content::Midi { notes, controls } => {
                 r.link = None;
                 for n in notes {
                     n.start -= start as i64 - old as i64;
+                }
+                for c in controls {
+                    c.start -= start as i64 - old as i64;
                 }
             }
             Content::Audio {
@@ -1695,7 +1851,16 @@ impl Project {
         r.length = first;
         match (&mut r.content, &mut second.content) {
             // Each half keeps only its notes, so neither is an alias any more.
-            (Content::Midi { notes: a }, Content::Midi { notes: b }) => {
+            (
+                Content::Midi {
+                    notes: a,
+                    controls: ca,
+                },
+                Content::Midi {
+                    notes: b,
+                    controls: cb,
+                },
+            ) => {
                 r.link = None;
                 second.link = None;
                 a.retain(|n| n.start < first as i64);
@@ -1703,6 +1868,14 @@ impl Project {
                 for n in b {
                     n.start -= first as i64;
                 }
+                // The second half starts with each controller where the first left it.
+                ca.retain(|c| c.start < first as i64);
+                *cb = chase(cb.iter().copied(), first as i64, i64::MAX)
+                    .map(|c| ControlPoint {
+                        start: c.start - first as i64,
+                        ..c
+                    })
+                    .collect();
             }
             (
                 _,
@@ -1750,7 +1923,10 @@ mod tests {
         Region {
             start,
             length,
-            content: Content::Midi { notes },
+            content: Content::Midi {
+                notes,
+                controls: Vec::new(),
+            },
             ..Default::default()
         }
     }
@@ -1826,11 +2002,56 @@ mod tests {
             (960, 960, 1920, 960)
         );
         let pitches = |r: &Region| match &r.content {
-            Content::Midi { notes } => notes.iter().map(|n| (n.start, n.pitch)).collect::<Vec<_>>(),
+            Content::Midi { notes, .. } => {
+                notes.iter().map(|n| (n.start, n.pitch)).collect::<Vec<_>>()
+            }
             _ => unreachable!(),
         };
         assert_eq!(pitches(a), [(0, 60), (900, 62)]);
         assert_eq!(pitches(b), [(0, 64)]);
+    }
+
+    #[test]
+    fn splitting_midi_keeps_each_controller_where_it_stood() {
+        let cc = |start, value| ControlPoint {
+            start,
+            kind: ControlValue::Cc { number: 1, value },
+        };
+        let bend = |start, value| ControlPoint {
+            start,
+            kind: ControlValue::PitchBend { value },
+        };
+        let mut p = Project::new(48_000);
+        p.tracks.push(Track {
+            regions: vec![Region {
+                start: 0,
+                length: 4 * PPQ,
+                content: Content::Midi {
+                    notes: vec![],
+                    controls: vec![
+                        cc(0, 10),
+                        bend(100, 500),
+                        cc(PPQ as i64, 90),
+                        cc(3 * PPQ as i64, 127),
+                    ],
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let second = p.split_region((0, 0), 2 * PPQ).unwrap();
+        let controls = |at| match &p.region(at).content {
+            Content::Midi { controls, .. } => controls.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            controls((0, 0)),
+            [cc(0, 10), bend(100, 500), cc(PPQ as i64, 90)]
+        );
+        // The second half starts with the wheel at 90 and the bend where it was.
+        let mut start = controls(second);
+        start.sort_by_key(|c| (c.start, matches!(c.kind, ControlValue::PitchBend { .. })));
+        assert_eq!(start, [cc(0, 90), bend(0, 500), cc(PPQ as i64, 127)]);
     }
 
     #[test]
@@ -1849,12 +2070,12 @@ mod tests {
         p.trim_start((0, 0), 1440);
         let r = p.region((0, 0));
         assert_eq!((r.start, r.length), (1440, 1440));
-        let Content::Midi { notes } = &r.content else {
+        let Content::Midi { notes, .. } = &r.content else {
             unreachable!()
         };
         assert_eq!((notes[0].start, notes[1].start), (-480, 0));
         p.trim_start((0, 0), 960); // back again: the hidden note returns
-        let Content::Midi { notes } = &p.region((0, 0)).content else {
+        let Content::Midi { notes, .. } = &p.region((0, 0)).content else {
             unreachable!()
         };
         assert_eq!(notes[0].start, 0);
@@ -1912,7 +2133,10 @@ mod tests {
         }];
         Take {
             start,
-            content: Content::Midi { notes },
+            content: Content::Midi {
+                notes,
+                controls: Vec::new(),
+            },
         }
     }
 
@@ -1936,14 +2160,30 @@ mod tests {
             pitch: 64,
             velocity: 90,
         }];
-        let at = p.add_take(0, 1440, 3360, Content::Midi { notes });
+        let at = p.add_take(
+            0,
+            1440,
+            3360,
+            Content::Midi {
+                notes,
+                controls: Vec::new(),
+            },
+        );
         assert_eq!(at, (0, 0));
         let r = p.region(at);
         assert_eq!((r.start, r.length), (960, 2400)); // grown to the end of the new take
         assert_eq!(folder(&p, at), (vec![0, 480], vec![(0, 2400, 1)])); // the newest plays
         // Recording somewhere else makes a plain region.
         assert_eq!(
-            p.add_take(0, 7680, 8640, Content::Midi { notes: vec![] }),
+            p.add_take(
+                0,
+                7680,
+                8640,
+                Content::Midi {
+                    notes: vec![],
+                    controls: Vec::new()
+                }
+            ),
             (0, 1)
         );
     }
@@ -1980,7 +2220,7 @@ mod tests {
     fn take_folders_split_trim_and_flatten() {
         // Take 1 starts at 480 with a note 600 in (at 1080), where the comp plays take 1.
         let mut late = take(480, 62);
-        let Content::Midi { notes } = &mut late.content else {
+        let Content::Midi { notes, .. } = &mut late.content else {
             unreachable!()
         };
         notes[0].start = 600;
@@ -2009,7 +2249,7 @@ mod tests {
         // Flattening keeps what the comp plays: take 1's note (1080, now 600 after the trim), not
         // take 0's (now -480, before the region).
         let flat = p.flatten((0, 0));
-        let Content::Midi { notes } = &p.region(flat[0]).content else {
+        let Content::Midi { notes, .. } = &p.region(flat[0]).content else {
             panic!()
         };
         let kept: Vec<(i64, u8)> = notes.iter().map(|n| (n.start, n.pitch)).collect();
@@ -2162,7 +2402,7 @@ mod tests {
         );
         let key = |s: &str| crate::music::Key::parse(s);
         let pitches = |p: &Project, t: usize| match &p.tracks[t].regions[0].content {
-            Content::Midi { notes } => notes.iter().map(|n| n.pitch).collect::<Vec<_>>(),
+            Content::Midi { notes, .. } => notes.iter().map(|n| n.pitch).collect::<Vec<_>>(),
             _ => unreachable!(),
         };
         assert_eq!(p.song_key(), key("C major")); // a C major chord

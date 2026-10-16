@@ -6,9 +6,9 @@ use std::path::Path;
 use serde_json::{Value, json};
 use tempo_engine::{
     analysis::{self, Analysis},
-    commands::{self, ChannelRef, Command},
-    engine::Engine,
-    plugin::PluginParam,
+    commands::{self, ChannelRef, Command, PluginSource},
+    engine::{Engine, load_plugin},
+    plugin::{Plugin, PluginApi, Processor, named_values},
     project::{Project, Which},
     scan,
     session::Session,
@@ -57,9 +57,40 @@ pub fn edit_with(dir: &Path, command: Command) -> Result<Value, String> {
         unreachable!()
     };
     let mut session = Session::open(dir)?;
+    let mut plugins = Offline { dir, loaded: None };
+    let command = commands::resolve(&session.project, command, &mut plugins)?;
     let result = commands::apply(&mut session.project, dir, command)?;
     session.save()?;
     Ok(result)
+}
+
+/// One plugin of the project saved in `dir`, loaded as the project sets it.
+fn load_one(
+    dir: &Path,
+    p: &Project,
+    channel: ChannelRef,
+    which: Which,
+) -> Result<(Plugin, Processor), String> {
+    let r = commands::plugin_ref(p, channel, which).ok_or("no plugin there")?;
+    load_plugin(r, dir, p.sample_rate as f64)
+}
+
+/// Plugins loaded from the folder, as `resolve` asks for them.
+struct Offline<'a> {
+    dir: &'a Path,
+    loaded: Option<(Plugin, Processor)>,
+}
+
+impl PluginSource for Offline<'_> {
+    fn plugin(
+        &mut self,
+        project: &Project,
+        channel: ChannelRef,
+        which: Which,
+    ) -> Result<&dyn PluginApi, String> {
+        let loaded = load_one(self.dir, project, channel, which)?;
+        Ok(&*self.loaded.insert(loaded).0)
+    }
 }
 
 /// Something only the running app can do: transport, save, undo.
@@ -125,13 +156,44 @@ pub fn bounce(p: &Project, dir: &Path, out: &Path) -> Result<(), String> {
     engine.bounce(out, length(p))
 }
 
-/// A plugin's parameters as JSON: id, name, value (0 to 1) and how the plugin shows it.
-pub fn params_json(params: &[PluginParam], text: impl Fn(u32, f64) -> String) -> Value {
-    let list: Vec<Value> = params
-        .iter()
-        .map(|p| json!({ "id": p.id, "name": p.name, "value": p.value, "text": text(p.id, p.value) }))
+/// A plugin's parameters as JSON: id, name, value (0 to 1) and how the plugin shows it, its
+/// default, unit and steps, and for a choice of a few, what each step is.
+pub fn params_json(plugin: &dyn PluginApi) -> Value {
+    let list: Vec<Value> = plugin
+        .params()
+        .into_iter()
+        .map(|p| {
+            let mut v = json!({
+                "id": p.id,
+                "name": p.name,
+                "value": p.value,
+                "text": plugin.param_text(p.id, p.value),
+                "default": p.default,
+            });
+            let map = v.as_object_mut().unwrap();
+            if !p.units.is_empty() {
+                map.insert("units".into(), p.units.clone().into());
+            }
+            if p.steps > 0 {
+                map.insert("steps".into(), p.steps.into());
+            }
+            // A choice: what each value is called, and a value that picks it.
+            if let Some(named) = named_values(plugin, &p) {
+                let options: Vec<Value> = named
+                    .into_iter()
+                    .map(|(name, value)| json!({ "text": name, "value": value }))
+                    .collect();
+                map.insert("options".into(), options.into());
+            }
+            v
+        })
         .collect();
     Value::Array(list)
+}
+
+/// A plugin's presets as JSON: name, and its program or file.
+pub fn presets_json(plugin: &dyn PluginApi) -> Value {
+    json!(plugin.presets())
 }
 
 /// A plugin's parameters, for automating them or setting them: from the app if it has the project
@@ -141,22 +203,39 @@ pub fn params(dir: &Path, channel: ChannelRef, plugin: Which) -> Result<Value, S
         return reply;
     }
     let p = Project::load(dir)?;
-    let (_engine, lanes) = Engine::load(&p, dir, p.sample_rate as f64)?;
-    // Lanes are the tracks', then the auxes', then the master's.
-    let lane = match channel {
-        ChannelRef::Track(i) if i < p.tracks.len() => i,
-        ChannelRef::Aux(i) if i < p.auxes.len() => p.tracks.len() + i,
-        ChannelRef::Master => p.tracks.len() + p.auxes.len(),
-        _ => return Err("no such channel".into()),
+    let (loaded, _processor) = load_one(dir, &p, channel, plugin)?;
+    Ok(params_json(&*loaded))
+}
+
+/// What a plugin can load: its programs and preset files. From the app if it has the project
+/// open, else by loading the plugin.
+pub fn presets(dir: &Path, channel: ChannelRef, plugin: Which) -> Result<Value, String> {
+    if let Some(reply) = server::ask(dir, &Request::Presets { channel, plugin }) {
+        return reply;
+    }
+    let p = Project::load(dir)?;
+    let (loaded, _processor) = load_one(dir, &p, channel, plugin)?;
+    Ok(presets_json(&*loaded))
+}
+
+/// Saves a plugin's settings as a preset file of its format, where its presets live.
+pub fn save_preset(
+    dir: &Path,
+    channel: ChannelRef,
+    plugin: Which,
+    name: &str,
+) -> Result<Value, String> {
+    let request = Request::SavePreset {
+        channel,
+        plugin,
+        name: name.to_string(),
     };
-    let found = match plugin {
-        Which::Instrument => lanes[lane].instrument.as_ref(),
-        Which::Insert(n) => lanes[lane].inserts.get(n),
-    };
-    let plugin = found.ok_or("no plugin there")?;
-    Ok(params_json(&plugin.params(), |id, v| {
-        plugin.param_text(id, v)
-    }))
+    if let Some(reply) = server::ask(dir, &request) {
+        return reply;
+    }
+    let p = Project::load(dir)?;
+    let (loaded, _processor) = load_one(dir, &p, channel, plugin)?;
+    Ok(json!({ "file": loaded.save_preset(name)? }))
 }
 
 /// The plugins installed, scanning what's new.

@@ -32,6 +32,10 @@ struct Slot {
     /// it, to go back to when the project stops setting it (as when that edit is undone).
     applied: HashMap<(Which, u32), f64>,
     original: HashMap<(Which, u32), f64>,
+    /// The preset each plugin has loaded, as last applied; and its settings from before tempo
+    /// first loaded one, to go back to.
+    presets: HashMap<Which, Option<crate::project::Preset>>,
+    before_preset: HashMap<Which, Vec<u8>>,
 }
 
 impl Slot {
@@ -42,15 +46,36 @@ impl Slot {
         }
     }
 
-    /// Gives a plugin the parameter values its `PluginRef` sets.
-    fn apply(&mut self, which: Which, r: &PluginRef) {
+    /// Gives a plugin the preset and parameter values its `PluginRef` sets.
+    fn apply(&mut self, which: Which, r: &PluginRef) -> Result<(), String> {
         let plugins = &self.plugins;
         let Some(p) = (match which {
             Which::Instrument => plugins.instrument.as_ref(),
             Which::Insert(i) => plugins.inserts.get(i),
         }) else {
-            return;
+            return Ok(());
         };
+        let mut problem = Ok(());
+        let had = self.presets.get(&which).cloned().flatten();
+        if r.preset != had {
+            if had.is_none()
+                && let Some(state) = p.state()
+            {
+                self.before_preset.insert(which, state);
+            }
+            match &r.preset {
+                Some(preset) => problem = p.load_preset(preset),
+                None => {
+                    if let Some(state) = self.before_preset.remove(&which) {
+                        problem = p.set_state(&state);
+                    }
+                }
+            }
+            self.presets.insert(which, r.preset.clone());
+            // The preset set every parameter: what tempo set before is set again over it.
+            self.applied.retain(|(w, _), _| *w != which);
+            self.original.retain(|(w, _), _| *w != which);
+        }
         let mut changed = Vec::new();
         for (&id, &v) in &r.params {
             if self.applied.get(&(which, id)) != Some(&v) {
@@ -74,6 +99,7 @@ impl Slot {
             self.original.entry((which, id)).or_insert(was);
             self.applied.insert((which, id), v);
         }
+        problem
     }
 }
 
@@ -129,8 +155,7 @@ impl Drop for Player {
 impl Player {
     /// A player and the engine it drives, at the project's sample rate. Empty: `sync` loads the
     /// project.
-    fn new(project: &Project, dir: &Path) -> (Player, Engine) {
-        let rate = project.sample_rate as f64;
+    fn new(dir: &Path, rate: f64) -> (Player, Engine) {
         let (tx, rx) = rtrb::RingBuffer::new(1024);
         let (gtx, garbage) = rtrb::RingBuffer::new(1024);
         let shared = Arc::new(Shared::new());
@@ -165,7 +190,9 @@ impl Player {
 
     /// Plays through the default output device, with every MIDI input playing the armed track.
     pub fn start(project: &Project, dir: &Path) -> Result<Player, String> {
-        let (mut player, engine) = Player::new(project, dir);
+        // At the project's rate if the output can run at it, else at the output's.
+        let rate = crate::engine::output_rate(project.sample_rate)?;
+        let (mut player, engine) = Player::new(dir, rate as f64);
         player._stream = Some(engine.start_output()?);
         player._midi = midi::connect(&player.live);
         Ok(player)
@@ -174,7 +201,7 @@ impl Player {
     /// Runs the engine in real time on a thread of its own, heard by nobody: for tests, and
     /// machines without audio. The thread ends with the player.
     pub fn silent(project: &Project, dir: &Path) -> Player {
-        let (player, mut engine) = Player::new(project, dir);
+        let (player, mut engine) = Player::new(dir, project.sample_rate as f64);
         let block = Duration::from_secs_f64(MAX_BLOCK as f64 / player.rate);
         thread::spawn(move || {
             let (mut l, mut r) = (vec![0f32; MAX_BLOCK], vec![0f32; MAX_BLOCK]);
@@ -230,6 +257,21 @@ impl Player {
             });
             self.send(Msg::Insert(slot, Box::new(lane)))?;
             let sound = sound(instrument, inserts);
+            // A preset its saved settings hold is loaded already.
+            let refs = match instrument {
+                Some(Instrument::Plugin(r)) => vec![(Which::Instrument, r)],
+                _ => Vec::new(),
+            };
+            let all = refs.into_iter().chain(
+                inserts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| (Which::Insert(i), r)),
+            );
+            let presets = all
+                .filter(|(_, r)| r.state.is_some())
+                .map(|(w, r)| (w, r.preset.clone()))
+                .collect();
             self.lanes.insert(
                 id,
                 Slot {
@@ -239,16 +281,22 @@ impl Player {
                     plugins,
                     applied: HashMap::new(),
                     original: HashMap::new(),
+                    presets,
+                    before_preset: HashMap::new(),
                 },
             );
         }
         for &(id, instrument, inserts) in &channels {
             let slot = self.lanes.get_mut(&id).unwrap();
-            if let Some(Instrument::Plugin(r)) = instrument {
-                slot.apply(Which::Instrument, r);
+            if let Some(Instrument::Plugin(r)) = instrument
+                && let Err(e) = slot.apply(Which::Instrument, r)
+            {
+                problems.push(e);
             }
             for (i, r) in inserts.iter().enumerate() {
-                slot.apply(Which::Insert(i), r);
+                if let Err(e) = slot.apply(Which::Insert(i), r) {
+                    problems.push(e);
+                }
             }
         }
         let lane = |id: &u64| (self.lanes[id].slot, self.lanes[id].latency);
@@ -265,8 +313,17 @@ impl Player {
         }
     }
 
-    fn plugin(&self, id: u64, which: Which) -> Option<&Plugin> {
+    /// The main-thread half of a track's or aux's plugin (the master's by `MASTER_ID`).
+    pub fn plugin(&self, id: u64, which: Which) -> Option<&Plugin> {
         self.lanes.get(&id)?.plugin(which)
+    }
+
+    /// Lets every plugin do the main-thread work it asked for. Call it often.
+    pub fn idle(&self) {
+        for slot in self.lanes.values() {
+            slot.plugins.instrument.iter().for_each(|p| p.idle());
+            slot.plugins.inserts.iter().for_each(|p| p.idle());
+        }
     }
 
     /// Opens (or brings back) a plugin's editor. Main thread only.
