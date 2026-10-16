@@ -537,4 +537,5 @@ fn logo() -> impl IntoElement {
         )
 }
 
-const LOGO: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 6.5v8.6a2.4 2.4 0 0 0 2.4 2.4h1.6M7 10h6" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round"/><circle cx="16.8" cy="10" r="1.6" fill="#000"/></svg>"##;
+/// The app icon's metronome, in one color: its body, and its arm swung from the pivot.
+const LOGO: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10.3 5h3.4l3.5 13.6H6.8z" fill="none" stroke="#000" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 15.6l3.3-8.1" stroke="#000" stroke-width="2" stroke-linecap="round"/><rect x="13.1" y="9" width="3.4" height="2.4" rx="0.8" transform="rotate(22 14.8 10.2)" fill="#000"/><circle cx="12" cy="15.6" r="1.5" fill="#000"/></svg>"##;

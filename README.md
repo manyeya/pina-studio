@@ -38,6 +38,12 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
 `play` sets the output device to the project's sample rate, as Logic does. `play_vst` loads a
 plugin, opens its editor and plays an arpeggio through it.
 
+`scripts/bundle.sh` builds `tempo.app` (the release binary, its icon, an Info.plist that asks for
+the microphone to record, signed ad hoc) and installs it in `/Applications`, or the folder given.
+The icon, a metronome on a dark squircle on Apple's grid, is drawn by `scripts/icon.py`
+(`crates/app/icon/tempo.svg`) and packed into `tempo.icns` by `cargo run -p tempo --example
+icon`; macOS 26 draws it in its own glass, not in a gray box.
+
 `examples/midnight-drive` was made entirely with `tempo do` commands, as an agent would make it.
 So is Corner Store Blues, a 95 BPM boom-bap beat on real samples (MusicRadar's free 90s Hip Hop
 pack, downloaded on first run: they can't be passed on, so they aren't here) with Surge XT and

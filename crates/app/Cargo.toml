@@ -17,3 +17,5 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = 
 
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+# examples/icon: the app icon's SVG to PNGs (gpui draws SVGs with it too).
+resvg = "0.46"
