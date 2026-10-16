@@ -191,6 +191,64 @@ struct CellPlan {
     length: u64,
 }
 
+/// The notes an instrument is holding, counted by pitch: the same pitch can be held twice (two
+/// notes overlapping), and each needs its own note-off, or one voice rings on.
+#[derive(Clone, Copy)]
+struct Held([u8; 128]);
+
+impl Held {
+    fn new() -> Self {
+        Held([0; 128])
+    }
+
+    fn apply(&mut self, pitch: u8, on: bool) {
+        let count = &mut self.0[pitch as usize];
+        *count = if on {
+            count.saturating_add(1)
+        } else {
+            count.saturating_sub(1)
+        };
+    }
+
+    /// Lets go of every note held, at `offset` in the block, unless `keep` says it's still on;
+    /// adds the note-offs to `notes`.
+    fn release(
+        &mut self,
+        offset: u32,
+        keep: impl Fn(u8) -> bool,
+        notes: &mut [Note; BLOCK_NOTES],
+        n: &mut usize,
+    ) {
+        for (pitch, count) in self.0.iter_mut().enumerate() {
+            if *count == 0 || keep(pitch as u8) {
+                continue;
+            }
+            for _ in 0..std::mem::take(count) {
+                if *n < BLOCK_NOTES {
+                    notes[*n] = Note {
+                        offset,
+                        pitch: pitch as u8,
+                        velocity: 0.0,
+                    };
+                    *n += 1;
+                }
+            }
+        }
+    }
+}
+
+/// Whether a pitch is sounding at a sample in some events (sorted by time): its last event before
+/// then turned it on. Looks back so far, then says no.
+fn sounding(events: &[Event], at: u64, pitch: u8) -> bool {
+    const LOOK_BACK: usize = 4096;
+    let end = events.partition_point(|e| e.at < at);
+    events[end.saturating_sub(LOOK_BACK)..end]
+        .iter()
+        .rev()
+        .find(|e| e.pitch == pitch)
+        .is_some_and(|e| e.velocity > 0.0)
+}
+
 /// Adds what `events` and `clips` play from `from` to `to` (samples) into a block, `into`
 /// samples into it.
 #[allow(clippy::too_many_arguments)]
@@ -201,7 +259,7 @@ fn gather(
     into: usize,
     notes: &mut [Note; BLOCK_NOTES],
     n: &mut usize,
-    held: &mut [bool; 128],
+    held: &mut Held,
     [l, r]: [&mut [f32]; 2],
 ) {
     let first = events.partition_point(|e| e.at < from);
@@ -209,7 +267,7 @@ fn gather(
         if *n == BLOCK_NOTES {
             break;
         }
-        held[e.pitch as usize] = e.velocity > 0.0;
+        held.apply(e.pitch, e.velocity > 0.0);
         notes[*n] = Note {
             offset: (e.at - from) as u32 + into as u32,
             pitch: e.pitch,
@@ -378,8 +436,10 @@ enum Source {
 pub struct Lane {
     source: Source,
     inserts: Vec<Processor>,
-    /// Notes the instrument is holding, to release on stop or locate.
-    held: [bool; 128],
+    /// Notes the instrument is holding, to release on stop or locate: those the song played, and
+    /// those played live (a MIDI keyboard, a key clicked in the piano roll).
+    held: Held,
+    live: Held,
     /// Delay compensation: before a track's sends, and after them (or after an aux's inserts).
     pre: Delay,
     post: Delay,
@@ -452,7 +512,8 @@ pub fn make_lane(
     let lane = Lane {
         source,
         inserts: processors,
-        held: [false; 128],
+        held: Held::new(),
+        live: Held::new(),
         pre: Delay::new(),
         post: Delay::new(),
         cell: None,
@@ -849,6 +910,8 @@ pub struct Engine {
     playing: bool,
     /// Release every held note at the start of the next block.
     release: bool,
+    /// What the song plays has changed while playing: notes it no longer has let go.
+    rechase: bool,
     scratch: [Vec<f32>; 2],
     link: Option<Link>,
     /// Notes asked for by `Msg::Note`, for the next block.
@@ -870,6 +933,7 @@ impl Engine {
             position: 0,
             playing: false,
             release: false,
+            rechase: false,
             scratch: [vec![0.0; MAX_BLOCK], vec![0.0; MAX_BLOCK]],
             link: None,
             pending: [(0, Note::default()); LIVE_NOTES],
@@ -966,6 +1030,7 @@ impl Engine {
                 Msg::Arrange(a) => {
                     let old = std::mem::replace(&mut self.arrangement, a);
                     trash(&mut link.garbage, Garbage::Arrangement(old));
+                    self.rechase = true;
                 }
                 Msg::Insert(slot, lane) => {
                     if let Some(old) = self.lanes[slot].replace(lane) {
@@ -1110,6 +1175,7 @@ impl Engine {
             None => to,
         };
         let release = std::mem::take(&mut self.release) || jumped;
+        let rechase = std::mem::take(&mut self.rechase) && playing;
         let shared = self.link.as_ref().map(|l| &*l.shared);
         let [l, r] = &mut self.scratch;
         let (l, r) = (&mut l[..frames], &mut r[..frames]);
@@ -1128,15 +1194,12 @@ impl Engine {
             let mut notes = [Note::default(); BLOCK_NOTES];
             let mut n = 0;
             if release {
-                for (pitch, held) in lane.held.iter_mut().enumerate().filter(|(_, h)| **h) {
-                    *held = false;
-                    notes[n] = Note {
-                        offset: 0,
-                        pitch: pitch as u8,
-                        velocity: 0.0,
-                    };
-                    n += 1;
-                }
+                lane.held.release(0, |_| false, &mut notes, &mut n);
+                lane.live.release(0, |_| false, &mut notes, &mut n);
+            } else if rechase && lane.cell.is_none() {
+                // An edit while playing: what the song still has sounding now rings on.
+                let still = |p: u8| sounding(&plan.events, from, p);
+                lane.held.release(0, still, &mut notes, &mut n);
             }
             // A launched cell takes over when its sample comes, held notes let go.
             if let Some((cell, at)) = lane.queued
@@ -1144,17 +1207,7 @@ impl Engine {
             {
                 lane.cell = cell.map(|c| (c, at));
                 lane.queued = None;
-                for (pitch, held) in lane.held.iter_mut().enumerate().filter(|(_, h)| **h) {
-                    *held = false;
-                    if n < BLOCK_NOTES {
-                        notes[n] = Note {
-                            offset: 0,
-                            pitch: pitch as u8,
-                            velocity: 0.0,
-                        };
-                        n += 1;
-                    }
-                }
+                lane.held.release(0, |_| false, &mut notes, &mut n);
             }
             if playing {
                 let into = [&mut *l, &mut *r];
@@ -1194,17 +1247,7 @@ impl Engine {
                                 let end = (from, from + left as u64);
                                 gather(e, c, end, 0, &mut notes, &mut n, held, into);
                                 // Round to the cycle's start: what's held lets go there.
-                                for (pitch, h) in held.iter_mut().enumerate().filter(|(_, h)| **h) {
-                                    *h = false;
-                                    if n < BLOCK_NOTES {
-                                        notes[n] = Note {
-                                            offset: left as u32,
-                                            pitch: pitch as u8,
-                                            velocity: 0.0,
-                                        };
-                                        n += 1;
-                                    }
-                                }
+                                held.release(left as u32, |_| false, &mut notes, &mut n);
                                 let into = [&mut *l, &mut *r];
                                 let rest = (start, start + (frames - left) as u64);
                                 gather(e, c, rest, left, &mut notes, &mut n, held, into);
@@ -1225,7 +1268,7 @@ impl Engine {
             };
             for note in now.chain(live) {
                 if n < BLOCK_NOTES {
-                    lane.held[note.pitch as usize] = note.velocity > 0.0;
+                    lane.live.apply(note.pitch, note.velocity > 0.0);
                     notes[n] = *note;
                     n += 1;
                 }
@@ -2014,6 +2057,79 @@ mod tests {
         run(&mut engine, RELEASE + MAX_BLOCK);
         assert_eq!(peak(&run(&mut engine, MAX_BLOCK)[0]), 0.0);
         assert_eq!(engine.position(), (MAX_BLOCK * 10) as u64);
+    }
+
+    #[test]
+    fn stopping_releases_overlapping_notes_of_one_pitch() {
+        // Two notes on A, the second starting while the first still sounds: two voices.
+        let notes = vec![note(0, PPQ * 8, 69), note(PPQ as i64, PPQ * 8, 69)];
+        let p = project(vec![synth_track("a", notes, PPQ * 8)]);
+        let (mut engine, _) = Engine::load(&p, Path::new("."), RATE).unwrap();
+        engine.play();
+        run(&mut engine, BEAT * 2);
+        engine.stop();
+        run(&mut engine, RELEASE + MAX_BLOCK);
+        assert_eq!(peak(&run(&mut engine, MAX_BLOCK)[0]), 0.0);
+    }
+
+    #[test]
+    fn an_edit_while_playing_lets_go_of_notes_the_song_no_longer_has() {
+        let (mut tx, rx) = rtrb::RingBuffer::new(16);
+        let (gtx, _garbage) = rtrb::RingBuffer::new(16);
+        let (_live, live_rx) = rtrb::RingBuffer::new(16);
+        let (played_tx, _played) = rtrb::RingBuffer::new(16);
+        let link = Link {
+            rx,
+            garbage: gtx,
+            shared: Arc::new(Shared::new()),
+            live: live_rx,
+            played: played_tx,
+        };
+        let mut engine = Engine::live(RATE, link);
+        // A long A, and a long C that the edit keeps.
+        let notes = vec![note(0, PPQ * 8, 69), note(0, PPQ * 8, 60)];
+        let p = project(vec![synth_track("a", notes, PPQ * 8)]);
+        let lane = make_lane(
+            Some(&Instrument::Synth),
+            &[],
+            RATE,
+            &mut Modules::new(),
+            Path::new("."),
+        )
+        .unwrap()
+        .0;
+        let mut files = AudioFiles::new(Path::new("."), RATE);
+        let arrange = |p: &Project, files: &mut AudioFiles| {
+            Box::new(compile(p, RATE, &[(3, 0)], &[], None, files).0)
+        };
+        for m in [
+            Msg::Insert(3, Box::new(lane)),
+            Msg::Arrange(arrange(&p, &mut files)),
+            Msg::Play,
+        ] {
+            assert!(tx.push(m).is_ok());
+        }
+        run(&mut engine, BEAT);
+        // The A goes (as a key change or a deleted note would take it); the C stays.
+        let mut edited = p.clone();
+        if let Content::Midi { notes } = &mut edited.tracks[0].regions[0].content {
+            notes.retain(|n| n.pitch == 60);
+        }
+        assert!(tx.push(Msg::Arrange(arrange(&edited, &mut files))).is_ok());
+        run(&mut engine, RELEASE + MAX_BLOCK);
+        let [l, _] = run(&mut engine, BEAT / 2);
+        // Only the C rings on: its 261.6 Hz, and no 440 Hz.
+        let level = |f: f64| {
+            let (mut re, mut im) = (0.0, 0.0);
+            for (i, &x) in l.iter().enumerate() {
+                let w = 2.0 * std::f64::consts::PI * f * i as f64 / RATE;
+                re += x as f64 * w.cos();
+                im += x as f64 * w.sin();
+            }
+            (re * re + im * im).sqrt() * 2.0 / l.len() as f64
+        };
+        let (c, a) = (level(261.63), level(440.0));
+        assert!(c > 0.05 && a < c / 20.0, "C {c}, A {a}"); // what's left of A is the C's spill
     }
 
     #[test]
