@@ -1,12 +1,13 @@
 # tempo
 
-A DAW with Logic Pro's structure and FL Studio's speed, written in Rust: gpui for the UI, VST3
-plugins, and agents as first-class collaborators. macOS first.
+A DAW with Logic Pro's structure and FL Studio's speed, written in Rust: gpui for the UI, VST3,
+CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macOS first.
 
 ## Layout
 
 - `crates/engine`: no UI. The project model (`project.rs`), the engine that plays and bounces it
-  (`engine.rs`), the built-in synth, and VST3 hosting (`plugin/`).
+  (`engine.rs`), the built-in synth, and plugin hosting (`plugin/`: one interface, with
+  `vst3/`, `clap.rs`, `vst2.rs` and `au.rs` behind it).
 - `crates/engine` also has the live `player.rs` (keeps the engine in step with edits) and
   `session.rs` (an open project and its undo history).
 - `crates/engine` also has the built-in drum kit (`drums.rs`), the channel EQ, compressor and
@@ -126,11 +127,15 @@ In the app, mostly as in Logic:
   bus, making an aux for a new one; drag a send for its level, right-click it to switch it before
   the fader (amber) or after, or to remove it. Meters are stereo, with peak holds.
 
-Plugins are found in `/Library/Audio/Plug-Ins/VST3`, `~/Library/Audio/Plug-Ins/VST3` and the
-folders in `TEMPO_VST3_PATH` (colon-separated). Each is first opened in a child process (`tempo
-__scan`), so a broken one can't crash the app, and the results are cached in
-`~/Library/Caches/tempo/plugins.json`. Saving writes each plugin's settings to `Plugin States/`
-in the project. Plugin latency is compensated, as Logic does.
+Plugins are VST3, CLAP, VST2 and Audio Units. They're found in `VST3`, `CLAP` and `VST` under
+`/Library/Audio/Plug-Ins` and `~/Library/Audio/Plug-Ins`, the folders in `TEMPO_PLUGIN_PATH`
+(colon-separated), and, for Audio Units, wherever macOS has them registered. Each bundle is
+first opened in a child process (`tempo __scan`), so a broken one can't crash the app, and the
+results are cached in `~/Library/Caches/tempo/plugins.json`. A plugin slot's menu lists them all
+(with their format, since one plugin is often installed in several) and the presets of the one
+in it. Saving writes each plugin's settings to `Plugin States/` in the project. Plugin latency is
+compensated, as Logic does. If the output device can't run at the project's sample rate (a
+Bluetooth speaker at 44.1 kHz), playback runs at the device's.
 
 Builds need only the Command Line Tools: gpui compiles its Metal shaders at launch.
 
@@ -148,8 +153,14 @@ agent can send, with examples. An agent can:
 
 - Read a project with `tempo show <project>`.
 - Change it one command at a time with `tempo do <project> '<json>'`.
-- Measure it with `tempo analyze` (LUFS, peaks, clipping, low/mid/high balance, for the mix and
-  each track), since it can't listen.
+- Measure it with `tempo analyze`, since it can't listen: loudness (integrated and loudest),
+  peaks, clipping, crest, six-band balance, stereo correlation and width, and the notes sounding
+  with the key they fit, for the mix, each section (marker to marker) and each track.
+- Play any plugin as a person would: find it with `tempo plugins`, set its parameters by name and
+  as it shows them (`"param": "Filter Cutoff", "text": "850 Hz"`), list and load its presets and
+  save new ones (`tempo presets`, `set_preset`), automate any parameter, send it controllers,
+  pitch bend, pressure and per-note expression with the notes (`set_controls`), and feed a track
+  into its sidechain (`set_sidechain`).
 
 When the project is open in the app, commands go to the app over a socket. Each lands on screen as
 one undoable edit, and `tempo save` saves it. The agent shows up like a collaborator in a shared
@@ -158,11 +169,14 @@ status bar, and its history in the side panel's Agent tab. Otherwise the folder 
 directly.
 
 `tempo params <project> <track>` (or `--aux N`, `--master`, with `--insert N`) lists a plugin's
-parameters, for `set_plugin_param` and plugin automation; from the app if it's open, else by
-loading the plugin.
+parameters (value and display, default, unit, steps, and a choice's options), for
+`set_plugin_param` and plugin automation; `tempo presets` lists its presets, and `--save <name>`
+saves its settings as one. Both answer from the app if it's open, else by loading that plugin.
 
-`tempo mcp` is the same as an MCP server on stdio. Its tools are `describe`, `show`, `edit`,
-`analyze`, `render`, `transport`, `plugins` and `params`. For Claude Code:
+`tempo mcp` is the same as an MCP server on stdio, for agents without a shell (Claude Desktop,
+claude.ai and the like): its tools list themselves with typed inputs, and a user can allow them
+without allowing a shell. Its tools are `describe`, `show`, `edit`, `analyze`, `render`,
+`transport`, `plugins`, `params` and `presets`. For Claude Code:
 
     claude mcp add tempo -- /path/to/tempo mcp
 
@@ -192,9 +206,11 @@ are in ticks, 960 to a quarter note; audio offsets are in samples.
 }
 ```
 
-An instrument is `"synth"` (built in) or `{ "vst3": { "path": …, "class": … } }`; a plugin can
-carry `"params"` tempo sets on it, by id. A track without one is an audio track, with an
-`"input"`. Audio files must be WAV at the project's sample rate, for now. Tracks can have
+An instrument is `"synth"` (built in) or `{ "plugin": { "format": …, "path": …, "class": …,
+"uid": … } }` (as `tempo plugins` lists it; `"vst3"` is still read); a plugin can carry the
+`"preset"` tempo loaded, `"params"` tempo sets on it (by id, in the order set) and, as an insert,
+the track it hears as a `"sidechain"`. A track without one is an audio track, with an `"input"`.
+Audio files are WAV, at any sample rate. A MIDI region can have `"controls"` beside its notes. Tracks can have
 `"sends": [{ "bus": 1, "level_db": -6, "pre": false }]`, played by an aux in `"auxes": [{ "bus":
 1, "name": "Reverb", "inserts": […] }]`. Tracks, auxes and the master (`master_eq`,
 `master_comp`, `master_sat`, `master_inserts`) can have an `"eq"`, a `"comp"` and a `"sat"`. A
@@ -203,5 +219,10 @@ track's `"automation"` has `volume`, `pan` and `plugins` lanes and a `mode`. Reg
 The project can have a `"time_signature"`, `"markers"`, a `"key"` and a `"cycle"` (see `tempo
 describe`).
 
-The engine's tests that need a real plugin are opt-in:
-`TEMPO_TEST_VST3="/path/to/Some Synth.vst3" cargo test -p tempo-engine -- --ignored`.
+The engine's tests that need a real plugin are opt-in, each format by its own variable:
+
+    TEMPO_TEST_VST3="/path/Some Synth.vst3" TEMPO_TEST_CLAP="/path/Some Synth.clap" \
+    TEMPO_TEST_CLAP_FX="/path/Some Reverb.clap" TEMPO_TEST_VST2="/path/Some Plugin.vst" \
+    TEMPO_TEST_AU="aumu SgXT VmbA" cargo test -p tempo-engine -- --ignored
+
+Apple's own Audio Units (AUSampler, AUDelay, AULowpass…) are tested on every run.

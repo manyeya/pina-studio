@@ -146,24 +146,27 @@ def main():
         zone(pack / "Hits/Stab_07.wav", "Eb Stab", 63, gain_db=-4),
         zone(pack / "Hits/Guitar_01.wav", "Blues Lick", 72, pan=-0.35),
     ])
-    pad = do("add_track", name="Pad", instrument={"vst3": surge})["track"]
-    lead = do("add_track", name="Whistle", instrument={"vst3": surge})["track"]
+    pad = do("add_track", name="Pad", instrument={"plugin": surge})["track"]
+    lead = do("add_track", name="Whistle", instrument={"plugin": surge})["track"]
     vinyl = do("add_track", name="Vinyl")["track"]
 
-    # Surge XT's init patch, made into a warm pad and a gliding sine whistle.
+    # Surge XT's init patch, made into a warm pad and a gliding sine whistle, its settings named
+    # as Surge shows them (tempo finds the parameter and the value). Its global volume is set
+    # too: its default depends on whether its factory patches are installed.
     def surge_set(track, values):
-        for param, value in values.items():
+        for param, text in values.items():
             do("set_plugin_param", channel={"track": track}, plugin="instrument",
-               param=param, value=value)
+               param=param, text=text)
 
-    OSC_TYPE, PLAY_MODE, GLIDE, DRIFT = 1406380009, 918034829, 994712943, 856649291
-    UNISON, DETUNE = 627352120, 627352119
-    FILTER, CUTOFF, RESO = 1537728286, 1945359057, 8095466
-    ATTACK, RELEASE, VOLUME = 2005836581, 1669861066, 1298982072
-    surge_set(pad, {UNISON: 0.13, DETUNE: 0.16, FILTER: 0.06, CUTOFF: 0.56, RESO: 0.12,
-                    ATTACK: 0.42, RELEASE: 0.56, DRIFT: 0.35, VOLUME: 0.8})
-    surge_set(lead, {OSC_TYPE: 0.08, PLAY_MODE: 0.7, GLIDE: 0.33, DRIFT: 0.15,
-                     ATTACK: 0.22, RELEASE: 0.42, VOLUME: 0.8})
+    surge_set(pad, {"Global Volume": "0 dB", "A Osc 1 Unison Voices": "3 voices",
+                    "A Osc 1 Unison Detune": "16 cents", "A Filter 1 Type": "LP 24 dB",
+                    "A Filter 1 Cutoff": "920 Hz", "A Filter 1 Resonance": "12 %",
+                    "A Amp EG Attack": "170 ms", "A Amp EG Release": "600 ms",
+                    "A Osc Drift": "35 %", "A Volume": "-3 dB"})
+    surge_set(lead, {"Global Volume": "0 dB", "A Osc 1 Type": "Sine",
+                     "A Play Mode": "Mono (Single Trigger & Fingered Portamento)",
+                     "A Portamento": "38 ms", "A Osc Drift": "15 %", "A Amp EG Attack": "28 ms",
+                     "A Amp EG Release": "170 ms", "A Volume": "-5.8 dB"})
 
     # The arrangement: 56 bars.
     INTRO, VERSE1, HOOK1, VERSE2, BREAK, HOOK2, OUTRO, END = 1, 5, 21, 29, 43, 45, 53, 57
@@ -476,7 +479,7 @@ def main():
     auto(pad, [(0, -24), (bar(5), -14), (bar(OUTRO), -14), (bar(END), -40)])
     auto(pad, [(0, 0.48), (bar(HOOK1), 0.5), (bar(HOOK1 + 6), 0.66), (bar(VERSE2), 0.5),
                (bar(HOOK2), 0.5), (bar(HOOK2 + 6), 0.66), (bar(OUTRO), 0.6), (bar(END), 0.42)],
-         param="plugin", plugin="instrument", id=CUTOFF, name="A Filter 1 Cutoff")
+         param="plugin", plugin="instrument", id="A Filter 1 Cutoff")
 
     # The hook on the cycle, ready to loop (off until C is pressed).
     do("set_cycle", start=bar(HOOK1), end=bar(VERSE2), on=False)
