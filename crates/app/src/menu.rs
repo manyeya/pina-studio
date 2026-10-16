@@ -2,9 +2,12 @@
 //! automation. Long ones narrow down as you type.
 
 use gpui::{Context, MouseButton, Pixels, Point, anchored, deferred, div, prelude::*, px, rgb};
-use tempo_engine::project::{
-    At, AutoMode, AuxSend, Comp, Content, Eq, Input, Instrument, Param, PatternRow, PluginRef,
-    Saturator,
+use tempo_engine::{
+    commands::{self, ChannelRef, Command, PresetChoice},
+    project::{
+        At, AutoMode, AuxSend, Comp, Content, Eq, Input, Instrument, Param, PatternRow, PluginRef,
+        Preset, Saturator, Which,
+    },
 };
 
 use crate::{
@@ -81,6 +84,12 @@ pub enum MenuAction {
         channel: Channel,
         index: usize,
         plugin: Option<PluginRef>,
+    },
+    /// Loads a preset into the plugin in a slot.
+    Preset {
+        channel: Channel,
+        which: Which,
+        preset: Preset,
     },
     /// Adds a channel's built-in EQ or compressor, or takes it out.
     AddBuiltin {
@@ -208,6 +217,26 @@ impl Workspace {
                     Some(p) => list.push(p),
                     None if index < list.len() => drop(list.remove(index)),
                     None => {}
+                }
+            }),
+            MenuAction::Preset {
+                channel,
+                which,
+                preset,
+            } => self.edit(cx, |ws| {
+                let channel = match channel {
+                    Channel::Track(i) => ChannelRef::Track(i),
+                    Channel::Aux(i) => ChannelRef::Aux(i),
+                    Channel::Master => ChannelRef::Master,
+                };
+                let set = Command::SetPreset {
+                    channel,
+                    plugin: which,
+                    preset: Some(PresetChoice::Found(preset)),
+                };
+                let dir = ws.session.dir.clone();
+                if let Err(e) = commands::apply(&mut ws.session.project, &dir, set) {
+                    ws.status = Some(e);
                 }
             }),
             // One it has already, it shows; one it hasn't, it gets.

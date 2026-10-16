@@ -317,6 +317,15 @@ impl Workspace {
         }
     }
 
+    /// The plugin in a slot, if there's one.
+    fn slot_plugin(&self, ch: Channel, which: Which) -> Option<&PluginRef> {
+        match (ch, which) {
+            (Channel::Track(t), w) => self.session.project.tracks.get(t)?.plugin(w),
+            (_, Which::Insert(n)) => self.inserts(ch).get(n),
+            _ => None,
+        }
+    }
+
     /// The plugins that can go in a slot: instruments for the instrument slot, effects (and the
     /// built-in ones a channel doesn't have yet) for inserts, by name.
     pub fn plugin_menu(&self, ch: Channel, which: Which, at: Point<Pixels>) -> Menu {
@@ -345,6 +354,24 @@ impl Workspace {
             }
             _ => {}
         }
+        // The presets of the plugin in the slot, the loaded one ticked.
+        let loaded = self.slot_plugin(ch, which).and_then(|r| r.preset.clone());
+        if let Some(plugin) = self.player.plugin(self.owner_id(ch), which) {
+            for preset in plugin.presets() {
+                let mark = if loaded.as_ref() == Some(&preset) {
+                    "✓ "
+                } else {
+                    ""
+                };
+                let label = format!("{mark}Preset: {}", preset.name);
+                let action = MenuAction::Preset {
+                    channel: ch,
+                    which,
+                    preset,
+                };
+                items.push((label, action));
+            }
+        }
         for p in self
             .plugins
             .iter()
@@ -364,7 +391,10 @@ impl Workspace {
                 },
                 _ => continue,
             };
-            items.push((format!("{} — {}", p.class, p.vendor), action));
+            items.push((
+                format!("{} — {} · {}", p.class, p.vendor, p.format.name()),
+                action,
+            ));
         }
         if !instrument {
             let (eq, comp) = self.strip_dsp(ch);
@@ -399,9 +429,11 @@ impl Workspace {
         if self.plugins.is_none() {
             items.push(("Looking for plugins…".to_string(), MenuAction::Nothing));
         }
+        // Presets and plugins run long: typing narrows them down.
         Menu {
             at,
             items,
+            searchable: true,
             ..Default::default()
         }
     }
