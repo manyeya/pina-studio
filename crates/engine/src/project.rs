@@ -21,6 +21,8 @@ pub const BEAT_UNITS: [u64; 5] = [1, 2, 4, 8, 16];
 pub const FILE: &str = "project.json";
 pub const AUDIO_DIR: &str = "Audio Files";
 pub const STATES_DIR: &str = "Plugin States";
+/// Where unsaved edits are kept, as a project of their own, until they're saved or discarded.
+pub const RECOVERY_DIR: &str = ".recovery";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Project {
@@ -1325,7 +1327,11 @@ impl Project {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let path = dir.join(FILE);
         let json = serde_json::to_string_pretty(self).unwrap();
-        std::fs::write(&path, json + "\n").map_err(|e| format!("{}: {e}", path.display()))
+        // Written beside it and moved over it, so stopping halfway leaves the old one whole.
+        let part = dir.join(format!("{FILE}.part"));
+        std::fs::write(&part, json + "\n")
+            .and_then(|()| std::fs::rename(&part, &path))
+            .map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// Gives every track and aux that has none an id.

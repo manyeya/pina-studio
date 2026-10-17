@@ -426,6 +426,54 @@ fn a_plugin_that_wont_load_is_reported_and_removable(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn unsaved_edits_are_kept_and_offered_back(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("tempo-test-kept-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("Audio Files")).unwrap();
+    for f in ["project.json", "Audio Files/drums.wav"] {
+        std::fs::copy(demo().join(f), dir.join(f)).unwrap();
+    }
+    let (ws, cx) = open_at(cx, &dir);
+    let saved = ws.read_with(cx, |ws, _| ws.session.project.tempo);
+    let kept = dir.join(".recovery/project.json");
+    // Edits, kept; then tempo stops, and the project opens again and asks.
+    let edit_and_reopen = |cx: &mut VisualTestContext| {
+        ws.update(cx, |ws, cx| {
+            ws.keep_edits(); // nothing to keep yet
+            assert!(!kept.exists());
+            ws.edit(cx, |ws| ws.session.project.tempo = saved + 7.0);
+            ws.keep_edits();
+            assert!(kept.exists());
+            ws.session = Session::open(&dir).unwrap();
+            assert_eq!(ws.session.project.tempo, saved);
+        });
+        cx.update(|window, cx| ws.update(cx, |ws, cx| ws.offer_kept(window, cx)));
+        cx.run_until_parked();
+        assert!(cx.has_pending_prompt());
+    };
+
+    edit_and_reopen(cx);
+    cx.simulate_prompt_answer("Discard");
+    cx.run_until_parked();
+    assert!(!dir.join(".recovery").exists());
+    ws.read_with(cx, |ws, _| {
+        assert_eq!(ws.session.project.tempo, saved);
+        assert!(!ws.session.edited);
+    });
+
+    edit_and_reopen(cx);
+    cx.simulate_prompt_answer("Restore");
+    cx.run_until_parked();
+    ws.update(cx, |ws, cx| {
+        assert_eq!(ws.session.project.tempo, saved + 7.0);
+        assert!(ws.session.edited);
+        assert!(ws.save(cx));
+    });
+    assert!(!dir.join(".recovery").exists());
+    assert_eq!(Session::open(&dir).unwrap().project.tempo, saved + 7.0);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
 fn agents_edit_the_open_project_through_its_socket(cx: &mut TestAppContext) {
     // A copy of the demo, so a tempo that has the real one open isn't disturbed.
     let dir = std::env::temp_dir().join(format!("tempo-test-socket-{}", std::process::id()));

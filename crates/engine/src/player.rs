@@ -342,7 +342,12 @@ impl Player {
     /// Writes every plugin's settings into `Plugin States/` and points the project at them, so
     /// saving the project saves them. Files no longer used are removed.
     pub fn save_states(&self, project: &mut Project) -> Result<(), String> {
-        let dir = self.dir.join(STATES_DIR);
+        self.save_states_in(project, Path::new(STATES_DIR))
+    }
+
+    /// `save_states` into another folder of the project's.
+    pub fn save_states_in(&self, project: &mut Project, folder: &Path) -> Result<(), String> {
+        let dir = self.dir.join(folder);
         let err = |e: std::io::Error| format!("{}: {e}", dir.display());
         std::fs::create_dir_all(&dir).map_err(err)?;
         let mut kept = HashSet::new();
@@ -352,7 +357,7 @@ impl Player {
                 *v = p.param_value(id);
             }
             if let Some(bytes) = p.state() {
-                let file = PathBuf::from(STATES_DIR).join(name);
+                let file = folder.join(name);
                 std::fs::write(self.dir.join(&file), bytes).map_err(err)?;
                 kept.insert(self.dir.join(&file));
                 r.state = Some(file);

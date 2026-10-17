@@ -1,8 +1,11 @@
 //! An open project: where it lives, and its undo history.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
-use crate::project::{FILE, Project};
+use crate::project::{FILE, Project, RECOVERY_DIR};
 
 /// Undo steps kept.
 const HISTORY: usize = 200;
@@ -14,6 +17,8 @@ pub struct Session {
     pub edited: bool,
     /// Its file exists: it was opened from one, or has been saved.
     pub on_disk: bool,
+    /// The edits are kept in the recovery folder, as they are now.
+    pub kept: bool,
     /// `edited` before the last checkpoint, for `cancel`.
     was_edited: bool,
     // ponytail: whole-project snapshots; store diffs if projects get big enough to notice.
@@ -35,6 +40,7 @@ impl Session {
             dir: dir.to_path_buf(),
             edited: false,
             on_disk,
+            kept: false,
             was_edited: false,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -50,6 +56,7 @@ impl Session {
         self.redo.clear();
         self.was_edited = self.edited;
         self.edited = true;
+        self.kept = false;
     }
 
     /// Forgets the last checkpoint, for an edit that turned out to change nothing.
@@ -64,6 +71,7 @@ impl Session {
         };
         self.redo.push(std::mem::replace(&mut self.project, p));
         self.edited = true;
+        self.kept = false;
         true
     }
 
@@ -73,6 +81,7 @@ impl Session {
         };
         self.undo.push(std::mem::replace(&mut self.project, p));
         self.edited = true;
+        self.kept = false;
         true
     }
 
@@ -81,6 +90,43 @@ impl Session {
         self.edited = false;
         self.on_disk = true;
         Ok(())
+    }
+
+    /// The folder unsaved edits are kept in: a project whose files are the real one's.
+    pub fn recovery(&self) -> PathBuf {
+        self.dir.join(RECOVERY_DIR)
+    }
+
+    /// Keeps `project` (the edits, with its plugins' settings in the recovery folder) for if
+    /// tempo stops before they're saved.
+    pub fn keep(&mut self, project: &Project) -> Result<(), String> {
+        project.save(&self.recovery())?;
+        self.kept = true;
+        Ok(())
+    }
+
+    /// When the edits in the recovery folder were kept, if there are any: tempo stopped
+    /// before saving or discarding them.
+    pub fn kept_at(&self) -> Option<SystemTime> {
+        std::fs::metadata(self.recovery().join(FILE))
+            .ok()?
+            .modified()
+            .ok()
+    }
+
+    /// Opens the kept edits in place of the saved project, which undo goes back to.
+    pub fn restore(&mut self) -> Result<(), String> {
+        let kept = Project::load(&self.recovery())?;
+        self.checkpoint();
+        self.project = kept;
+        self.kept = true;
+        Ok(())
+    }
+
+    /// Drops the kept edits: they were saved, or aren't wanted.
+    pub fn forget_kept(&mut self) {
+        let _ = std::fs::remove_dir_all(self.recovery());
+        self.kept = false;
     }
 }
 
@@ -109,6 +155,31 @@ mod tests {
         s.checkpoint();
         s.cancel(); // an edit that changed nothing
         assert!(!s.edited && !s.undo());
+    }
+
+    #[test]
+    fn unsaved_edits_are_kept_and_restored() {
+        let dir = std::env::temp_dir().join(format!("tempo-test-keep-{}", std::process::id()));
+        let mut s = Session::open(&dir).unwrap();
+        s.save().unwrap();
+        s.checkpoint();
+        s.project.tempo = 95.0;
+        assert!(!s.kept && s.kept_at().is_none());
+        s.keep(&s.project.clone()).unwrap();
+        assert!(s.kept);
+
+        // tempo stopped without saving: the project opens as saved, with the edits on offer.
+        let mut s = Session::open(&dir).unwrap();
+        assert_eq!(s.project.tempo, 120.0);
+        assert!(s.kept_at().is_some());
+        s.restore().unwrap();
+        assert!(s.edited && s.project.tempo == 95.0);
+        assert!(s.undo() && s.project.tempo == 120.0);
+
+        s.forget_kept();
+        assert!(s.kept_at().is_none());
+        assert!(!dir.join(format!("{FILE}.part")).exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

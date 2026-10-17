@@ -230,7 +230,9 @@ without allowing a shell. Its tools are `describe`, `show`, `edit`, `analyze`, `
 ## Projects
 
 A project is a folder holding `project.json` and, for audio regions, `Audio Files/`. Positions
-are in ticks, 960 to a quarter note; audio offsets are in samples.
+are in ticks, 960 to a quarter note; audio offsets are in samples. Unsaved edits are kept every
+30 seconds in `.recovery/`, a project of its own; if tempo stops before they're saved, opening the
+project offers them back.
 
 ```json
 {

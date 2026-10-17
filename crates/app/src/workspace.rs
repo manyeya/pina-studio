@@ -6,8 +6,9 @@ use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
     collections::HashMap,
+    path::Path,
     rc::Rc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 pub use crate::record::Recording;
@@ -21,8 +22,8 @@ use tempo_engine::{
     engine::LiveNote,
     player::Player,
     project::{
-        At, AutoMode, Comp, Content, Cycle, Eq, Instrument, PPQ, Param, Project, Track, Which,
-        value_at,
+        At, AutoMode, Comp, Content, Cycle, Eq, Instrument, PPQ, Param, Project, RECOVERY_DIR,
+        STATES_DIR, Track, Which, value_at,
     },
     scan::{self, PluginInfo},
     session::Session,
@@ -423,6 +424,21 @@ impl AgentEdit {
     }
 }
 
+/// How often unsaved edits are kept, for if tempo stops before they're saved.
+const KEEP_EVERY: Duration = Duration::from_secs(30);
+
+/// How long ago, in words: "just now", "4 minutes ago", "2 hours ago", "3 days ago".
+fn ago(at: SystemTime) -> String {
+    let s = at.elapsed().map_or(0, |d| d.as_secs());
+    let (n, unit) = match s {
+        0..60 => return "just now".into(),
+        60..3_600 => (s / 60, "minute"),
+        3_600..86_400 => (s / 3_600, "hour"),
+        _ => (s / 86_400, "day"),
+    };
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+}
+
 /// How long an agent's outline stays on what it touched.
 pub const PRESENCE: Duration = Duration::from_secs(12);
 
@@ -590,6 +606,15 @@ impl Workspace {
                     .timer(Duration::from_millis(500))
                     .await;
                 if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(KEEP_EVERY).await;
+                if this.update(cx, |ws, _| ws.keep_edits()).is_err() {
                     break;
                 }
             }
@@ -1897,12 +1922,81 @@ impl Workspace {
             .player
             .save_states(&mut self.session.project)
             .and_then(|()| self.session.save());
+        if result.is_ok() {
+            self.session.forget_kept();
+        }
         self.status = Some(match &result {
             Ok(()) => format!("Saved {}", self.session.dir.display()),
             Err(e) => e.clone(),
         });
         cx.notify();
         result.is_ok()
+    }
+
+    /// Keeps unsaved edits in the project's recovery folder, for if tempo stops before they're
+    /// saved: it's offered them when the project next opens.
+    pub fn keep_edits(&mut self) {
+        if !self.session.edited || self.session.kept {
+            return;
+        }
+        let mut project = self.session.project.clone();
+        let states = Path::new(RECOVERY_DIR).join(STATES_DIR);
+        let result = self
+            .player
+            .save_states_in(&mut project, &states)
+            .and_then(|()| self.session.keep(&project));
+        if let Err(e) = result {
+            self.status = Some(format!("Couldn't keep unsaved edits: {e}"));
+        }
+    }
+
+    /// Asks whether to restore edits kept from when tempo last stopped without saving them.
+    pub fn offer_kept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(at) = self.session.kept_at() else {
+            return;
+        };
+        let detail = format!(
+            "tempo closed before they were saved. They were kept {}.",
+            ago(at)
+        );
+        // After the window is up, for the question to sit on it.
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(answer) = this.update_in(cx, |_, window, cx| {
+                window.prompt(
+                    PromptLevel::Warning,
+                    "Restore your unsaved changes to this project?",
+                    Some(&detail),
+                    &["Restore", "Discard"],
+                    cx,
+                )
+            }) else {
+                return;
+            };
+            let Ok(choice) = answer.await else { return };
+            this.update(cx, |ws, cx| {
+                if choice == 0 {
+                    ws.restore_kept(cx);
+                } else {
+                    ws.session.forget_kept();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens the kept edits in place of the saved project (undo goes back to it).
+    pub fn restore_kept(&mut self, cx: &mut Context<Self>) {
+        if let Err(e) = self.session.restore() {
+            self.status = Some(format!("Couldn't restore unsaved changes: {e}"));
+            cx.notify();
+            return;
+        }
+        // Every plugin anew, from the settings kept with the edits.
+        let rate = self.session.project.sample_rate;
+        let _ = self.player.sync(&Project::new(rate));
+        self.changed(cx);
+        self.status = Some("Restored unsaved changes".into());
     }
 
     /// Bounces the project to `Bounces/<name>.wav` in its folder, in the background.
@@ -1960,7 +2054,10 @@ impl Workspace {
             let Ok(choice) = answer.await else { return };
             this.update(cx, |this, cx| match choice {
                 0 if this.save(cx) => cx.quit(),
-                1 => cx.quit(),
+                1 => {
+                    this.session.forget_kept();
+                    cx.quit()
+                }
                 _ => {}
             })
             .ok();

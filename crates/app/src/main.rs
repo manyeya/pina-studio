@@ -234,6 +234,7 @@ fn open(dir: &Path) -> Result<(), String> {
                 let mut ws = Workspace::new(session, player, window, cx);
                 ws.start_scan(cx);
                 ws.load_library(cx);
+                ws.offer_kept(window, cx);
                 server::serve(cx.entity().downgrade(), &dir, cx);
                 ws
             })
