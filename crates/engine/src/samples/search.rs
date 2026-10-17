@@ -193,6 +193,7 @@ const TRAIT_WORDS: &[(&str, &str)] = &[
     ("fat", "boomy"),
     ("thick", "warm"),
     ("smooth", "soft"),
+    ("mellow", "soft"),
     ("gritty", "distorted"),
     ("dirty", "distorted"),
     ("crunchy", "distorted"),
@@ -217,6 +218,8 @@ struct Words {
     categories: Vec<Category>,
     kind: Option<Kind>,
     traits: Vec<String>,
+    /// The word each trait was said by ("dusty" for lo-fi), which a name saying counts for.
+    said: Vec<String>,
     key: Option<Key>,
     bpm: Option<f32>,
     rest: Vec<String>,
@@ -316,8 +319,10 @@ fn understand(text: &str) -> Words {
             w.categories.extend_from_slice(cats);
         } else if let Some((name, _)) = TRAITS.iter().find(|(name, _)| *name == t) {
             w.traits.push(name.to_string());
+            w.said.push(t.to_string());
         } else if let Some((_, name)) = TRAIT_WORDS.iter().find(|(word, _)| *word == t) {
             w.traits.push(name.to_string());
+            w.said.push(t.to_string());
         } else if !matches!(
             t,
             "in" | "a" | "an" | "the" | "with" | "and" | "of" | "some"
@@ -598,6 +603,16 @@ fn goes_with(s: &Sample, other: &Sample) -> (f32, Vec<String>) {
     (score.min(1.0), reasons)
 }
 
+/// Whether a sample's name or folder says `w`, word by word ("b" is pack B, not every b):
+/// "kick" finds Kick_03, and "jazzy", "funky", "orchestral" find Jazz, Funk and Orchestra.
+fn mentions(s: &Sample, w: &str) -> bool {
+    format!("{} {}", s.name, s.folder)
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .any(|t| t == w || (w.len() >= 3 && t.starts_with(w)) || (t.len() >= 4 && w.starts_with(t)))
+}
+
 /// A folder's first part: the pack, usually.
 fn pack(folder: &str) -> &str {
     folder.split(['/', '\\']).next().unwrap_or("")
@@ -648,20 +663,9 @@ pub fn find(samples: &[Sample], q: &Query) -> Vec<Hit> {
             let a = &s.analysis;
             let mut reasons = Vec::new();
             let mut parts: Vec<(f32, f32)> = Vec::new(); // (score, weight)
-            // Words left over: names and folders, word by word ("b" is pack B, not every b).
+            // Words left over: names and folders. Every word, as a search box means it.
             if !words.rest.is_empty() {
-                let hay = format!("{} {}", s.name, s.folder).to_lowercase();
-                let tokens: Vec<&str> = hay
-                    .split(|c: char| !c.is_alphanumeric())
-                    .filter(|t| !t.is_empty())
-                    .collect();
-                let has = |w: &str| {
-                    tokens
-                        .iter()
-                        .any(|t| *t == w || (w.len() >= 3 && t.starts_with(w)))
-                };
-                // Every word, as a search box means it.
-                if !words.rest.iter().all(|w| has(w)) {
+                if !words.rest.iter().all(|w| mentions(s, w)) {
                     return None;
                 }
                 parts.push((1.0, 1.0));
@@ -732,7 +736,16 @@ pub fn find(samples: &[Sample], q: &Query) -> Vec<Hit> {
                 }
                 parts.push((total / with.len() as f32, 2.0));
             }
-            let has: Vec<&&String> = traits.iter().filter(|t| a.traits.contains(t)).collect();
+            // A trait in words is there by ear, or by name: Dusty Kick 01 is dusty.
+            let picked = q.traits.len();
+            let has: Vec<&&String> = traits
+                .iter()
+                .enumerate()
+                .filter(|&(i, t)| {
+                    a.traits.contains(t) || i >= picked && mentions(s, &words.said[i - picked])
+                })
+                .map(|(_, t)| t)
+                .collect();
             if !words.traits.is_empty() {
                 parts.push((has.len() as f32 / traits.len() as f32, 1.0));
             }
@@ -838,10 +851,11 @@ pub fn kit(samples: &[Sample], seed: &KitSeed) -> Kit {
         n => n,
     };
     let words = understand(&seed.text);
-    // The seed's words, less any category in them (each role is its own).
-    let text = words.rest.join(" ");
-    let mut traits = seed.traits.clone();
-    traits.extend(words.traits.iter().cloned());
+    // The seed's words, less any category in them (each role is its own). How they say it should
+    // sound ranks, as in a search; traits picked are kept to.
+    let rest = words.rest.join(" ");
+    let feel = words.said.join(" ");
+    let traits = seed.traits.clone();
     let key = seed.key.clone().or(words.key.map(|k| k.name()));
     let bpm = seed.bpm.or(words.bpm);
     let mut chosen: Vec<PathBuf> = seed.keep.clone();
@@ -866,8 +880,8 @@ pub fn kit(samples: &[Sample], seed: &KitSeed) -> Kit {
                     alternatives: Vec::new(),
                 };
             }
-            let ask = |traits: Vec<String>, folder: Option<String>| Query {
-                text: text.clone(),
+            let ask = |rest: &str, traits: Vec<String>, folder: Option<String>| Query {
+                text: format!("{rest} {feel}"),
                 categories: vec![role],
                 traits,
                 key: key.clone(),
@@ -877,13 +891,17 @@ pub fn kit(samples: &[Sample], seed: &KitSeed) -> Kit {
                 limit: alternatives + 1,
                 ..Default::default()
             };
-            // Loosen what was asked until something's there: the pack, then the traits.
-            let mut hits = find(samples, &ask(traits.clone(), seed.folder.clone()));
+            // Loosen what was asked until something's there: the pack, the words names are
+            // looked for by (a "jazzy" kit's kick needn't be called Jazz), then the traits.
+            let mut hits = find(samples, &ask(&rest, traits.clone(), seed.folder.clone()));
             if hits.is_empty() && seed.folder.is_some() {
-                hits = find(samples, &ask(traits.clone(), None));
+                hits = find(samples, &ask(&rest, traits.clone(), None));
+            }
+            if hits.is_empty() && !rest.is_empty() {
+                hits = find(samples, &ask("", traits.clone(), None));
             }
             if hits.is_empty() && !traits.is_empty() {
-                hits = find(samples, &ask(Vec::new(), None));
+                hits = find(samples, &ask("", Vec::new(), None));
             }
             let mut hits = hits.into_iter();
             let pick = hits.next();
@@ -1342,6 +1360,7 @@ mod tests {
         assert_eq!(w.categories, [Category::Keys]);
         assert_eq!(w.kind, Some(Kind::Loop));
         assert_eq!(w.traits, ["lo-fi"]);
+        assert_eq!(w.said, ["dusty"]);
         assert_eq!(w.key, Key::parse("C minor"));
         assert_eq!(w.bpm, Some(95.0));
         let w = understand("open hat Am 120bpm vinyl");
@@ -1387,6 +1406,15 @@ mod tests {
             ["Kick_01", "Kick_02"]
         );
         assert_eq!(names(&lib, &find(&lib, &q("snare pack b"))), ["Snare_02"]);
+        // A word with an ending finds the name it's made from, as "jazzy" finds Jazz.
+        assert_eq!(names(&lib, &find(&lib, &q("snare packed b"))), ["Snare_02"]);
+        // A word for a trait counts in a name too: Kick_02, called dusty, is dusty.
+        let mut named = lib.clone();
+        named[1].name = "Dusty Kick 02".into();
+        assert_eq!(
+            names(&named, &find(&named, &q("dusty kick"))),
+            ["Dusty Kick 02", "Kick_01"]
+        );
         // A key and tempo: the C minor loop at 95 fits as it is; F# major at 96 fits two
         // semitones up (A flat major is C minor's sixth), so it comes after, saying so; D minor at
         // 140 is too far in tempo.
@@ -1505,6 +1533,20 @@ mod tests {
             })
             .collect();
         assert_eq!(picks, ["Kick_01", "Snare_01", "Sub_01", "Keys_Cm"]);
+        // Words nothing in a role is called don't leave it empty; how they say it sounds ranks.
+        let jazzy = kit(
+            &lib,
+            &KitSeed {
+                text: "jazzy punchy".into(),
+                roles: vec![Category::Kick],
+                ..Default::default()
+            },
+        );
+        let kick = jazzy.slots[0]
+            .pick
+            .as_ref()
+            .map(|p| lib[p.index].name.as_str());
+        assert_eq!(kick, Some("Kick_01"));
         let snare = k.slots[1].pick.as_ref().unwrap();
         assert!(
             snare.reasons.iter().any(|r| r.contains("same pack")),
