@@ -58,13 +58,24 @@ pub fn transpose_to(a: &Analysis, key: Key) -> f32 {
     }
 }
 
+/// The tempo a loop at `bpm` is heard at in a song at `tempo`: its own, or halved or doubled
+/// (half or double time) when that's much nearer. A 170 BPM loop is half time at 85, but one at
+/// 120 slows to 84 with its bars still its bars: sped up to fit as half time instead, its chords
+/// would come twice as fast.
+pub fn feel(bpm: f64, tempo: f64) -> f64 {
+    let far = |b: f64| (b / tempo).ln().abs();
+    // ponytail: "much" is a quarter nearer, by ear; tune if half-time picks sound wrong.
+    [bpm / 2.0, bpm * 2.0]
+        .into_iter()
+        .find(|&b| far(b) + 1.25f64.ln() < far(bpm))
+        .unwrap_or(bpm)
+}
+
 /// How long a loop lasts in the song to play in time, in ticks: its beats at the song's tempo
-/// (its own tempo halved or doubled, whichever is nearest the song's).
+/// (as `feel` hears them).
 pub fn loop_ticks(a: &Analysis, tempo: f64) -> Option<u64> {
     let bpm = a.bpm.filter(|b| *b > 20.0)? as f64;
-    let bpm = [bpm / 2.0, bpm, bpm * 2.0]
-        .into_iter()
-        .min_by(|x, y| (x / tempo).ln().abs().total_cmp(&(y / tempo).ln().abs()))?;
+    let bpm = feel(bpm, tempo);
     let beats = a.seconds as f64 * bpm / 60.0;
     // A loop is whole beats: what's left over is the analysis rounding.
     let beats = match (beats - beats.round()).abs() < 0.1 {
@@ -203,6 +214,16 @@ mod tests {
         // Double time at 180 in a song at 90: still four of the song's beats... of 180's eight.
         assert_eq!(
             loop_ticks(&at(180.0, 8.0 * 60.0 / 180.0), 90.0),
+            Some(PPQ * 4)
+        );
+        // Two bars at 120 in a song at 84: slowed, still two bars (not sped up as half time).
+        assert_eq!(
+            loop_ticks(&at(120.0, 8.0 * 60.0 / 120.0), 84.0),
+            Some(PPQ * 8)
+        );
+        // At 140 in a song at 84: half time, its two bars one of the song's.
+        assert_eq!(
+            loop_ticks(&at(140.0, 8.0 * 60.0 / 140.0), 84.0),
             Some(PPQ * 4)
         );
         assert_eq!(loop_ticks(&Analysis::default(), 120.0), None);

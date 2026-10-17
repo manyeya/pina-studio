@@ -274,7 +274,15 @@ pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Val
                 region,
                 length,
             })?;
-            done.push(format!("stretched from {bpm:.0} to {:.0} BPM", p.tempo));
+            let how = match place::feel(bpm as f64, p.tempo) / bpm as f64 {
+                f if f < 1.0 => " as half time",
+                f if f > 1.0 => " as double time",
+                _ => "",
+            };
+            done.push(format!(
+                "stretched from {bpm:.0} to {:.0} BPM{how}",
+                p.tempo
+            ));
         }
         // In key: the small move that fits it, if there is one.
         let fit = p.song_key().and_then(|key| {

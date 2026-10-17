@@ -476,11 +476,9 @@ fn bpm_fit(s: &Sample, bpm: f32) -> (f32, Option<String>) {
     let Some(own) = a.bpm else {
         return (0.5, Some("tempo unknown".into()));
     };
-    let (factor, off) = [1.0, 2.0, 0.5]
-        .into_iter()
-        .map(|k| (k, ((own * k - bpm) / bpm).abs()))
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .unwrap();
+    // Heard as `put` places it: at its own tempo unless half or double time is much nearer.
+    let factor = (super::place::feel(own as f64, bpm as f64) / own as f64) as f32;
+    let off = ((own * factor - bpm) / bpm).abs();
     let how = match factor {
         2.0 => " (double time)",
         0.5 => " (half time)",
