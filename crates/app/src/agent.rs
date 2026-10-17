@@ -40,9 +40,11 @@ pub enum Event {
         ok: bool,
         output: String,
     },
-    /// It's done with what it was asked, or stopped.
+    /// It's done with what it was asked, was stopped, or went wrong.
     Done {
         seconds: f64,
+        #[serde(default)]
+        stopped: bool,
         #[serde(default)]
         error: Option<String>,
     },
@@ -226,14 +228,21 @@ pub fn ask(dir: &Path, words: &str) -> Result<(), String> {
                 "    {red}✗ {}{off}",
                 output.lines().next().unwrap_or("")
             )),
-            Event::Done { seconds, error } => {
-                match error {
-                    Some(e) => line(format!("{red}{e}{off}")),
-                    None => line(format!(
-                        "{green}✓{off} {dim}done in {seconds:.0}s · {steps} step{}{off}",
-                        if steps == 1 { "" } else { "s" }
-                    )),
-                }
+            Event::Done {
+                seconds,
+                stopped,
+                error,
+            } => {
+                let s = if steps == 1 { "" } else { "s" };
+                line(match (error, stopped) {
+                    (Some(e), _) => format!("{red}{e}{off}"),
+                    (None, true) => {
+                        format!("{dim}stopped after {seconds:.0}s · {steps} step{s}{off}")
+                    }
+                    (None, false) => {
+                        format!("{green}✓{off} {dim}done in {seconds:.0}s · {steps} step{s}{off}")
+                    }
+                });
                 break;
             }
             _ => {}
@@ -265,6 +274,7 @@ fn read(stdout: impl Read, errors: thread::JoinHandle<String>, tx: UnboundedSend
     if busy || !said.trim().is_empty() {
         let _ = tx.unbounded_send(Event::Done {
             seconds: 0.0,
+            stopped: false,
             error: Some(why.trim().to_string()),
         });
     }
@@ -321,16 +331,21 @@ pub fn events(v: &Value) -> Vec<Event> {
                 },
             })
             .collect(),
-        Some("result") => vec![Event::Done {
-            seconds: v["duration_ms"].as_f64().unwrap_or(0.0) / 1000.0,
-            error: match (v["subtype"].as_str(), v["is_error"].as_bool()) {
-                (Some("success"), Some(false) | None) => None,
-                (Some("error_during_execution"), _) => Some("Stopped.".into()),
-                _ => Some(s(&v["result"]))
-                    .filter(|r| !r.is_empty())
-                    .or(Some(s(&v["subtype"]))),
-            },
-        }],
+        Some("result") => {
+            // An interrupted answer ends "during execution".
+            let stopped = v["subtype"] == "error_during_execution";
+            vec![Event::Done {
+                seconds: v["duration_ms"].as_f64().unwrap_or(0.0) / 1000.0,
+                stopped,
+                error: match (v["subtype"].as_str(), v["is_error"].as_bool()) {
+                    (Some("success"), Some(false) | None) => None,
+                    _ if stopped => None,
+                    _ => Some(s(&v["result"]))
+                        .filter(|r| !r.is_empty())
+                        .or(Some(s(&v["subtype"]))),
+                },
+            }]
+        }
         _ => Vec::new(),
     }
 }
@@ -479,6 +494,17 @@ mod tests {
             line(r#"{"type":"result","subtype":"success","is_error":false,"duration_ms":11449}"#),
             [Event::Done {
                 seconds: 11.449,
+                stopped: false,
+                error: None
+            }]
+        );
+        assert_eq!(
+            line(
+                r#"{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":6000}"#
+            ),
+            [Event::Done {
+                seconds: 6.0,
+                stopped: true,
                 error: None
             }]
         );

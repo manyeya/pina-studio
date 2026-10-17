@@ -43,10 +43,12 @@ pub enum Item {
     },
     /// An edit by an agent outside the conversation.
     Outside(String),
-    /// The end of an answer: how long it took, how many steps, or what went wrong.
+    /// The end of an answer: how long it took, how many steps, whether it was stopped, or what
+    /// went wrong.
     End {
         seconds: f64,
         steps: usize,
+        stopped: bool,
         error: Option<String>,
     },
 }
@@ -138,7 +140,11 @@ impl Chat {
                     };
                 }
             }
-            Event::Done { seconds, error } => self.end(seconds, error),
+            Event::Done {
+                seconds,
+                stopped,
+                error,
+            } => self.end(seconds, stopped, error),
         }
     }
 
@@ -148,7 +154,7 @@ impl Chat {
         self.since = Some(Instant::now());
     }
 
-    fn end(&mut self, seconds: f64, error: Option<String>) {
+    fn end(&mut self, seconds: f64, stopped: bool, error: Option<String>) {
         let asked = self
             .items
             .iter()
@@ -171,6 +177,7 @@ impl Chat {
         self.items.push(Item::End {
             seconds,
             steps,
+            stopped,
             error,
         });
         self.busy = false;
@@ -238,7 +245,7 @@ impl Workspace {
                             if ws.chat.run == run {
                                 ws.chat.agent = None;
                                 if ws.chat.busy {
-                                    ws.chat.end(0.0, Some("Claude stopped.".into()));
+                                    ws.chat.end(0.0, false, Some("Claude stopped.".into()));
                                 }
                                 cx.notify();
                             }
@@ -249,7 +256,7 @@ impl Workspace {
                 }
                 Err(e) => {
                     self.chat.asked(text);
-                    self.chat.end(0.0, Some(e));
+                    self.chat.end(0.0, false, Some(e));
                     cx.notify();
                     return;
                 }
@@ -259,7 +266,7 @@ impl Workspace {
         self.chat.asked(text);
         if let Some(Err(e)) = sent {
             self.chat.agent = None;
-            self.chat.end(0.0, Some(e));
+            self.chat.end(0.0, false, Some(e));
         }
         if keep {
             self.chat.scroll.scroll_to_bottom();
@@ -672,6 +679,7 @@ fn transcript(items: &[Item], bar: u64) -> Vec<gpui::AnyElement> {
             Item::End {
                 seconds,
                 steps,
+                stopped,
                 error,
             } => match error {
                 Some(e) => div()
@@ -691,9 +699,13 @@ fn transcript(items: &[Item], bar: u64) -> Vec<gpui::AnyElement> {
                     .gap(px(6.))
                     .text_size(px(11.))
                     .text_color(rgb(TEXT_3))
-                    .child(icon(Icon::Check, 12.).text_color(rgb(METER_LOW)))
+                    .child(match stopped {
+                        true => icon(Icon::Stop, 12.).text_color(rgb(TEXT_3)),
+                        false => icon(Icon::Check, 12.).text_color(rgb(METER_LOW)),
+                    })
                     .child(format!(
-                        "Done in {} · {steps} step{}",
+                        "{} {} · {steps} step{}",
+                        if *stopped { "Stopped after" } else { "Done in" },
                         duration(*seconds),
                         if *steps == 1 { "" } else { "s" }
                     ))
