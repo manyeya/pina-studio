@@ -380,7 +380,12 @@ fn harmony(s: &Sample) -> Harmony {
             | Category::Synth
     );
     match (&a.pitch, a.kind) {
-        (Some(p), Kind::OneShot) if single && p.confidence > 0.5 => Harmony::Tunable(p.note),
+        // A clearly tonal note is trusted at a lower confidence: a low bass tone's is modest.
+        (Some(p), Kind::OneShot)
+            if single && (p.confidence > 0.5 || a.tonal >= 0.8 && p.confidence > 0.3) =>
+        {
+            Harmony::Tunable(p.note)
+        }
         _ if a.chroma.iter().sum::<f32>() > 0.0 => Harmony::Notes(a.chroma),
         _ => Harmony::None,
     }
@@ -1564,6 +1569,13 @@ mod tests {
         let k = zone(&lib[0], None);
         assert_eq!((k.note, k.high), (36, None));
         assert_eq!(zone(&lib[4], None).choke, Some(1));
+        // A clean low tone the pitch tracker is only half sure of still plays in tune.
+        let mut low = lib[8].clone();
+        low.analysis.tonal = 0.99;
+        low.analysis.pitch.as_mut().unwrap().confidence = 0.45;
+        assert_eq!(zone(&low, None).root, Some(31));
+        low.analysis.tonal = 0.6;
+        assert_eq!(zone(&low, None).root, None);
     }
 
     #[test]
