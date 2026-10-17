@@ -2073,3 +2073,22 @@ cat > /dev/null
     ));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[gpui::test]
+fn an_agent_that_isnt_signed_in_says_how_rather_than_starting(cx: &mut TestAppContext) {
+    use crate::{
+        agent::{Kind, Readiness},
+        chat::Item,
+    };
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| {
+        ws.chat.ready = vec![(Kind::Codex, Readiness::SignIn)];
+        ws.chat.kind = Kind::Codex;
+        ws.ask_agent("Make it 101".into(), cx);
+        assert!(!ws.chat.busy);
+        assert!(
+            matches!(ws.chat.items.last(), Some(Item::End { error: Some(e), .. })
+            if e.contains("codex login"))
+        );
+    });
+}

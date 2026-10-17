@@ -1,12 +1,17 @@
-//! Claude, working in tempo: Claude Code run headless, with tempo's MCP server for its only
-//! tools, its stream of thinking, words and tool calls turned into events. The app's Agent panel
-//! and `tempo ask` both run it; `tempo ask` also sends its events to the app that has the
-//! project open, so the panel shows that too.
+//! Agents working in tempo, as modisa knows them: Claude Code and Codex, each run
+//! headless with tempo's MCP server for its only tools, their streams of thinking, words and
+//! tool calls turned into the same events. The app's Agent panel and `tempo ask` both run them;
+//! `tempo ask` also sends its events to the app that has the project open, so the panel shows
+//! that too.
 
 use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
 };
 
@@ -14,7 +19,7 @@ use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-/// What Claude is doing, as it happens.
+/// What an agent is doing, as it happens.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
@@ -50,23 +55,145 @@ pub enum Event {
     },
 }
 
-/// Where Claude Code is: `TEMPO_CLAUDE`, else on the PATH or where its installer puts it (an app
-/// opened from the Finder has a short PATH).
-pub fn claude() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("TEMPO_CLAUDE") {
-        return Some(p.into());
+/// The agents tempo runs. Only those whose headless streams and tool hookup are checked against
+/// the real thing are here (modisa knows more; they come in the same way). Not opencode: version
+/// 2 hands MCP tools to its model inside one code-running `execute` tool, so its steps can't
+/// show as tempo's, and its free tier refuses headless runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Kind {
+    #[default]
+    ClaudeCode,
+    Codex,
+}
+
+/// An agent as modisa shows it: its id, name, command, brand colour (none for a monochrome
+/// brand) and its logo in modisa's logo font, "Modisa Marks".
+pub struct Def {
+    pub kind: Kind,
+    pub id: &'static str,
+    pub name: &'static str,
+    pub bin: &'static str,
+    pub color: Option<u32>,
+    pub logo: char,
+    /// How to sign in, when it isn't.
+    pub sign_in: &'static str,
+}
+
+pub const AGENTS: [Def; 2] = [
+    Def {
+        kind: Kind::ClaudeCode,
+        id: "claude-code",
+        name: "Claude Code",
+        bin: "claude",
+        color: Some(0xd97757),
+        logo: '\u{f5a00}',
+        sign_in: "claude auth login",
+    },
+    Def {
+        kind: Kind::Codex,
+        id: "codex",
+        name: "Codex",
+        bin: "codex",
+        color: None,
+        logo: '\u{f5a01}',
+        sign_in: "codex login",
+    },
+];
+
+/// The logo font, with the logos from U+F5A00 in modisa's order.
+pub const MARKS: &str = "Modisa Marks";
+
+impl Kind {
+    pub fn def(self) -> &'static Def {
+        AGENTS.iter().find(|d| d.kind == self).unwrap()
     }
-    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path)
-        .chain([
-            home.join(".local/bin"),
-            home.join(".claude/local"),
-            "/opt/homebrew/bin".into(),
-            "/usr/local/bin".into(),
-        ])
-        .map(|d| d.join("claude"))
-        .find(|p| p.is_file())
+
+    pub fn from_id(id: &str) -> Option<Kind> {
+        AGENTS.iter().find(|d| d.id == id.trim()).map(|d| d.kind)
+    }
+
+    /// Where its command is: `TEMPO_<COMMAND>` (TEMPO_CLAUDE), else on the PATH or where its
+    /// installer puts it (an app opened from the Finder has a short PATH).
+    pub fn command(self) -> Option<PathBuf> {
+        let bin = self.def().bin;
+        if let Some(p) = std::env::var_os(format!("TEMPO_{}", bin.to_uppercase())) {
+            return Some(p.into());
+        }
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        std::env::split_paths(&path)
+            .chain([
+                home.join(".local/bin"),
+                home.join(".claude/local"),
+                "/opt/homebrew/bin".into(),
+                "/usr/local/bin".into(),
+            ])
+            .map(|d| d.join(bin))
+            .find(|p| p.is_file())
+    }
+
+    /// Whether it can work: installed, and signed in. Asks the agent, so takes a moment.
+    pub fn readiness(self) -> Readiness {
+        let Some(cmd) = self.command() else {
+            return Readiness::Missing;
+        };
+        let run = |args: &[&str]| {
+            Command::new(&cmd)
+                .args(args)
+                .stdin(Stdio::null())
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        };
+        match self {
+            Kind::ClaudeCode => {
+                let status: Value = run(&["auth", "status"])
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+                match (status["loggedIn"].as_bool(), status["authMethod"].as_str()) {
+                    (Some(false), _) => Readiness::SignIn,
+                    (_, Some("claude.ai")) => Readiness::Ready("your Claude plan".into()),
+                    (_, Some(m)) => Readiness::Ready(m.replace(['_', '-'], " ")),
+                    _ => Readiness::Ready(String::new()),
+                }
+            }
+            Kind::Codex => match run(&["login", "status"]) {
+                Some(s) if s.contains("Logged in") => {
+                    Readiness::Ready(s.trim().trim_start_matches("Logged in using ").to_string())
+                }
+                _ => Readiness::SignIn,
+            },
+        }
+    }
+}
+
+/// Whether an agent can work here.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Readiness {
+    /// Installed and signed in; on what (a plan, an API key), when it says.
+    Ready(String),
+    Missing,
+    SignIn,
+}
+
+/// The agent chosen last, in `~/Library/Application Support/tempo/agent`; Claude Code at first.
+pub fn chosen() -> Kind {
+    std::fs::read_to_string(choice_file())
+        .ok()
+        .and_then(|s| Kind::from_id(&s))
+        .unwrap_or_default()
+}
+
+pub fn choose(kind: Kind) {
+    let file = choice_file();
+    let _ = std::fs::create_dir_all(file.parent().unwrap());
+    let _ = std::fs::write(file, kind.def().id);
+}
+
+fn choice_file() -> PathBuf {
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+        .join("Library/Application Support/tempo/agent")
 }
 
 fn instructions(project: &Path) -> String {
@@ -83,98 +210,223 @@ and say what you couldn't check."
     )
 }
 
-/// A conversation with Claude about one song. Dropping it ends it.
+/// A conversation with an agent about one song. Dropping it ends it.
 pub struct Agent {
-    child: Child,
-    stdin: ChildStdin,
+    kind: Kind,
+    project: PathBuf,
+    tx: UnboundedSender<Event>,
+    run: Run,
     asks: u32,
 }
 
+enum Run {
+    /// Claude Code: one process for the whole conversation, asked on its stdin.
+    Claude { child: Child, stdin: ChildStdin },
+    /// Codex: a process for each question, the conversation carried on by its id.
+    Turns {
+        child: Option<Child>,
+        session: Arc<Mutex<Option<String>>>,
+        stopping: Arc<AtomicBool>,
+    },
+}
+
+/// What one line of an agent's output says, and the conversation's id if it names it.
+type Parse = fn(&Value) -> (Vec<Event>, Option<String>);
+
 impl Agent {
-    /// Starts Claude on `project`; its events come on the receiver.
-    pub fn start(project: &Path) -> Result<(Agent, UnboundedReceiver<Event>), String> {
-        let claude = claude().ok_or(
-            "Claude Code isn't installed. Get it at claude.com/claude-code, sign in, then try again.",
-        )?;
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let mcp = json!({ "mcpServers": { "tempo": { "command": exe, "args": ["mcp"] } } });
-        let mut child = Command::new(&claude)
-            .args(["-p", "--verbose", "--include-partial-messages"])
-            .args([
-                "--input-format",
-                "stream-json",
-                "--output-format",
-                "stream-json",
-            ])
-            // tempo's tools and nothing else: no shell, no files, no one else's MCP servers or
-            // hooks; anything else asked for is refused, not asked about.
-            .args(["--strict-mcp-config", "--mcp-config", &mcp.to_string()])
-            .args(["--tools", "", "--allowedTools", "mcp__tempo"])
-            .args(["--permission-prompts", "none", "--setting-sources", ""])
-            .args(["--append-system-prompt", &instructions(project)])
-            .current_dir(project)
-            .env_remove("CLAUDECODE")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("{}: {e}", claude.display()))?;
-        let stdin = child.stdin.take().unwrap();
-        let (stdout, mut stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    /// Starts `kind` on `project`; its events come on the receiver.
+    pub fn start(kind: Kind, project: &Path) -> Result<(Agent, UnboundedReceiver<Event>), String> {
+        let def = kind.def();
+        let cmd = kind.command().ok_or(format!(
+            "{} isn't installed. Install it, sign in ({}), then try again.",
+            def.name, def.sign_in
+        ))?;
         let (tx, rx) = unbounded();
-        let errors = thread::spawn(move || {
-            let mut s = String::new();
-            let _ = stderr.read_to_string(&mut s);
-            s
-        });
-        thread::spawn(move || read(stdout, errors, tx));
-        Ok((
-            Agent {
-                child,
-                stdin,
-                asks: 0,
+        let run = match kind {
+            Kind::ClaudeCode => {
+                let mut child = claude_command(&cmd, project)?;
+                let stdin = child.stdin.take().unwrap();
+                read(&mut child, tx.clone(), claude_events, None, None);
+                Run::Claude { child, stdin }
+            }
+            _ => Run::Turns {
+                child: None,
+                session: Arc::default(),
+                stopping: Arc::default(),
             },
-            rx,
-        ))
+        };
+        let agent = Agent {
+            kind,
+            project: project.to_path_buf(),
+            tx,
+            run,
+            asks: 0,
+        };
+        Ok((agent, rx))
     }
 
     /// Asks it something: a first request, or more about the last.
     pub fn ask(&mut self, text: &str) -> Result<(), String> {
         self.asks += 1;
-        let line = json!({ "type": "user", "message": { "role": "user", "content": text } });
-        writeln!(self.stdin, "{line}")
-            .and_then(|()| self.stdin.flush())
-            .map_err(|_| "Claude has stopped. Start a new conversation.".to_string())
+        let first = self.asks == 1;
+        match &mut self.run {
+            Run::Claude { stdin, .. } => {
+                let line =
+                    json!({ "type": "user", "message": { "role": "user", "content": text } });
+                writeln!(stdin, "{line}")
+                    .and_then(|()| stdin.flush())
+                    .map_err(|_| "Claude has stopped. Start a new conversation.".to_string())
+            }
+            Run::Turns {
+                child,
+                session,
+                stopping,
+            } => {
+                if let Some(c) = child
+                    && c.try_wait().ok().flatten().is_none()
+                {
+                    return Err("It's still working on the last one.".into());
+                }
+                // Theirs has no way in for tempo's instructions but the first question.
+                let text = match first {
+                    true => format!("{}\n\n{text}", instructions(&self.project)),
+                    false => text.to_string(),
+                };
+                let cmd = self.kind.command().ok_or("It's no longer installed.")?;
+                let id = session.lock().unwrap().clone();
+                let mut c = codex_command(&cmd, &self.project, id.as_deref(), &text)?;
+                stopping.store(false, Ordering::Relaxed);
+                read(
+                    &mut c,
+                    self.tx.clone(),
+                    codex_events,
+                    Some(session.clone()),
+                    Some(stopping.clone()),
+                );
+                *child = Some(c);
+                Ok(())
+            }
+        }
     }
 
     /// Stops what it's doing; the conversation can go on.
     pub fn interrupt(&mut self) {
-        let line = json!({
-            "type": "control_request",
-            "request_id": format!("stop-{}", self.asks),
-            "request": { "subtype": "interrupt" },
-        });
-        let _ = writeln!(self.stdin, "{line}").and_then(|()| self.stdin.flush());
+        match &mut self.run {
+            Run::Claude { stdin, .. } => {
+                let line = json!({
+                    "type": "control_request",
+                    "request_id": format!("stop-{}", self.asks),
+                    "request": { "subtype": "interrupt" },
+                });
+                let _ = writeln!(stdin, "{line}").and_then(|()| stdin.flush());
+            }
+            Run::Turns {
+                child, stopping, ..
+            } => {
+                stopping.store(true, Ordering::Relaxed);
+                if let Some(c) = child {
+                    let _ = c.kill();
+                }
+            }
+        }
     }
 }
 
 impl Drop for Agent {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let child = match &mut self.run {
+            Run::Claude { child, .. } => Some(child),
+            Run::Turns { child, .. } => child.as_mut(),
+        };
+        if let Some(c) = child {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
     }
 }
 
-/// `tempo ask`: Claude does what's asked to the song, saying what it's doing as it goes. The app
+/// Claude Code with tempo's tools and nothing else: no shell, no files, no one else's MCP servers
+/// or hooks; anything else asked for is refused, not asked about.
+fn claude_command(cmd: &Path, project: &Path) -> Result<Child, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mcp = json!({ "mcpServers": { "tempo": { "command": exe, "args": ["mcp"] } } });
+    Command::new(cmd)
+        .args(["-p", "--verbose", "--include-partial-messages"])
+        .args([
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+        ])
+        .args(["--strict-mcp-config", "--mcp-config", &mcp.to_string()])
+        .args(["--tools", "", "--allowedTools", "mcp__tempo"])
+        .args(["--permission-prompts", "none", "--setting-sources", ""])
+        .args(["--append-system-prompt", &instructions(project)])
+        .current_dir(project)
+        .env_remove("CLAUDECODE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{}: {e}", cmd.display()))
+}
+
+/// `codex exec`, resuming the conversation after its first question: tempo's MCP server in place
+/// of any others, its sandbox read-only, nothing asked about.
+fn codex_command(
+    cmd: &Path,
+    project: &Path,
+    session: Option<&str>,
+    text: &str,
+) -> Result<Child, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut c = Command::new(cmd);
+    c.arg("exec");
+    if session.is_some() {
+        c.arg("resume");
+    }
+    c.args(["--json", "--skip-git-repo-check"])
+        .args([
+            "-c",
+            "sandbox_mode=\"read-only\"",
+            "-c",
+            "approval_policy=\"never\"",
+        ])
+        .arg("-c")
+        .arg(format!(
+            "mcp_servers={{tempo={{command={:?},args=[\"mcp\"]}}}}",
+            exe.display().to_string()
+        ));
+    if let Some(id) = session {
+        c.arg(id);
+    }
+    c.arg(text)
+        .current_dir(project)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{}: {e}", cmd.display()))
+}
+
+/// `tempo ask`: an agent does what's asked to the song, saying what it's doing as it goes. The app
 /// that has the song open shows it all in its Agent panel, and the edits as they're made.
-pub fn ask(dir: &Path, words: &str) -> Result<(), String> {
+pub fn ask(kind: Kind, dir: &Path, words: &str) -> Result<(), String> {
     use std::io::IsTerminal;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let dir = dir
         .canonicalize()
         .map_err(|e| format!("{}: {e}", dir.display()))?;
     let bar = crate::cli::project(&dir).map_or(0, |p| p.bar());
-    let (mut agent, events) = Agent::start(&dir)?;
+    let def = kind.def();
+    match kind.readiness() {
+        Readiness::Missing => return Err(format!("{} isn't installed.", def.name)),
+        Readiness::SignIn => {
+            return Err(format!("{} isn't signed in: run {}", def.name, def.sign_in));
+        }
+        Readiness::Ready(_) => {}
+    }
+    let (mut agent, events) = Agent::start(kind, &dir)?;
     let mut app = crate::server::Link::to(&dir);
     let mut tell = |e: &Event| {
         if let Some(link) = app.as_mut()
@@ -211,7 +463,14 @@ pub fn ask(dir: &Path, words: &str) -> Result<(), String> {
             println!("{s}");
         };
         match e {
-            Event::Started { model } => line(format!("{dim}{model} is working on {song}…{off}")),
+            Event::Started { model } => {
+                let who = if model.is_empty() {
+                    kind.def().name
+                } else {
+                    &model
+                };
+                line(format!("{dim}{who} is working on {song}…{off}"))
+            }
             Event::Text { text } => {
                 print!("{text}");
                 let _ = out.flush();
@@ -251,37 +510,69 @@ pub fn ask(dir: &Path, words: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Turns Claude's output into events until it ends, then says why if it ended early.
-fn read(stdout: impl Read, errors: thread::JoinHandle<String>, tx: UnboundedSender<Event>) {
-    let mut busy = false;
-    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-        let Ok(v) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        for e in events(&v) {
-            busy = !matches!(e, Event::Done { .. });
-            if tx.unbounded_send(e).is_err() {
-                return;
+/// Turns an agent's output into events until it ends, keeping the conversation's id when it
+/// names it; then, if it ended without saying it was done, says why.
+fn read(
+    child: &mut Child,
+    tx: UnboundedSender<Event>,
+    parse: Parse,
+    session: Option<Arc<Mutex<Option<String>>>>,
+    stopping: Option<Arc<AtomicBool>>,
+) {
+    let (stdout, mut stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let errors = thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stderr.read_to_string(&mut s);
+        s
+    });
+    thread::spawn(move || {
+        let mut done = false;
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let (events, id) = parse(&v);
+            if let (Some(id), Some(s)) = (id, &session) {
+                *s.lock().unwrap() = Some(id);
+            }
+            for e in events {
+                done = matches!(e, Event::Done { .. });
+                if tx.unbounded_send(e).is_err() {
+                    return;
+                }
             }
         }
-    }
-    let said = errors.join().unwrap_or_default();
-    let why = said
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("Claude stopped.");
-    if busy || !said.trim().is_empty() {
+        let said = errors.join().unwrap_or_default();
+        let stopped = stopping.is_some_and(|s| s.load(Ordering::Relaxed));
+        let error = match session.is_some() {
+            // A process for each question ends when it's answered, or stopped.
+            true if done => return,
+            true => None,
+            // Claude's lasts the conversation: its ending is news.
+            false if done && said.trim().is_empty() => return,
+            false => Some(
+                said.lines()
+                    .rev()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    .unwrap_or("Claude stopped.")
+                    .to_string(),
+            ),
+        };
         let _ = tx.unbounded_send(Event::Done {
             seconds: 0.0,
-            stopped: false,
-            error: Some(why.trim().to_string()),
+            stopped,
+            error: error.filter(|_| !stopped),
         });
-    }
+    });
 }
 
 /// The events in one line of Claude Code's stream-json output.
-pub fn events(v: &Value) -> Vec<Event> {
+fn claude_events(v: &Value) -> (Vec<Event>, Option<String>) {
+    (claude_line(v), None)
+}
+
+pub fn claude_line(v: &Value) -> Vec<Event> {
     let s = |v: &Value| v.as_str().unwrap_or_default().to_string();
     let blocks = |v: &Value| {
         v.pointer("/message/content")
@@ -348,6 +639,77 @@ pub fn events(v: &Value) -> Vec<Event> {
         }
         _ => Vec::new(),
     }
+}
+
+/// The events in one line of `codex exec --json`: its items (what it says, thinks and runs, and
+/// its MCP tool calls) as they start and finish, and how the turn ended.
+fn codex_events(v: &Value) -> (Vec<Event>, Option<String>) {
+    let s = |v: &Value| v.as_str().unwrap_or_default().to_string();
+    let item = &v["item"];
+    let id = s(&item["id"]);
+    // An MCP tool's name as Claude Code says it, so it reads the same.
+    let name = || match item["type"].as_str() {
+        Some("mcp_tool_call") => format!("mcp__{}__{}", s(&item["server"]), s(&item["tool"])),
+        _ => "shell".to_string(),
+    };
+    let events = match (v["type"].as_str(), item["type"].as_str()) {
+        (Some("thread.started"), _) => {
+            return (
+                vec![Event::Started {
+                    model: String::new(),
+                }],
+                Some(s(&v["thread_id"])),
+            );
+        }
+        (Some("item.started"), Some("reasoning")) => vec![Event::Thinking],
+        (Some("item.started"), Some("mcp_tool_call" | "command_execution")) => vec![
+            Event::ToolStart {
+                id: id.clone(),
+                name: name(),
+            },
+            Event::Tool {
+                id,
+                name: name(),
+                input: match item["type"].as_str() {
+                    Some("mcp_tool_call") => item["arguments"].clone(),
+                    _ => json!({ "command": item["command"] }),
+                },
+            },
+        ],
+        (Some("item.completed"), Some("agent_message")) => vec![Event::Text {
+            text: format!("{}\n\n", s(&item["text"])),
+        }],
+        (Some("item.completed"), Some("mcp_tool_call")) => vec![Event::ToolDone {
+            id,
+            ok: item["status"] == "completed" && item["error"].is_null(),
+            output: match item["error"]["message"].as_str() {
+                Some(e) => e.to_string(),
+                None => item["result"]["content"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|c| s(&c["text"]))
+                    .collect(),
+            },
+        }],
+        (Some("item.completed"), Some("command_execution")) => vec![Event::ToolDone {
+            id,
+            ok: item["exit_code"].as_i64() == Some(0),
+            output: s(&item["aggregated_output"]),
+        }],
+        (Some("turn.completed"), _) => vec![Event::Done {
+            seconds: 0.0,
+            stopped: false,
+            error: None,
+        }],
+        (Some("turn.failed"), _) => vec![Event::Done {
+            seconds: 0.0,
+            stopped: false,
+            error: Some(s(&v["error"]["message"])),
+        }],
+        _ => Vec::new(),
+    };
+    (events, None)
 }
 
 /// A tool call in words: what it's doing, and to what. `bar` is the song's bar in ticks, for
@@ -458,7 +820,7 @@ mod tests {
 
     #[test]
     fn claudes_stream_becomes_events() {
-        let line = |s: &str| events(&serde_json::from_str(s).unwrap());
+        let line = |s: &str| claude_line(&serde_json::from_str(s).unwrap());
         assert_eq!(
             line(r#"{"type":"system","subtype":"init","model":"claude-opus-5-5"}"#),
             [Event::Started {
@@ -509,6 +871,39 @@ mod tests {
             }]
         );
         assert!(line(r#"{"type":"rate_limit_event"}"#).is_empty());
+    }
+
+    #[test]
+    fn codexs_stream_becomes_the_same_events() {
+        let codex = |s: &str| codex_events(&serde_json::from_str(s).unwrap());
+        let (e, id) = codex(r#"{"type":"thread.started","thread_id":"01a1"}"#);
+        assert_eq!((e.len(), id.as_deref()), (1, Some("01a1")));
+        let (e, _) = codex(
+            r#"{"type":"item.started","item":{"id":"item_2","type":"mcp_tool_call","server":"tempo","tool":"edit","arguments":{"command":{"op":"set_tempo","bpm":101}},"status":"in_progress"}}"#,
+        );
+        assert!(matches!(&e[1], Event::Tool { name, input, .. }
+            if name == "mcp__tempo__edit" && input["command"]["bpm"] == 101));
+        let (e, _) = codex(
+            r#"{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"tempo","tool":"edit","status":"failed","error":{"message":"no such track"}}}"#,
+        );
+        assert_eq!(
+            e,
+            [Event::ToolDone {
+                id: "item_2".into(),
+                ok: false,
+                output: "no such track".into()
+            }]
+        );
+        let (e, _) = codex(r#"{"type":"turn.failed","error":{"message":"401 Unauthorized"}}"#);
+        assert!(matches!(&e[0], Event::Done { error: Some(m), .. } if m == "401 Unauthorized"));
+    }
+
+    #[test]
+    fn agents_are_known_by_modisas_ids() {
+        assert_eq!(Kind::from_id("codex"), Some(Kind::Codex));
+        assert_eq!(Kind::from_id("claude-code\n"), Some(Kind::ClaudeCode));
+        assert_eq!(Kind::Codex.def().logo, '\u{f5a01}');
+        assert_eq!(Kind::from_id("opencode"), None);
     }
 
     #[test]

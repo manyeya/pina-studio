@@ -71,8 +71,11 @@ const USAGE: &str = "usage:
                                    into the song, made to fit: a loop stretched to its
                                    tempo and moved into its key; a one-shot as a sampler
                                    zone in tune
-  tempo ask <project> <words>      Claude does what's asked to the song, saying so as it
-                                   goes (live in the app, and its Agent panel, if it's open)
+  tempo ask [--agent <id>] <project> <words>
+                                   an agent does what's asked to the song, saying so as it
+                                   goes (live in the app, and its Agent panel, if it's open):
+                                   claude-code or codex; the last one picked in the app by
+                                   default
   tempo mcp                        an MCP server on stdin and stdout";
 
 fn main() {
@@ -126,7 +129,22 @@ fn main() {
         }
         ["samples", rest @ ..] => print(samples_cli::command(rest)),
         ["mcp"] => mcp::serve(),
-        ["ask", dir, words @ ..] if !words.is_empty() => agent::ask(p(dir), &words.join(" ")),
+        ["ask", "--agent", id, dir, words @ ..] if !words.is_empty() => {
+            match agent::Kind::from_id(id) {
+                Some(kind) => agent::ask(kind, p(dir), &words.join(" ")),
+                None => Err(format!(
+                    "no agent called {id}: {}",
+                    agent::AGENTS
+                        .iter()
+                        .map(|d| d.id)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+            }
+        }
+        ["ask", dir, words @ ..] if !words.is_empty() => {
+            agent::ask(agent::chosen(), p(dir), &words.join(" "))
+        }
         // What a plugin bundle holds, as JSON: run by the plugin scan, one bundle per process.
         ["__scan", bundle] => tempo_engine::scan::inspect(p(bundle))
             .map(|found| println!("{}", serde_json::to_string(&found).unwrap())),

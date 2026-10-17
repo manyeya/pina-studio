@@ -75,6 +75,8 @@ impl Menu {
 #[derive(Clone)]
 pub enum MenuAction {
     Nothing,
+    /// Works with this agent in the Agent panel.
+    Agent(crate::agent::Kind),
     Instrument {
         track: usize,
         instrument: Instrument,
@@ -188,6 +190,7 @@ impl Workspace {
         self.menu = None;
         match action {
             MenuAction::Nothing => {}
+            MenuAction::Agent(kind) => self.pick_agent(kind, cx),
             MenuAction::SampleKey(key) => self.set_sample_key(key, cx),
             MenuAction::SampleCompatible(at) => {
                 self.browser.compatible = !self.browser.compatible;

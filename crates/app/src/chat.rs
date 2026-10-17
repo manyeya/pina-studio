@@ -12,7 +12,8 @@ use gpui::{
 use serde_json::Value;
 
 use crate::{
-    agent::{self, Agent, Event},
+    agent::{self, Agent, Event, Kind, Readiness},
+    menu::{Menu, MenuAction},
     text::{TextEvent, TextInput},
     theme::*,
     workspace::Workspace,
@@ -63,6 +64,10 @@ const STARTERS: [&str; 4] = [
 
 pub struct Chat {
     pub items: Vec<Item>,
+    /// The agent to work with, as last chosen.
+    pub kind: Kind,
+    /// Whether each agent can work here, once asked.
+    pub ready: Vec<(Kind, Readiness)>,
     agent: Option<Agent>,
     /// Which conversation is running, so the end of an old one doesn't end a new one.
     run: u32,
@@ -88,8 +93,34 @@ impl Chat {
             TextEvent::Cancel => input.update(cx, |i, cx| i.set_text("", cx)),
             _ => {}
         });
+        // Asking each agent whether it's signed in takes a moment: in the background (and not
+        // in tests, which leave the person's agents alone).
+        let check = cx.background_spawn(async {
+            match cfg!(test) {
+                true => Vec::new(),
+                false => agent::AGENTS
+                    .iter()
+                    .map(|d| (d.kind, d.kind.readiness()))
+                    .collect(),
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let ready = check.await;
+            this.update(cx, |ws, cx| {
+                ws.chat.ready = ready;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         Chat {
             items: Vec::new(),
+            kind: if cfg!(test) {
+                Kind::ClaudeCode
+            } else {
+                agent::chosen()
+            },
+            ready: Vec::new(),
             agent: None,
             run: 0,
             busy: false,
@@ -192,6 +223,11 @@ impl Chat {
             .find(|i| matches!(i, Item::Tool { id: x, .. } if x == id))
     }
 
+    /// Whether `kind` can work here; None until asked.
+    pub fn readiness(&self, kind: Kind) -> Option<&Readiness> {
+        self.ready.iter().find(|(k, _)| *k == kind).map(|(_, r)| r)
+    }
+
     /// Notes an edit by an agent outside the conversation.
     pub fn outside(&mut self, what: &str) {
         self.items.push(Item::Outside(what.to_string()));
@@ -220,11 +256,26 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Asks Claude something, starting it on the song if it isn't running.
+    /// Asks the agent something, starting it on the song if it isn't running.
     pub fn ask_agent(&mut self, text: String, cx: &mut Context<Self>) {
         let keep = self.chat.at_end();
+        let def = self.chat.kind.def();
+        let problem = match self.chat.readiness(self.chat.kind) {
+            Some(Readiness::Missing) => Some(format!("{} isn't installed on this Mac.", def.name)),
+            Some(Readiness::SignIn) => Some(format!(
+                "{} isn't signed in. Run {} in a terminal, then ask again.",
+                def.name, def.sign_in
+            )),
+            _ => None,
+        };
+        if let Some(problem) = problem {
+            self.chat.asked(text);
+            self.chat.end(0.0, false, Some(problem));
+            cx.notify();
+            return;
+        }
         if self.chat.agent.is_none() {
-            match Agent::start(&self.session.dir) {
+            match Agent::start(self.chat.kind, &self.session.dir) {
                 Ok((agent, mut events)) => {
                     self.chat.run += 1;
                     let run = self.chat.run;
@@ -245,7 +296,8 @@ impl Workspace {
                             if ws.chat.run == run {
                                 ws.chat.agent = None;
                                 if ws.chat.busy {
-                                    ws.chat.end(0.0, false, Some("Claude stopped.".into()));
+                                    let name = ws.chat.kind.def().name;
+                                    ws.chat.end(0.0, false, Some(format!("{name} stopped.")));
                                 }
                                 cx.notify();
                             }
@@ -301,6 +353,47 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Works with another agent from now on, in a new conversation.
+    pub fn pick_agent(&mut self, kind: Kind, cx: &mut Context<Self>) {
+        if kind != self.chat.kind {
+            self.chat.kind = kind;
+            self.chat.model = None;
+            agent::choose(kind);
+            self.new_chat(cx);
+        }
+        cx.notify();
+    }
+
+    /// The agents to choose from: each one's name, and what it needs if it can't work yet.
+    pub fn agent_menu(&self, at: gpui::Point<gpui::Pixels>) -> Menu {
+        let items = agent::AGENTS
+            .iter()
+            .map(|d| {
+                let mark = if d.kind == self.chat.kind {
+                    "✓ "
+                } else {
+                    "    "
+                };
+                let how = match self.chat.readiness(d.kind) {
+                    None => String::new(),
+                    Some(Readiness::Ready(on)) if on.is_empty() => String::new(),
+                    Some(Readiness::Ready(on)) => format!(" · {on}"),
+                    Some(Readiness::Missing) => " · not installed".into(),
+                    Some(Readiness::SignIn) => format!(" · sign in: {}", d.sign_in),
+                };
+                (
+                    format!("{mark}{}  {}{how}", d.logo, d.name),
+                    MenuAction::Agent(d.kind),
+                )
+            })
+            .collect();
+        Menu {
+            at,
+            items,
+            ..Default::default()
+        }
+    }
+
     /// A new conversation: the one running ends.
     fn new_chat(&mut self, cx: &mut Context<Self>) {
         self.chat.run += 1;
@@ -314,10 +407,16 @@ impl Workspace {
 
     pub fn agent_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = &self.chat;
+        let def = c.kind.def();
         let status = match (c.busy, c.since, c.remote) {
             (true, Some(t), true) => format!("From the terminal · {}s", t.elapsed().as_secs()),
             (true, Some(t), false) => format!("Working · {}s", t.elapsed().as_secs()),
-            _ => c.model.as_deref().map(model_name).unwrap_or_default(),
+            _ => c
+                .model
+                .as_deref()
+                .filter(|m| !m.is_empty())
+                .map(model_name)
+                .unwrap_or_default(),
         };
         let header = div()
             .h(px(40.))
@@ -329,12 +428,31 @@ impl Workspace {
             .pr(px(7.))
             .border_b_1()
             .border_color(rgb(LINE))
-            .child(badge(18., c.busy))
+            .child(badge(c.kind, 20., c.busy))
+            // Its name picks another.
             .child(
                 div()
+                    .id("agent-pick")
+                    .flex()
+                    .items_center()
+                    .gap(px(3.))
+                    .px(px(4.))
+                    .py(px(2.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(rgb(RAISED)))
                     .text_size(px(13.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Claude"),
+                    .child(def.name)
+                    .child(icon(Icon::Chevron, 12.).text_color(rgb(TEXT_3)))
+                    .debug_selector(|| "agent-pick".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, e: &gpui::MouseDownEvent, _, cx| {
+                            ws.menu = Some(ws.agent_menu(e.position));
+                            cx.notify();
+                        }),
+                    ),
             )
             .child(
                 div()
@@ -471,7 +589,18 @@ impl Workspace {
 
     /// Before the first request: what it does, and some things to ask.
     fn agent_welcome(&self, cx: &mut Context<Self>) -> Div {
-        let installed = agent::claude().is_some();
+        let def = self.chat.kind.def();
+        let problem = match self.chat.readiness(self.chat.kind) {
+            Some(Readiness::Missing) => Some(format!(
+                "{} isn't installed on this Mac. Install it and sign in ({}), or pick another agent above.",
+                def.name, def.sign_in
+            )),
+            Some(Readiness::SignIn) => Some(format!(
+                "{} isn't signed in. Run {} in a terminal, then come back.",
+                def.name, def.sign_in
+            )),
+            _ => None,
+        };
         div()
             .flex_1()
             .min_h(px(0.))
@@ -480,7 +609,7 @@ impl Workspace {
             .justify_center()
             .gap(px(14.))
             .px(px(18.))
-            .child(badge(40., false))
+            .child(badge(self.chat.kind, 44., false))
             .child(
                 div()
                     .flex()
@@ -490,20 +619,22 @@ impl Workspace {
                         div()
                             .text_size(px(17.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Make music with Claude"),
+                            .child(format!("Make music with {}", def.name)),
                     )
                     .child(
                         div()
                             .text_size(px(12.5))
                             .line_height(px(18.))
                             .text_color(rgb(TEXT_3))
-                            .child(
-                                "Ask for anything. Claude edits this song while you watch: every \
-                                 step shows here, and every edit lands in the tracks as it's made.",
-                            ),
+                            .child(format!(
+                                "Ask for anything. {} edits this song while you watch: every \
+                                     step shows here, and every edit lands in the tracks as it's \
+                                     made.",
+                                def.name
+                            )),
                     ),
             )
-            .when(!installed, |d| {
+            .when_some(problem, |d, problem| {
                 d.child(
                     div()
                         .p(px(10.))
@@ -514,7 +645,7 @@ impl Workspace {
                         .text_size(px(12.))
                         .line_height(px(17.))
                         .text_color(rgb(TEXT_2))
-                        .child("Claude Code isn't installed. Get it at claude.com/claude-code and sign in."),
+                        .child(problem),
                 )
             })
             .child(
@@ -559,17 +690,22 @@ impl Workspace {
     }
 }
 
-/// Claude's mark: the agent glyph on its colour, breathing while it works.
-fn badge(size: f32, busy: bool) -> impl IntoElement {
+/// An agent's mark, as modisa draws it: its logo in its brand colour (white for a monochrome
+/// brand), breathing while it works.
+pub fn badge(kind: Kind, size: f32, busy: bool) -> impl IntoElement {
+    let def = kind.def();
+    let color = def.color.unwrap_or(TEXT);
     let dot = div()
         .size(px(size))
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(size / 2.0))
-        .bg(rgb(AGENT))
-        .child(icon(Icon::Agent, size * 0.55).text_color(rgb(BG)));
+        .rounded(px(size * 0.3))
+        .bg(alpha(color, 0.14))
+        .border_1()
+        .border_color(alpha(color, 0.28))
+        .child(logo(kind, size * 0.6));
     match busy {
         true => dot
             .with_animation(
@@ -582,6 +718,17 @@ fn badge(size: f32, busy: bool) -> impl IntoElement {
             .into_any_element(),
         false => dot.into_any_element(),
     }
+}
+
+/// An agent's logo, from modisa's logo font, in its brand colour.
+pub fn logo(kind: Kind, size: f32) -> Div {
+    let def = kind.def();
+    div()
+        .font_family(agent::MARKS)
+        .text_size(px(size))
+        .line_height(px(size))
+        .text_color(rgb(def.color.unwrap_or(TEXT)))
+        .child(def.logo.to_string())
 }
 
 /// "claude-opus-5-5" as "Opus 5.5".

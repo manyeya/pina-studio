@@ -85,6 +85,8 @@ pub fn fonts() -> Vec<Cow<'static, [u8]>> {
         Cow::Borrowed(include_bytes!("../assets/fonts/GeistMono-Regular.ttf")),
         Cow::Borrowed(include_bytes!("../assets/fonts/GeistMono-Medium.ttf")),
         Cow::Borrowed(include_bytes!("../assets/fonts/GeistMono-SemiBold.ttf")),
+        // Agents' logos, modisa's (see ModisaMarks.NOTICE).
+        Cow::Borrowed(include_bytes!("../assets/fonts/ModisaMarks.ttf")),
     ]
 }
 

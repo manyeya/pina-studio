@@ -17,7 +17,7 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   (`commands.rs`, described in `commands.md`) and measuring audio (`analysis.rs`).
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
   `topbar.rs` (transport and display), `inspector.rs` (the side panel: inspector and browser),
-  `chat.rs` (the Agent panel) with `agent.rs` (running Claude Code for it and `tempo ask`),
+  `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`),
   `tracks.rs` (tools, markers, ruler, headers, regions, automation), `editor.rs` (the
   editor under the tracks) with `pianoroll.rs`, `steps.rs` (the step sequencer), `score.rs`,
   `takes.rs` (take folders), `liveloops.rs` and `browser.rs` (the sample browser, a page of
@@ -96,10 +96,12 @@ In the app, mostly as in Logic:
   the notes ("Apply to notes" writes them in). Then Smart Controls (a plugin instrument's filter
   and envelope, else the channel's EQ and compressor; turning them is an undoable edit) and the
   channel strips. Browser lists instruments and effects to put on the selected track.
-- ⌘L, or Claude's button in the top bar, opens the Agent panel beside the tracks: ask Claude for
+- ⌘L, or the agent's mark in the top bar, opens the Agent panel beside the tracks: ask for
   anything and watch it work. Its thinking, each step (reading the song, finding samples, every
   edit, listening) and what it says show as they happen, and each edit lands in the tracks as
-  it's made, outlined, undoable on its own. Edits by any other agent show there too.
+  it's made, outlined, undoable on its own. The agent's name at the top picks another (Claude
+  Code or Codex, with their logos, each saying whether it's signed in and on what). Edits by any
+  other agent show there too.
 - Drag regions to move them (across tracks too) and their edges to trim; option-drag one to copy
   it, option-shift-drag for an alias: a linked copy, its name in italics with a link, that plays
   the same notes, so editing either edits both (its place, length and playback settings are its
@@ -180,15 +182,20 @@ under `crates/engine/src/faust/`, so building tempo doesn't need Faust; after ch
 
 ## Agents
 
-tempo is made to be driven by agents as well as people. The quickest is Claude, built in: the
+tempo is made to be driven by agents as well as people. The quickest are built in, as modisa
+knows them (ids, logos from modisa's logo font, brand colours): Claude Code and Codex, in the
 Agent panel (⌘L) in the app, or from a terminal
 
-    tempo ask <project> "make the hook hit harder"
+    tempo ask [--agent codex] <project> "make the hook hit harder"
 
-which prints Claude's words and steps as it goes. Both run Claude Code (installed and signed in)
-headless, with tempo's MCP server as its only tools: no shell, no files, no other MCP servers or
-hooks. When the app has the project open, `tempo ask`'s edits land there live and its Agent
-panel opens to show the conversation.
+which prints the agent's words and steps as it goes (the agent last picked in the app by
+default). Each runs headless, installed and signed in on its own account (Claude Code on your
+Claude plan), with tempo's MCP server as its only tools: Claude Code with no built-in tools, other
+MCP servers, settings or hooks; Codex with tempo's server in place of yours and its sandbox
+read-only. One that isn't signed in says how to sign in rather than starting. When the app has
+the project open, `tempo ask`'s edits land there live and its Agent panel opens to show the
+conversation. (opencode isn't one yet: version 2 hands MCP tools to its model inside a single
+code-running tool, so its steps can't show as tempo's.)
 
 Any other agent drives tempo the same way Claude does. `tempo describe` prints every command an
 agent can send, with examples. An agent can:

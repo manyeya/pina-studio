@@ -444,12 +444,11 @@ impl Workspace {
             )
     }
 
-    /// Claude: lit while it (or any agent) is working on the song, or while its panel is open;
-    /// clicking it opens the panel.
+    /// The agent's mark (the one picked in the Agent panel): ringed while it, or any agent, is
+    /// working on the song, raised while its panel is open; clicking it opens the panel.
     fn presence(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let lit = self.chat.busy
-            || self.agent_presence().is_some()
-            || (self.show_agent && !self.show_samples && self.view == View::Arrange);
+        let busy = self.chat.busy || self.agent_presence().is_some();
+        let open = self.show_agent && !self.show_samples && self.view == View::Arrange;
         div()
             .size(px(30.))
             .flex_none()
@@ -458,9 +457,17 @@ impl Workspace {
             .justify_center()
             .rounded(px(15.))
             .cursor_pointer()
-            .bg(rgb(if lit { AGENT } else { FIELD }))
-            .hover(|d| d.bg(rgb(if lit { AGENT_TEXT } else { RAISED })))
-            .child(icon(Icon::Agent, 15.).text_color(rgb(if lit { BG } else { TEXT_2 })))
+            .bg(rgb(if open { RAISED } else { FIELD }))
+            .border_2()
+            .border_color(rgb(if busy {
+                AGENT
+            } else if open {
+                LINE_STRONG
+            } else {
+                FIELD
+            }))
+            .hover(|d| d.bg(rgb(RAISED)))
+            .child(crate::chat::logo(self.chat.kind, 15.))
             .debug_selector(|| "agent".into())
             .on_mouse_down(
                 MouseButton::Left,
