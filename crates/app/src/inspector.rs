@@ -105,7 +105,6 @@ impl Workspace {
                     }),
                 )
         };
-        let agent_busy = self.agent_presence().is_some();
         let tabs = tray()
             .rounded(px(9.))
             .child(tab(
@@ -119,23 +118,10 @@ impl Workspace {
                 Side::Browser,
                 self.side == Side::Browser,
                 cx,
-            ))
-            .child(
-                tab("Agent", Side::Agent, self.side == Side::Agent, cx).when(
-                    !self.agent.is_empty(),
-                    |d| {
-                        d.child(div().size(px(6.)).rounded(px(3.)).bg(rgb(if agent_busy {
-                            AGENT
-                        } else {
-                            TEXT_4
-                        })))
-                    },
-                ),
-            );
+            ));
         let body = match self.side {
             Side::Inspector => self.inspector_tab(cx).into_any_element(),
             Side::Browser => self.browser_tab(cx).into_any_element(),
-            Side::Agent => self.agent_tab().into_any_element(),
         };
         div()
             .w(px(INSPECTOR_W))
@@ -891,120 +877,6 @@ impl Workspace {
             .when(scanning, |d| {
                 d.child(div().text_color(rgb(TEXT_3)).child("Looking for plugins…"))
             })
-    }
-
-    fn agent_tab(&self) -> Div {
-        let dir = self.session.dir.display().to_string();
-        let home = std::env::var("HOME").unwrap_or_default();
-        let dir = match dir.strip_prefix(&home) {
-            Some(rest) if !home.is_empty() => format!("~{rest}"),
-            _ => dir,
-        };
-        let log = self.agent.iter().rev().take(40).map(|a| {
-            let recent = a.at.elapsed() < crate::workspace::PRESENCE;
-            div()
-                .flex()
-                .items_start()
-                .gap(px(8.))
-                .py(px(6.))
-                .border_b_1()
-                .border_color(rgb(LINE_SOFT))
-                .child(
-                    div()
-                        .mt(px(5.))
-                        .size(px(6.))
-                        .flex_none()
-                        .rounded(px(3.))
-                        .bg(rgb(if recent { AGENT } else { TEXT_4 })),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .line_height(px(16.))
-                        .text_color(rgb(TEXT_2))
-                        .child(a.what.clone()),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(px(11.))
-                        .text_color(rgb(TEXT_3))
-                        .child(a.ago()),
-                )
-        });
-        let code = |s: String| {
-            div()
-                .p(px(8.))
-                .rounded(px(6.))
-                .bg(rgb(WELL))
-                .border_1()
-                .border_color(rgb(LINE_SOFT))
-                .font_family(MONO)
-                .text_size(px(10.5))
-                .line_height(px(15.))
-                .text_color(rgb(TEXT_2))
-                .child(s)
-        };
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(16.))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .p(px(12.))
-                    .rounded(px(10.))
-                    .bg(rgb(CARD))
-                    .border_1()
-                    .border_color(rgb(LINE))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(
-                                div()
-                                    .size(px(22.))
-                                    .rounded(px(11.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .bg(rgb(AGENT))
-                                    .text_color(rgb(BG))
-                                    .child(icon(Icon::Agent, 12.).text_color(rgb(BG))),
-                            )
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Make music with an agent"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(TEXT_3))
-                            .line_height(px(17.))
-                            .child("Agents make the same edits you do, live here and undoable. Point one at this project over MCP, or send a command:"),
-                    )
-                    .child(code("tempo mcp".into()))
-                    .child(code(format!("tempo do \"{dir}\" '{{\"op\": \"set_tempo\", \"bpm\": 96}}'"))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(section_title("Activity").mb(px(4.)))
-                    .children(log)
-                    .when(self.agent.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .text_color(rgb(TEXT_3))
-                                .child("No agent has edited this project yet."),
-                        )
-                    }),
-            )
     }
 }
 

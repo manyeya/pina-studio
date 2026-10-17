@@ -40,6 +40,7 @@ actions!(
     tempo,
     [
         PlayStop,
+        ToggleAgent,
         GoToStart,
         Undo,
         Redo,
@@ -100,6 +101,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("down", NextSample, Some("Samples")),
         KeyBinding::new("r", Record, Some("Workspace")),
         KeyBinding::new("cmd-k", ToggleTyping, Some("Workspace")),
+        KeyBinding::new("cmd-l", ToggleAgent, None),
         KeyBinding::new("cmd-shift-d", CreateStack, Some("Workspace")),
         KeyBinding::new("cmd-alt-p", NewPattern, Some("Workspace")),
         KeyBinding::new("cmd-s", Save, None),
@@ -391,7 +393,6 @@ impl Snap {
 pub enum Side {
     Inspector,
     Browser,
-    Agent,
 }
 
 /// Which channels the mixer shows.
@@ -500,6 +501,10 @@ pub struct Workspace {
     pub show_inspector: bool,
     /// The compact sample browser, beside the tracks.
     pub show_samples: bool,
+    /// The Agent panel shows beside the tracks, where the Samples panel would.
+    pub show_agent: bool,
+    /// The conversation with Claude in it.
+    pub chat: crate::chat::Chat,
     pub side: Side,
     pub tool: Tool,
     pub snap: Snap,
@@ -599,6 +604,7 @@ impl Workspace {
         });
         let links = session.project.link_contents();
         let browser = crate::browser::Browser::new(cx);
+        let chat = crate::chat::Chat::new(cx);
         // The CPU load and meters refresh while nothing else redraws.
         cx.spawn(async move |this, cx| {
             loop {
@@ -633,6 +639,7 @@ impl Workspace {
             bottom: None,
             show_inspector: true,
             show_samples: false,
+            show_agent: false,
             side: Side::Inspector,
             tool: Tool::Pointer,
             snap: Snap::Smart,
@@ -683,6 +690,7 @@ impl Workspace {
             viewport_h: 900.0,
             viewport_w: 1440.0,
             browser,
+            chat,
             title: String::new(),
         }
     }
@@ -2407,6 +2415,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &ToggleMetronome, _, cx| ws.toggle_metronome(cx)))
             .on_action(cx.listener(|ws, _: &Quit, window, cx| ws.quit(window, cx)))
             .on_action(cx.listener(|ws, _: &ToggleMixer, _, cx| ws.toggle_mixer(cx)))
+            .on_action(cx.listener(|ws, _: &ToggleAgent, window, cx| ws.toggle_agent(window, cx)))
             .on_action(cx.listener(|ws, _: &ToggleInspector, _, cx| {
                 ws.show_inspector = !ws.show_inspector;
                 cx.notify();
@@ -2435,6 +2444,9 @@ impl Render for Workspace {
                                     }),
                             )
                             .when(self.show_samples, |d| d.child(self.samples_panel(cx)))
+                            .when(self.show_agent && !self.show_samples, |d| {
+                                d.child(self.agent_panel(cx))
+                            })
                     }),
             )
             .child(self.status_bar())

@@ -413,7 +413,7 @@ impl Workspace {
                             ),
                     ),
             )
-            .child(self.presence())
+            .child(self.presence(cx))
             .child(
                 div()
                     .h(px(32.))
@@ -444,37 +444,28 @@ impl Workspace {
             )
     }
 
-    /// Who's in the project: you, and the agent once one has edited it (lit while it's busy).
-    fn presence(&self) -> impl IntoElement {
-        let avatar = |bg: u32, fg: u32, i: Icon| {
-            div()
-                .size(px(28.))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(14.))
-                .bg(rgb(bg))
-                .border_2()
-                .border_color(rgb(SURFACE))
-                .text_color(rgb(fg))
-                .child(icon(i, 14.).text_color(rgb(fg)))
-        };
-        let agent = self.agent.last().map(|a| a.at.elapsed().as_secs() < 60);
+    /// Claude: lit while it (or any agent) is working on the song, or while its panel is open;
+    /// clicking it opens the panel.
+    fn presence(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let lit = self.chat.busy
+            || self.agent_presence().is_some()
+            || (self.show_agent && !self.show_samples && self.view == View::Arrange);
         div()
+            .size(px(30.))
+            .flex_none()
             .flex()
             .items_center()
-            .child(avatar(RAISED, TEXT_2, Icon::Person))
-            .when_some(agent, |d, busy| {
-                d.child(
-                    avatar(
-                        if busy { AGENT } else { FIELD },
-                        if busy { BG } else { TEXT_3 },
-                        Icon::Agent,
-                    )
-                    .ml(px(-6.)),
-                )
-            })
+            .justify_center()
+            .rounded(px(15.))
+            .cursor_pointer()
+            .bg(rgb(if lit { AGENT } else { FIELD }))
+            .hover(|d| d.bg(rgb(if lit { AGENT_TEXT } else { RAISED })))
+            .child(icon(Icon::Agent, 15.).text_color(rgb(if lit { BG } else { TEXT_2 })))
+            .debug_selector(|| "agent".into())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|ws, _, window, cx| ws.toggle_agent(window, cx)),
+            )
     }
 
     /// The keys to choose from, and going back to working it out.

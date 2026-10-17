@@ -2011,3 +2011,65 @@ fn the_sound_map_boxes_in_samples_and_similar_weighs_aspects(cx: &mut TestAppCon
     assert!(!ws.read_with(cx, |ws, _| ws.session.edited));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[gpui::test]
+fn the_agent_panel_shows_claude_working_as_it_goes(cx: &mut TestAppContext) {
+    use crate::chat::{Item, Step};
+    // A stand-in for Claude Code: it takes the question and answers as Claude does, an edit and
+    // a sentence, then waits to be let go.
+    let dir = std::env::temp_dir().join(format!("tempo-test-claude-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let claude = dir.join("claude");
+    std::fs::write(
+        &claude,
+        r#"#!/bin/sh
+read question
+cat <<'OUT'
+{"type":"system","subtype":"init","model":"claude-test-1"}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}}
+{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"mcp__tempo__edit","input":{}}}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__tempo__edit","input":{"project":"p","command":{"op":"set_tempo","bpm":101}}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"{}"}]}]}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"Set the tempo "}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"to 101."}}}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":1200}
+OUT
+cat > /dev/null
+"#,
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // SAFETY: no other test reads TEMPO_CLAUDE.
+    unsafe { std::env::set_var("TEMPO_CLAUDE", &claude) };
+    cx.executor().allow_parking();
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| ws.ask_agent("Make it 101".into(), cx));
+    assert!(ws.read_with(cx, |ws, _| ws.chat.busy));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while ws.read_with(cx, |ws, _| ws.chat.busy) && Instant::now() < deadline {
+        cx.run_until_parked();
+        thread::sleep(Duration::from_millis(5));
+    }
+    let (items, model, busy) = ws.read_with(cx, |ws, _| {
+        (ws.chat.items.clone(), ws.chat.model.clone(), ws.chat.busy)
+    });
+    assert!(!busy);
+    assert_eq!(model.as_deref(), Some("claude-test-1"));
+    assert_eq!(items.len(), 4, "{items:?}");
+    assert_eq!(items[0], Item::You("Make it 101".into()));
+    assert!(
+        matches!(&items[1], Item::Tool { step: Step::Done, input, .. }
+        if input["command"]["bpm"] == 101)
+    );
+    assert_eq!(items[2], Item::Words("Set the tempo to 101.".into()));
+    assert!(matches!(
+        items[3],
+        Item::End {
+            steps: 1,
+            error: None,
+            ..
+        }
+    ));
+    std::fs::remove_dir_all(dir).unwrap();
+}

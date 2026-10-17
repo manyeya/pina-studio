@@ -1,4 +1,6 @@
+mod agent;
 mod browser;
+mod chat;
 mod cli;
 mod editor;
 mod inspector;
@@ -69,6 +71,8 @@ const USAGE: &str = "usage:
                                    into the song, made to fit: a loop stretched to its
                                    tempo and moved into its key; a one-shot as a sampler
                                    zone in tune
+  tempo ask <project> <words>      Claude does what's asked to the song, saying so as it
+                                   goes (live in the app, and its Agent panel, if it's open)
   tempo mcp                        an MCP server on stdin and stdout";
 
 fn main() {
@@ -122,6 +126,7 @@ fn main() {
         }
         ["samples", rest @ ..] => print(samples_cli::command(rest)),
         ["mcp"] => mcp::serve(),
+        ["ask", dir, words @ ..] if !words.is_empty() => agent::ask(p(dir), &words.join(" ")),
         // What a plugin bundle holds, as JSON: run by the plugin scan, one bundle per process.
         ["__scan", bundle] => tempo_engine::scan::inspect(p(bundle))
             .map(|found| println!("{}", serde_json::to_string(&found).unwrap())),
@@ -204,6 +209,7 @@ fn open(dir: &Path) -> Result<(), String> {
                 MenuItem::action("Live Loops", ToggleLoops),
                 MenuItem::action("Sample Browser", ToggleSamples),
                 MenuItem::action("Samples Page", ToggleSamplesPage),
+                MenuItem::action("Agent", ToggleAgent),
                 MenuItem::action("Score", ToggleScore),
                 MenuItem::action("Automation", ToggleAutomation),
                 MenuItem::action("Inspector", ToggleInspector),

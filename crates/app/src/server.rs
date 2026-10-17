@@ -64,6 +64,10 @@ pub enum Request {
         plugin: Which,
         name: String,
     },
+    /// What Claude is doing for `tempo ask`, for the Agent panel to show.
+    Agent {
+        event: crate::agent::Event,
+    },
 }
 
 /// The running plugins, for `commands::resolve`.
@@ -116,6 +120,27 @@ pub fn ask(dir: &Path, request: &Request) -> Option<Reply> {
         (_, Some(e)) => Err(e.as_str().unwrap_or("error").to_string()),
         _ => Err(format!("an odd reply from the app: {line}")),
     })
+}
+
+/// One connection to the app, for many requests: `tempo ask` sends Claude's events over it.
+pub struct Link {
+    out: UnixStream,
+    replies: BufReader<UnixStream>,
+}
+
+impl Link {
+    /// To the app that has `dir` open, if one does.
+    pub fn to(dir: &Path) -> Option<Link> {
+        let out = UnixStream::connect(socket_path(dir)).ok()?;
+        let replies = BufReader::new(out.try_clone().ok()?);
+        Some(Link { out, replies })
+    }
+
+    pub fn send(&mut self, request: &Request) -> Option<()> {
+        writeln!(self.out, "{}", serde_json::to_string(request).unwrap()).ok()?;
+        let mut line = String::new();
+        self.replies.read_line(&mut line).ok().map(|_| ())
+    }
 }
 
 /// Serves the workspace's project while the app runs.
@@ -197,6 +222,11 @@ impl Workspace {
             },
             None => op,
         };
+        // An agent working outside a conversation the panel shows (`tempo do`, another MCP
+        // client) shows there edit by edit.
+        if !self.chat.busy {
+            self.chat.outside(&what);
+        }
         self.agent.push(AgentEdit {
             at: Instant::now(),
             what,
@@ -296,6 +326,10 @@ impl Workspace {
             } => {
                 let found = self.running_plugin(channel, plugin)?;
                 Ok(json!({ "file": found.save_preset(&name)? }))
+            }
+            Request::Agent { event } => {
+                self.heard_agent(event, cx);
+                ok
             }
             Request::Undo | Request::Redo => {
                 let done = match request {

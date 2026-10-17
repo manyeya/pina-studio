@@ -16,8 +16,9 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   (`midi.rs`), audio recording (`record.rs`), the plugin scan (`scan.rs`), edits as data
   (`commands.rs`, described in `commands.md`) and measuring audio (`analysis.rs`).
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
-  `topbar.rs` (transport and display), `inspector.rs` (the side panel: inspector, browser,
-  agent), `tracks.rs` (tools, markers, ruler, headers, regions, automation), `editor.rs` (the
+  `topbar.rs` (transport and display), `inspector.rs` (the side panel: inspector and browser),
+  `chat.rs` (the Agent panel) with `agent.rs` (running Claude Code for it and `tempo ask`),
+  `tracks.rs` (tools, markers, ruler, headers, regions, automation), `editor.rs` (the
   editor under the tracks) with `pianoroll.rs`, `steps.rs` (the step sequencer), `score.rs`,
   `takes.rs` (take folders), `liveloops.rs` and `browser.rs` (the sample browser, a page of
   its own (⇧F) and a compact list beside the tracks to drag from (F): search, filters, the sound
@@ -94,8 +95,11 @@ In the app, mostly as in Logic:
   and for MIDI and patterns Quantize, Transpose and Velocity, which change what plays but not
   the notes ("Apply to notes" writes them in). Then Smart Controls (a plugin instrument's filter
   and envelope, else the channel's EQ and compressor; turning them is an undoable edit) and the
-  channel strips. Browser lists instruments and effects to put on the selected track; Agent shows
-  how to connect one and everything it did.
+  channel strips. Browser lists instruments and effects to put on the selected track.
+- ⌘L, or Claude's button in the top bar, opens the Agent panel beside the tracks: ask Claude for
+  anything and watch it work. Its thinking, each step (reading the song, finding samples, every
+  edit, listening) and what it says show as they happen, and each edit lands in the tracks as
+  it's made, outlined, undoable on its own. Edits by any other agent show there too.
 - Drag regions to move them (across tracks too) and their edges to trim; option-drag one to copy
   it, option-shift-drag for an alias: a linked copy, its name in italics with a link, that plays
   the same notes, so editing either edits both (its place, length and playback settings are its
@@ -176,7 +180,17 @@ under `crates/engine/src/faust/`, so building tempo doesn't need Faust; after ch
 
 ## Agents
 
-tempo is made to be driven by agents as well as people. `tempo describe` prints every command an
+tempo is made to be driven by agents as well as people. The quickest is Claude, built in: the
+Agent panel (⌘L) in the app, or from a terminal
+
+    tempo ask <project> "make the hook hit harder"
+
+which prints Claude's words and steps as it goes. Both run Claude Code (installed and signed in)
+headless, with tempo's MCP server as its only tools: no shell, no files, no other MCP servers or
+hooks. When the app has the project open, `tempo ask`'s edits land there live and its Agent
+panel opens to show the conversation.
+
+Any other agent drives tempo the same way Claude does. `tempo describe` prints every command an
 agent can send, with examples. An agent can:
 
 - Read a project with `tempo show <project>`.
@@ -201,8 +215,7 @@ agent can send, with examples. An agent can:
 When the project is open in the app, commands go to the app over a socket. Each lands on screen as
 one undoable edit, and `tempo save` saves it. The agent shows up like a collaborator in a shared
 file: its avatar in the top bar, an outline and cursor on what it just changed, a line in the
-status bar, and its history in the side panel's Agent tab. Otherwise the folder is edited
-directly.
+status bar, and each edit in the Agent panel. Otherwise the folder is edited directly.
 
 `tempo params <project> <track>` (or `--aux N`, `--master`, with `--insert N`) lists a plugin's
 parameters (value and display, default, unit, steps, and a choice's options), for

@@ -1090,6 +1090,7 @@ impl Workspace {
     /// tracks with it beside them. It opens with the search field ready to type in.
     pub fn toggle_samples(&mut self, cx: &mut Context<Self>) {
         self.show_samples = self.view != View::Arrange || !self.show_samples;
+        self.show_agent &= !self.show_samples;
         self.view = View::Arrange;
         self.browser.focus_search = self.show_samples;
         cx.notify();
@@ -1125,6 +1126,44 @@ impl Workspace {
             .panel_list
             .scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
+    }
+
+    /// The right panel's left edge (Samples' or Agent's): a strip to grab, lit while it's held or
+    /// under the pointer. Double-click puts the width back.
+    pub fn panel_edge(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let width = self.panel_width();
+        let resizing = matches!(self.drag, Some(Drag::Panel { .. }));
+        div()
+            .id("panel-edge")
+            .absolute()
+            .left(px(-4.))
+            .top_0()
+            .h_full()
+            .w(px(8.))
+            .flex()
+            .justify_center()
+            .cursor_col_resize()
+            .child(
+                div()
+                    .h_full()
+                    .w(px(2.))
+                    .when(resizing, |d| d.bg(rgb(ACCENT))),
+            )
+            .hover(|s| s.bg(alpha(ACCENT, 0.35)))
+            .debug_selector(|| "panel-edge".into())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    if e.click_count == 2 {
+                        ws.panel_w = PANEL_W;
+                        cx.notify();
+                        return;
+                    }
+                    let x = pt(e.position).x;
+                    ws.begin_drag(Drag::Panel { x, width }, cx);
+                }),
+            )
     }
 
     /// The compact browser's width: as dragged, but never so wide the lanes lose their room,
@@ -2009,39 +2048,6 @@ impl Workspace {
             .into_any_element(),
         };
         let width = self.panel_width();
-        let resizing = matches!(self.drag, Some(Drag::Panel { .. }));
-        // The left edge: a strip to grab, lit while it's held or under the pointer.
-        let edge = div()
-            .id("panel-edge")
-            .absolute()
-            .left(px(-4.))
-            .top_0()
-            .h_full()
-            .w(px(8.))
-            .flex()
-            .justify_center()
-            .cursor_col_resize()
-            .child(
-                div()
-                    .h_full()
-                    .w(px(2.))
-                    .when(resizing, |d| d.bg(rgb(ACCENT))),
-            )
-            .hover(|s| s.bg(alpha(ACCENT, 0.35)))
-            .debug_selector(|| "panel-edge".into())
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    if e.click_count == 2 {
-                        ws.panel_w = PANEL_W;
-                        cx.notify();
-                        return;
-                    }
-                    let x = pt(e.position).x;
-                    ws.begin_drag(Drag::Panel { x, width }, cx);
-                }),
-            );
         div()
             .w(px(width))
             .flex_none()
@@ -2085,7 +2091,7 @@ impl Workspace {
                     .child(list),
             )
             .children(self.panel_footer(cx))
-            .child(edge)
+            .child(self.panel_edge(cx))
     }
 
     /// Rows of the compact list, as the list draws them.

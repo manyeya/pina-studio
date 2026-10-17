@@ -165,7 +165,6 @@ pub enum Icon {
     Scissors,
     Eraser,
     Magnet,
-    Person,
     Agent,
     Drum,
     Sine,
@@ -195,6 +194,8 @@ pub enum Icon {
     Shuffle,
     Expand,
     PanelRight,
+    Send,
+    Check,
 }
 
 impl Icon {
@@ -235,9 +236,6 @@ impl Icon {
                 r##"<path d="M9 20h11M4.6 14.6l9.5-9.5a2 2 0 0 1 2.8 0l2 2a2 2 0 0 1 0 2.8L11 18.8a2 2 0 0 1-1.4.6H8.4a2 2 0 0 1-1.4-.6l-2.4-2.4a1.2 1.2 0 0 1 0-1.8z"/>"##
             }
             Icon::Magnet => r##"<path d="M6 4v7a6 6 0 0 0 12 0V4M6 8h4M14 8h4"/>"##,
-            Icon::Person => {
-                r##"<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c1.3-3.6 4.1-5.5 7.5-5.5s6.2 1.9 7.5 5.5"/>"##
-            }
             Icon::Agent => r##"<path stroke-width="2.25" d="M5 7l5 5-5 5M12.5 17.5H19"/>"##,
             Icon::Drum => {
                 r##"<path d="M4 8.5c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 8.5V15c0 1.7 3.6 3 8 3s8-1.3 8-3V8.5M8.5 11.3v6.4M15.5 11.3v6.4"/>"##
@@ -290,6 +288,8 @@ impl Icon {
             Icon::Rescan => r##"<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4"/>"##,
             Icon::Back => r##"<path d="M14.5 6l-6 6 6 6"/>"##,
             Icon::Forward => r##"<path d="M9.5 6l6 6-6 6"/>"##,
+            Icon::Send => r##"<path stroke-width="2.25" d="M12 19V5.5M6.5 11L12 5.5 17.5 11"/>"##,
+            Icon::Check => r##"<path stroke-width="2.25" d="M5 12.5l4.5 4.5L19 7.5"/>"##,
             Icon::Expand => {
                 r##"<path d="M14 4.5h5.5V10M10 19.5H4.5V14M19.5 4.5l-6 6M4.5 19.5l6-6"/>"##
             }
