@@ -233,13 +233,16 @@ impl Workspace {
                     .output
                     .and_then(|b| project.auxes.iter().find(|a| a.bus == b))
                     .map_or("Stereo Out".to_string(), |a| a.name.clone());
-                (track_icon(t), format!("Channel {} · to {to}", i + 1))
+                (
+                    crate::looks::glyph(self.shown(i).look.icon, 18.),
+                    format!("Channel {} · to {to}", i + 1),
+                )
             }
             Channel::Aux(i) => (
-                Icon::Bus,
+                icon(Icon::Bus, 18.),
                 format!("Bus {} · to Stereo Out", project.auxes[i].bus),
             ),
-            Channel::Master => (Icon::Output, "Output 1–2".to_string()),
+            Channel::Master => (icon(Icon::Output, 18.), "Output 1–2".to_string()),
         };
         let header = div()
             .flex_none()
@@ -257,7 +260,7 @@ impl Workspace {
                     .rounded(px(10.))
                     .bg(alpha(color, 0.14))
                     .text_color(rgb(color))
-                    .child(icon(glyph, 18.).text_color(rgb(color))),
+                    .child(glyph.text_color(rgb(color))),
             )
             .child(
                 div()
@@ -278,6 +281,7 @@ impl Workspace {
         let instrument = match ch {
             Channel::Track(i) => {
                 let t = &project.tracks[i];
+                let look_icon = self.shown(i).look.icon;
                 let (title, sub, opens) = match &t.instrument {
                     None => (
                         "Audio input".to_string(),
@@ -316,8 +320,11 @@ impl Workspace {
                                 .bg(rgb(FIELD))
                                 .text_color(rgb(TEXT_2))
                                 .child(
-                                    icon(if opens { Icon::Plug } else { track_icon(t) }, 16.)
-                                        .text_color(rgb(TEXT_2)),
+                                    match opens {
+                                        true => icon(Icon::Plug, 16.),
+                                        false => crate::looks::glyph(look_icon, 16.),
+                                    }
+                                    .text_color(rgb(TEXT_2)),
                                 ),
                         )
                         .child(

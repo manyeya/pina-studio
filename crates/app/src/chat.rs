@@ -556,6 +556,7 @@ impl Workspace {
                             .flex_1()
                             .min_w(px(0.))
                             .text_size(px(13.))
+                            .debug_selector(|| "agent-input".into())
                             .child(c.input.clone()),
                     )
                     .child(send),

@@ -4,6 +4,7 @@ pub mod drums;
 pub mod dsp;
 pub mod engine;
 mod faust;
+pub mod look;
 pub mod midi;
 pub mod music;
 pub mod peaks;

@@ -18,6 +18,7 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
   `topbar.rs` (transport and display), `inspector.rs` (the side panel: inspector and browser),
   `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`),
+  `looks.rs` (track colours and icons, and their picker),
   `tracks.rs` (tools, markers, ruler, headers, regions, automation), `editor.rs` (the
   editor under the tracks) with `pianoroll.rs`, `steps.rs` (the step sequencer), `score.rs`,
   `takes.rs` (take folders), `liveloops.rs` and `browser.rs` (the sample browser, a page of
@@ -96,6 +97,13 @@ In the app, mostly as in Logic:
   the notes ("Apply to notes" writes them in). Then Smart Controls (a plugin instrument's filter
   and envelope, else the channel's EQ and compressor; turning them is an undoable edit) and the
   channel strips. Browser lists instruments and effects to put on the selected track.
+- Every track is coloured and drawn by what it plays, worked out from its sound (its samples' and
+  audio's analysis), the plugin it plays, its name and its notes: drums warm, bass violet, keys
+  teal, vocals pink, effects grey, each track a shade of its family's colour so they read as one
+  and each as itself. Click a track's icon for the picker: its colour from a palette (hover to
+  try it on the track; ⌥-click, or "Shade all", colours its whole family in shades of it), and
+  its icon from 54 instruments and marks drawn for tempo, searchable, those its sound suggests
+  first. Auto goes back to what it plays saying. Regions and channel strips follow.
 - ⌘L, or the agent's mark in the top bar, opens the Agent panel beside the tracks: ask for
   anything and watch it work. Its thinking, each step (reading the song, finding samples, every
   edit, listening) and what it says show as they happen, and each edit lands in the tracks as

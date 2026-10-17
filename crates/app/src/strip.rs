@@ -1349,9 +1349,12 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
     let reduction = ws.reductions.get(&id).copied().unwrap_or(0.0);
     let header = mixer.then(|| {
         let (i, number) = match ch {
-            Channel::Track(i) => (track_icon(&project.tracks[i]), format!("{}", i + 1)),
-            Channel::Aux(i) => (Icon::Bus, format!("B{}", i + 1)),
-            Channel::Master => (Icon::Output, String::new()),
+            Channel::Track(i) => (
+                crate::looks::glyph(ws.shown(i).look.icon, 14.),
+                format!("{}", i + 1),
+            ),
+            Channel::Aux(i) => (icon(Icon::Bus, 14.), format!("B{}", i + 1)),
+            Channel::Master => (icon(Icon::Output, 14.), String::new()),
         };
         div()
             .flex_none()
@@ -1368,7 +1371,7 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                     .rounded(px(7.))
                     .bg(alpha(color, 0.14))
                     .text_color(rgb(color))
-                    .child(icon(i, 14.).text_color(rgb(color))),
+                    .child(i.text_color(rgb(color))),
             )
             .when(reduction > 0.3, |d| {
                 d.child(

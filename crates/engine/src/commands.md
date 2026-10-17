@@ -40,7 +40,9 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   audio track; `index` defaults to the end.
 - `delete_track` `{"track": 1}`
 - `set_track` `{"track": 1, "name": "Sub", "volume_db": -6, "pan": -0.3, "mute": false, "solo": false}`:
-  any of them.
+  any of them. `"color": "#d97757"` and `"icon": "808"` choose how it looks (`"auto"` for each
+  goes back to what it plays saying: drums warm, bass violet, keys teal, vocals pink, each track a
+  shade of its family). Icons: kick, snare, clap, hihat, cymbal, tom, drums, sticks, conga, shaker, tambourine, cowbell, 808, bass, synth-bass, piano, keys, organ, chords, guitar, guitar-electric, strings, harp, brass, sax, flute, synth, lead, arp, pluck, pad, bells, mallets, vocals, mic, choir, chop, fx, riser, impact, reverse, vinyl, texture, foley, audio, midi, sampler, loop, reference, click, star, heart, flame, bolt.
 - `set_instrument` `{"track": 1, "instrument": {"plugin": {"path": "…", "class": "…"}}}`
 - `set_insert` `{"channel": {"track": 1}, "index": 0, "plugin": {"format": "au", "class": "AUDelay", "uid": "aufx dely appl"}}`:
   an effect into an insert slot (`{"aux": 0}` for an aux, `"master"` for the master, after its

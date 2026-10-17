@@ -5,6 +5,7 @@ mod cli;
 mod editor;
 mod inspector;
 mod liveloops;
+mod looks;
 mod mcp;
 mod menu;
 mod mixer;

@@ -183,8 +183,10 @@ impl TextInput {
         self.replace_text_in_range(None, "", window, cx)
     }
 
-    fn mouse_down(&mut self, e: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn mouse_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        // Clicked, it takes the keyboard.
+        window.focus(&self.focus, cx);
         self.selecting = true;
         let at = self.index_at(e.position);
         match e.modifiers.shift {

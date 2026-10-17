@@ -8,7 +8,6 @@ use gpui::{
     Div, FontWeight, Hsla, PathBuilder, Pixels, Point, Svg, canvas, div, point, prelude::*, px,
     rgb, svg,
 };
-use tempo_engine::project::{Instrument, Track};
 
 // Surfaces, from the window back to the controls on it.
 pub const BG: u32 = 0x0c0c0f;
@@ -55,7 +54,6 @@ pub const VIOLET: u32 = 0xa78bfa;
 pub const PINK: u32 = 0xf472b6;
 pub const SLATE: u32 = 0x94a3b8;
 pub const TEAL: u32 = 0x2dd4bf;
-const PALETTE: [u32; 8] = [CORAL, AMBER, MINT, SKY, VIOLET, PINK, SLATE, TEAL];
 
 pub const CONTROL_BAR_H: f32 = 52.0;
 pub const STATUS_H: f32 = 24.0;
@@ -88,49 +86,6 @@ pub fn fonts() -> Vec<Cow<'static, [u8]>> {
         // Agents' logos, modisa's (see ModisaMarks.NOTICE).
         Cow::Borrowed(include_bytes!("../assets/fonts/ModisaMarks.ttf")),
     ]
-}
-
-/// A track's color: by its name where that says what it is, else the next in the palette.
-pub fn track_color(track: &Track, index: usize) -> u32 {
-    let name = track.name.to_lowercase();
-    let has = |words: &[&str]| words.iter().any(|w| name.contains(w));
-    if matches!(track.instrument, Some(Instrument::Drums))
-        || has(&["drum", "beat", "perc", "kick", "snare", "hat", "kit"])
-    {
-        CORAL
-    } else if has(&["bass", "sub"]) {
-        AMBER
-    } else if has(&["key", "piano", "rhodes", "chord", "organ", "ep"]) {
-        MINT
-    } else if has(&["lead", "melody", "arp", "pluck", "hook"]) {
-        SKY
-    } else if has(&["pad", "string", "atmos", "air", "choir"]) {
-        VIOLET
-    } else if has(&["vox", "vocal", "voice", "sing", "rap"]) {
-        PINK
-    } else if has(&["fx", "riser", "impact", "sfx", "noise", "sweep"]) {
-        SLATE
-    } else {
-        PALETTE[index % PALETTE.len()]
-    }
-}
-
-/// A track's icon, by what it plays.
-pub fn track_icon(track: &Track) -> Icon {
-    let name = track.name.to_lowercase();
-    let has = |words: &[&str]| words.iter().any(|w| name.contains(w));
-    match &track.instrument {
-        Some(Instrument::Drums) => Icon::Drum,
-        Some(i) if i.is_kit() => Icon::Drum,
-        _ if has(&["drum", "beat", "perc", "kick", "snare"]) => Icon::Drum,
-        _ if has(&["vox", "vocal", "voice", "sing"]) => Icon::Mic,
-        _ if has(&["fx", "riser", "impact", "sfx"]) => Icon::Burst,
-        None => Icon::Wave,
-        _ if has(&["bass", "sub"]) => Icon::Sine,
-        _ if has(&["key", "piano", "rhodes", "organ", "chord"]) => Icon::Keys,
-        _ if has(&["pad", "string", "atmos", "air"]) => Icon::Pad,
-        _ => Icon::Saw,
-    }
 }
 
 /// `c` lifted toward white by `t` (0 to 1): text on a tint of the same color.
@@ -171,9 +126,6 @@ pub enum Icon {
     Drum,
     Sine,
     Keys,
-    Saw,
-    Pad,
-    Mic,
     Burst,
     Wave,
     Bus,
@@ -246,11 +198,6 @@ impl Icon {
                 r##"<path d="M3 12c1.5-4.5 3-4.5 4.5 0s3 4.5 4.5 0 3-4.5 4.5 0 3 4.5 4.5 0"/>"##
             }
             Icon::Keys => r##"<path d="M4 5h16v14H4zM8.5 5v8M15.5 5v8M12 13v6"/>"##,
-            Icon::Saw => r##"<path d="M3 17L9 7v10l6-10v10l6-10"/>"##,
-            Icon::Pad => r##"<path d="M3 9.5c3-3 6-3 9 0s6 3 9 0M3 15c3-3 6-3 9 0s6 3 9 0"/>"##,
-            Icon::Mic => {
-                r##"<path d="M12 3.5a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0v-5a3 3 0 0 1 3-3zM6 11a6 6 0 0 0 12 0M12 17v3.5"/>"##
-            }
             Icon::Burst => {
                 r##"<path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/>"##
             }

@@ -197,6 +197,12 @@ pub struct Track {
     #[serde(skip)]
     pub id: u64,
     pub name: String,
+    /// Its colour, "#d97757", if one was chosen; else its family's, by what it plays (`look`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Its icon (an id from `look::ICONS`), if one was chosen; else what it plays says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// Software instrument tracks have one; audio tracks don't.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instrument: Option<Instrument>,

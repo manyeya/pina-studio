@@ -599,6 +599,8 @@ impl Workspace {
         for (i, t) in tracks.iter().enumerate() {
             let selected = i == self.track;
             let color = self.color(i);
+            let glyph = self.shown(i).look.icon;
+            let picking = self.picker.as_ref().is_some_and(|p| p.track == i);
             // The summing stack it plays into, if it's in one.
             let stack = t.output.and_then(|b| {
                 let aux = self
@@ -646,17 +648,33 @@ impl Workspace {
                     .border_b_1()
                     .border_color(rgb(LINE_SOFT))
                     .debug_selector(move || format!("header-{i}"))
+                    // Its icon, in its colour: click to choose them.
                     .child(
                         div()
-                            .size(px(30.))
+                            .id(("track-look", i))
+                            .size(px(32.))
                             .flex_none()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(8.))
-                            .bg(alpha(color, 0.14))
-                            .text_color(rgb(color))
-                            .child(icon(track_icon(t), 16.).text_color(rgb(color))),
+                            .rounded(px(9.))
+                            .bg(alpha(color, 0.15))
+                            .border_1()
+                            .border_color(alpha(color, if picking { 0.8 } else { 0.28 }))
+                            .cursor_pointer()
+                            .hover(|d| d.bg(alpha(color, 0.26)))
+                            .child(crate::looks::glyph(glyph, 17.).text_color(rgb(color)))
+                            .debug_selector(move || format!("track-look-{i}"))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    ws.select_track(i);
+                                    let at =
+                                        e.position + gpui::point(gpui::px(24.), gpui::px(-12.));
+                                    ws.open_picker(i, at, window, cx);
+                                }),
+                            ),
                     )
                     .child(
                         div()

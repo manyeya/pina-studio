@@ -74,32 +74,35 @@ actions!(
 
 /// Logic's shortcuts, where it has one. While a name is being typed the workspace's context is
 /// "Naming", so these keys type instead.
+/// The window's shortcuts. Those with no ⌘, ⌃ or ⌥ stand down while a text field has the
+/// keyboard, so typing "a" types it rather than showing automation.
 pub fn bind_keys(cx: &mut App) {
     crate::text::bind_keys(cx);
     cx.bind_keys([
-        KeyBinding::new("space", PlayStop, Some("Workspace")),
-        KeyBinding::new("enter", GoToStart, Some("Workspace")),
+        KeyBinding::new("space", PlayStop, Some("Workspace && !TextInput")),
+        KeyBinding::new("enter", GoToStart, Some("Workspace && !TextInput")),
         KeyBinding::new("cmd-z", Undo, Some("Workspace")),
         KeyBinding::new("cmd-shift-z", Redo, Some("Workspace")),
-        KeyBinding::new("backspace", Delete, Some("Workspace")),
-        KeyBinding::new("delete", Delete, Some("Workspace")),
+        KeyBinding::new("backspace", Delete, Some("Workspace && !TextInput")),
+        KeyBinding::new("delete", Delete, Some("Workspace && !TextInput")),
         KeyBinding::new("cmd-backspace", DeleteTrack, Some("Workspace")),
         KeyBinding::new("cmd-t", Split, Some("Workspace")),
         // Letters are notes while musical typing is on, so these only work in the arrangement.
-        KeyBinding::new("x", ToggleMixer, Some("Arrange")),
-        KeyBinding::new("i", ToggleInspector, Some("Arrange")),
-        KeyBinding::new("p", TogglePianoRoll, Some("Arrange")),
-        KeyBinding::new("l", ToggleLoops, Some("Arrange")),
-        KeyBinding::new("n", ToggleScore, Some("Arrange")),
-        KeyBinding::new("a", ToggleAutomation, Some("Arrange")),
-        KeyBinding::new("c", ToggleCycle, Some("Arrange")),
-        KeyBinding::new("k", ToggleMetronome, Some("Arrange")),
-        KeyBinding::new("f", ToggleSamples, Some("Arrange")),
-        KeyBinding::new("shift-f", ToggleSamplesPage, Some("Arrange")),
+        KeyBinding::new("x", ToggleMixer, Some("Arrange && !TextInput")),
+        KeyBinding::new("i", ToggleInspector, Some("Arrange && !TextInput")),
+        KeyBinding::new("p", TogglePianoRoll, Some("Arrange && !TextInput")),
+        KeyBinding::new("l", ToggleLoops, Some("Arrange && !TextInput")),
+        KeyBinding::new("n", ToggleScore, Some("Arrange && !TextInput")),
+        KeyBinding::new("a", ToggleAutomation, Some("Arrange && !TextInput")),
+        KeyBinding::new("c", ToggleCycle, Some("Arrange && !TextInput")),
+        KeyBinding::new("k", ToggleMetronome, Some("Arrange && !TextInput")),
+        KeyBinding::new("f", ToggleSamples, Some("Arrange && !TextInput")),
+        KeyBinding::new("shift-f", ToggleSamplesPage, Some("Arrange && !TextInput")),
         // In the sample browser, as Splice: the next sound plays as it's picked.
+        // Arrows walk the results while their search is typed.
         KeyBinding::new("up", PreviousSample, Some("Samples")),
         KeyBinding::new("down", NextSample, Some("Samples")),
-        KeyBinding::new("r", Record, Some("Workspace")),
+        KeyBinding::new("r", Record, Some("Workspace && !TextInput")),
         KeyBinding::new("cmd-k", ToggleTyping, Some("Workspace")),
         KeyBinding::new("cmd-l", ToggleAgent, None),
         KeyBinding::new("cmd-shift-d", CreateStack, Some("Workspace")),
@@ -505,6 +508,14 @@ pub struct Workspace {
     pub show_agent: bool,
     /// The conversation with Claude in it.
     pub chat: crate::chat::Chat,
+    /// Each track's icon and colour, as what it plays says or as chosen (`looks.rs`).
+    pub looks: Vec<crate::looks::Shown>,
+    /// The analysis of the song's audio the looks are worked out from.
+    pub heard: crate::looks::Heard,
+    /// The colour and icon picker, open on a track.
+    pub picker: Option<crate::looks::Picker>,
+    /// A colour or icon being tried on a track, under the pointer in the picker.
+    pub trying: Option<(usize, crate::looks::Trying)>,
     pub side: Side,
     pub tool: Tool,
     pub snap: Snap,
@@ -626,7 +637,7 @@ impl Workspace {
             }
         })
         .detach();
-        Workspace {
+        let mut ws = Workspace {
             session,
             player,
             focus,
@@ -691,8 +702,14 @@ impl Workspace {
             viewport_w: 1440.0,
             browser,
             chat,
+            looks: Vec::new(),
+            heard: Default::default(),
+            picker: None,
+            trying: None,
             title: String::new(),
-        }
+        };
+        ws.refresh_looks(cx);
+        ws
     }
 
     pub fn px_per_tick(&self) -> f32 {
@@ -748,11 +765,7 @@ impl Workspace {
 
     /// The color a track's regions, header and strip use.
     pub fn color(&self, track: usize) -> u32 {
-        self.session
-            .project
-            .tracks
-            .get(track)
-            .map_or(ACCENT, |t| track_color(t, track))
+        self.shown(track).color
     }
 
     /// What the engine plays: the project, or in pattern mode just the selected region, looped.
@@ -809,6 +822,7 @@ impl Workspace {
         }
         let project = self.engine_project().into_owned();
         self.status = self.player.sync(&project).err();
+        self.refresh_looks(cx);
         cx.notify();
     }
 
@@ -1682,9 +1696,9 @@ impl Workspace {
 
     /// Musical typing, as in Logic: A to K are white keys from C, W E T Y U O P the black ones;
     /// Z and X shift the octave.
-    fn type_key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
-        // Typing a search is typing, not notes.
-        if self.browser.searching {
+    fn type_key(&mut self, e: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
+        // Typing in a field (a search, a question for the agent) is typing, not notes.
+        if self.browser.searching || self.typing_in_field(window, cx) {
             return;
         }
         if self.naming.is_none() && self.menu_key(e, cx) {
@@ -2137,6 +2151,14 @@ impl Workspace {
         }
     }
 
+    /// Whether the agent's message box or the look picker's search has the keyboard.
+    fn typing_in_field(&self, window: &Window, cx: &App) -> bool {
+        let focused = |input: &Entity<crate::text::TextInput>| {
+            input.read(cx).focus_handle(cx).is_focused(window)
+        };
+        focused(&self.chat.input) || self.picker.as_ref().is_some_and(|p| focused(&p.search))
+    }
+
     /// The agent's most recent edit, while its outline still shows.
     pub fn agent_presence(&self) -> Option<&AgentEdit> {
         self.agent.last().filter(|a| a.at.elapsed() < PRESENCE)
@@ -2362,7 +2384,7 @@ impl Render for Workspace {
                 };
                 gpui::KeyContext::parse(&context).unwrap_or_default()
             })
-            .on_key_down(cx.listener(|ws, e: &KeyDownEvent, _, cx| ws.type_key(e, cx)))
+            .on_key_down(cx.listener(|ws, e: &KeyDownEvent, window, cx| ws.type_key(e, window, cx)))
             .on_key_up(cx.listener(|ws, e: &KeyUpEvent, _, cx| ws.release_key(e, cx)))
             .on_action(
                 cx.listener(|ws, _: &TogglePianoRoll, _, cx| {
@@ -2453,5 +2475,6 @@ impl Render for Workspace {
             .when(self.drag.is_some(), |d| d.child(self.drag_listener(cx)))
             .children(self.sample_ghost())
             .children(self.menu_view(cx))
+            .children(self.picker_view(cx))
     }
 }

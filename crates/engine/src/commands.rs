@@ -49,6 +49,12 @@ pub enum Command {
         track: usize,
         #[serde(default)]
         name: Option<String>,
+        /// "#d97757", or "auto": its family's, by what it plays.
+        #[serde(default)]
+        color: Option<String>,
+        /// An icon's id (`look::ICONS`), or "auto": what it plays says.
+        #[serde(default)]
+        icon: Option<String>,
         #[serde(default)]
         volume_db: Option<f32>,
         #[serde(default)]
@@ -701,6 +707,8 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         Command::SetTrack {
             track: t,
             name,
+            color,
+            icon,
             volume_db,
             pan,
             mute,
@@ -709,6 +717,23 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             let t = track(p, t)?;
             if let Some(v) = name {
                 t.name = v;
+            }
+            if let Some(v) = color {
+                t.color = match v.as_str() {
+                    "auto" => None,
+                    c if crate::look::parse_color(c).is_some() => Some(c.to_lowercase()),
+                    c => return Err(format!("color: {c:?} isn't \"#rrggbb\" or \"auto\"")),
+                };
+            }
+            if let Some(v) = icon {
+                t.icon = match v.as_str() {
+                    "auto" => None,
+                    i if crate::look::icon(i).is_some() => Some(i.to_string()),
+                    i => {
+                        let ids: Vec<&str> = crate::look::ICONS.iter().map(|i| i.id).collect();
+                        return Err(format!("icon: no icon {i:?}; there are {}", ids.join(", ")));
+                    }
+                };
             }
             if let Some(v) = volume_db {
                 t.volume_db = finite("volume_db", v)?;

@@ -2092,3 +2092,56 @@ fn an_agent_that_isnt_signed_in_says_how_rather_than_starting(cx: &mut TestAppCo
         );
     });
 }
+
+#[gpui::test]
+fn the_agent_panel_takes_typing_spaces_and_all(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-l");
+    cx.run_until_parked();
+    assert!(ws.read_with(cx, |ws, _| ws.show_agent));
+    // Clicked, the message box takes the keyboard; a space is a space, not play.
+    let input = ws.read_with(cx, |ws, _| ws.chat.input.clone());
+    let at = cx
+        .debug_bounds("agent-input")
+        .expect("the message box is drawn")
+        .center();
+    cx.simulate_click(at, Modifiers::none());
+    cx.simulate_input("make it 101");
+    cx.run_until_parked();
+    assert_eq!(
+        input.read_with(cx, |i, _| i.text().to_string()),
+        "make it 101"
+    );
+    assert!(!ws.read_with(cx, |ws, _| ws.player.playing()));
+}
+
+#[gpui::test]
+fn a_tracks_icon_opens_a_picker_for_its_colour_and_icon(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let tile = cx
+        .debug_bounds("track-look-2")
+        .expect("track 3's icon")
+        .center();
+    cx.simulate_click(tile, Modifiers::none());
+    cx.run_until_parked();
+    assert!(ws.read_with(cx, |ws, _| ws.picker.as_ref().is_some_and(|p| p.track == 2)));
+    // The demo's Drums track is drums, by its name.
+    let before = ws.read_with(cx, |ws, _| ws.shown(2));
+    assert_eq!(before.look.family, tempo_engine::look::Family::Drums);
+    // A swatch colours it, an icon marks it: each one edit, undone in turn.
+    let swatch = cx.debug_bounds("swatch-1-9").unwrap().center();
+    cx.simulate_click(swatch, Modifiers::none());
+    let icon = cx.debug_bounds("icon-808").unwrap().center();
+    cx.simulate_click(icon, Modifiers::none());
+    cx.run_until_parked();
+    let t = ws.read_with(cx, |ws, _| ws.session.project.tracks[2].clone());
+    assert!(t.color.is_some());
+    assert_eq!(t.icon.as_deref(), Some("808"));
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.shown(2).look.family),
+        tempo_engine::look::Family::Bass
+    );
+    cx.simulate_keystrokes("cmd-z cmd-z");
+    cx.run_until_parked();
+    assert_eq!(ws.read_with(cx, |ws, _| ws.shown(2)), before);
+}

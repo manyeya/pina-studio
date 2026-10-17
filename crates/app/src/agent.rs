@@ -345,6 +345,16 @@ impl Drop for Agent {
     }
 }
 
+/// Where an agent runs: the song's folder, or, for a song not saved yet (its folder isn't made
+/// until it is), the nearest folder that is.
+fn workdir(project: &Path) -> PathBuf {
+    project
+        .ancestors()
+        .find(|d| d.is_dir())
+        .unwrap_or(Path::new("/"))
+        .to_path_buf()
+}
+
 /// Claude Code with tempo's tools and nothing else: no shell, no files, no one else's MCP servers
 /// or hooks; anything else asked for is refused, not asked about.
 fn claude_command(cmd: &Path, project: &Path) -> Result<Child, String> {
@@ -362,13 +372,13 @@ fn claude_command(cmd: &Path, project: &Path) -> Result<Child, String> {
         .args(["--tools", "", "--allowedTools", "mcp__tempo"])
         .args(["--permission-prompts", "none", "--setting-sources", ""])
         .args(["--append-system-prompt", &instructions(project)])
-        .current_dir(project)
+        .current_dir(workdir(project))
         .env_remove("CLAUDECODE")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("{}: {e}", cmd.display()))
+        .map_err(|e| format!("Couldn't start {}: {e}", cmd.display()))
 }
 
 /// `codex exec`, resuming the conversation after its first question: tempo's MCP server in place
@@ -401,12 +411,12 @@ fn codex_command(
         c.arg(id);
     }
     c.arg(text)
-        .current_dir(project)
+        .current_dir(workdir(project))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("{}: {e}", cmd.display()))
+        .map_err(|e| format!("Couldn't start {}: {e}", cmd.display()))
 }
 
 /// `tempo ask`: an agent does what's asked to the song, saying what it's doing as it goes. The app
@@ -896,6 +906,13 @@ mod tests {
         );
         let (e, _) = codex(r#"{"type":"turn.failed","error":{"message":"401 Unauthorized"}}"#);
         assert!(matches!(&e[0], Event::Done { error: Some(m), .. } if m == "401 Unauthorized"));
+    }
+
+    #[test]
+    fn a_song_not_saved_yet_runs_in_the_nearest_folder_there_is() {
+        let tmp = std::env::temp_dir();
+        assert_eq!(workdir(&tmp.join("tempo-not-made-yet/Untitled")), tmp);
+        assert_eq!(workdir(&tmp), tmp);
     }
 
     #[test]
