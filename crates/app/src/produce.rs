@@ -1008,7 +1008,9 @@ pub fn master(dir: &Path, lufs: Option<f32>) -> Result<Value, String> {
 }
 
 /// How an agent makes a song that sounds finished, with these tools.
-pub const WORKFLOW: &str = "1. playbook <genre>, then set_genre, set_tempo and set_key from it. \
+pub const WORKFLOW: &str = "0. Asked for a song like an existing one: study <file> with playbook true, \
+and use the playbook it saves as the genre. \
+1. playbook <genre>, then set_genre, set_tempo and set_key from it. \
 2. Chords first: theory for progressions, set_chords. \
 3. A loop of 4-8 bars: tracks for its parts; sounds <role> for each (any installed instrument's \
 presets, or samples) instead of the sine synth or built-in kit; write_drums, write_bass (style kick for an \

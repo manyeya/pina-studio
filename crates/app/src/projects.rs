@@ -637,6 +637,7 @@ impl Workspace {
         let mut items = vec![
             ("New Song…    ⌘N".to_string(), MenuAction::NewSong),
             ("Songs…    ⌘O".to_string(), MenuAction::ShowSongs),
+            ("Study a Song…".to_string(), MenuAction::Study),
         ];
         let others: Vec<&Song> = self.songs.iter().filter(|s| s.dir != dir).take(5).collect();
         if !others.is_empty() {

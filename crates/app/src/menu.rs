@@ -91,6 +91,8 @@ pub enum MenuAction {
     Genre(Option<String>),
     /// The Playbooks page, on a genre.
     Playbooks(Option<String>),
+    /// The Song Study page.
+    Study,
     Instrument {
         track: usize,
         instrument: Instrument,
@@ -208,6 +210,7 @@ impl Workspace {
                 self.edit(cx, |ws| ws.session.project.genre = genre);
             }
             MenuAction::Playbooks(id) => self.open_genres(id.as_deref(), cx),
+            MenuAction::Study => self.open_study(cx),
             MenuAction::NewSongKey(key) => {
                 if let Some(s) = self.new_song.as_mut() {
                     s.key = key.as_deref().and_then(tempo_engine::music::Key::parse);

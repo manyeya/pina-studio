@@ -2778,3 +2778,115 @@ fn the_composer_wraps_and_grows_as_its_written_in(cx: &mut TestAppContext) {
     assert!(most <= empty + 19.0 * 8.0, "{most}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[gpui::test]
+fn a_song_studied_shows_its_form_and_becomes_the_mix_reference(cx: &mut TestAppContext) {
+    // Studies of the test's own, never the person's.
+    let dir = std::env::temp_dir().join(format!("tempo-test-studies-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    unsafe { std::env::set_var("TEMPO_STUDIES", &dir) };
+    // Ten seconds at 120 BPM: a kick on every beat over an A minor chord.
+    let rate = 44_100u32;
+    let l: Vec<f32> = (0..rate as usize * 10)
+        .map(|i| {
+            let t = i as f32 / rate as f32;
+            let beat = t % 0.5;
+            let chord: f32 = [220.0f32, 261.63, 329.63]
+                .iter()
+                .map(|f| (std::f32::consts::TAU * f * t).sin())
+                .sum();
+            0.12 * chord + 0.6 * (-beat * 30.0).exp() * (std::f32::consts::TAU * 55.0 * beat).sin()
+        })
+        .collect();
+    let song = dir.join("Someone - A Test.wav");
+    tempo_engine::analysis::write_wav(&song, &l, &l, rate).unwrap();
+    let studied = crate::study_cli::study(&song, false).unwrap();
+    assert_eq!(studied.identity.title, "A Test");
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| ws.open_study(cx));
+    cx.run_until_parked();
+    assert!(ws.read_with(cx, |ws, _| ws.view == View::Study
+        && ws.studies.open.as_ref() == Some(&song)));
+    assert!(cx.debug_bounds("study-title").is_some());
+    // A section picked opens up.
+    click_on(cx, "study-section-0", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.studies.section), Some(0));
+    assert!(cx.debug_bounds("study-section-detail").is_some());
+    // Its mix becomes this song's reference.
+    click_on(cx, "study-reference", Modifiers::none(), MouseButton::Left);
+    let reference = ws
+        .read_with(cx, |ws, _| ws.session.project.reference.clone())
+        .unwrap();
+    assert_eq!(reference.file, song);
+    assert!((reference.lufs - studied.mix.overall.lufs).abs() < 0.01);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Pages drawn to PNGs, to look at without a window on screen:
+/// `TEMPO_SHOT=<dir> TEMPO_SHOT_PAGE=study cargo test -p tempo shots -- --ignored`. The Song
+/// Study page shows the studies kept on this Mac, the first or the one whose file name has
+/// `TEMPO_SHOT_SONG` in it.
+#[test]
+#[ignore]
+fn shots() {
+    let out =
+        PathBuf::from(std::env::var("TEMPO_SHOT").expect("TEMPO_SHOT: a folder for the PNGs"));
+    std::fs::create_dir_all(&out).unwrap();
+    let page = std::env::var("TEMPO_SHOT_PAGE").unwrap_or_else(|_| "study".into());
+    let tall: f32 = std::env::var("TEMPO_SHOT_H")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(900.0);
+    let mut cx = gpui::HeadlessAppContext::with_platform(
+        std::sync::Arc::new(gpui_apple::AppleTextSystem::new()),
+        std::sync::Arc::new(()),
+        || {
+            Ok(Some(Box::new(
+                gpui_apple::metal_renderer::MetalHeadlessRenderer::new(),
+            )))
+        },
+    );
+    cx.update(|cx| {
+        cx.text_system().add_fonts(crate::theme::fonts()).unwrap();
+        bind_keys(cx);
+    });
+    let session = Session::open(&demo()).unwrap();
+    let player = Player::silent(&session.project, &session.dir);
+    let window = cx
+        .open_window(gpui::size(px(1440.), px(tall)), |window, cx| {
+            gpui::AppContext::new(cx, |cx| Workspace::new(session, player, window, cx))
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let song = std::env::var("TEMPO_SHOT_SONG").ok();
+    cx.update(|cx| {
+        window
+            .update(cx, |ws, _, cx| match page.as_str() {
+                "study" => {
+                    ws.open_study(cx);
+                    if let Some(want) = &song {
+                        ws.studies.open = ws
+                            .studies
+                            .list
+                            .iter()
+                            .find(|s| s.file.to_string_lossy().contains(want.as_str()))
+                            .map(|s| s.file.clone());
+                    }
+                }
+                "study-empty" => {
+                    ws.open_study(cx);
+                    ws.studies.list.clear();
+                    ws.studies.open = None;
+                }
+                "playbooks" => ws.open_genres(None, cx),
+                _ => {}
+            })
+            .unwrap()
+    });
+    cx.run_until_parked();
+    let image = cx.capture_screenshot(window.into()).unwrap();
+    let file = out.join(format!("{page}.png"));
+    image.save(&file).unwrap();
+    println!("{}", file.display());
+}

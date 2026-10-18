@@ -21,6 +21,8 @@ mod score;
 mod server;
 mod steps;
 mod strip;
+mod study;
+mod study_cli;
 mod takes;
 #[cfg(test)]
 mod tests;
@@ -82,6 +84,11 @@ const USAGE: &str = "usage:
   tempo critique <project> [--quick] [--bars 9-16]
                                    a producer's notes on the song, worst first, each with
                                    the command that fixes it; --quick skips the render
+  tempo study <file> [--summary] [--playbook] [--offline]
+                                   everything about a song: its tempo, key, chords, form,
+                                   groove, what plays, its mix, the genres it's nearest, and
+                                   (online) its lyrics, year and genre; --playbook makes a
+                                   playbook from it to write songs like it
   tempo playbook [genre]           what a genre is: tempo, swing, parts and their sounds,
                                    sections, progressions, mix targets
   tempo playbook --edit [genre]    open the playbooks (JSON, one a genre) to edit or add to
@@ -171,6 +178,23 @@ fn main() {
                     None => Err(USAGE.to_string()),
                 },
                 None => print(produce::critique(p(dir), quick, None)),
+            }
+        }
+        ["study", file, rest @ ..] => {
+            let online = !rest.contains(&"--offline");
+            match study_cli::study(p(file), online) {
+                Err(e) => Err(e),
+                Ok(s) if rest.contains(&"--summary") => {
+                    println!("{}", study_cli::summary(&s));
+                    Ok(())
+                }
+                Ok(s) if rest.contains(&"--playbook") => {
+                    let taken = tempo_engine::playbook::ids();
+                    let book = tempo_engine::study::to_playbook(&s, &taken);
+                    tempo_engine::playbook::save(&book)
+                        .map(|f| println!("{} ({}): {}", book.name, book.id, f.display()))
+                }
+                Ok(s) => print(Ok(study_cli::for_agent(&s))),
             }
         }
         ["playbook"] => print(produce::playbook(None)),
@@ -308,6 +332,7 @@ fn open(dir: &Path) -> Result<(), String> {
                 MenuItem::action("New Song…", NewSong),
                 MenuItem::action("Songs…", ShowSongs),
                 MenuItem::action("Genre Playbooks…", EditPlaybooks),
+                MenuItem::action("Study a Song…", StudySong),
                 MenuItem::separator(),
                 MenuItem::action("Save", Save),
                 MenuItem::action("Export to WAV", Export),

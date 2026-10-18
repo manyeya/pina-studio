@@ -21,11 +21,17 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   into a song, copied bars, transitions with their sounds synthesized), `playbook.rs` (genres:
   tempo, swing, parts, sounds, sections, mix targets measured from released songs) and
   `critique.rs` (a producer's notes, from the notes and from a render).
+- `crates/engine` also takes finished songs apart (`study/`): frames of onsets, pitch classes
+  and timbre (`features.rs`), tempo and beats (`beats.rs`), key and chords (`harmony.rs`),
+  sections and their names (`form.rs`), the drums' groove (`groove.rs`) and lyrics' rhymes,
+  syllables and hooks (`words.rs`); `examples/study_eval.rs` measures its tempo and key against
+  labelled loops.
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
   `topbar.rs` (transport and display), `inspector.rs` (the side panel: inspector and browser),
   `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`)
   and `producer.rs` (its song strip, producer's path, critic, undo for a turn and selection),
-  `genres.rs` (the Playbooks page, where genres are read and changed),
+  `genres.rs` (the Playbooks page, where genres are read and changed), `study.rs` (the Song
+  Study page) with `study_cli.rs` (studies kept, and lyrics, year and genre looked up),
   `looks.rs` (track colours and icons, and their picker), `catalog.rs` (the Browser),
   `projects.rs` (songs: the Songs page, the new-song sheet, opening another in the window),
   `tracks.rs` (tools, markers, ruler, headers, regions, automation), `editor.rs` (the
@@ -303,6 +309,30 @@ agent can send, with examples. An agent can:
     and limits the master to the genre's loudness (or a reference's: `tempo reference <file>
     <project>`), measuring until it's there.
   - `tempo analyze` and `tempo render` take `--bars 9-16` to hear part of a song.
+  - `tempo study <file> [--summary] [--playbook] [--offline]`: a finished song taken apart from
+    its audio. Its identity (tags, else its file name; online, its year and genre from
+    MusicBrainz), tempo, meter, key (and tuning, and sections in another key), chords beat by
+    beat with numerals, its form (intro, verses, pre-chorus, choruses, bridge, outro, found from
+    what repeats and named by it, with bars, energy, loudness and the chord loop each goes round;
+    a song that never repeats is named by its energy: build, drop, breakdown), its groove (kick,
+    snare and hats on a sixteen-step bar, swing, syncopation, the nearest of tempo's grooves),
+    what plays in it, its mix and dynamics overall and section by section, the playbooks it's
+    nearest, and its lyrics from LRCLIB (timed into their sections where they can be), with each
+    line's rhyme and syllables, the rhyme schemes, the hooks, who sings to whom and the words it
+    keeps coming back to. Only its title, artist and length are sent anywhere; never its audio.
+    Studies are kept in `~/Library/Caches/tempo/studies/`. `--playbook` saves a playbook made from
+    it, to write songs like it; agents have it as the `study` tool, and read its theme, story and
+    imagery from the lyrics themselves.
+
+The Song Study page (File ▸ Study a Song…, or the song menu) shows a study: the song's name and
+vitals over its shape (a stroke a bar, as loud as it is, coloured by section), its form (a block a
+section, the same colour for the same music, each opened up to its chords, numerals, parts and
+lines), its harmony on the circle of fifths, its groove as steps, its parts and where they play,
+its loudness, spectrum (against its nearest genre's target) and dynamics, its lyrics with their
+rhymes and hooks, and its nearest playbooks. Drop a song on the page, or click, to study one. From
+a study: Start a song like this (a new song at its tempo, key and meter, its playbook as the genre
+and its mix as the reference), Save as playbook, Mix reference (this song's), and Ask the agent
+what it means (its theme and message, metaphors and imagery, and why it works).
 
 The Agent panel is a producer's desk as well as a conversation: under its header the song at a
 glance (its genre, picked from the playbooks, its key, tempo and length); a new conversation

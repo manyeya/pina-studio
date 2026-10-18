@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-#[derive(Serialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct Analysis {
     pub seconds: f64,
     /// Per channel, left and right, in dBFS.
@@ -27,7 +27,7 @@ pub struct Analysis {
     pub notes: Notes,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct Spectrum {
     /// Under 60 Hz: sub, an 808's weight.
     pub sub: f32,
@@ -43,7 +43,7 @@ pub struct Spectrum {
     pub air: f32,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct Stereo {
     /// 1 is mono, 0 unrelated sides, below 0 sides that cancel when summed to mono.
     pub correlation: f32,
@@ -51,7 +51,7 @@ pub struct Stereo {
     pub width_db: f32,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct Notes {
     pub classes: [(String, f32); 12],
     /// Like "C minor"; empty when there's nothing tonal to go on.
@@ -60,7 +60,7 @@ pub struct Notes {
     pub key_fit: f32,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct Bands {
     pub low: f32,
     pub mid: f32,

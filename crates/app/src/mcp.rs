@@ -86,6 +86,19 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "study",
+            "description": "Studies an existing song from its audio file (WAV, AIFF, FLAC, MP3): who it is (tags; online, its year and genre), its tempo and bars, key (and changes), chords beat by beat with numerals, its form (intro, verse, pre-chorus, chorus, bridge, outro, each with its bars, energy, loudness and the chord loop it goes round), its groove (kick, snare and hats on a 16-step grid, swing, syncopation, nearest tempo groove), what plays in it (with confidence), its mix and dynamics overall and by section, the playbook genres it's nearest, and (online, from LRCLIB) its lyrics: each line in its section, rhyme schemes, syllables, hooks, point of view and recurring words. Interpret its theme, story and imagery from the lyrics yourself. `playbook: true` also saves a playbook made from it, to write songs like it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "file": { "type": "string" },
+                    "online": { "type": "boolean", "description": "Look up its lyrics, year and genre by its title and artist (default true; no audio leaves the Mac)." },
+                    "playbook": { "type": "boolean" }
+                },
+                "required": ["file"]
+            }
+        },
+        {
             "name": "playbook",
             "description": "What a genre is: tempo range, swing, key, its parts with the sounds they take and how to write them, its sections (bars, parts, energy), progressions, mix targets (LUFS and spectrum) and what makes it sound right or amateur, with the workflow. Without `genre`, the genres there are. Playbooks are the person's JSON files (`edit` says where): follow them as written.",
             "inputSchema": { "type": "object", "properties": { "genre": { "type": "string" } } }
@@ -301,6 +314,23 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
             args.get("quick").and_then(Value::as_bool).unwrap_or(false),
             bar_range(args)?,
         ),
+        "study" => {
+            let s = crate::study_cli::study(
+                &path(args, "file")?,
+                args.get("online").and_then(Value::as_bool).unwrap_or(true),
+            )?;
+            let mut out = crate::study_cli::for_agent(&s);
+            if args
+                .get("playbook")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                let book = tempo_engine::study::to_playbook(&s, &tempo_engine::playbook::ids());
+                let file = tempo_engine::playbook::save(&book)?;
+                out["playbook"] = json!({ "id": book.id, "name": book.name, "file": file });
+            }
+            Ok(out)
+        }
         "playbook" => produce::playbook(text(args, "genre")),
         "theory" => produce::theory(
             text(args, "key").ok_or("`key` is required")?,
@@ -527,6 +557,7 @@ mod tests {
                 "analyze",
                 "render",
                 "critique",
+                "study",
                 "playbook",
                 "theory",
                 "reference",

@@ -25,7 +25,7 @@ const ROLES: [&str; 11] = [
 ];
 
 /// What the spectrum's six bands are called.
-const BANDS: [(&str, &str); 6] = [
+pub(crate) const BANDS: [(&str, &str); 6] = [
     ("Sub", "< 60"),
     ("Bass", "60–250"),
     ("Low mid", "250–1k"),
@@ -35,7 +35,7 @@ const BANDS: [(&str, &str); 6] = [
 ];
 
 /// The floor of the spectrum editor, dB of the total.
-const FLOOR: f32 = -32.0;
+pub(crate) const FLOOR: f32 = -32.0;
 
 /// A genre's color: tempo's have their own, the person's one from the palette by name.
 pub fn genre_color(id: &str) -> u32 {
@@ -68,7 +68,7 @@ pub fn genre_color(id: &str) -> u32 {
 }
 
 /// A part's color, the same everywhere on the page.
-fn role_color(role: &str) -> u32 {
+pub(crate) fn role_color(role: &str) -> u32 {
     match role {
         "drums" => CORAL,
         "perc" => AMBER,
@@ -1779,7 +1779,7 @@ impl Workspace {
 }
 
 /// A section's heading: its title, what it's for, and room for a button on the right.
-fn heading(title: &'static str, about: &'static str) -> Div {
+pub(crate) fn heading(title: &'static str, about: &'static str) -> Div {
     div().flex().items_end().gap(px(12.)).child(
         div()
             .flex_1()
@@ -1802,7 +1802,7 @@ fn heading(title: &'static str, about: &'static str) -> Div {
 }
 
 /// A card holding one setting.
-fn tile(title: &'static str, about: &'static str) -> Div {
+pub(crate) fn tile(title: &'static str, about: &'static str) -> Div {
     div()
         .min_w(px(200.))
         .p(px(14.))
@@ -1834,7 +1834,7 @@ fn tile(title: &'static str, about: &'static str) -> Div {
         )
 }
 
-fn label(text: &'static str) -> Div {
+pub(crate) fn label(text: &'static str) -> Div {
     div()
         .text_size(px(10.5))
         .font_weight(FontWeight::SEMIBOLD)
@@ -1858,7 +1858,7 @@ fn field_box(f: Option<Entity<TextInput>>, sel: &'static str) -> Div {
         .when_some(f, |d, f| d.child(f))
 }
 
-fn capital(s: &str) -> String {
+pub(crate) fn capital(s: &str) -> String {
     let mut c = s.chars();
     c.next()
         .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
@@ -1888,7 +1888,7 @@ fn ribbon(sections: &[Section], color: u32, w: f32, h: f32) -> Div {
 }
 
 /// Swing as eight steps: every second one late by it.
-fn swing_dots(swing: f32, color: u32) -> Div {
+pub(crate) fn swing_dots(swing: f32, color: u32) -> Div {
     let late = (swing - 50.0) / 50.0;
     div()
         .relative()

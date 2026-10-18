@@ -45,6 +45,7 @@ actions!(
         NewSong,
         ShowSongs,
         EditPlaybooks,
+        StudySong,
         BrowserUp,
         BrowserDown,
         BrowserNewTrack,
@@ -345,6 +346,8 @@ pub enum View {
     Songs,
     /// The genres' playbooks, to read and change.
     Playbooks,
+    /// Songs taken apart.
+    Study,
 }
 
 /// What a name being typed is for.
@@ -538,6 +541,8 @@ pub struct Workspace {
     pub songs: Vec<crate::projects::Song>,
     /// The Playbooks page's genres, and the one being edited.
     pub genres: crate::genres::Genres,
+    /// The Song Study page's songs, and the one shown.
+    pub studies: crate::study::Studies,
     /// How many times the song has changed, for what's worked out from it (the critic).
     pub edits: u64,
     /// A song to open, once the next frame has the window to ask about saving with.
@@ -754,6 +759,7 @@ impl Workspace {
             catalog,
             songs: Vec::new(),
             genres: Default::default(),
+            studies: Default::default(),
             edits: 0,
             opening: None,
             song_pending: None,
@@ -2603,6 +2609,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &NewSong, window, cx| ws.new_song_sheet(window, cx)))
             .on_action(cx.listener(|ws, _: &ShowSongs, _, cx| ws.toggle_songs(cx)))
             .on_action(cx.listener(|ws, _: &EditPlaybooks, _, cx| ws.open_genres(None, cx)))
+            .on_action(cx.listener(|ws, _: &StudySong, _, cx| ws.open_study(cx)))
             .on_action(cx.listener(|ws, _: &BrowserUp, _, cx| ws.move_picked(-1, cx)))
             .on_action(cx.listener(|ws, _: &BrowserDown, _, cx| ws.move_picked(1, cx)))
             .on_action(cx.listener(|ws, _: &BrowserNewTrack, _, cx| ws.use_picked(true, cx)))
@@ -2624,6 +2631,7 @@ impl Render for Workspace {
                     .when(self.view == View::Playbooks, |d| {
                         d.child(self.genres_page(cx))
                     })
+                    .when(self.view == View::Study, |d| d.child(self.study_page(cx)))
                     .when(self.view == View::Arrange, |d| {
                         d.when(self.show_inspector, |d| d.child(self.inspector(cx)))
                             .child(

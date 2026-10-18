@@ -21,5 +21,6 @@ pub mod samples;
 pub mod scan;
 pub mod session;
 pub mod stretch;
+pub mod study;
 pub mod synth;
 pub mod theory;

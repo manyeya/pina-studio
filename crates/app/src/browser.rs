@@ -1363,6 +1363,13 @@ impl Workspace {
             cx.notify();
             return;
         }
+        // On the Song Study page, a song dropped is studied.
+        if self.view == View::Study {
+            for file in audio {
+                self.study_file(file.clone(), cx);
+            }
+            return;
+        }
         let n = self.session.project.tracks.len();
         let (mut track, tick, mut new) = match self.drop_target(at) {
             Some(Drop::Audio(t, tick)) => (Some(t), tick, t + 1),
