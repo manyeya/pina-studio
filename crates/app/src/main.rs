@@ -4,6 +4,7 @@ mod catalog;
 mod chat;
 mod cli;
 mod editor;
+mod genres;
 mod inspector;
 mod liveloops;
 mod looks;
@@ -12,6 +13,7 @@ mod menu;
 mod mixer;
 mod pianoroll;
 mod produce;
+mod producer;
 mod projects;
 mod record;
 mod samples_cli;
@@ -305,7 +307,7 @@ fn open(dir: &Path) -> Result<(), String> {
             Menu::new("File").items([
                 MenuItem::action("New Song…", NewSong),
                 MenuItem::action("Songs…", ShowSongs),
-                MenuItem::action("Edit Genre Playbooks…", EditPlaybooks),
+                MenuItem::action("Genre Playbooks…", EditPlaybooks),
                 MenuItem::separator(),
                 MenuItem::action("Save", Save),
                 MenuItem::action("Export to WAV", Export),

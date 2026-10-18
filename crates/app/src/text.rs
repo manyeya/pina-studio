@@ -7,10 +7,10 @@ use std::ops::Range;
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
-    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
-    ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div,
-    fill, point, prelude::*, px, relative, rgb, size,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, FontWeight, GlobalElementId,
+    KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    Pixels, Point, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle,
+    Window, actions, div, fill, point, prelude::*, px, relative, rgb, size,
 };
 
 use crate::theme::*;
@@ -80,6 +80,8 @@ pub struct TextInput {
     /// Losing focus confirms it, as naming a track does; a search, a message to an agent or a
     /// form's field wait for Enter.
     confirm_on_blur: bool,
+    /// Its type: size, line height and weight; 12 on 16, regular, by default.
+    type_: Option<(f32, f32, FontWeight)>,
 }
 
 impl EventEmitter<TextEvent> for TextInput {}
@@ -99,7 +101,14 @@ impl TextInput {
             done: false,
             search: None,
             confirm_on_blur: true,
+            type_: None,
         }
+    }
+
+    /// The same, in a larger (or bolder) type: a title edited in place.
+    pub fn typed(mut self, size: f32, line: f32, weight: FontWeight) -> Self {
+        self.type_ = Some((size, line, weight));
+        self
     }
 
     /// An empty search field, saying what to type in it.
@@ -116,6 +125,17 @@ impl TextInput {
         TextInput {
             search: Some("".into()),
             confirm_on_blur: false,
+            ..TextInput::new(text, cx)
+        }
+    }
+
+    /// A form's field that keeps itself: Enter or a click elsewhere confirms it, every time,
+    /// and `placeholder` shows while it's empty.
+    pub fn form(text: &str, placeholder: &str, cx: &mut Context<Self>) -> Self {
+        TextInput {
+            search: Some(placeholder.to_string().into()),
+            confirm_on_blur: true,
+            selected: text.len()..text.len(),
             ..TextInput::new(text, cx)
         }
     }
@@ -622,8 +642,9 @@ impl Render for TextInput {
             .key_context("TextInput")
             .track_focus(&self.focus)
             .cursor(CursorStyle::IBeam)
-            .text_size(px(12.))
-            .line_height(px(16.))
+            .text_size(px(self.type_.map_or(12., |t| t.0)))
+            .line_height(px(self.type_.map_or(16., |t| t.1)))
+            .when_some(self.type_, |d, t| d.font_weight(t.2).h(px(t.1)))
             .text_color(rgb(TEXT))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))

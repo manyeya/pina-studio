@@ -191,6 +191,85 @@ fn check(p: &Playbook) -> Result<(), String> {
     Ok(())
 }
 
+/// Where a playbook comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// tempo's, as it ships.
+    Tempo,
+    /// tempo's, changed by the person.
+    Edited,
+    /// The person's own genre.
+    Yours,
+}
+
+/// tempo's own playbook for `id`, as it ships.
+pub fn builtin(id: &str) -> Option<Playbook> {
+    BUILT_IN
+        .iter()
+        .find(|(b, _)| *b == id)
+        .and_then(|(_, json)| serde_json::from_str(json).ok())
+}
+
+pub fn origin(p: &Playbook) -> Origin {
+    match builtin(&p.id) {
+        None => Origin::Yours,
+        Some(b) if b == *p => Origin::Tempo,
+        Some(_) => Origin::Edited,
+    }
+}
+
+/// Writes a playbook to the person's folder, as `<id>.json`, whole or not at all.
+pub fn save(p: &Playbook) -> Result<PathBuf, String> {
+    check(p)?;
+    let dir = dir().ok_or("no playbooks folder")?;
+    save_in(&dir, p)
+}
+
+fn save_in(dir: &Path, p: &Playbook) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let file = dir.join(format!("{}.json", p.id));
+    let part = file.with_extension("json.part");
+    let json = serde_json::to_string_pretty(p).map_err(|e| e.to_string())? + "\n";
+    std::fs::write(&part, json).map_err(|e| e.to_string())?;
+    std::fs::rename(&part, &file).map_err(|e| e.to_string())?;
+    Ok(file)
+}
+
+/// Takes the person's playbook for `id` away: tempo's own comes back, or a genre of theirs is
+/// gone.
+pub fn remove(id: &str) -> Result<(), String> {
+    let dir = dir().ok_or("no playbooks folder")?;
+    match std::fs::remove_file(dir.join(format!("{id}.json"))) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+        _ => Ok(()),
+    }
+}
+
+/// An id for a new genre called `name`: its words joined, kept clear of the ones there are.
+pub fn new_id(name: &str, taken: &[String]) -> String {
+    let base: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect::<String>()
+        .split('_')
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    let base = if base.is_empty() {
+        "genre".to_string()
+    } else {
+        base
+    };
+    let mut id = base.clone();
+    let mut n = 2;
+    while taken.contains(&id) {
+        id = format!("{base}_{n}");
+        n += 1;
+    }
+    id
+}
+
 /// The playbook for a genre's id or name ("lo-fi", "UK drill"), the nearest it knows.
 pub fn find(genre: &str) -> Option<Playbook> {
     find_in(load().0, genre)
@@ -258,6 +337,29 @@ mod tests {
         assert_eq!(find("Lo-Fi").unwrap().id, "lofi");
         assert_eq!(find("UK drill").unwrap().id, "drill");
         assert!(find("polka").is_none());
+    }
+
+    #[test]
+    fn playbooks_know_where_they_come_from_and_save_whole() {
+        let trap = builtin("trap").unwrap();
+        assert_eq!(origin(&trap), Origin::Tempo);
+        let mut edited = trap.clone();
+        edited.swing = 56.0;
+        assert_eq!(origin(&edited), Origin::Edited);
+        let mine = Playbook {
+            id: "gqom".into(),
+            ..trap.clone()
+        };
+        assert_eq!(origin(&mine), Origin::Yours);
+        let taken = vec!["trap".to_string(), "dark_trap".to_string()];
+        assert_eq!(new_id("Dark Trap!", &taken), "dark_trap_2");
+        assert_eq!(new_id("Gqom", &taken), "gqom");
+        let dir = std::env::temp_dir().join(format!("tempo-playbook-save-{}", std::process::id()));
+        let file = save_in(&dir, &edited).unwrap();
+        let back: Playbook =
+            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(back, edited);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

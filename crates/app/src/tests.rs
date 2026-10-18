@@ -40,6 +40,9 @@ fn open_at<'a>(
     dir: &Path,
 ) -> (Entity<Workspace>, &'a mut VisualTestContext) {
     cx.update(bind_keys);
+    // Playbooks of the tests' own: never the person's.
+    let books = std::env::temp_dir().join(format!("tempo-test-books-{}", std::process::id()));
+    unsafe { std::env::set_var("TEMPO_PLAYBOOKS", &books) };
     let session = Session::open(dir).unwrap();
     let player = Player::silent(&session.project, &session.dir);
     let (ws, cx) = cx.add_window_view(|window, cx| Workspace::new(session, player, window, cx));
@@ -2532,5 +2535,204 @@ fn the_browser_names_new_tracks_and_puts_effects_on_them(cx: &mut TestAppContext
         (tr.instrument.is_none(), tr.eq.is_some())
     });
     assert!(audio && has_eq);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn playbook_parts_are_added_edited_and_removed(cx: &mut TestAppContext) {
+    // `open_at` gives the tests a playbooks folder of their own.
+    let books = std::env::temp_dir().join(format!("tempo-test-books-{}", std::process::id()));
+    let dir = demo_copy("playbook-parts");
+    let (ws, cx) = open_at(cx, &dir);
+    // Tall enough to show the whole page.
+    cx.simulate_resize(gpui::size(px(1600.), px(3400.)));
+    ws.update(cx, |ws, cx| ws.open_genres(Some("lofi"), cx));
+    cx.run_until_parked();
+    let parts = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| ws.genres.draft.as_ref().unwrap().parts.clone())
+    };
+    let saved = || {
+        let json = std::fs::read_to_string(books.join("lofi.json")).unwrap();
+        serde_json::from_str::<tempo_engine::playbook::Playbook>(&json).unwrap()
+    };
+    let before = parts(cx).len();
+
+    // Add a percussion part: it shows, and it's saved.
+    click_on(cx, "add-part-perc", Modifiers::none(), MouseButton::Left);
+    assert_eq!(parts(cx).len(), before + 1);
+    assert_eq!(saved().parts.last().unwrap().role, "perc");
+
+    // Type what it sounds like into its field, and Enter: saved.
+    let n = before;
+    let field: &'static str = Box::leak(format!("part-sound-{n}").into_boxed_str());
+    click_on(cx, field, Modifiers::none(), MouseButton::Left);
+    cx.simulate_input("shaker, conga");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(parts(cx)[n].sound, "shaker, conga");
+    assert_eq!(saved().parts[n].sound, "shaker, conga");
+    // And how to write it, kept when the click goes elsewhere.
+    let field: &'static str = Box::leak(format!("part-write-{n}").into_boxed_str());
+    click_on(cx, field, Modifiers::none(), MouseButton::Left);
+    cx.simulate_input("write_drums afrobeats on a percussion kit");
+    click_on(cx, "genre-harmony", Modifiers::none(), MouseButton::Left);
+    assert_eq!(
+        saved().parts[n].write,
+        "write_drums afrobeats on a percussion kit"
+    );
+
+    // Remove it: gone from the page, the file, and every section.
+    let remove: &'static str = Box::leak(format!("part-remove-{n}").into_boxed_str());
+    click_on(cx, remove, Modifiers::none(), MouseButton::Left);
+    assert_eq!(parts(cx).len(), before);
+    let book = saved();
+    assert!(!book.parts.iter().any(|p| p.role == "perc"));
+    assert!(
+        book.sections
+            .iter()
+            .all(|s| !s.parts.contains(&"perc".to_string()))
+    );
+    // tempo's again: the same as it ships.
+    assert_eq!(
+        tempo_engine::playbook::origin(&book),
+        tempo_engine::playbook::Origin::Tempo
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn the_agent_panel_knows_the_song_and_its_critic(cx: &mut TestAppContext) {
+    use crate::{chat::Item, producer::Stage};
+    let dir = demo_copy("agent-producer");
+    let (ws, cx) = open_at(cx, &dir);
+    cx.simulate_resize(gpui::size(px(1600.), px(1200.)));
+    ws.update(cx, |ws, cx| {
+        ws.show_agent = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    // The path: the demo has a loop but no genre, chords or mix.
+    let done: Vec<bool> = ws.read_with(cx, |ws, _| {
+        crate::producer::STAGES
+            .iter()
+            .map(|s| s.done(&ws.session.project))
+            .collect()
+    });
+    assert_eq!(done, [false, false, true, false, false, false]);
+
+    // The genre picker sets the song's genre, from the playbooks.
+    click_on(cx, "agent-genre", Modifiers::none(), MouseButton::Left);
+    let items = ws.read_with(cx, |ws, _| {
+        ws.menu
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.0.clone())
+            .collect::<Vec<_>>()
+    });
+    assert!(
+        items.iter().any(|i| i.contains("Lo-fi"))
+            && items.last().unwrap().contains("Edit playbooks")
+    );
+    let lofi = items.iter().position(|i| i.contains("Lo-fi")).unwrap();
+    let name: &'static str = Box::leak(format!("menu-{lofi}").into_boxed_str());
+    click_on(cx, name, Modifiers::none(), MouseButton::Left);
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.genre.clone()),
+        Some("lofi".into())
+    );
+    // And what each stage asks says the genre.
+    let ask = ws.read_with(cx, |ws, _| Stage::Arrange.ask(&ws.session.project));
+    assert!(ask.contains("Lo-fi hip-hop"), "{ask}");
+
+    // The critic: the demo plays sine synths, so there's something to improve, with a fix each.
+    click_on(cx, "critic-head", Modifiers::none(), MouseButton::Left);
+    let notes = ws.read_with(cx, |ws, _| ws.chat.critic.notes.clone());
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.level == "improve" && n.what.contains("sine")),
+        "{notes:?}"
+    );
+    assert!(cx.debug_bounds("critic-fix-0").is_some());
+
+    // What's selected goes with a request: the region, by its track and bars.
+    ws.update(cx, |ws, _| ws.region = Some((0, 0)));
+    let (label, said) = ws.read_with(cx, |ws, _| ws.selection_note().unwrap());
+    assert!(label.starts_with("Keys · bar"), "{label}");
+    assert!(said.contains("track 0 \"Keys\""), "{said}");
+
+    // Undo this turn: the song as it was when the agent was asked, in one step.
+    let before = ws.read_with(cx, |ws, _| ws.session.project.clone());
+    ws.update(cx, |ws, cx| {
+        ws.chat.before = Some(before.clone());
+        ws.edit(cx, |ws| ws.session.project.tracks.remove(1).name.clear());
+        ws.chat.items.push(Item::You("make it hit harder".into()));
+        ws.chat.items.push(Item::End {
+            seconds: 4.0,
+            steps: 3,
+            stopped: false,
+            error: None,
+        });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    click_on(cx, "undo-turn", Modifiers::none(), MouseButton::Left);
+    let tracks = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    assert_eq!(tracks, before.tracks.len());
+    assert!(cx.debug_bounds("undo-turn").is_none());
+    // ⌘Z takes the undo back.
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks.len()),
+        before.tracks.len() - 1
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn the_song_map_toggles_parts_and_genres_duplicate_and_go(cx: &mut TestAppContext) {
+    use tempo_engine::playbook::{self, Origin};
+    let dir = demo_copy("playbook-map");
+    let (ws, cx) = open_at(cx, &dir);
+    cx.simulate_resize(gpui::size(px(1600.), px(3400.)));
+    ws.update(cx, |ws, cx| ws.open_genres(Some("house"), cx));
+    cx.run_until_parked();
+    let draft = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.genres.draft.clone().unwrap());
+    // House's intro is drums alone: a click puts the bass in it, another takes it out.
+    assert!(!draft(cx).sections[0].parts.contains(&"bass".to_string()));
+    click_on(cx, "cell-bass-0", Modifiers::none(), MouseButton::Left);
+    assert!(draft(cx).sections[0].parts.contains(&"bass".to_string()));
+    assert_eq!(playbook::origin(&draft(cx)), Origin::Edited);
+    click_on(cx, "cell-bass-0", Modifiers::none(), MouseButton::Left);
+    assert_eq!(playbook::origin(&draft(cx)), Origin::Tempo);
+
+    // A section picked: its energy and length change; a new one comes and goes.
+    click_on(cx, "section-0", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "energy-5", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "bars-up", Modifiers::none(), MouseButton::Left);
+    let s = draft(cx).sections[0].clone();
+    assert_eq!((s.energy, s.bars), (5, 20));
+    let n = draft(cx).sections.len();
+    click_on(cx, "add-section", Modifiers::none(), MouseButton::Left);
+    assert_eq!(draft(cx).sections.len(), n + 1);
+    click_on(cx, "section-remove", Modifiers::none(), MouseButton::Left);
+    assert_eq!(draft(cx).sections.len(), n);
+
+    // Duplicate: a genre of the person's own; Delete takes it away again.
+    click_on(cx, "genre-duplicate", Modifiers::none(), MouseButton::Left);
+    let copy = draft(cx);
+    assert_eq!(
+        (copy.name.as_str(), playbook::origin(&copy)),
+        ("House 2", Origin::Yours)
+    );
+    click_on(cx, "genre-reset", Modifiers::none(), MouseButton::Left);
+    let gone = ws.read_with(cx, |ws, _| !ws.genres.list.iter().any(|p| p.id == copy.id));
+    assert!(gone);
+    // Reset to tempo's: house as it ships.
+    ws.update(cx, |ws, cx| ws.open_genres(Some("house"), cx));
+    click_on(cx, "genre-reset", Modifiers::none(), MouseButton::Left);
+    assert_eq!(playbook::origin(&draft(cx)), Origin::Tempo);
     std::fs::remove_dir_all(dir).unwrap();
 }

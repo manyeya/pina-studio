@@ -78,6 +78,12 @@ pub struct Chat {
     pub remote: bool,
     pub input: Entity<TextInput>,
     pub scroll: ScrollHandle,
+    /// tempo's critic's notes on the song.
+    pub critic: crate::producer::Critic,
+    /// The song as it was when the agent was last asked: Undo this turn puts it back.
+    pub before: Option<tempo_engine::project::Project>,
+    /// Whether what's selected goes along with what's asked.
+    pub use_selection: bool,
     _sent: Subscription,
 }
 
@@ -129,6 +135,9 @@ impl Chat {
             remote: false,
             input,
             scroll: ScrollHandle::new(),
+            critic: Default::default(),
+            before: None,
+            use_selection: true,
             _sent: sent,
         }
     }
@@ -324,7 +333,15 @@ impl Workspace {
                 }
             }
         }
-        let sent = self.chat.agent.as_mut().map(|a| a.ask(&text));
+        // What's selected goes along, so "make this hit harder" knows what this is.
+        let full = match self.selection_note().filter(|_| self.chat.use_selection) {
+            Some((_, said)) => format!("(Selected in tempo: {said}.)\n\n{text}"),
+            None => text.clone(),
+        };
+        if !self.chat.busy {
+            self.chat.before = Some(self.session.project.clone());
+        }
+        let sent = self.chat.agent.as_mut().map(|a| a.ask(&full));
         self.chat.asked(text);
         if let Some(Err(e)) = sent {
             self.chat.agent = None;
@@ -510,7 +527,41 @@ impl Workspace {
                         .flex_col()
                         .gap(px(10.))
                         .p(px(12.))
-                        .children(transcript(&c.items, bar)),
+                        .children(transcript(&c.items, bar))
+                        .when(
+                            !c.busy
+                                && matches!(c.items.last(), Some(Item::End { .. }))
+                                && c.before
+                                    .as_ref()
+                                    .is_some_and(|b| *b != self.session.project),
+                            |d| {
+                                d.child(
+                                    div().flex().child(
+                                        div()
+                                            .id("undo-turn")
+                                            .h(px(26.))
+                                            .px(px(10.))
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.))
+                                            .rounded(px(7.))
+                                            .border_1()
+                                            .border_color(rgb(LINE_STRONG))
+                                            .text_size(px(11.5))
+                                            .text_color(rgb(TEXT_2))
+                                            .cursor_pointer()
+                                            .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+                                            .child(icon(Icon::Back, 11.).text_color(rgb(TEXT_2)))
+                                            .child("Undo this turn")
+                                            .debug_selector(|| "undo-turn".into())
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|ws, _, _, cx| ws.undo_turn(cx)),
+                                            ),
+                                    ),
+                                )
+                            },
+                        ),
                 )
                 .into_any_element(),
         };
@@ -544,11 +595,62 @@ impl Workspace {
                     ),
             })
             .when(busy && remote, |d| d.opacity(0.4));
+        let selection = self
+            .selection_note()
+            .map(|(label, _)| (label, c.use_selection));
         let composer = div()
             .flex_none()
             .p(px(10.))
             .border_t_1()
             .border_color(rgb(LINE))
+            .when_some(selection, |d, (label, on)| {
+                d.child(
+                    div().pb(px(7.)).flex().child(
+                        div()
+                            .id("agent-selection")
+                            .max_w_full()
+                            .h(px(24.))
+                            .px(px(8.))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .rounded(px(7.))
+                            .border_1()
+                            .cursor_pointer()
+                            .when(on, |d| {
+                                d.bg(alpha(ACCENT, 0.12))
+                                    .border_color(alpha(ACCENT, 0.4))
+                                    .text_color(rgb(ACCENT_TEXT))
+                            })
+                            .when(!on, |d| {
+                                d.border_color(rgb(LINE))
+                                    .text_color(rgb(TEXT_4))
+                                    .line_through()
+                            })
+                            .text_size(px(11.))
+                            .child(icon(Icon::Pointer, 11.).text_color(rgb(if on {
+                                ACCENT_TEXT
+                            } else {
+                                TEXT_4
+                            })))
+                            .child(
+                                div()
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(format!("With {label}")),
+                            )
+                            .debug_selector(|| "agent-selection".into())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|ws, _, _, cx| {
+                                    ws.chat.use_selection ^= true;
+                                    cx.notify();
+                                }),
+                            ),
+                    ),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -593,7 +695,9 @@ impl Workspace {
             .border_l_1()
             .border_color(rgb(LINE))
             .child(header)
+            .child(self.agent_context(cx))
             .child(body)
+            .child(self.critic_card(cx))
             .child(composer)
             .child(self.panel_edge(cx))
     }

@@ -87,6 +87,10 @@ pub enum MenuAction {
     NewSongKey(Option<String>),
     /// Works with this agent in the Agent panel.
     Agent(crate::agent::Kind),
+    /// The song's genre, by its playbook's id; None for none.
+    Genre(Option<String>),
+    /// The Playbooks page, on a genre.
+    Playbooks(Option<String>),
     Instrument {
         track: usize,
         instrument: Instrument,
@@ -200,6 +204,10 @@ impl Workspace {
         self.menu = None;
         match action {
             MenuAction::Nothing => {}
+            MenuAction::Genre(genre) => {
+                self.edit(cx, |ws| ws.session.project.genre = genre);
+            }
+            MenuAction::Playbooks(id) => self.open_genres(id.as_deref(), cx),
             MenuAction::NewSongKey(key) => {
                 if let Some(s) = self.new_song.as_mut() {
                     s.key = key.as_deref().and_then(tempo_engine::music::Key::parse);

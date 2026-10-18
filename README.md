@@ -23,7 +23,9 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   `critique.rs` (a producer's notes, from the notes and from a render).
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
   `topbar.rs` (transport and display), `inspector.rs` (the side panel: inspector and browser),
-  `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`),
+  `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`)
+  and `producer.rs` (its song strip, producer's path, critic, undo for a turn and selection),
+  `genres.rs` (the Playbooks page, where genres are read and changed),
   `looks.rs` (track colours and icons, and their picker), `catalog.rs` (the Browser),
   `projects.rs` (songs: the Songs page, the new-song sheet, opening another in the window),
   `tracks.rs` (tools, markers, ruler, headers, regions, automation), `editor.rs` (the
@@ -270,10 +272,16 @@ agent can send, with examples. An agent can:
   - `tempo playbook <genre>`: what a genre is (17 of them, lofi to amapiano): its tempo, swing and
     keys, its parts with the sounds they take and how to write them, its sections, progressions,
     and where its mixes sit (loudness and six-band balance, measured from released songs).
-    Playbooks are JSON files, one a genre, in `~/Library/Application Support/tempo/playbooks/`
-    (File ▸ Edit Genre Playbooks…, or `tempo playbook --edit [genre]`): edit one and agents and
-    the critic follow it; add a file for a new genre; delete one to get tempo's back. tempo's own
-    are in `crates/engine/playbooks/`.
+    The Playbooks page (File ▸ Genre Playbooks…, or a genre's Edit playbooks… in the Agent
+    panel) shows each genre as its song's shape, and changes it in place: tempo range, swing,
+    key, groove (its kick, snare and hats shown), harmony words (and the progression they find),
+    the song map (sections as blocks as long as they are and as tall as they're loud, and a grid
+    of which part plays in which, clicked on and off), the parts (sounds to look for, how to
+    write them), the mix target (six bands dragged, and loudness) and notes for the agent.
+    Duplicate makes a genre of your own; Reset puts tempo's back. Each change is saved as it's
+    made, to JSON files, one a genre, in `~/Library/Application Support/tempo/playbooks/`
+    (`tempo playbook --edit [genre]` opens them too); tempo's own are in
+    `crates/engine/playbooks/`.
   - `tempo theory "A minor" dark trap`: the key's chords and progressions that suit the words.
     `set_chords` takes them as symbols (`Am9 | Fmaj9`) or numerals (`i9 | VImaj9`) and makes them
     the song's chord track; `write_chords`, `write_bass`, `write_melody` and `write_drums` write
@@ -295,6 +303,15 @@ agent can send, with examples. An agent can:
     and limits the master to the genre's loudness (or a reference's: `tempo reference <file>
     <project>`), measuring until it's there.
   - `tempo analyze` and `tempo render` take `--bars 9-16` to hear part of a song.
+
+The Agent panel is a producer's desk as well as a conversation: under its header the song at a
+glance (its genre, picked from the playbooks, its key, tempo and length) and the producer's path,
+Genre → Chords → Loop → Arrange → Mix → Master, each stage lit when the song has it and a click
+away from asking the agent for it; over the composer the critic, tempo's notes on the song kept
+up to date as it changes, each with a Fix to ask for (or Fix all), and Listen to the mix for the
+notes a render gives; after an answer, Undo this turn puts the song back as it was when it was
+asked (one step, so ⌘Z puts it back again); and what's selected (a region and its bars, or a
+track) goes along with what's asked, unless its chip is turned off.
 
 When the project is open in the app, commands go to the app over a socket. Each lands on screen as
 one undoable edit, and `tempo save` saves it. The agent shows up like a collaborator in a shared

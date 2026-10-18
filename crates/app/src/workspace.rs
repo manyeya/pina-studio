@@ -343,6 +343,8 @@ pub enum View {
     Samples,
     /// Every song, to open, start or manage.
     Songs,
+    /// The genres' playbooks, to read and change.
+    Playbooks,
 }
 
 /// What a name being typed is for.
@@ -534,6 +536,10 @@ pub struct Workspace {
     pub catalog: crate::catalog::Catalog,
     /// Every song, for the Songs page and the menus.
     pub songs: Vec<crate::projects::Song>,
+    /// The Playbooks page's genres, and the one being edited.
+    pub genres: crate::genres::Genres,
+    /// How many times the song has changed, for what's worked out from it (the critic).
+    pub edits: u64,
     /// A song to open, once the next frame has the window to ask about saving with.
     pub opening: Option<std::path::PathBuf>,
     /// A song action from a menu, for the next frame.
@@ -747,6 +753,8 @@ impl Workspace {
             chat,
             catalog,
             songs: Vec::new(),
+            genres: Default::default(),
+            edits: 0,
             opening: None,
             song_pending: None,
             new_song: None,
@@ -759,6 +767,19 @@ impl Workspace {
         };
         ws.refresh_looks(cx);
         ws.refresh_songs(cx);
+        // For screenshots and docs: TEMPO_PAGE=playbooks[:genre[@scroll]] opens on that page.
+        if let Ok(page) = std::env::var("TEMPO_PAGE") {
+            match page.split_once(':').unwrap_or((page.as_str(), "")) {
+                ("playbooks", rest) => {
+                    let (genre, down) = rest.split_once('@').unwrap_or((rest, "0"));
+                    ws.open_genres((!genre.is_empty()).then_some(genre), cx);
+                    let down: f32 = down.parse().unwrap_or(0.0);
+                    ws.genres.scroll.set_offset(gpui::point(px(0.), px(-down)));
+                }
+                ("agent", _) => ws.show_agent = true,
+                _ => {}
+            }
+        }
         ws
     }
 
@@ -859,6 +880,7 @@ impl Workspace {
 
     /// After an edit (or undo): keeps the selection valid and brings the engine up to date.
     pub fn changed(&mut self, cx: &mut Context<Self>) {
+        self.edits += 1;
         // Aliases of whatever changed change with it.
         self.session.project.sync_links(&mut self.links);
         let tracks = &self.session.project.tracks;
@@ -2577,11 +2599,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &ToggleAgent, window, cx| ws.toggle_agent(window, cx)))
             .on_action(cx.listener(|ws, _: &NewSong, window, cx| ws.new_song_sheet(window, cx)))
             .on_action(cx.listener(|ws, _: &ShowSongs, _, cx| ws.toggle_songs(cx)))
-            .on_action(|_: &EditPlaybooks, _, _| {
-                if let Err(e) = crate::produce::edit_playbooks(None) {
-                    eprintln!("playbooks: {e}");
-                }
-            })
+            .on_action(cx.listener(|ws, _: &EditPlaybooks, _, cx| ws.open_genres(None, cx)))
             .on_action(cx.listener(|ws, _: &BrowserUp, _, cx| ws.move_picked(-1, cx)))
             .on_action(cx.listener(|ws, _: &BrowserDown, _, cx| ws.move_picked(1, cx)))
             .on_action(cx.listener(|ws, _: &BrowserNewTrack, _, cx| ws.use_picked(true, cx)))
@@ -2600,6 +2618,9 @@ impl Render for Workspace {
                         d.child(self.samples_page(cx))
                     })
                     .when(self.view == View::Songs, |d| d.child(self.songs_page(cx)))
+                    .when(self.view == View::Playbooks, |d| {
+                        d.child(self.genres_page(cx))
+                    })
                     .when(self.view == View::Arrange, |d| {
                         d.when(self.show_inspector, |d| d.child(self.inspector(cx)))
                             .child(
