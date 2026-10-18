@@ -1,0 +1,77 @@
+{
+  "id": "lofi",
+  "name": "Lo-fi hip-hop",
+  "tempo": [70.0, 90.0],
+  "minor": true,
+  "groove": "lofi",
+  "swing": 60,
+  "harmony": "lofi",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "dusty boom bap kit, soft kick, brushy snare, vinyl",
+      "write": "write_drums lofi, fill_every 8; velocities soft"
+    },
+    {
+      "role": "chords",
+      "sound": "rhodes, electric piano, felt piano, jazz guitar",
+      "write": "write_chords voicing open, rhythm push; 7ths and 9ths"
+    },
+    {
+      "role": "bass",
+      "sound": "upright bass, warm sub, muted electric bass",
+      "write": "write_bass syncopated or roots, register 28-48"
+    },
+    {
+      "role": "lead",
+      "sound": "muted trumpet, flute, soft bell, vocal chop",
+      "write": "write_melody hook, density 0.4; sparse, behind the beat"
+    },
+    {
+      "role": "texture",
+      "sound": "vinyl crackle, rain, tape hiss, room tone",
+      "write": "a long audio region under everything, -24 dB"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 4,
+      "parts": ["chords", "texture"],
+      "energy": 1
+    },
+    {
+      "name": "A",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "texture"],
+      "energy": 3
+    },
+    {
+      "name": "B",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "lead", "texture"],
+      "energy": 4
+    },
+    {
+      "name": "Break",
+      "bars": 4,
+      "parts": ["chords", "lead", "texture"],
+      "energy": 2
+    },
+    {
+      "name": "A2",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "lead", "texture"],
+      "energy": 4
+    },
+    {
+      "name": "Outro",
+      "bars": 4,
+      "parts": ["chords", "texture"],
+      "energy": 1
+    }
+  ],
+  "lufs": -13,
+  "spectrum": [-6.0, -4.0, -6.0, -13.5, -20.0, -25.0],
+  "notes": ["Dark and warm: roll off the top (high shelf -3 to -6 dB at 8 kHz) and saturate the chords.", "Swing 58-62 and soft hats; nothing quantized hard.", "Chords carry it: 9ths and 11ths, pushed an eighth early.", "Mono below 120 Hz; no huge sub."]
+}

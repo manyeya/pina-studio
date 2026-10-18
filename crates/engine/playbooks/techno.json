@@ -1,0 +1,72 @@
+{
+  "id": "techno",
+  "name": "Techno",
+  "tempo": [125.0, 140.0],
+  "minor": true,
+  "groove": "techno",
+  "swing": 50,
+  "harmony": "techno",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "techno kit, rumble kick, rim, open hat",
+      "write": "write_drums techno"
+    },
+    {
+      "role": "bass",
+      "sound": "rumble, acid bass, sub",
+      "write": "write_bass offbeat"
+    },
+    {
+      "role": "lead",
+      "sound": "acid, sequence, stab",
+      "write": "write_melody riff or arp"
+    },
+    {
+      "role": "texture",
+      "sound": "atmosphere, noise, drone",
+      "write": "a long audio region"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 16,
+      "parts": ["drums"],
+      "energy": 2
+    },
+    {
+      "name": "Build",
+      "bars": 16,
+      "parts": ["drums", "bass"],
+      "energy": 3
+    },
+    {
+      "name": "Peak",
+      "bars": 32,
+      "parts": ["drums", "bass", "lead", "texture"],
+      "energy": 5
+    },
+    {
+      "name": "Break",
+      "bars": 16,
+      "parts": ["texture", "lead"],
+      "energy": 2
+    },
+    {
+      "name": "Peak 2",
+      "bars": 32,
+      "parts": ["drums", "bass", "lead", "texture"],
+      "energy": 5
+    },
+    {
+      "name": "Outro",
+      "bars": 16,
+      "parts": ["drums"],
+      "energy": 2
+    }
+  ],
+  "lufs": -8,
+  "spectrum": [-3.5, -4.0, -8.5, -14.0, -17.0, -19.0],
+  "notes": ["One idea, changed slowly: filter, decay and layers over 16-bar steps.", "The kick is everything; nothing else under 100 Hz on its beats."]
+}

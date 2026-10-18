@@ -1,0 +1,88 @@
+{
+  "id": "rnb",
+  "name": "R&B",
+  "tempo": [60.0, 100.0],
+  "minor": false,
+  "groove": "rnb",
+  "swing": 60,
+  "harmony": "rnb smooth",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "R&B kit, soft snap, rim, tight kick",
+      "write": "write_drums rnb"
+    },
+    {
+      "role": "chords",
+      "sound": "rhodes, wurlitzer, soft synth keys, guitar",
+      "write": "write_chords voicing open, rhythm push; maj9, m9, 13"
+    },
+    {
+      "role": "bass",
+      "sound": "synth bass, sub, 808 soft",
+      "write": "write_bass syncopated"
+    },
+    {
+      "role": "pad",
+      "sound": "warm pad, strings",
+      "write": "write_chords voicing spread, held, quiet"
+    },
+    {
+      "role": "lead",
+      "sound": "vocal, vocal chop, synth lead",
+      "write": "write_melody hook, density 0.6"
+    },
+    {
+      "role": "counter",
+      "sound": "guitar, bells, strings",
+      "write": "write_melody counter"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 4,
+      "parts": ["chords", "pad"],
+      "energy": 2
+    },
+    {
+      "name": "Verse",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass"],
+      "energy": 3
+    },
+    {
+      "name": "Pre",
+      "bars": 8,
+      "parts": ["drums", "chords", "bass", "pad"],
+      "energy": 3
+    },
+    {
+      "name": "Chorus",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "pad", "lead", "counter"],
+      "energy": 5
+    },
+    {
+      "name": "Verse 2",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "counter"],
+      "energy": 3
+    },
+    {
+      "name": "Chorus 2",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "pad", "lead", "counter"],
+      "energy": 5
+    },
+    {
+      "name": "Outro",
+      "bars": 8,
+      "parts": ["chords", "pad"],
+      "energy": 2
+    }
+  ],
+  "lufs": -10.5,
+  "spectrum": [-5.0, -4.0, -7.0, -13.0, -17.5, -20.0],
+  "notes": ["Extended chords everywhere; voice-leading smooth (tempo voices them so).", "Laid back: swing and the snare a touch late.", "Space: the vocal (or lead) owns 1-5 kHz."]
+}

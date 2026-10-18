@@ -1,0 +1,66 @@
+{
+  "id": "drill",
+  "name": "UK / NY drill",
+  "tempo": [138.0, 146.0],
+  "minor": true,
+  "groove": "drill",
+  "swing": 50,
+  "harmony": "drill dark tense",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "drill kit, sliding 808, rim, crisp snare",
+      "write": "write_drums drill"
+    },
+    {
+      "role": "bass",
+      "sound": "sliding 808, glide 808",
+      "write": "write_bass kick, register 26-43, notes that slide between roots"
+    },
+    {
+      "role": "lead",
+      "sound": "dark piano, strings, choir, bell",
+      "write": "write_melody riff, minor or phrygian (bII)"
+    },
+    {
+      "role": "pad",
+      "sound": "dark strings, choir",
+      "write": "write_chords voicing spread"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 8,
+      "parts": ["lead", "pad"],
+      "energy": 2
+    },
+    {
+      "name": "Hook",
+      "bars": 16,
+      "parts": ["drums", "bass", "lead", "pad"],
+      "energy": 5
+    },
+    {
+      "name": "Verse",
+      "bars": 16,
+      "parts": ["drums", "bass", "lead"],
+      "energy": 4
+    },
+    {
+      "name": "Hook 2",
+      "bars": 16,
+      "parts": ["drums", "bass", "lead", "pad"],
+      "energy": 5
+    },
+    {
+      "name": "Outro",
+      "bars": 4,
+      "parts": ["lead"],
+      "energy": 1
+    }
+  ],
+  "lufs": -8.5,
+  "spectrum": [-2.0, -7.0, -9.5, -14.5, -18.0, -20.0],
+  "notes": ["The snare lands late (on the third beat's back half), the kick syncopated: it shouldn't sound like trap.", "Slides between 808 notes are the genre: glide on."]
+}

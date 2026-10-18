@@ -1,0 +1,71 @@
+{
+  "id": "deep_house",
+  "name": "Deep house",
+  "tempo": [118.0, 124.0],
+  "minor": true,
+  "groove": "house",
+  "swing": 56,
+  "harmony": "deep_house",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "deep house kit, soft kick, shaker, rim",
+      "write": "write_drums house"
+    },
+    {
+      "role": "chords",
+      "sound": "deep chord stab, rhodes, organ",
+      "write": "write_chords voicing open, rhythm offbeat; m9, m11"
+    },
+    {
+      "role": "bass",
+      "sound": "deep sub bass, rubbery bass",
+      "write": "write_bass syncopated or offbeat"
+    },
+    {
+      "role": "pad",
+      "sound": "warm pad, atmosphere",
+      "write": "write_chords voicing spread"
+    },
+    {
+      "role": "lead",
+      "sound": "vocal chop, soft pluck",
+      "write": "write_melody riff, density 0.4"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 16,
+      "parts": ["drums"],
+      "energy": 2
+    },
+    {
+      "name": "Groove",
+      "bars": 32,
+      "parts": ["drums", "bass", "chords"],
+      "energy": 3
+    },
+    {
+      "name": "Break",
+      "bars": 16,
+      "parts": ["pad", "chords"],
+      "energy": 2
+    },
+    {
+      "name": "Groove 2",
+      "bars": 32,
+      "parts": ["drums", "bass", "chords", "lead", "pad"],
+      "energy": 4
+    },
+    {
+      "name": "Outro",
+      "bars": 16,
+      "parts": ["drums", "bass"],
+      "energy": 2
+    }
+  ],
+  "lufs": -9.5,
+  "spectrum": [-4.0, -4.0, -7.0, -13.5, -18.0, -21.0],
+  "notes": ["Warm, rounded, never harsh; minor 9 and 11 chords.", "Groove over drops: change by filtering and adding/removing parts."]
+}

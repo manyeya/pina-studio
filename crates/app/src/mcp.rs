@@ -87,7 +87,7 @@ fn tools() -> Value {
         },
         {
             "name": "playbook",
-            "description": "What a genre is: tempo range, swing, key, its parts with the sounds they take and how to write them, its sections (bars, parts, energy), progressions, mix targets (LUFS and spectrum) and what makes it sound right or amateur, with the workflow. Without `genre`, the genres there are.",
+            "description": "What a genre is: tempo range, swing, key, its parts with the sounds they take and how to write them, its sections (bars, parts, energy), progressions, mix targets (LUFS and spectrum) and what makes it sound right or amateur, with the workflow. Without `genre`, the genres there are. Playbooks are the person's JSON files (`edit` says where): follow them as written.",
             "inputSchema": { "type": "object", "properties": { "genre": { "type": "string" } } }
         },
         {
@@ -110,7 +110,7 @@ fn tools() -> Value {
         },
         {
             "name": "sounds",
-            "description": "Real sounds for a part (`role`: drums, perc, bass, chords, pad, lead, counter, arp, fx, vocals, texture), for `genre`, matching `words` (\"warm rhodes\", \"dark bell\"): Surge XT patches with the set_preset that loads each, the instrument plugins installed, and samples from the library. With `project` and `track`, the commands are ready for that track.",
+            "description": "Real sounds for a part (`role`: drums, perc, bass, chords, pad, lead, counter, arp, fx, vocals, texture), for `genre`, matching `words` (\"warm rhodes\", \"dark bell\"): every installed instrument's presets that suit it (a few from each, with the set_instrument and set_preset that load them), and samples from the library. With `project` and `track`, the commands are ready for that track.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

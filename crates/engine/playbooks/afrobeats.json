@@ -1,0 +1,77 @@
+{
+  "id": "afrobeats",
+  "name": "Afrobeats",
+  "tempo": [98.0, 115.0],
+  "minor": false,
+  "groove": "afrobeats",
+  "swing": 55,
+  "harmony": "afrobeats",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "afrobeats kit, shaker, conga, rim, talking drum",
+      "write": "write_drums afrobeats"
+    },
+    {
+      "role": "chords",
+      "sound": "guitar, rhodes, synth keys, marimba",
+      "write": "write_chords rhythm stabs or comp"
+    },
+    {
+      "role": "bass",
+      "sound": "sub, round bass",
+      "write": "write_bass syncopated"
+    },
+    {
+      "role": "lead",
+      "sound": "vocal, sax, pluck, flute",
+      "write": "write_melody hook"
+    },
+    {
+      "role": "perc",
+      "sound": "conga, shaker, cowbell",
+      "write": "write_drums afrobeats on a percussion kit"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 8,
+      "parts": ["chords", "perc"],
+      "energy": 2
+    },
+    {
+      "name": "Verse",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "perc"],
+      "energy": 3
+    },
+    {
+      "name": "Chorus",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "lead", "perc"],
+      "energy": 5
+    },
+    {
+      "name": "Verse 2",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "perc"],
+      "energy": 3
+    },
+    {
+      "name": "Chorus 2",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "lead", "perc"],
+      "energy": 5
+    },
+    {
+      "name": "Outro",
+      "bars": 8,
+      "parts": ["chords", "perc"],
+      "energy": 2
+    }
+  ],
+  "lufs": -9,
+  "spectrum": [-4.5, -4.0, -7.5, -13.5, -18.0, -20.5],
+  "notes": ["The percussion's interplay is the song: syncopated, layered, swung a little.", "Bright guitars or keys in small stabs; space for the vocal."]
+}

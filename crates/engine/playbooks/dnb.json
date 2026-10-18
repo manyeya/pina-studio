@@ -1,0 +1,77 @@
+{
+  "id": "dnb",
+  "name": "Drum and bass",
+  "tempo": [170.0, 176.0],
+  "minor": true,
+  "groove": "dnb",
+  "swing": 50,
+  "harmony": "dnb liquid",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "dnb break, tight snare, punchy kick",
+      "write": "write_drums dnb, fill_every 8"
+    },
+    {
+      "role": "bass",
+      "sound": "reese, sub, neuro bass",
+      "write": "write_bass roots or syncopated"
+    },
+    {
+      "role": "pad",
+      "sound": "lush pad, strings, atmosphere",
+      "write": "write_chords voicing spread"
+    },
+    {
+      "role": "lead",
+      "sound": "vocal, pluck, piano",
+      "write": "write_melody hook"
+    },
+    {
+      "role": "fx",
+      "sound": "riser, impact",
+      "write": "transition into the drop"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 16,
+      "parts": ["pad"],
+      "energy": 2
+    },
+    {
+      "name": "Build",
+      "bars": 16,
+      "parts": ["drums", "pad", "lead"],
+      "energy": 3
+    },
+    {
+      "name": "Drop",
+      "bars": 32,
+      "parts": ["drums", "bass", "pad", "fx"],
+      "energy": 5
+    },
+    {
+      "name": "Break",
+      "bars": 16,
+      "parts": ["pad", "lead"],
+      "energy": 2
+    },
+    {
+      "name": "Drop 2",
+      "bars": 32,
+      "parts": ["drums", "bass", "pad", "lead", "fx"],
+      "energy": 5
+    },
+    {
+      "name": "Outro",
+      "bars": 16,
+      "parts": ["drums"],
+      "energy": 2
+    }
+  ],
+  "lufs": -8,
+  "spectrum": [-3.5, -4.5, -8.5, -13.5, -16.5, -18.5],
+  "notes": ["The snare on 2 and 4 at 174 is the backbone; the bass carries the drop.", "Sub mono, the reese's mids wide."]
+}

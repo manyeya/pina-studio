@@ -12,7 +12,7 @@ use tempo_engine::{
     critique::{self, Heard},
     music::Key,
     playbook,
-    project::{Format, Instrument, PluginRef, Project, Reference, Which},
+    project::{Format, Instrument, PluginRef, Preset, PresetSource, Project, Reference, Which},
     scan,
     theory::{self, PROGRESSIONS},
 };
@@ -61,12 +61,18 @@ pub fn critique(dir: &Path, quick: bool, range: Option<(u64, u64)>) -> Result<Va
 /// A genre's playbook, or every genre's id and name.
 pub fn playbook(genre: Option<&str>) -> Result<Value, String> {
     match genre {
-        None => Ok(json!(
-            playbook::PLAYBOOKS
+        None => {
+            let (all, problems) = playbook::load();
+            let genres: Vec<Value> = all
                 .iter()
                 .map(|b| json!({ "id": b.id, "name": b.name, "tempo": b.tempo }))
-                .collect::<Vec<_>>()
-        )),
+                .collect();
+            let mut out = json!({ "genres": genres, "edit": playbook::dir() });
+            if !problems.is_empty() {
+                out["unreadable"] = json!(problems);
+            }
+            Ok(out)
+        }
         Some(g) => {
             let b = playbook::find(g).ok_or(format!(
                 "no playbook for {g:?}; there are {}",
@@ -76,12 +82,42 @@ pub fn playbook(genre: Option<&str>) -> Result<Value, String> {
                 root: 9,
                 minor: b.minor,
             };
-            let mut out = serde_json::to_value(b).map_err(|e| e.to_string())?;
-            out["progressions"] = json!(suggestions(&key, b.harmony, 4));
+            let mut out = serde_json::to_value(&b).map_err(|e| e.to_string())?;
+            out["progressions"] = json!(suggestions(&key, &b.harmony, 4));
+            if let Some(d) = playbook::dir() {
+                out["file"] = json!(d.join(format!("{}.json", b.id)));
+            }
             out["how"] = json!(WORKFLOW);
             Ok(out)
         }
     }
+}
+
+/// Opens the playbooks folder (made the first time, a copy of tempo's), or one genre's file.
+pub fn edit_playbooks(genre: Option<&str>) -> Result<(), String> {
+    let (_, problems) = playbook::load();
+    let dir = playbook::dir().ok_or("no home folder")?;
+    let target = match genre {
+        None => dir,
+        Some(g) => {
+            let id = playbook::find(g).map_or(g.to_string(), |b| b.id);
+            let file = dir.join(format!("{id}.json"));
+            if !file.exists() {
+                return Err(format!("no {id}.json in {}", dir.display()));
+            }
+            file
+        }
+    };
+    for p in problems {
+        eprintln!("{p}");
+    }
+    let mut open = std::process::Command::new("open");
+    if target.is_file() {
+        open.arg("-t");
+    }
+    open.arg(&target).status().map_err(|e| e.to_string())?;
+    println!("{}", target.display());
+    Ok(())
 }
 
 /// The library's progressions that suit `words`, best first, written in `key`.
@@ -209,68 +245,119 @@ pub fn reference(file: &Path, dir: Option<&Path>) -> Result<Value, String> {
     Ok(out)
 }
 
-/// Surge XT's patch folders, by the part they're for.
-fn patch_folders(role: &str) -> &'static [&'static str] {
+/// Words that say a preset is for a part, in its name or the folders it's in: how plugins file
+/// them ("Basses/", "Pads/", "KEY Rhodes", "LD Saw").
+fn role_words(role: &str) -> &'static [&'static str] {
     match role {
-        "bass" => &["Basses"],
-        "chords" => &["Keys", "Chords", "Polysynths", "Organs", "Guitars"],
-        "pad" => &["Pads", "Atmospheres", "Strings"],
-        "lead" => &["Leads", "Plucks", "Bells", "Brass", "Winds"],
-        "counter" | "arp" => &["Sequences", "Plucks", "Bells", "Keys", "Rhythms"],
-        "fx" => &["FX"],
-        "texture" => &["Atmospheres", "FX"],
-        "drums" | "perc" => &["Percussion", "Drums"],
-        "vocals" => &["Vocoder", "Vox"],
-        _ => &["Leads", "Keys", "Pads"],
+        "bass" => &["bass", "808", "sub", "reese", "bs "],
+        "chords" => &[
+            "key", "piano", "ep ", "rhodes", "wurli", "organ", "chord", "poly", "guitar", "stab",
+            "clav",
+        ],
+        "pad" => &[
+            "pad", "atmo", "ambient", "string", "choir", "drone", "swell", "texture",
+        ],
+        "lead" => &[
+            "lead", "ld ", "pluck", "bell", "brass", "horn", "flute", "wind", "sax", "whistle",
+            "solo",
+        ],
+        "counter" | "arp" => &["arp", "seq", "pluck", "bell", "mallet", "marimba", "rhythm"],
+        "fx" => &["fx", "sfx", "riser", "noise", "sweep", "impact"],
+        "texture" => &["atmo", "texture", "noise", "drone", "ambient"],
+        "drums" | "perc" => &["drum", "kit", "perc", "kick", "snare", "hat", "tom"],
+        "vocals" => &["vox", "vocal", "choir", "voice", "vocoder"],
+        _ => &[],
     }
 }
 
-fn surge_dir() -> PathBuf {
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    Path::new(&home).join("Library/Application Support/Surge XT")
-}
-
-/// Every Surge XT patch (factory and third party) in the role's folders, as (name, path).
-fn patches(role: &str) -> Vec<(String, PathBuf)> {
-    let mut out = Vec::new();
-    for root in ["patches_factory", "patches_3rdparty"] {
-        let base = surge_dir().join(root);
-        let mut dirs: Vec<PathBuf> = patch_folders(role).iter().map(|f| base.join(f)).collect();
-        // Third-party patches sit in a folder per author, then by kind.
-        if let Ok(authors) = std::fs::read_dir(&base) {
-            for a in authors.flatten() {
-                dirs.extend(patch_folders(role).iter().map(|f| a.path().join(f)));
-            }
-        }
-        for d in dirs {
-            let Ok(files) = std::fs::read_dir(&d) else {
-                continue;
-            };
-            for f in files.flatten() {
-                let path = f.path();
-                if path.extension().is_some_and(|e| e == "fxp") {
-                    let name = path
-                        .file_stem()
-                        .map_or(String::new(), |s| s.to_string_lossy().to_string());
-                    out.push((name, path));
-                }
-            }
+/// How well a preset suits a part: the part's words in its name or folders count most, then
+/// the words asked for.
+fn fit(preset: &Preset, role: &str, wanted: &[String]) -> usize {
+    let mut text = format!("{} ", preset.name.to_lowercase());
+    if let PresetSource::File { file } = &preset.source {
+        // The folders it's filed in, nearest first.
+        for part in file.iter().rev().skip(1).take(3) {
+            text.push_str(&part.to_string_lossy().to_lowercase());
+            text.push(' ');
         }
     }
-    out
-}
-
-/// How well a name says what's wanted: the words of `wanted` it holds.
-fn score(name: &str, wanted: &[String]) -> usize {
-    let n = name.to_lowercase();
-    wanted
+    let part = role_words(role)
         .iter()
-        .filter(|w| w.len() > 2 && n.contains(w.as_str()))
-        .count()
+        .filter(|w| text.contains(*w))
+        .count();
+    let asked = wanted
+        .iter()
+        .filter(|w| w.len() > 2 && text.contains(w.as_str()))
+        .count();
+    part * 3 + asked
 }
 
-/// Sounds for a part: Surge XT patches, instrument plugins, and samples from the library, for
-/// `role` in `genre`, matching `words`; with a project, ready-made commands for `track`.
+fn presets_cache() -> PathBuf {
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    Path::new(&home).join("Library/Caches/tempo/presets.json")
+}
+
+/// An instrument's presets (its own programs and its files), as it lists them loaded on its
+/// own: in a process of its own, so one that crashes or hangs doesn't take tempo with it. Kept
+/// until the plugin changes.
+fn instrument_presets(
+    p: &scan::PluginInfo,
+    cache: &mut serde_json::Map<String, Value>,
+) -> Vec<Preset> {
+    let key = format!(
+        "{:?}|{}|{}|{}",
+        p.format,
+        p.path.display(),
+        p.class,
+        p.uid.as_deref().unwrap_or("")
+    );
+    let modified = std::fs::metadata(&p.path)
+        .and_then(|m| m.modified())
+        .map_or(0, |t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs())
+        });
+    if let Some(kept) = cache.get(&key).filter(|k| k["modified"] == json!(modified))
+        && let Ok(list) = serde_json::from_value(kept["presets"].clone())
+    {
+        return list;
+    }
+    let listed = (|| -> Option<Vec<Preset>> {
+        let exe = std::env::current_exe().ok()?;
+        let mut child = std::process::Command::new(exe)
+            .arg("__presets")
+            .arg(serde_json::to_string(&p.plugin_ref()).ok()?)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()?;
+        // Read as it writes (a long list fills the pipe), and give up on one that hangs.
+        let mut stdout = child.stdout.take()?;
+        let reader = std::thread::spawn(move || {
+            let mut out = String::new();
+            std::io::Read::read_to_string(&mut stdout, &mut out).map(|_| out)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while child.try_wait().ok()?.is_none() {
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        serde_json::from_str(&reader.join().ok()?.ok()?).ok()
+    })();
+    // One that couldn't be asked is asked again next time.
+    let Some(listed) = listed else {
+        return Vec::new();
+    };
+    cache.insert(key, json!({ "modified": modified, "presets": listed }));
+    listed
+}
+
+/// Sounds for a part: every installed instrument's presets that suit it, a few from each, and
+/// samples from the library, for `role` in `genre`, matching `words`; with `track`, the
+/// commands are for it.
 pub fn sounds(
     role_name: &str,
     genre: Option<&str>,
@@ -280,47 +367,74 @@ pub fn sounds(
 ) -> Result<Value, String> {
     let book = genre.and_then(playbook::find);
     let from_book = book
+        .as_ref()
         .and_then(|b| b.parts.iter().find(|p| p.role == role_name))
-        .map_or("", |p| p.sound);
+        .map_or(String::new(), |p| p.sound.clone());
     let wanted: Vec<String> = format!("{words} {from_book}")
         .to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
         .map(str::to_string)
         .collect();
-    let mut found = patches(role_name);
-    found.sort_by_key(|(n, _)| std::cmp::Reverse(score(n, &wanted)));
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let plugins = scan::scan(&exe, &scan::everything(), &scan::cache_file());
-    let surge = plugins
-        .iter()
-        .filter(|p| p.class == "Surge XT")
-        .min_by_key(|p| match p.format {
-            Format::Clap => 0,
-            Format::Vst3 => 1,
-            _ => 2,
-        });
+    // Each instrument once, in the format it plays best in here.
+    let rank = |f: Format| match f {
+        Format::Clap => 0,
+        Format::Vst3 => 1,
+        Format::Au => 2,
+        Format::Vst2 => 3,
+    };
+    let mut chosen: Vec<&scan::PluginInfo> = Vec::new();
+    for p in plugins.iter().filter(|p| p.instrument) {
+        match chosen.iter_mut().find(|c| c.class == p.class) {
+            Some(c) if rank(p.format) < rank(c.format) => *c = p,
+            Some(_) => {}
+            None => chosen.push(p),
+        }
+    }
+    let file = presets_cache();
+    let mut cache: serde_json::Map<String, Value> = std::fs::read(&file)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
     let t = track.unwrap_or(0);
-    let patches: Vec<Value> = found
+    let mut instruments: Vec<(usize, Value)> = chosen
         .iter()
-        .take(14)
-        .map(|(name, path)| {
-            let mut v = json!({ "name": name, "file": path });
-            if dir.is_some() && surge.is_some() {
-                v["load"] = json!({ "op": "set_preset", "channel": { "track": t }, "plugin": "instrument", "preset": { "file": path } });
-            }
-            v
+        .map(|p| {
+            let all = instrument_presets(p, &mut cache);
+            let mut fitting: Vec<(usize, &Preset)> = all
+                .iter()
+                .map(|x| (fit(x, role_name, &wanted), x))
+                .filter(|(f, _)| *f > 0)
+                .collect();
+            fitting.sort_by_key(|(f, _)| std::cmp::Reverse(*f));
+            let best = fitting.first().map_or(0, |f| f.0);
+            // A few from each, so no one instrument's library crowds out the rest.
+            let presets: Vec<Value> = fitting
+                .iter()
+                .take(6)
+                .map(|(_, x)| json!({ "name": x.name, "load": { "op": "set_preset", "channel": { "track": t }, "plugin": "instrument", "preset": x.source } }))
+                .collect();
+            let v = json!({
+                "name": p.class,
+                "vendor": p.vendor,
+                "presets_in_all": all.len(),
+                "set_instrument": { "op": "set_instrument", "track": t, "instrument": Instrument::Plugin(p.plugin_ref()) },
+                "presets": presets,
+            });
+            (best, v)
         })
         .collect();
-    let instruments: Vec<Value> = plugins
-        .iter()
-        .filter(|p| p.instrument)
-        .map(|p| json!({ "name": p.class, "vendor": p.vendor, "format": p.format, "instrument": { "plugin": p.plugin_ref() } }))
-        .collect();
+    instruments.sort_by_key(|(best, _)| std::cmp::Reverse(*best));
+    if let Some(parent) = file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+        let _ = std::fs::write(&file, serde_json::to_vec(&cache).unwrap_or_default());
+    }
     // The library's search wants few words: what's asked, else the genre's first sound, else
     // the part.
-    let first = from_book.split(',').next().unwrap_or("").trim();
-    let samples = [words.trim(), first, role_name]
+    let first = from_book.split(',').next().unwrap_or("").trim().to_string();
+    let samples = [words.trim(), first.as_str(), role_name]
         .into_iter()
         .filter(|q| !q.is_empty())
         .find_map(|q| {
@@ -334,21 +448,13 @@ pub fn sounds(
                 .filter(|v| v.as_array().is_some_and(|a| !a.is_empty()))
         })
         .unwrap_or(json!([]));
-    let mut out = json!({
+    Ok(json!({
         "role": role_name,
         "looking_for": from_book,
-        "surge_xt_patches": patches,
-        "instrument_plugins": instruments,
+        "instruments": instruments.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
         "samples": samples,
-    });
-    if let Some(s) = surge {
-        let inst = Instrument::Plugin(s.plugin_ref());
-        out["surge_xt"] = json!({ "op": "set_instrument", "track": t, "instrument": inst });
-        out["how"] = json!(
-            "set_instrument Surge XT on the track (surge_xt), then a patch's `load`; render a bar or two of it and try another if it isn't right"
-        );
-    }
-    Ok(out)
+        "how": "an instrument's set_instrument on the track, then one of its presets' load; or a sample with samples_put. Render a bar or two and try another if it isn't right. `presets` lists everything an instrument has.",
+    }))
 }
 
 /// A channel strip for a part: EQ, compressor, saturator, pan, and how much reverb.
@@ -904,8 +1010,8 @@ pub fn master(dir: &Path, lufs: Option<f32>) -> Result<Value, String> {
 /// How an agent makes a song that sounds finished, with these tools.
 pub const WORKFLOW: &str = "1. playbook <genre>, then set_genre, set_tempo and set_key from it. \
 2. Chords first: theory for progressions, set_chords. \
-3. A loop of 4-8 bars: tracks for its parts; sounds <role> for each (Surge XT patches, plugins, \
-samples) instead of the sine synth or built-in kit; write_drums, write_bass (style kick for an \
+3. A loop of 4-8 bars: tracks for its parts; sounds <role> for each (any installed instrument's \
+presets, or samples) instead of the sine synth or built-in kit; write_drums, write_bass (style kick for an \
 808), write_chords, write_melody. \
 4. critique quick: fix every \"fix\"; render a bar range and listen-check with analyze. \
 5. arrange (the genre's sections), then transition into each section (build into choruses and \

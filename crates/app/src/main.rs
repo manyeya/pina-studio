@@ -82,10 +82,11 @@ const USAGE: &str = "usage:
                                    the command that fixes it; --quick skips the render
   tempo playbook [genre]           what a genre is: tempo, swing, parts and their sounds,
                                    sections, progressions, mix targets
+  tempo playbook --edit [genre]    open the playbooks (JSON, one a genre) to edit or add to
   tempo theory <key> [words]       the key's chords, and progressions for a genre or mood
   tempo reference <file> [project] measure a finished song; with a project, aim its mix there
   tempo sounds <role> [--genre g] [words]
-                                   Surge XT patches, instruments and samples for a part
+                                   every instrument's presets that suit a part, and samples
   tempo mix <project> [--track N] [--no-levels]
                                    EQ, compression, saturation, pan, reverb and level, by
                                    the part each track plays
@@ -171,6 +172,17 @@ fn main() {
             }
         }
         ["playbook"] => print(produce::playbook(None)),
+        ["playbook", "--edit"] => produce::edit_playbooks(None),
+        ["playbook", "--edit", genre] => produce::edit_playbooks(Some(genre)),
+        // An instrument's presets, listed by loading it alone: run by `tempo sounds`.
+        ["__presets", plugin] => serde_json::from_str::<tempo_engine::project::PluginRef>(plugin)
+            .map_err(|e| e.to_string())
+            .and_then(|r| {
+                let dir = std::env::temp_dir();
+                let (plugin, _) = tempo_engine::engine::load_plugin(&r, &dir, 48_000.0)?;
+                println!("{}", serde_json::to_string(&plugin.presets()).unwrap());
+                Ok(())
+            }),
         ["playbook", genre @ ..] => print(produce::playbook(Some(&genre.join(" ")))),
         ["theory", key, words @ ..] => print(produce::theory(key, &words.join(" "))),
         ["reference", file] => print(produce::reference(p(file), None)),
@@ -293,6 +305,7 @@ fn open(dir: &Path) -> Result<(), String> {
             Menu::new("File").items([
                 MenuItem::action("New Song…", NewSong),
                 MenuItem::action("Songs…", ShowSongs),
+                MenuItem::action("Edit Genre Playbooks…", EditPlaybooks),
                 MenuItem::separator(),
                 MenuItem::action("Save", Save),
                 MenuItem::action("Export to WAV", Export),

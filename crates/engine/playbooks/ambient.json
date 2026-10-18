@@ -1,0 +1,54 @@
+{
+  "id": "ambient",
+  "name": "Ambient",
+  "tempo": [60.0, 90.0],
+  "minor": false,
+  "groove": "lofi",
+  "swing": 50,
+  "harmony": "dreamy ambient",
+  "parts": [
+    {
+      "role": "pad",
+      "sound": "evolving pad, atmosphere, drone",
+      "write": "write_chords voicing spread, held, 2 bars a chord"
+    },
+    {
+      "role": "texture",
+      "sound": "field recording, noise, granular",
+      "write": "a long audio region"
+    },
+    {
+      "role": "lead",
+      "sound": "bell, piano, soft pluck",
+      "write": "write_melody counter or hook with density 0.2"
+    },
+    {
+      "role": "bass",
+      "sound": "sub drone",
+      "write": "write_bass roots"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Open",
+      "bars": 16,
+      "parts": ["pad", "texture"],
+      "energy": 1
+    },
+    {
+      "name": "Bloom",
+      "bars": 32,
+      "parts": ["pad", "texture", "lead", "bass"],
+      "energy": 3
+    },
+    {
+      "name": "Fade",
+      "bars": 16,
+      "parts": ["pad", "texture"],
+      "energy": 1
+    }
+  ],
+  "lufs": -16,
+  "spectrum": [-7.0, -5.5, -5.5, -12.0, -18.0, -20.5],
+  "notes": ["Slow change and space; long reverbs, no hard transients."]
+}

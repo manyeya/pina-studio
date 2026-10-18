@@ -1,0 +1,82 @@
+{
+  "id": "house",
+  "name": "House",
+  "tempo": [118.0, 128.0],
+  "minor": true,
+  "groove": "house",
+  "swing": 54,
+  "harmony": "house",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "909 house kit, open hat, clap, shaker",
+      "write": "write_drums house"
+    },
+    {
+      "role": "chords",
+      "sound": "house stab, organ, piano, M1 piano",
+      "write": "write_chords rhythm offbeat or stabs, voicing close"
+    },
+    {
+      "role": "bass",
+      "sound": "house bass, sub, organ bass",
+      "write": "write_bass offbeat or octaves"
+    },
+    {
+      "role": "pad",
+      "sound": "warm pad, strings",
+      "write": "write_chords voicing spread"
+    },
+    {
+      "role": "lead",
+      "sound": "vocal chop, pluck, synth lead",
+      "write": "write_melody riff"
+    },
+    {
+      "role": "fx",
+      "sound": "riser, white noise sweep, crash",
+      "write": "transition riser before the drop"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 16,
+      "parts": ["drums"],
+      "energy": 2
+    },
+    {
+      "name": "Build",
+      "bars": 16,
+      "parts": ["drums", "bass", "chords"],
+      "energy": 3
+    },
+    {
+      "name": "Drop",
+      "bars": 32,
+      "parts": ["drums", "bass", "chords", "lead"],
+      "energy": 5
+    },
+    {
+      "name": "Breakdown",
+      "bars": 16,
+      "parts": ["pad", "chords", "fx"],
+      "energy": 2
+    },
+    {
+      "name": "Drop 2",
+      "bars": 32,
+      "parts": ["drums", "bass", "chords", "lead", "pad"],
+      "energy": 5
+    },
+    {
+      "name": "Outro",
+      "bars": 16,
+      "parts": ["drums"],
+      "energy": 2
+    }
+  ],
+  "lufs": -8.5,
+  "spectrum": [-4.0, -4.0, -8.0, -13.5, -16.5, -18.5],
+  "notes": ["Four on the floor; the bass between kicks (offbeat), never on them.", "Long DJ-friendly intro and outro of drums only.", "Sidechain the bass and pads to the kick."]
+}

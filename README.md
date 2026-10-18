@@ -257,13 +257,18 @@ agent can send, with examples. An agent can:
   - `tempo playbook <genre>`: what a genre is (17 of them, lofi to amapiano): its tempo, swing and
     keys, its parts with the sounds they take and how to write them, its sections, progressions,
     and where its mixes sit (loudness and six-band balance, measured from released songs).
+    Playbooks are JSON files, one a genre, in `~/Library/Application Support/tempo/playbooks/`
+    (File ▸ Edit Genre Playbooks…, or `tempo playbook --edit [genre]`): edit one and agents and
+    the critic follow it; add a file for a new genre; delete one to get tempo's back. tempo's own
+    are in `crates/engine/playbooks/`.
   - `tempo theory "A minor" dark trap`: the key's chords and progressions that suit the words.
     `set_chords` takes them as symbols (`Am9 | Fmaj9`) or numerals (`i9 | VImaj9`) and makes them
     the song's chord track; `write_chords`, `write_bass`, `write_melody` and `write_drums` write
     parts on it that are in key and on the chords, voice-led, with a player's rhythm and a
     genre's groove (swing, ghosts, rolls, fills); an 808 can follow the kick.
   - `tempo sounds <role> --genre trap`: real sounds for a part instead of the built-in sine:
-    Surge XT patches (with the command that loads each), instrument plugins, and samples.
+    every installed instrument's presets that suit it (each instrument asked for its own, a few
+    from each, with the commands that load them), and samples.
   - `tempo critique <project> [--quick]`: what's wrong, worst first, each with where and the
     command that fixes it: wrong notes and semitone clashes, a bass off its chords, kick and 808
     flamming, robotic velocities, missing swing, placeholder sounds, a song that never changes or

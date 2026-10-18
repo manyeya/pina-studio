@@ -1,0 +1,76 @@
+{
+  "id": "amapiano",
+  "name": "Amapiano",
+  "tempo": [110.0, 116.0],
+  "minor": true,
+  "groove": "amapiano",
+  "swing": 54,
+  "harmony": "amapiano",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "amapiano kit, shaker, soft kick, clap, rim",
+      "write": "write_drums amapiano"
+    },
+    {
+      "role": "bass",
+      "sound": "log drum, sub",
+      "write": "write_bass syncopated or kick, register 30-50; the log drum is the lead bass"
+    },
+    {
+      "role": "chords",
+      "sound": "jazzy piano, rhodes, organ",
+      "write": "write_chords voicing open, rhythm comp; maj9, m9"
+    },
+    {
+      "role": "pad",
+      "sound": "warm pad, strings",
+      "write": "write_chords voicing spread"
+    },
+    {
+      "role": "lead",
+      "sound": "vocal, sax, flute, whistle",
+      "write": "write_melody hook, density 0.5"
+    },
+    {
+      "role": "perc",
+      "sound": "shaker, conga, wood block",
+      "write": "pattern regions"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 16,
+      "parts": ["chords", "perc"],
+      "energy": 2
+    },
+    {
+      "name": "Groove",
+      "bars": 32,
+      "parts": ["drums", "chords", "bass", "perc"],
+      "energy": 4
+    },
+    {
+      "name": "Break",
+      "bars": 16,
+      "parts": ["chords", "pad"],
+      "energy": 2
+    },
+    {
+      "name": "Drop",
+      "bars": 32,
+      "parts": ["drums", "chords", "bass", "pad", "lead", "perc"],
+      "energy": 5
+    },
+    {
+      "name": "Outro",
+      "bars": 16,
+      "parts": ["drums", "chords"],
+      "energy": 2
+    }
+  ],
+  "lufs": -8.5,
+  "spectrum": [-1.5, -8.0, -10.0, -15.5, -19.0, -19.5],
+  "notes": ["The log drum: deep, pitched, syncopated, loud; the sub is most of the mix.", "Jazzy piano chords, long songs, slow builds."]
+}

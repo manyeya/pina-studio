@@ -1,0 +1,72 @@
+{
+  "id": "reggaeton",
+  "name": "Reggaeton",
+  "tempo": [88.0, 100.0],
+  "minor": true,
+  "groove": "reggaeton",
+  "swing": 50,
+  "harmony": "reggaeton",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "dembow kit, kick, snare, rim, hat",
+      "write": "write_drums reggaeton"
+    },
+    {
+      "role": "bass",
+      "sound": "808, sub",
+      "write": "write_bass kick"
+    },
+    {
+      "role": "chords",
+      "sound": "pluck, guitar, synth keys",
+      "write": "write_chords rhythm stabs"
+    },
+    {
+      "role": "lead",
+      "sound": "vocal, pluck, lead",
+      "write": "write_melody hook"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 4,
+      "parts": ["chords"],
+      "energy": 2
+    },
+    {
+      "name": "Verse",
+      "bars": 16,
+      "parts": ["drums", "bass", "chords"],
+      "energy": 3
+    },
+    {
+      "name": "Chorus",
+      "bars": 8,
+      "parts": ["drums", "bass", "chords", "lead"],
+      "energy": 5
+    },
+    {
+      "name": "Verse 2",
+      "bars": 16,
+      "parts": ["drums", "bass", "chords"],
+      "energy": 3
+    },
+    {
+      "name": "Chorus 2",
+      "bars": 8,
+      "parts": ["drums", "bass", "chords", "lead"],
+      "energy": 5
+    },
+    {
+      "name": "Outro",
+      "bars": 4,
+      "parts": ["chords"],
+      "energy": 1
+    }
+  ],
+  "lufs": -8.5,
+  "spectrum": [-3.5, -4.0, -8.0, -13.5, -17.0, -19.5],
+  "notes": ["The dembow (3+3+2) never stops in a verse or chorus.", "Big, simple 808 on the kick."]
+}

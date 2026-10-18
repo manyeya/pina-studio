@@ -1,0 +1,106 @@
+{
+  "id": "pop",
+  "name": "Pop",
+  "tempo": [95.0, 128.0],
+  "minor": false,
+  "groove": "pop",
+  "swing": 50,
+  "harmony": "pop",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "pop kit, big clap, punchy kick",
+      "write": "write_drums pop, fill_every 8"
+    },
+    {
+      "role": "chords",
+      "sound": "piano, guitar, synth keys",
+      "write": "write_chords rhythm pulse or push"
+    },
+    {
+      "role": "bass",
+      "sound": "synth bass, electric bass",
+      "write": "write_bass octaves or roots"
+    },
+    {
+      "role": "pad",
+      "sound": "lush pad, strings",
+      "write": "write_chords voicing spread"
+    },
+    {
+      "role": "lead",
+      "sound": "vocal, synth lead, pluck",
+      "write": "write_melody hook, the chorus a step higher"
+    },
+    {
+      "role": "fx",
+      "sound": "riser, impact, reverse",
+      "write": "transition into each chorus"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 4,
+      "parts": ["chords"],
+      "energy": 2
+    },
+    {
+      "name": "Verse",
+      "bars": 8,
+      "parts": ["drums", "chords", "bass"],
+      "energy": 2
+    },
+    {
+      "name": "Pre",
+      "bars": 8,
+      "parts": ["drums", "chords", "bass", "pad"],
+      "energy": 3
+    },
+    {
+      "name": "Chorus",
+      "bars": 8,
+      "parts": ["drums", "chords", "bass", "pad", "lead", "fx"],
+      "energy": 5
+    },
+    {
+      "name": "Verse 2",
+      "bars": 8,
+      "parts": ["drums", "chords", "bass", "lead"],
+      "energy": 3
+    },
+    {
+      "name": "Pre 2",
+      "bars": 8,
+      "parts": ["drums", "chords", "bass", "pad"],
+      "energy": 3
+    },
+    {
+      "name": "Chorus 2",
+      "bars": 8,
+      "parts": ["drums", "chords", "bass", "pad", "lead", "fx"],
+      "energy": 5
+    },
+    {
+      "name": "Bridge",
+      "bars": 8,
+      "parts": ["chords", "pad"],
+      "energy": 2
+    },
+    {
+      "name": "Chorus 3",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "pad", "lead", "fx"],
+      "energy": 5
+    },
+    {
+      "name": "Outro",
+      "bars": 4,
+      "parts": ["chords"],
+      "energy": 1
+    }
+  ],
+  "lufs": -9,
+  "spectrum": [-5.5, -4.5, -7.5, -13.0, -16.0, -18.0],
+  "notes": ["The chorus is the loudest, widest, highest moment; get there in under a minute.", "Bright and clear on top, tight low end."]
+}

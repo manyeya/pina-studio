@@ -1,0 +1,83 @@
+{
+  "id": "trap",
+  "name": "Trap",
+  "tempo": [130.0, 160.0],
+  "minor": true,
+  "groove": "trap",
+  "swing": 50,
+  "harmony": "trap dark",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "808 trap kit, crisp clap, hard kick, rolling hats",
+      "write": "write_drums trap (hats roll), fill_every 8"
+    },
+    {
+      "role": "bass",
+      "sound": "808, long 808 with glide, distorted 808",
+      "write": "write_bass kick (follows the kick), register 26-43; saturate it"
+    },
+    {
+      "role": "lead",
+      "sound": "bell, pluck, dark piano, flute, choir",
+      "write": "write_melody riff or hook in a high register, density 0.6"
+    },
+    {
+      "role": "pad",
+      "sound": "dark pad, strings, choir",
+      "write": "write_chords voicing spread, rhythm held, -6 dB under the lead"
+    },
+    {
+      "role": "fx",
+      "sound": "riser, reverse cymbal, impact",
+      "write": "transition riser into the hook, impact on its downbeat"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 8,
+      "parts": ["lead", "pad"],
+      "energy": 2
+    },
+    {
+      "name": "Hook",
+      "bars": 16,
+      "parts": ["drums", "bass", "lead", "pad", "fx"],
+      "energy": 5
+    },
+    {
+      "name": "Verse",
+      "bars": 16,
+      "parts": ["drums", "bass", "lead"],
+      "energy": 3
+    },
+    {
+      "name": "Hook 2",
+      "bars": 16,
+      "parts": ["drums", "bass", "lead", "pad", "fx"],
+      "energy": 5
+    },
+    {
+      "name": "Bridge",
+      "bars": 8,
+      "parts": ["lead", "pad"],
+      "energy": 2
+    },
+    {
+      "name": "Hook 3",
+      "bars": 16,
+      "parts": ["drums", "bass", "lead", "pad"],
+      "energy": 5
+    },
+    {
+      "name": "Outro",
+      "bars": 4,
+      "parts": ["lead"],
+      "energy": 1
+    }
+  ],
+  "lufs": -8.5,
+  "spectrum": [-2.0, -7.0, -9.5, -14.5, -18.0, -20.0],
+  "notes": ["The 808 is the bass: its root on the song's chord, on the kick, held to the next hit. Never a kick and an 808 a few ticks apart.", "Hats at half time feel: eighths with 32nd rolls at bar ends.", "The melody is a short, dark loop: 2 bars, minor, in a high register clear of the 808.", "Big sub, mono; drums and 808 loudest, melody under them."]
+}

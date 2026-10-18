@@ -111,7 +111,8 @@ pub fn music(p: &Project) -> Vec<Issue> {
     let mut out = Vec::new();
     let bar = p.bar();
     let beat = p.beat();
-    let book = p.genre.as_deref().and_then(playbook::find);
+    let found = p.genre.as_deref().and_then(playbook::find);
+    let book = found.as_ref();
     let key = p.song_key();
     let end = p.end();
     let song_bars = end.div_ceil(bar);
@@ -172,7 +173,7 @@ pub fn music(p: &Project) -> Vec<Issue> {
             Some(Instrument::Synth) => out.push(issue("improve", "sound",
                 "plays the built-in sine synth, a placeholder that sounds like a test tone".into(),
                 Some(track_name(p, t)),
-                format!("give it a real instrument: sounds role \"{}\" lists plugins, Surge XT patches and samples", roles[t]))),
+                format!("give it a real instrument: sounds role \"{}\" lists every instrument's presets that suit it, and samples", roles[t]))),
             Some(Instrument::Drums) => out.push(issue("improve", "sound",
                 "plays the built-in synthesized kit".into(), Some(track_name(p, t)),
                 "samples_kit for a real kit that goes together, then write_drums on it".into())),
@@ -440,7 +441,8 @@ fn spectrum(a: &Analysis) -> [f32; 6] {
 /// What a render of the song says.
 pub fn mix(p: &Project, heard: &Heard) -> Vec<Issue> {
     let mut out = Vec::new();
-    let book = p.genre.as_deref().and_then(playbook::find);
+    let found = p.genre.as_deref().and_then(playbook::find);
+    let book = found.as_ref();
     let m = heard.mix;
     let roles: Vec<&str> = p.tracks.iter().map(role).collect();
     let peak = m.peak_db[0].max(m.peak_db[1]);
@@ -480,7 +482,7 @@ pub fn mix(p: &Project, heard: &Heard) -> Vec<Issue> {
                 .file_stem()
                 .map_or("".into(), |s| s.to_string_lossy().to_string())
         ),
-        None => format!("finished {} songs", book.map_or("", |b| b.name)),
+        None => format!("finished {} songs", book.map_or("", |b| b.name.as_str())),
     };
     if m.lufs < target - 3.0 {
         out.push(issue(

@@ -1,0 +1,77 @@
+{
+  "id": "neo_soul",
+  "name": "Neo-soul",
+  "tempo": [70.0, 95.0],
+  "minor": false,
+  "groove": "neo_soul",
+  "swing": 62,
+  "harmony": "neo_soul",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "live kit, rim, brushes, dusty",
+      "write": "write_drums neo_soul"
+    },
+    {
+      "role": "chords",
+      "sound": "rhodes, wurlitzer, organ",
+      "write": "write_chords voicing rootless or open, rhythm comp"
+    },
+    {
+      "role": "bass",
+      "sound": "electric bass, synth bass",
+      "write": "write_bass syncopated or walking"
+    },
+    {
+      "role": "counter",
+      "sound": "guitar, horns",
+      "write": "write_melody counter"
+    },
+    {
+      "role": "lead",
+      "sound": "vocal, flute, synth lead",
+      "write": "write_melody hook"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 4,
+      "parts": ["chords"],
+      "energy": 2
+    },
+    {
+      "name": "Verse",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass"],
+      "energy": 3
+    },
+    {
+      "name": "Chorus",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "lead", "counter"],
+      "energy": 4
+    },
+    {
+      "name": "Verse 2",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "counter"],
+      "energy": 3
+    },
+    {
+      "name": "Chorus 2",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "lead", "counter"],
+      "energy": 5
+    },
+    {
+      "name": "Outro",
+      "bars": 8,
+      "parts": ["chords", "bass"],
+      "energy": 2
+    }
+  ],
+  "lufs": -11,
+  "spectrum": [-6.0, -4.0, -6.0, -13.0, -17.5, -21.0],
+  "notes": ["Drunk feel: heavy swing (60-65), ghost notes on the snare.", "ii-V's, 9ths, 11ths, 13ths; chromatic approach chords."]
+}

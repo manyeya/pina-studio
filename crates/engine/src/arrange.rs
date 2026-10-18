@@ -340,7 +340,7 @@ pub fn arrange(p: &mut Project, a: Arrangement) -> Result<Value, String> {
             book.sections
                 .iter()
                 .map(|s| SectionIn {
-                    name: s.name.into(),
+                    name: s.name.clone(),
                     bars: s.bars,
                     parts: s.parts.iter().map(|x| x.to_string()).collect(),
                     energy: Some(s.energy),

@@ -1,0 +1,89 @@
+{
+  "id": "edm",
+  "name": "EDM / future bass",
+  "tempo": [128.0, 150.0],
+  "minor": false,
+  "groove": "pop",
+  "swing": 50,
+  "harmony": "future_bass emotional",
+  "parts": [
+    {
+      "role": "drums",
+      "sound": "edm kit, big clap, punchy kick, snare roll",
+      "write": "write_drums pop, fill_every 8"
+    },
+    {
+      "role": "chords",
+      "sound": "supersaw, future bass chords, wobble chords",
+      "write": "write_chords voicing spread, rhythm pulse"
+    },
+    {
+      "role": "bass",
+      "sound": "sub, saw bass",
+      "write": "write_bass octaves or roots"
+    },
+    {
+      "role": "lead",
+      "sound": "pluck, synth lead, vocal chop",
+      "write": "write_melody hook"
+    },
+    {
+      "role": "fx",
+      "sound": "riser, impact, white noise",
+      "write": "transition riser into each drop, impact on it"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 8,
+      "parts": ["chords"],
+      "energy": 2
+    },
+    {
+      "name": "Verse",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass"],
+      "energy": 3
+    },
+    {
+      "name": "Build",
+      "bars": 8,
+      "parts": ["drums", "chords", "lead", "fx"],
+      "energy": 4
+    },
+    {
+      "name": "Drop",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "lead", "fx"],
+      "energy": 5
+    },
+    {
+      "name": "Break",
+      "bars": 8,
+      "parts": ["chords"],
+      "energy": 2
+    },
+    {
+      "name": "Build 2",
+      "bars": 8,
+      "parts": ["drums", "chords", "lead", "fx"],
+      "energy": 4
+    },
+    {
+      "name": "Drop 2",
+      "bars": 16,
+      "parts": ["drums", "chords", "bass", "lead", "fx"],
+      "energy": 5
+    },
+    {
+      "name": "Outro",
+      "bars": 8,
+      "parts": ["chords"],
+      "energy": 1
+    }
+  ],
+  "lufs": -7.5,
+  "spectrum": [-4.5, -4.5, -8.0, -13.0, -15.5, -17.0],
+  "notes": ["Builds rise for 8 bars (snare roll, riser, filter opening), then a gap, then the drop.", "Wide, bright and loud; sidechain everything to the kick."]
+}

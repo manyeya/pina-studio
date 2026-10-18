@@ -1,0 +1,71 @@
+{
+  "id": "cinematic",
+  "name": "Cinematic",
+  "tempo": [60.0, 100.0],
+  "minor": true,
+  "groove": "rock",
+  "swing": 50,
+  "harmony": "cinematic epic",
+  "parts": [
+    {
+      "role": "pad",
+      "sound": "strings, choir, brass, orchestral",
+      "write": "write_chords voicing spread, rhythm held"
+    },
+    {
+      "role": "bass",
+      "sound": "low strings, contrabass, sub",
+      "write": "write_bass roots"
+    },
+    {
+      "role": "lead",
+      "sound": "piano, solo strings, horn",
+      "write": "write_melody hook, density 0.5"
+    },
+    {
+      "role": "perc",
+      "sound": "taiko, epic drums, impacts",
+      "write": "write_drums rock on an epic kit"
+    },
+    {
+      "role": "fx",
+      "sound": "riser, impact, braam, reverse",
+      "write": "transitions at each section"
+    }
+  ],
+  "sections": [
+    {
+      "name": "Opening",
+      "bars": 8,
+      "parts": ["pad"],
+      "energy": 1
+    },
+    {
+      "name": "Theme",
+      "bars": 16,
+      "parts": ["pad", "lead", "bass"],
+      "energy": 2
+    },
+    {
+      "name": "Build",
+      "bars": 16,
+      "parts": ["pad", "lead", "bass", "perc"],
+      "energy": 3
+    },
+    {
+      "name": "Climax",
+      "bars": 16,
+      "parts": ["pad", "lead", "bass", "perc", "fx"],
+      "energy": 5
+    },
+    {
+      "name": "Resolve",
+      "bars": 8,
+      "parts": ["pad", "lead"],
+      "energy": 1
+    }
+  ],
+  "lufs": -14,
+  "spectrum": [-6.0, -5.0, -6.0, -12.5, -18.0, -21.0],
+  "notes": ["Dynamics are the point: quiet openings, a loud climax.", "Long reverbs; layers added one at a time."]
+}

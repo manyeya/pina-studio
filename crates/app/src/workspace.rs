@@ -43,6 +43,7 @@ actions!(
         ToggleAgent,
         NewSong,
         ShowSongs,
+        EditPlaybooks,
         BrowserUp,
         BrowserDown,
         BrowserNewTrack,
@@ -2521,6 +2522,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &ToggleAgent, window, cx| ws.toggle_agent(window, cx)))
             .on_action(cx.listener(|ws, _: &NewSong, window, cx| ws.new_song_sheet(window, cx)))
             .on_action(cx.listener(|ws, _: &ShowSongs, _, cx| ws.toggle_songs(cx)))
+            .on_action(|_: &EditPlaybooks, _, _| {
+                if let Err(e) = crate::produce::edit_playbooks(None) {
+                    eprintln!("playbooks: {e}");
+                }
+            })
             .on_action(cx.listener(|ws, _: &BrowserUp, _, cx| ws.move_picked(-1, cx)))
             .on_action(cx.listener(|ws, _: &BrowserDown, _, cx| ws.move_picked(1, cx)))
             .on_action(cx.listener(|ws, _: &BrowserNewTrack, _, cx| ws.use_picked(true, cx)))
