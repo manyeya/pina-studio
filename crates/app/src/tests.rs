@@ -2325,3 +2325,49 @@ fn audio_dragged_in_from_the_finder_lands_on_the_timeline(cx: &mut TestAppContex
     assert!(status.contains("WAV"), "{status}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[gpui::test]
+fn the_inspectors_strips_line_up_row_for_row(cx: &mut TestAppContext) {
+    use tempo_engine::project::Eq;
+    let dir = demo_copy("strips-line-up");
+    let (ws, cx) = open_at(cx, &dir);
+    let lined_up = |cx: &mut VisualTestContext, t: usize| {
+        ws.update(cx, |ws, cx| {
+            ws.select_track(t);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let named = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+        let track = cx.debug_bounds(named(format!("fader-Track({t})"))).unwrap();
+        let master = cx.debug_bounds("fader-Master").unwrap();
+        let (a, b) = (
+            cx.debug_bounds(named(format!("strip-Track({t})"))).unwrap(),
+            cx.debug_bounds("strip-Master").unwrap(),
+        );
+        (
+            track.origin.y == master.origin.y,
+            a.size.height == b.size.height,
+        )
+    };
+    // An audio track (its input, a send slot and a pan knob) beside the master (none of them).
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    assert_eq!(lined_up(cx, drums), (true, true));
+    // With an EQ, a plugin-less compressor and two sends, still.
+    ws.update(cx, |ws, _| {
+        let t = &mut ws.session.project.tracks[drums];
+        t.eq = Some(Eq::default());
+        t.sends = vec![
+            AuxSend {
+                bus: 1,
+                level_db: -6.0,
+                pre: false
+            };
+            2
+        ];
+    });
+    assert_eq!(lined_up(cx, drums), (true, true));
+    std::fs::remove_dir_all(dir).unwrap();
+}

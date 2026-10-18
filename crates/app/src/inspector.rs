@@ -668,20 +668,22 @@ impl Workspace {
                         )
                     }),
             )
-            .child(
+            .child({
+                // Side by side, row for row.
+                let (mut effects, mut sends) = strip::rows(self, Channel::Master);
+                if has_track {
+                    let (e, s) = strip::rows(self, Channel::Track(self.track));
+                    (effects, sends) = (effects.max(e), sends.max(s));
+                }
+                let layout = Layout::Compact { effects, sends };
                 div()
                     .flex()
                     .gap(px(8.))
                     .when(has_track, |d| {
-                        d.child(strip::strip(
-                            self,
-                            Channel::Track(self.track),
-                            Layout::Compact,
-                            cx,
-                        ))
+                        d.child(strip::strip(self, Channel::Track(self.track), layout, cx))
                     })
-                    .child(strip::strip(self, Channel::Master, Layout::Compact, cx)),
-            )
+                    .child(strip::strip(self, Channel::Master, layout, cx))
+            })
     }
 }
 

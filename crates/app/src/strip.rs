@@ -42,18 +42,17 @@ pub enum Builtin {
 /// Where a strip is drawn: narrow in the inspector, or in a row of the mixer.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Layout {
-    Compact,
+    /// Side by side in the inspector: at least this many effect and send rows, so strips with
+    /// fewer line up with the one beside them.
+    Compact { effects: usize, sends: usize },
     /// Which of the EQ, effect and send rows show, and how tall the fader stands.
-    Mixer {
-        rows: [bool; 3],
-        fader: f32,
-    },
+    Mixer { rows: [bool; 3], fader: f32 },
 }
 
 impl Layout {
     pub fn fader_h(self) -> f32 {
         match self {
-            Layout::Compact => 136.0,
+            Layout::Compact { .. } => 136.0,
             Layout::Mixer { fader, .. } => fader,
         }
     }
@@ -816,12 +815,28 @@ pub fn meter(level: [f32; 2], held: [f32; 2], w: f32, gap: f32) -> impl IntoElem
     .flex_none()
 }
 
+/// How many effect rows (its built-ins, its plugins and an empty slot) and send rows (its sends
+/// and a slot for another) a strip shows in the inspector.
+pub fn rows(ws: &Workspace, ch: Channel) -> (usize, usize) {
+    let (eq, comp) = ws.strip_dsp(ch);
+    let effects = eq.is_some() as usize
+        + comp.is_some() as usize
+        + ws.sat(ch).is_some() as usize
+        + ws.inserts(ch).len()
+        + 1;
+    let sends = match ch {
+        Channel::Track(i) => ws.session.project.tracks[i].sends.len() + 1,
+        _ => 0,
+    };
+    (effects, sends)
+}
+
 pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Workspace>) -> Div {
     let project = &ws.session.project;
     let mixer = matches!(layout, Layout::Mixer { .. });
     let rows = match layout {
         Layout::Mixer { rows, .. } => rows,
-        Layout::Compact => [true; 3],
+        Layout::Compact { .. } => [true; 3],
     };
     let (name, color) = ws.channel_look(ch);
     let (pan, mute, solo, id) = match ch {
@@ -953,11 +968,15 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
             cx,
         ));
     }
+    let (fit_effects, fit_sends) = match layout {
+        Layout::Mixer { .. } => (MIXER_INSERTS, MIXER_SENDS),
+        Layout::Compact { effects, sends } => (effects, sends),
+    };
     if mixer {
         effects.truncate(MIXER_INSERTS);
-        while effects.len() < MIXER_INSERTS {
-            effects.push(blank(slot_h));
-        }
+    }
+    while effects.len() < fit_effects {
+        effects.push(blank(slot_h));
     }
 
     // Sends, for tracks.
@@ -1030,9 +1049,9 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
     }
     if mixer {
         sends.truncate(MIXER_SENDS);
-        while sends.len() < MIXER_SENDS {
-            sends.push(blank(slot_h));
-        }
+    }
+    while sends.len() < fit_sends {
+        sends.push(blank(slot_h));
     }
 
     // Where it plays, in the mixer.
