@@ -61,6 +61,9 @@ pub const INSPECTOR_W: f32 = 248.0;
 pub const HEADER_W: f32 = 300.0;
 pub const MARKERS_H: f32 = 22.0;
 pub const RULER_H: f32 = 26.0;
+/// The top of each column beside the ruler (the headers' tools, a side panel's tabs or title),
+/// so their lines meet the ruler's.
+pub const TOP_H: f32 = MARKERS_H + RULER_H;
 /// A track's lane as it opens, and how short and tall one can be dragged.
 pub const LANE_H: f32 = 76.0;
 pub const MIN_LANE_H: f32 = 40.0;

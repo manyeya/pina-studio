@@ -132,7 +132,18 @@ impl Workspace {
             .bg(rgb(SURFACE))
             .border_r_1()
             .border_color(rgb(LINE))
-            .child(div().flex_none().p(px(12.)).pb(px(0.)).child(tabs))
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(TOP_H))
+                    .px(px(12.))
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .border_b_1()
+                    .border_color(rgb(LINE))
+                    .child(tabs),
+            )
             .child(
                 div()
                     .id("inspector")

@@ -187,7 +187,7 @@ impl Workspace {
             .flex_col()
             .child(
                 div()
-                    .h(px(MARKERS_H + RULER_H))
+                    .h(px(TOP_H))
                     .flex_none()
                     .flex()
                     .child(self.toolbar(cx))

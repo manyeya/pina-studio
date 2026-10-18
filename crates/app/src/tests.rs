@@ -3905,6 +3905,15 @@ fn shots() {
                     }
                     ws.steps_row = 2;
                 }
+                // The tracks with the sample browser beside them and the piano roll under them,
+                // no inspector: the columns' edges, to line up.
+                "beside" | "beside-agent" => {
+                    ws.show_inspector = page == "beside-agent";
+                    ws.show_samples = page == "beside";
+                    ws.show_agent = page == "beside-agent";
+                    ws.track = 1;
+                    ws.show_bottom(Bottom::PianoRoll, cx);
+                }
                 // The console headers: a stereo pan, a binaural one, a tall track, a muted region;
                 // and each right-click menu.
                 "tracks" | "track-menu" | "pan-menu" | "region-menu" | "lane-menu" | "panner" => {

@@ -445,7 +445,7 @@ impl Workspace {
                 .unwrap_or_default(),
         };
         let header = div()
-            .h(px(40.))
+            .h(px(TOP_H))
             .flex_none()
             .flex()
             .items_center()

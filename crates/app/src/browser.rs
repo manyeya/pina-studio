@@ -2018,7 +2018,7 @@ impl Workspace {
         let fits = self.fits_song();
         let in_key = b.play_in_key;
         let header = div()
-            .h(px(40.))
+            .h(px(TOP_H))
             .flex_none()
             .flex()
             .items_center()
