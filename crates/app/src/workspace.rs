@@ -776,7 +776,10 @@ impl Workspace {
                     let down: f32 = down.parse().unwrap_or(0.0);
                     ws.genres.scroll.set_offset(gpui::point(px(0.), px(-down)));
                 }
-                ("agent", _) => ws.show_agent = true,
+                ("agent", rest) => {
+                    ws.show_agent = true;
+                    ws.chat.critic.open = rest == "critic";
+                }
                 _ => {}
             }
         }

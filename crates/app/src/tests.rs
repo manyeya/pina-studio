@@ -2611,14 +2611,14 @@ fn the_agent_panel_knows_the_song_and_its_critic(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
 
-    // The path: the demo has a loop but no genre, chords or mix.
+    // The path: the demo has a loop, its keys playing chords, but no genre or mix.
     let done: Vec<bool> = ws.read_with(cx, |ws, _| {
         crate::producer::STAGES
             .iter()
             .map(|s| s.done(&ws.session.project))
             .collect()
     });
-    assert_eq!(done, [false, false, true, false, false, false]);
+    assert_eq!(done, [false, true, true, false, false, false]);
 
     // The genre picker sets the song's genre, from the playbooks.
     click_on(cx, "agent-genre", Modifiers::none(), MouseButton::Left);

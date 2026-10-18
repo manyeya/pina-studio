@@ -566,26 +566,35 @@ impl Workspace {
                 .into_any_element(),
         };
         let (busy, remote) = (c.busy, c.remote);
+        let empty = c.input.read(cx).text().trim().is_empty();
+        // Send, a solid circle when there's something to send; Stop, the same circle, while it
+        // works.
         let send = div()
-            .size(px(28.))
+            .size(px(30.))
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(14.))
-            .cursor_pointer()
+            .rounded(px(15.))
             .map(|d| match busy {
                 true => d
-                    .bg(rgb(RAISED))
-                    .child(icon(Icon::Stop, 14.).text_color(rgb(TEXT)))
+                    .bg(rgb(TEXT))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(rgb(0xffffff)))
+                    .child(div().size(px(10.)).rounded(px(2.)).bg(rgb(BG)))
                     .debug_selector(|| "agent-stop".into())
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, _, _, cx| ws.stop_agent(cx)),
                     ),
                 false => d
-                    .bg(rgb(ACCENT))
-                    .child(icon(Icon::Send, 14.).text_color(rgb(BG)))
+                    .when(empty, |d| d.bg(rgb(RAISED)))
+                    .when(!empty, |d| {
+                        d.bg(rgb(TEXT))
+                            .cursor_pointer()
+                            .hover(|d| d.bg(rgb(0xffffff)))
+                    })
+                    .child(icon(Icon::Send, 14.).text_color(rgb(if empty { TEXT_4 } else { BG })))
                     .debug_selector(|| "agent-send".into())
                     .on_mouse_down(
                         MouseButton::Left,
@@ -595,95 +604,110 @@ impl Workspace {
                     ),
             })
             .when(busy && remote, |d| d.opacity(0.4));
-        let selection = self
-            .selection_note()
-            .map(|(label, _)| (label, c.use_selection));
-        let composer = div()
-            .flex_none()
-            .p(px(10.))
-            .border_t_1()
-            .border_color(rgb(LINE))
-            .when_some(selection, |d, (label, on)| {
-                d.child(
-                    div().pb(px(7.)).flex().child(
-                        div()
-                            .id("agent-selection")
-                            .max_w_full()
-                            .h(px(24.))
-                            .px(px(8.))
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .rounded(px(7.))
-                            .border_1()
-                            .cursor_pointer()
-                            .when(on, |d| {
-                                d.bg(alpha(ACCENT, 0.12))
-                                    .border_color(alpha(ACCENT, 0.4))
-                                    .text_color(rgb(ACCENT_TEXT))
-                            })
-                            .when(!on, |d| {
-                                d.border_color(rgb(LINE))
-                                    .text_color(rgb(TEXT_4))
-                                    .line_through()
-                            })
-                            .text_size(px(11.))
-                            .child(icon(Icon::Pointer, 11.).text_color(rgb(if on {
-                                ACCENT_TEXT
-                            } else {
-                                TEXT_4
-                            })))
-                            .child(
-                                div()
-                                    .whitespace_nowrap()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(format!("With {label}")),
-                            )
-                            .debug_selector(|| "agent-selection".into())
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|ws, _, _, cx| {
-                                    ws.chat.use_selection ^= true;
-                                    cx.notify();
-                                }),
-                            ),
-                    ),
-                )
-            })
-            .child(
+        // What's selected, as context that goes along: a chip to take out, or (taken out) a
+        // dashed one to put back.
+        let selection =
+            self.selection_note().map(|(label, _)| {
+                let on = c.use_selection;
                 div()
+                    .id("agent-selection")
+                    .min_w(px(0.))
+                    .flex_shrink(1.)
+                    .h(px(26.))
+                    .pl(px(8.))
+                    .pr(px(if on { 4. } else { 9. }))
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .h(px(42.))
-                    .pl(px(12.))
-                    .pr(px(7.))
-                    .rounded(px(12.))
-                    .bg(rgb(FIELD))
+                    .rounded(px(8.))
                     .border_1()
-                    .border_color(rgb(LINE_STRONG))
+                    .cursor_pointer()
+                    .text_size(px(11.5))
+                    .when(on, |d| {
+                        d.bg(rgb(RAISED))
+                            .border_color(rgb(LINE_STRONG))
+                            .text_color(rgb(TEXT_2))
+                            .hover(|d| d.border_color(rgb(TEXT_4)))
+                    })
+                    .when(!on, |d| {
+                        d.border_dashed()
+                            .border_color(rgb(LINE_STRONG))
+                            .text_color(rgb(TEXT_4))
+                            .hover(|d| d.text_color(rgb(TEXT_3)))
+                    })
+                    .child(
+                        icon(if on { Icon::Pointer } else { Icon::Plus }, 11.)
+                            .text_color(rgb(if on { ACCENT_TEXT } else { TEXT_4 })),
+                    )
                     .child(
                         div()
-                            .flex_1()
                             .min_w(px(0.))
-                            .text_size(px(13.))
-                            .debug_selector(|| "agent-input".into())
-                            .child(c.input.clone()),
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(label),
                     )
-                    .child(send),
-            )
-            .child(
-                div()
-                    .pt(px(6.))
-                    .px(px(4.))
-                    .text_size(px(10.5))
-                    .text_color(rgb(TEXT_4))
-                    .child(match busy {
-                        true => "Edits land as they're made · ⌘Z undoes each",
-                        false => "Enter sends · Claude Code, with tempo's tools only",
-                    }),
-            );
+                    .when(on, |d| {
+                        d.child(
+                            div()
+                                .size(px(18.))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(5.))
+                                .hover(|d| d.bg(rgb(LINE_STRONG)))
+                                .child(icon(Icon::Close, 9.).text_color(rgb(TEXT_3))),
+                        )
+                    })
+                    .debug_selector(|| "agent-selection".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, _, _, cx| {
+                            ws.chat.use_selection ^= true;
+                            cx.notify();
+                        }),
+                    )
+            });
+        let critic = self.critic_chip(cx);
+        let c = &self.chat;
+        // One card: what's typed, and under it what goes with it and the button that sends it.
+        let composer = div().flex_none().px(px(10.)).pb(px(10.)).pt(px(4.)).child(
+            div()
+                .flex()
+                .flex_col()
+                .rounded(px(14.))
+                .bg(rgb(FIELD))
+                .border_1()
+                .border_color(rgb(LINE_STRONG))
+                .shadow_lg()
+                .child(
+                    div()
+                        .min_h(px(30.))
+                        .px(px(13.))
+                        .pt(px(12.))
+                        .pb(px(4.))
+                        .flex()
+                        .items_center()
+                        .text_size(px(13.))
+                        .debug_selector(|| "agent-input".into())
+                        .child(c.input.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .pl(px(8.))
+                        .pr(px(7.))
+                        .pt(px(4.))
+                        .pb(px(7.))
+                        .children(selection)
+                        .child(critic)
+                        .child(div().flex_1())
+                        .child(send),
+                ),
+        );
         div()
             .w(px(self.panel_width()))
             .flex_none()
@@ -697,13 +721,13 @@ impl Workspace {
             .child(header)
             .child(self.agent_context(cx))
             .child(body)
-            .child(self.critic_card(cx))
+            .children(self.critic_sheet(cx))
             .child(composer)
             .child(self.panel_edge(cx))
     }
 
     /// Before the first request: what it does, and some things to ask.
-    fn agent_welcome(&self, cx: &mut Context<Self>) -> Div {
+    fn agent_welcome(&self, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
         let def = self.chat.kind.def();
         let problem = match self.chat.readiness(self.chat.kind) {
             Some(Readiness::Missing) => Some(format!(
@@ -716,15 +740,19 @@ impl Workspace {
             )),
             _ => None,
         };
+        // Scrolls, top first, when the critic's sheet leaves it little room.
         div()
+            .id("agent-welcome")
             .flex_1()
             .min_h(px(0.))
+            .overflow_y_scroll()
             .flex()
             .flex_col()
-            .justify_center()
             .gap(px(14.))
             .px(px(18.))
-            .child(badge(self.chat.kind, 44., false))
+            .pt(px(22.))
+            .pb(px(12.))
+            .child(badge(self.chat.kind, 36., false))
             .child(
                 div()
                     .flex()
