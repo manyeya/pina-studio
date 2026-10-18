@@ -664,7 +664,7 @@ impl Workspace {
                 MenuAction::RevealSong(dir),
             ),
             ("    Save    ⌘S".to_string(), MenuAction::Save),
-            ("    Export to WAV    ⌘B".to_string(), MenuAction::Export),
+            ("    Bounce…    ⌘B".to_string(), MenuAction::Export),
         ]);
         Menu {
             at,

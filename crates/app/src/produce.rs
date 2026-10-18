@@ -1055,4 +1055,5 @@ presets, or samples) instead of the sine synth or built-in kit; write_drums, wri
 drops, fill or reverse into verses). Vary sections: write_melody with another seed or style in \
 the chorus, take parts out of verses. \
 6. mix_role, then critique (it renders): fix mix issues. \
-7. master. 8. critique once more; say what you made and what's left.";
+7. master. 8. critique once more; say what you made and what's left. \
+Asked for files (a master, stems, an MP3): bounce, with the formats, bits, rate and loudness asked.";

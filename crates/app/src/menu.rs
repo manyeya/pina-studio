@@ -181,6 +181,10 @@ pub enum MenuAction {
     TimeSignature([u64; 2]),
     /// Opens a text field to name something.
     Rename(Name),
+    /// A track rendered to audio on a track of its own.
+    BounceInPlace(usize),
+    /// The Bounce sheet, on stems, with one track ticked.
+    ExportStem(usize),
     /// Makes an alias of a region, after it.
     Alias(At),
     /// Makes an alias a region of its own.
@@ -441,7 +445,9 @@ impl Workspace {
             MenuAction::Save => {
                 self.save(cx);
             }
-            MenuAction::Export => self.export(cx),
+            MenuAction::Export => self.open_export(cx),
+            MenuAction::BounceInPlace(t) => self.bounce_in_place(t, cx),
+            MenuAction::ExportStem(t) => self.export_stem(t, cx),
         }
         cx.notify();
     }

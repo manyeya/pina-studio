@@ -678,6 +678,8 @@ pub struct Workspace {
     pub roll_hover: Option<u8>,
     /// Where the lane under the piano roll was drawn last frame.
     pub lane_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// The Bounce sheet, when it's open (and what it's bouncing).
+    pub export: Option<crate::export::Export>,
     /// The New Track palette, when it's open; and the presets it searches.
     pub adder: Option<crate::adder::Adder>,
     pub sounds: crate::adder::Sounds,
@@ -830,6 +832,7 @@ impl Workspace {
             painting: Vec::new(),
             roll_hover: None,
             lane_bounds: Rc::new(Cell::new(Bounds::default())),
+            export: None,
             adder: None,
             sounds: Default::default(),
             steps_row: 0,
@@ -2242,44 +2245,6 @@ impl Workspace {
         self.status = Some("Restored unsaved changes".into());
     }
 
-    /// Bounces the project to `Bounces/<name>.wav` in its folder, in the background.
-    pub fn export(&mut self, cx: &mut Context<Self>) {
-        if self.exporting {
-            return;
-        }
-        let mut project = self.session.project.clone();
-        if let Err(e) = self.player.save_states(&mut project) {
-            self.status = Some(e);
-            cx.notify();
-            return;
-        }
-        let dir = self.session.dir.clone();
-        let name = dir
-            .file_name()
-            .map_or("Untitled".into(), |n| n.to_string_lossy().into_owned());
-        let out = dir.join("Bounces").join(format!("{name}.wav"));
-        self.exporting = true;
-        self.status = Some("Exporting…".into());
-        cx.notify();
-        let job = cx.background_spawn(async move {
-            std::fs::create_dir_all(out.parent().unwrap()).map_err(|e| e.to_string())?;
-            crate::cli::bounce(&project, &dir, &out).map(|()| out)
-        });
-        cx.spawn(async move |this, cx| {
-            let result = job.await;
-            this.update(cx, |ws, cx| {
-                ws.exporting = false;
-                ws.status = Some(match result {
-                    Ok(out) => format!("Exported {}", out.display()),
-                    Err(e) => format!("Couldn't export: {e}"),
-                });
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     /// Quits, asking first if there are unsaved changes.
     fn quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.session.edited {
@@ -2692,7 +2657,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &Save, _, cx| {
                 ws.save(cx);
             }))
-            .on_action(cx.listener(|ws, _: &Export, _, cx| ws.export(cx)))
+            .on_action(cx.listener(|ws, _: &Export, _, cx| ws.open_export(cx)))
             .on_action(cx.listener(|ws, _: &ToggleCycle, _, cx| ws.toggle_cycle(cx)))
             .on_action(cx.listener(|ws, _: &ToggleMetronome, _, cx| ws.toggle_metronome(cx)))
             .on_action(cx.listener(|ws, _: &Quit, window, cx| ws.quit(window, cx)))
@@ -2791,6 +2756,7 @@ impl Render for Workspace {
             .children(self.new_song_view(cx))
             .children(self.menu_view(cx))
             .children(self.adder_view(cx))
+            .children(self.export_view(cx))
             .children(self.picker_view(cx))
     }
 }

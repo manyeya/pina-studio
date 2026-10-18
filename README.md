@@ -162,6 +162,19 @@ In the app, mostly as in Logic:
   own; "Make unique" in the inspector, splitting it or trimming its start unlinks it). Option-drag
   an audio region's end to flex it (Flex Time: slower or faster, same pitch, by Signalsmith
   Stretch).
+- Bounce (⌘B, or Export in the control bar) opens the Bounce sheet, as Logic's Bounce and FL
+  Studio's Export: the mix, each track as a stem (through the master or not), or each marked
+  section as its own file; over the song, the cycle or any bars; as WAV, AIFF, FLAC, MP3 (LAME,
+  built in), AAC or ALAC (macOS's encoder), and the notes as a MIDI file, several formats at once;
+  16-, 24- or 32-bit float at 44.1 to 96 kHz (rendered at that rate, not converted); as it plays,
+  to a peak, or to a loudness (Club −9, Streaming −14, Apple −16, Broadcast −23 LUFS) under a
+  −1 dB ceiling; with the tail its reverbs and delays leave (until it's silent, ten seconds at
+  most); TPDF dither. Presets: Master, Streaming (WAV and MP3 at −14), CD (16-bit 44.1), Stems,
+  Demo MP3, MIDI. It shows how many files and how big before it starts, each file's progress as
+  it bounces, then each one's loudness and peak (and why, if its peaks kept it from the target),
+  to play or show in the Finder. Right-click a track's header for Bounce in Place (the track
+  rendered to audio on a track under it, through its own plugins and sends, the original muted;
+  one undo puts it back) or Export as Stem.
 - The piano roll works as Logic's and FL Studio's do. Pick notes by clicking (shift adds), by
   dragging a band over the grid, ⌘A for all, or ⌘-click a key for every note of its pitch; drag
   them together, by either edge to resize, ⌥-drag to copy. ↑↓ move them a semitone (⇧ an octave),
@@ -344,6 +357,11 @@ agent can send, with examples. An agent can:
     and limits the master to the genre's loudness (or a reference's: `tempo reference <file>
     <project>`), measuring until it's there.
   - `tempo analyze` and `tempo render` take `--bars 9-16` to hear part of a song.
+  - `tempo bounce <project>` (and the agents' `bounce` tool) bounces as the Bounce sheet does:
+    `--stems` (`--tracks 0,2`, `--master` through the master) or `--sections`, `--formats
+    wav,mp3,flac,aiff,aac,alac,midi`, `--bits`, `--rate`, `--lufs -14` (`--ceiling -1`) or
+    `--peak -1`, `--kbps`, `--no-tail`, `--bars`, `--out`, `--name`; it answers with each file
+    and its loudness and peak.
   - `tempo study <file> [--summary] [--playbook] [--offline]`: a finished song taken apart from
     its audio. Its identity (tags, else its file name; online, its year and genre from
     MusicBrainz), tempo, meter, key (and tuning, and sections in another key), chords beat by

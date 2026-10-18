@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod arrange;
+pub mod bounce;
 pub mod commands;
 pub mod compose;
 pub mod critique;

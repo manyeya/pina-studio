@@ -72,6 +72,32 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "bounce",
+            "description": "Bounces the song to files, as a person would from the Bounce sheet: the mix, each track as a stem (`what`: \"stems\", `tracks` to choose; through the master with `master`), or each marked section (`what`: \"sections\"); in `formats` (wav, aiff, flac, mp3, aac, alac, midi; several at once), `bits` (16, 24, 32), `rate`; levelled to a loudness (`lufs`, under `ceiling` dBFS, -1 by default) or a `peak`; with its reverb tail (`tail`, on by default); `from_bar`/`to_bar` for part of it. Into `out` (the song's Bounces folder by default). Answers with each file and its loudness and peak.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": project,
+                    "what": { "type": "string", "enum": ["mix", "stems", "sections"] },
+                    "tracks": { "type": "array", "items": { "type": "integer" } },
+                    "master": { "type": "boolean" },
+                    "formats": { "type": "array", "items": { "type": "string", "enum": ["wav", "aiff", "flac", "mp3", "aac", "alac", "midi"] } },
+                    "bits": { "type": "integer", "enum": [16, 24, 32] },
+                    "rate": { "type": "integer" },
+                    "lufs": { "type": "number" },
+                    "ceiling": { "type": "number" },
+                    "peak": { "type": "number" },
+                    "kbps": { "type": "integer" },
+                    "tail": { "type": "boolean" },
+                    "from_bar": { "type": "integer", "minimum": 1 },
+                    "to_bar": { "type": "integer", "minimum": 1 },
+                    "out": { "type": "string" },
+                    "name": { "type": "string" }
+                },
+                "required": ["project"]
+            }
+        },
+        {
             "name": "critique",
             "description": "A producer's notes on the song, worst first, each with where and the command that fixes it: wrong notes and semitone clashes, a bass off its chords, kick and bass flamming, robotic velocities, missing swing, placeholder sounds, a song that never changes or starts with everything, a hook weaker than its verse, no transitions; and (unless `quick`) from a render: clipping, loudness, tonal balance against the genre or reference, low end in the wrong parts, parts too loud for their role, stereo trouble. `quick` skips the render (fast: use it after each edit). `from_bar`/`to_bar` limit the render.",
             "inputSchema": {
@@ -309,6 +335,7 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
             &path(args, "out")?,
             bar_range(args)?,
         ),
+        "bounce" => cli::bounce_spec(&path(args, "project")?, args),
         "critique" => produce::critique(
             &path(args, "project")?,
             args.get("quick").and_then(Value::as_bool).unwrap_or(false),
@@ -556,6 +583,7 @@ mod tests {
                 "edit",
                 "analyze",
                 "render",
+                "bounce",
                 "critique",
                 "study",
                 "playbook",

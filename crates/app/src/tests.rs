@@ -3270,6 +3270,99 @@ fn the_sampler_takes_samples_slices_them_and_its_knobs_and_marks_turn(cx: &mut T
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Lets a background job and the timers watching it run, until `done`.
+fn settle(cx: &mut VisualTestContext, ws: &Entity<Workspace>, done: impl Fn(&Workspace) -> bool) {
+    for _ in 0..400 {
+        cx.executor().advance_clock(Duration::from_millis(150));
+        cx.run_until_parked();
+        if ws.read_with(cx, |ws, _| done(ws)) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    panic!("timed out");
+}
+
+#[gpui::test]
+fn the_bounce_sheet_writes_stems_in_several_formats(cx: &mut TestAppContext) {
+    let song = demo_copy("bounce");
+    let (ws, cx) = open_at(cx, &song);
+    cx.simulate_keystrokes("cmd-b");
+    assert!(ws.read_with(cx, |ws, _| ws.export.is_some()));
+    click_on(
+        cx,
+        "bounce-what-Stems",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(
+        cx,
+        "bounce-format-MP3",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(
+        cx,
+        "bounce-format-MIDI",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(cx, "bounce-level-2", Modifiers::none(), MouseButton::Left); // to a loudness
+    click_on(cx, "bounce-go", Modifiers::none(), MouseButton::Left);
+    settle(cx, &ws, |ws| {
+        ws.export
+            .as_ref()
+            .and_then(|e| e.run.as_ref())
+            .is_some_and(|r| r.finished)
+    });
+    // A file of each format for each track with something on it.
+    let name = song.file_name().unwrap().to_string_lossy().to_string();
+    for track in ["Keys", "Lead", "Drums"] {
+        for ext in ["wav", "mp3", "mid"] {
+            let f = song.join("Bounces").join(format!("{name} - {track}.{ext}"));
+            assert!(f.is_file(), "{}", f.display());
+        }
+    }
+    // 24-bit: its header says so (bits per sample at byte 34).
+    let wav = std::fs::read(song.join("Bounces").join(format!("{name} - Keys.wav"))).unwrap();
+    assert_eq!(u16::from_le_bytes([wav[34], wav[35]]), 24);
+    click_on(cx, "bounce-cancel", Modifiers::none(), MouseButton::Left); // Done
+    assert!(ws.read_with(cx, |ws, _| ws.export.is_none()));
+    let _ = std::fs::remove_dir_all(&song);
+}
+
+#[gpui::test]
+fn bounce_in_place_puts_a_track_on_audio_and_mutes_it(cx: &mut TestAppContext) {
+    use tempo_engine::project::Content;
+    let song = demo_copy("in-place");
+    let (ws, cx) = open_at(cx, &song);
+    let before = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    click_on(cx, "header-0", Modifiers::none(), MouseButton::Right);
+    click_on(cx, "menu-0", Modifiers::none(), MouseButton::Left); // Bounce in Place
+    settle(cx, &ws, |ws| ws.session.project.tracks.len() == before + 1);
+    let (muted, new) = ws.read_with(cx, |ws, _| {
+        (
+            ws.session.project.tracks[0].mute,
+            ws.session.project.tracks[1].clone(),
+        )
+    });
+    assert!(muted);
+    assert!(new.instrument.is_none() && new.name.ends_with("(bounced)"));
+    let Content::Audio { file, .. } = &new.regions[0].content else {
+        panic!("not audio")
+    };
+    assert!(song.join(file).is_file());
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        ws.read_with(cx, |ws, _| (
+            ws.session.project.tracks.len(),
+            ws.session.project.tracks[0].mute
+        )),
+        (before, false)
+    );
+    let _ = std::fs::remove_dir_all(&song);
+}
+
 /// Pages drawn to PNGs, to look at without a window on screen:
 /// `TEMPO_SHOT=<dir> TEMPO_SHOT_PAGE=study cargo test -p tempo shots -- --ignored`. The Song
 /// Study page shows the studies kept on this Mac, the first or the one whose file name has
@@ -3412,6 +3505,41 @@ fn shots() {
                             .update(cx, |s, cx| s.set_text(q, cx));
                     }
                 }
+                "bounce" => {
+                    ws.open_export(cx);
+                    ws.choose(crate::menu::MenuAction::Nothing, cx);
+                }
+                "bounce-stems" => {
+                    ws.export_stem(0, cx);
+                    if let Some(e) = ws.export.as_mut() {
+                        e.tracks = vec![true; e.tracks.len()];
+                        e.formats = vec![
+                            tempo_engine::bounce::Format::Wav,
+                            tempo_engine::bounce::Format::Mp3 { kbps: 320 },
+                            tempo_engine::bounce::Format::Flac,
+                        ];
+                        e.level = tempo_engine::bounce::Level::Loudness {
+                            lufs: -14.0,
+                            ceiling: -1.0,
+                        };
+                    }
+                }
+                "bounce-done" => {
+                    ws.export_stem(0, cx);
+                    if let Some(e) = ws.export.as_mut() {
+                        e.tracks = vec![true; e.tracks.len()];
+                        e.formats = vec![
+                            tempo_engine::bounce::Format::Wav,
+                            tempo_engine::bounce::Format::Mp3 { kbps: 320 },
+                        ];
+                        e.level = tempo_engine::bounce::Level::Loudness {
+                            lufs: -14.0,
+                            ceiling: -1.0,
+                        };
+                        e.folder = out.join("bounces");
+                    }
+                    ws.start_export(cx);
+                }
                 "steps-empty" => {
                     ws.select_track(1);
                     ws.region = Some((1, 0));
@@ -3451,6 +3579,26 @@ fn shots() {
             .unwrap()
     });
     cx.run_until_parked();
+    // A bounce runs to its end before it's drawn.
+    for _ in 0..600 {
+        let running = cx.update(|cx| {
+            window
+                .read(cx)
+                .map(|ws| {
+                    ws.export
+                        .as_ref()
+                        .and_then(|e| e.run.as_ref())
+                        .is_some_and(|r| !r.finished)
+                })
+                .unwrap_or(false)
+        });
+        if !running {
+            break;
+        }
+        cx.advance_clock(Duration::from_millis(150));
+        cx.run_until_parked();
+        thread::sleep(Duration::from_millis(5));
+    }
     let image = cx.capture_screenshot(window.into()).unwrap();
     let file = out.join(format!("{page}.png"));
     image.save(&file).unwrap();

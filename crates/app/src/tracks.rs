@@ -638,6 +638,23 @@ impl Workspace {
                     .border_b_1()
                     .border_color(rgb(LINE_SOFT))
                     .debug_selector(move || format!("header-{i}"))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            ws.select_track(i);
+                            let items = vec![
+                                ("Bounce in Place".to_string(), MenuAction::BounceInPlace(i)),
+                                ("Export as Stem…".to_string(), MenuAction::ExportStem(i)),
+                                ("Rename…".to_string(), MenuAction::Rename(Name::Track(i))),
+                            ];
+                            ws.menu = Some(Menu {
+                                at: e.position,
+                                items,
+                                ..Default::default()
+                            });
+                            cx.notify();
+                        }),
+                    )
                     // Its icon, in its colour: click to choose them.
                     .child(
                         div()

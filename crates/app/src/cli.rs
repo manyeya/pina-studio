@@ -1,7 +1,7 @@
 //! What agents and scripts run: each returns JSON (or text), and goes to the running app when it
 //! has the project open, so edits land on screen and can be undone there.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use tempo_engine::{
@@ -265,6 +265,145 @@ pub fn render(dir: &Path, out: &Path, bars_given: Option<(u64, u64)>) -> Result<
     let rate = p.sample_rate as f64;
     let seconds = length(&p) as f64 / rate;
     Ok(json!({ "file": out, "seconds": seconds, "sample_rate": p.sample_rate }))
+}
+
+/// Bounces a project (as the app has it, if open) as `spec` says, for `tempo bounce` and agents:
+/// `what` ("mix", "stems" or "sections"), `tracks` (stems: indices; all with regions by default),
+/// `formats` (wav, aiff, flac, mp3, aac, alac, midi), `bits` (16, 24, 32), `rate`, `lufs` or `peak`
+/// (dBFS) to level to (`ceiling`, -1 by default, under a loudness), `tail` (true), `master` (stems
+/// through the master), `from_bar`/`to_bar`, `out` (a folder: the song's Bounces by default),
+/// `name` (the song's by default), `kbps` (MP3 and AAC).
+pub fn bounce_spec(dir: &Path, spec: &Value) -> Result<Value, String> {
+    use tempo_engine::bounce::{self, Bits, Format, Job, Level, Options};
+    let p = project(dir)?;
+    let num = |k: &str| spec.get(k).and_then(Value::as_f64);
+    let kbps = num("kbps").map(|k| k as u32);
+    let formats: Vec<Format> = match spec.get("formats").and_then(Value::as_array) {
+        Some(list) => list
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|f| match f.to_lowercase().as_str() {
+                "wav" => Ok(Format::Wav),
+                "aiff" | "aif" => Ok(Format::Aiff),
+                "flac" => Ok(Format::Flac),
+                "mp3" => Ok(Format::Mp3 {
+                    kbps: kbps.unwrap_or(320),
+                }),
+                "aac" | "m4a" => Ok(Format::Aac {
+                    kbps: kbps.unwrap_or(256),
+                }),
+                "alac" => Ok(Format::Alac),
+                "midi" | "mid" => Ok(Format::Midi),
+                other => Err(format!(
+                    "{other} isn't a format: wav, aiff, flac, mp3, aac, alac or midi"
+                )),
+            })
+            .collect::<Result<_, _>>()?,
+        None => vec![Format::Wav],
+    };
+    let bits = match num("bits").map(|b| b as u32) {
+        None | Some(24) => Bits::I24,
+        Some(16) => Bits::I16,
+        Some(32) => Bits::F32,
+        Some(b) => return Err(format!("{b} bits: 16, 24 or 32")),
+    };
+    let ceiling = num("ceiling").unwrap_or(-1.0) as f32;
+    let level = match (num("lufs"), num("peak")) {
+        (Some(l), _) => Level::Loudness {
+            lufs: l as f32,
+            ceiling,
+        },
+        (None, Some(db)) => Level::Peak { db: db as f32 },
+        _ => Level::Off,
+    };
+    let opts = Options {
+        formats,
+        bits,
+        rate: num("rate").map_or(p.sample_rate, |r| r as u32),
+        level,
+        tail: spec.get("tail").and_then(Value::as_bool).unwrap_or(true),
+        dither: true,
+    };
+    let bar = |k: &str| spec.get(k).and_then(Value::as_u64);
+    let range = match (bar("from_bar"), bar("to_bar")) {
+        (None, None) => None,
+        (a, b) => Some(bars(
+            &p,
+            a.unwrap_or(1),
+            b.unwrap_or_else(|| p.end().div_ceil(p.bar().max(1))),
+        )?),
+    };
+    let song = dir
+        .file_name()
+        .map_or("Bounce".into(), |n| n.to_string_lossy().into_owned());
+    let base = bounce::file_safe(spec.get("name").and_then(Value::as_str).unwrap_or(&song));
+    let master = spec.get("master").and_then(Value::as_bool).unwrap_or(false);
+    let jobs: Vec<Job> = match spec.get("what").and_then(Value::as_str).unwrap_or("mix") {
+        "mix" => vec![Job {
+            name: base.clone(),
+            track: None,
+            range,
+            master: true,
+        }],
+        "stems" => {
+            let tracks: Vec<usize> = match spec.get("tracks").and_then(Value::as_array) {
+                Some(t) => t
+                    .iter()
+                    .filter_map(Value::as_u64)
+                    .map(|t| t as usize)
+                    .collect(),
+                None => bounce::tracks_with_regions(&p),
+            };
+            tracks
+                .into_iter()
+                .map(|t| {
+                    let name = p
+                        .tracks
+                        .get(t)
+                        .map(|x| x.name.clone())
+                        .ok_or(format!("there's no track {t}"))?;
+                    Ok(Job {
+                        name: format!("{base} - {}", bounce::file_safe(&name)),
+                        track: Some(t),
+                        range,
+                        master,
+                    })
+                })
+                .collect::<Result<_, String>>()?
+        }
+        "sections" => bounce::sections(&p)
+            .into_iter()
+            .enumerate()
+            .map(|(k, (name, from, to))| Job {
+                name: format!("{base} - {:02} {}", k + 1, bounce::file_safe(&name)),
+                track: None,
+                range: Some((from, to)),
+                master: true,
+            })
+            .collect(),
+        other => return Err(format!("{other}: mix, stems or sections")),
+    };
+    if jobs.is_empty() {
+        return Err("nothing to bounce: no tracks with regions, or no markers for sections".into());
+    }
+    let out = spec
+        .get("out")
+        .and_then(Value::as_str)
+        .map_or(dir.join("Bounces"), PathBuf::from);
+    let mut results = Vec::new();
+    for job in &jobs {
+        let done = bounce::bounce(&p, dir, job, &opts, &out, &|_| {})?;
+        let a = &done.analysis;
+        results.push(json!({
+            "name": done.name,
+            "files": done.files,
+            "seconds": (done.seconds * 100.0).round() / 100.0,
+            "lufs": (a.lufs as f64 * 10.0).round() / 10.0,
+            "peak_db": (a.peak_db[0].max(a.peak_db[1]) as f64 * 10.0).round() / 10.0,
+            "gain_db": (done.gain_db as f64 * 10.0).round() / 10.0,
+        }));
+    }
+    Ok(json!({ "folder": out, "bounced": results }))
 }
 
 /// Bounces a project, whose files are in `dir`, to a WAV file.

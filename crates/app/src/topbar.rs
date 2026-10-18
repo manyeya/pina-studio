@@ -434,7 +434,10 @@ impl Workspace {
                         })
                     })
                     .debug_selector(|| "export".into())
-                    .on_mouse_down(MouseButton::Left, cx.listener(|ws, _, _, cx| ws.export(cx))),
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, _, _, cx| ws.open_export(cx)),
+                    ),
             )
     }
 

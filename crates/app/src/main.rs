@@ -5,6 +5,7 @@ mod catalog;
 mod chat;
 mod cli;
 mod editor;
+mod export;
 mod genres;
 mod inspector;
 mod liveloops;
@@ -56,6 +57,9 @@ const USAGE: &str = "usage:
   tempo analyze <project|audio file> [--bars 9-16]
                                    loudness, peaks and balance, of the mix and each track
   tempo render <project> <out> [--bars 9-16]
+  tempo bounce <project> [--stems [--tracks 0,2] [--master] | --sections] [--formats wav,mp3,flac,aiff,aac,alac,midi]
+                         [--bits 16|24|32] [--rate 48000] [--lufs -14 [--ceiling -1] | --peak -1] [--kbps 320]
+                         [--no-tail] [--bars 9-16] [--out <folder>] [--name <name>]
                                    bounce to a WAV file
   tempo play <project>             play it (in the app if it's open, else through the output)
   tempo stop|save|undo|redo <project>, tempo locate <project> <tick>,
@@ -128,6 +132,10 @@ fn main() {
         ["analyze", path] => print(cli::analyze(p(path), None)),
         ["analyze", path, "--bars", range] => match bar_range(range) {
             Some(r) => print(cli::analyze(p(path), Some(r))),
+            None => Err(USAGE.to_string()),
+        },
+        ["bounce", dir, rest @ ..] => match bounce_args(rest) {
+            Some(spec) => print(cli::bounce_spec(p(dir), &spec)),
             None => Err(USAGE.to_string()),
         },
         ["render", dir, out] => print(cli::render(p(dir), p(out), None)),
@@ -278,6 +286,62 @@ fn main() {
 }
 
 /// "9-16" (bars from 1, both in) or "9".
+/// `tempo bounce`'s flags as the spec `cli::bounce_spec` takes.
+fn bounce_args(args: &[&str]) -> Option<Value> {
+    let mut spec = serde_json::Map::new();
+    let mut i = 0;
+    while i < args.len() {
+        let next = || args.get(i + 1).copied();
+        let n = |v: &str| v.parse::<f64>().ok().map(Value::from);
+        match args[i] {
+            "--stems" => drop(spec.insert("what".into(), "stems".into())),
+            "--sections" => drop(spec.insert("what".into(), "sections".into())),
+            "--master" => drop(spec.insert("master".into(), true.into())),
+            "--no-tail" => drop(spec.insert("tail".into(), false.into())),
+            flag @ ("--format" | "--formats") => {
+                let _ = flag;
+                spec.insert(
+                    "formats".into(),
+                    next()?
+                        .split(',')
+                        .map(|f| Value::from(f.trim()))
+                        .collect::<Vec<_>>()
+                        .into(),
+                );
+                i += 1;
+            }
+            "--tracks" => {
+                spec.insert(
+                    "tracks".into(),
+                    next()?
+                        .split(',')
+                        .map(|t| t.trim().parse::<u64>().ok().map(Value::from))
+                        .collect::<Option<Vec<_>>>()?
+                        .into(),
+                );
+                i += 1;
+            }
+            "--bars" => {
+                let (a, b) = bar_range(next()?)?;
+                spec.insert("from_bar".into(), a.into());
+                spec.insert("to_bar".into(), b.into());
+                i += 1;
+            }
+            key @ ("--bits" | "--rate" | "--lufs" | "--peak" | "--ceiling" | "--kbps") => {
+                spec.insert(key.trim_start_matches("--").into(), n(next()?)?);
+                i += 1;
+            }
+            key @ ("--out" | "--name") => {
+                spec.insert(key.trim_start_matches("--").into(), next()?.into());
+                i += 1;
+            }
+            _ => return None,
+        }
+        i += 1;
+    }
+    Some(Value::Object(spec))
+}
+
 fn bar_range(s: &str) -> Option<(u64, u64)> {
     match s.split_once('-') {
         Some((a, b)) => Some((a.trim().parse().ok()?, b.trim().parse().ok()?)),
@@ -337,7 +401,7 @@ fn open(dir: &Path) -> Result<(), String> {
                 MenuItem::action("Study a Song…", StudySong),
                 MenuItem::separator(),
                 MenuItem::action("Save", Save),
-                MenuItem::action("Export to WAV", Export),
+                MenuItem::action("Bounce…", Export),
             ]),
             Menu::new("Edit").items([
                 MenuItem::action("Undo", Undo),

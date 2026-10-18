@@ -1987,6 +1987,24 @@ impl Engine {
         self.render_from(0, frames)
     }
 
+    /// Starts a render at sample `start`: the song plays from there, once through, cycle or not.
+    pub fn start_render(&mut self, start: u64) {
+        self.arrangement.cycle = None;
+        self.locate(start);
+        self.play();
+    }
+
+    /// The next `frames` of a render begun with `start_render`.
+    pub fn render_on(&mut self, frames: u64) -> [Vec<f32>; 2] {
+        let mut out = [vec![0f32; frames as usize], vec![0f32; frames as usize]];
+        for at in (0..frames as usize).step_by(MAX_BLOCK) {
+            let n = MAX_BLOCK.min(frames as usize - at);
+            let [l, r] = &mut out;
+            self.process([&mut l[at..], &mut r[at..]], n);
+        }
+        out
+    }
+
     /// `frames` of the song from sample `start`, as a bounce plays them (notes begun before it
     /// aside).
     pub fn render_from(&mut self, start: u64, frames: u64) -> [Vec<f32>; 2] {
