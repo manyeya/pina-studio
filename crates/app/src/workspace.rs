@@ -773,7 +773,8 @@ impl Workspace {
         };
         ws.refresh_looks(cx);
         ws.refresh_songs(cx);
-        // For screenshots and docs: TEMPO_PAGE=playbooks[:genre[@scroll]] opens on that page.
+        // For screenshots and docs: TEMPO_PAGE=playbooks[:genre[@scroll]] (or study, agent)
+        // opens on that page.
         if let Ok(page) = std::env::var("TEMPO_PAGE") {
             match page.split_once(':').unwrap_or((page.as_str(), "")) {
                 ("playbooks", rest) => {
@@ -782,6 +783,7 @@ impl Workspace {
                     let down: f32 = down.parse().unwrap_or(0.0);
                     ws.genres.scroll.set_offset(gpui::point(px(0.), px(-down)));
                 }
+                ("study", _) => ws.open_study(cx),
                 ("agent", rest) => {
                     ws.show_agent = true;
                     ws.chat.critic.open = rest == "critic";
