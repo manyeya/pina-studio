@@ -77,6 +77,8 @@ actions!(
         NudgeRightFine,
         QuantizeNotes,
         DeselectNotes,
+        AdderUp,
+        AdderDown,
         Quit,
         TogglePianoRoll,
         ToggleAutomation,
@@ -158,6 +160,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-right", NudgeRightFine, Some("Roll")),
         KeyBinding::new("q", QuantizeNotes, Some("Roll")),
         KeyBinding::new("escape", DeselectNotes, Some("Roll")),
+        KeyBinding::new("up", AdderUp, Some("Adder")),
+        KeyBinding::new("down", AdderDown, Some("Adder")),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-w", Quit, None),
     ]);
@@ -674,6 +678,9 @@ pub struct Workspace {
     pub roll_hover: Option<u8>,
     /// Where the lane under the piano roll was drawn last frame.
     pub lane_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// The New Track palette, when it's open; and the presets it searches.
+    pub adder: Option<crate::adder::Adder>,
+    pub sounds: crate::adder::Sounds,
     /// The step sequencer's picked row (its velocities in the lane), and where its lane was drawn.
     pub steps_row: usize,
     pub steps_lane: Rc<Cell<Bounds<Pixels>>>,
@@ -823,6 +830,8 @@ impl Workspace {
             painting: Vec::new(),
             roll_hover: None,
             lane_bounds: Rc::new(Cell::new(Bounds::default())),
+            adder: None,
+            sounds: Default::default(),
             steps_row: 0,
             steps_lane: Rc::new(Cell::new(Bounds::default())),
             sampler_ui: Default::default(),
@@ -2674,9 +2683,10 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &Delete, _, cx| ws.delete(cx)))
             .on_action(cx.listener(|ws, _: &DeleteTrack, _, cx| ws.delete_track(cx)))
             .on_action(cx.listener(|ws, _: &Split, _, cx| ws.split(cx)))
-            .on_action(
-                cx.listener(|ws, _: &NewTrack, _, cx| ws.new_track(Some(Instrument::Synth), cx)),
-            )
+            .on_action(cx.listener(|ws, _: &NewTrack, window, cx| {
+                let at = gpui::point(px(12.), px(CONTROL_BAR_H + 44.));
+                ws.open_adder(at, window, cx)
+            }))
             .on_action(cx.listener(|ws, _: &ZoomIn, _, cx| ws.zoom(1.25, cx)))
             .on_action(cx.listener(|ws, _: &ZoomOut, _, cx| ws.zoom(0.8, cx)))
             .on_action(cx.listener(|ws, _: &Save, _, cx| {
@@ -2780,6 +2790,7 @@ impl Render for Workspace {
             .children(self.device_ghost())
             .children(self.new_song_view(cx))
             .children(self.menu_view(cx))
+            .children(self.adder_view(cx))
             .children(self.picker_view(cx))
     }
 }

@@ -987,7 +987,7 @@ impl Workspace {
         c.save();
     }
 
-    fn toggle_favourite(&mut self, key: &str, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_favourite(&mut self, key: &str, cx: &mut Context<Self>) {
         let c = &mut self.catalog;
         match c.favourites.iter().position(|k| k == key) {
             Some(i) => drop(c.favourites.remove(i)),
@@ -1619,7 +1619,7 @@ impl Workspace {
 }
 
 /// The instrument a device is.
-fn instrument_of(d: &Device) -> Option<Instrument> {
+pub(crate) fn instrument_of(d: &Device) -> Option<Instrument> {
     match d.own {
         Some(Own::Synth) => Some(Instrument::Synth),
         Some(Own::Drums) => Some(Instrument::Drums),

@@ -133,10 +133,6 @@ pub enum MenuAction {
         at: At,
         pitch: u8,
     },
-    /// Adds a track after the selected one: an instrument track, or an audio track.
-    NewTrack {
-        instrument: Option<Instrument>,
-    },
     /// The song's key, or None to work it out from the notes; the music moves into a new key
     /// unless that's been turned off.
     Key(Option<String>),
@@ -392,7 +388,6 @@ impl Workspace {
                     });
                 }
             }),
-            MenuAction::NewTrack { instrument } => self.new_track(instrument, cx),
             MenuAction::Key(key) => {
                 let key = key.as_deref().and_then(tempo_engine::music::Key::parse);
                 let moves = self.key_moves_notes;

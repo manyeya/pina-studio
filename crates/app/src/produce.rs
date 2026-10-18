@@ -297,6 +297,41 @@ fn presets_cache() -> PathBuf {
     Path::new(&home).join("Library/Caches/tempo/presets.json")
 }
 
+/// Each instrument's presets, as the sounds tool lists them: those kept from before at once, and
+/// with `ask` the rest asked of each instrument (a process each, so it can take a while), kept for
+/// next time.
+pub fn presets_of(plugins: &[scan::PluginInfo], ask: bool) -> Vec<Vec<Preset>> {
+    let file = presets_cache();
+    let mut cache: serde_json::Map<String, Value> = std::fs::read(&file)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let out = plugins
+        .iter()
+        .map(|p| match ask {
+            true => instrument_presets(p, &mut cache),
+            false => {
+                let key = format!(
+                    "{:?}|{}|{}|{}",
+                    p.format,
+                    p.path.display(),
+                    p.class,
+                    p.uid.as_deref().unwrap_or("")
+                );
+                cache
+                    .get(&key)
+                    .and_then(|k| serde_json::from_value(k["presets"].clone()).ok())
+                    .unwrap_or_default()
+            }
+        })
+        .collect();
+    if ask {
+        let _ = std::fs::create_dir_all(file.parent().unwrap_or(Path::new(".")));
+        let _ = std::fs::write(&file, serde_json::to_vec(&cache).unwrap_or_default());
+    }
+    out
+}
+
 /// An instrument's presets (its own programs and its files), as it lists them loaded on its
 /// own: in a process of its own, so one that crashes or hangs doesn't take tempo with it. Kept
 /// until the plugin changes.

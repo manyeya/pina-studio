@@ -460,7 +460,7 @@ impl Workspace {
     }
 
     /// A new track with an empty sampler, selected, its editor open.
-    fn new_sampler_track(&mut self, cx: &mut Context<Self>) {
+    pub fn new_sampler_track(&mut self, cx: &mut Context<Self>) {
         let n = self.session.project.tracks.len();
         let dir = self.session.dir.clone();
         self.session.checkpoint();

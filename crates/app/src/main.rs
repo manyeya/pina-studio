@@ -1,3 +1,4 @@
+mod adder;
 mod agent;
 mod browser;
 mod catalog;

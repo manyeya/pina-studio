@@ -231,11 +231,57 @@ fn mute_solo_and_arm_from_the_track_header(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_new_track_palette_adds_beats_samplers_and_instruments(cx: &mut TestAppContext) {
+    use tempo_engine::project::Instrument;
+    let (ws, cx) = open(cx);
+    let last = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let t = &ws.session.project.tracks[ws.track];
+            (t.instrument.clone(), t.regions.len(), ws.bottom)
+        })
+    };
+    // Beat: a drum kit with a pattern, in the step sequencer.
+    click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "adder-Beat", Modifiers::none(), MouseButton::Left);
+    let (instrument, regions, bottom) = last(cx);
+    assert_eq!(
+        (instrument, regions, bottom),
+        (Some(Instrument::Drums), 1, Some(Bottom::Steps))
+    );
+    // Sampler: an empty one, in its editor.
+    click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "adder-Sampler", Modifiers::none(), MouseButton::Left);
+    let (instrument, _, bottom) = last(cx);
+    assert!(matches!(instrument, Some(Instrument::Sampler(_))) && bottom == Some(Bottom::Sampler));
+    // Instrument narrows the list to instruments; tempo's synth is first.
+    click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "adder-Instrument", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.adder.is_some()));
+    click_on(cx, "adder-row-0", Modifiers::none(), MouseButton::Left);
+    assert_eq!(last(cx).0, Some(Instrument::Synth));
+    assert!(ws.read_with(cx, |ws, _| ws.adder.is_none()));
+}
+
+#[gpui::test]
 fn shortcuts_add_tracks_undo_and_play(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     let tracks = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    // ⌥⌘N: the New Track palette, its search typed in; Enter adds what's picked.
     cx.simulate_keystrokes("cmd-alt-n");
+    assert!(ws.read_with(cx, |ws, _| ws.adder.is_some()));
+    cx.simulate_input("audio");
+    cx.simulate_keystrokes("enter");
     assert_eq!(tracks(cx), 4);
+    let (instrument, open) = ws.read_with(cx, |ws, _| {
+        (
+            ws.session.project.tracks[ws.track].instrument.clone(),
+            ws.adder.is_some(),
+        )
+    });
+    assert!(instrument.is_none() && !open);
+    // Arrows move down the list; Escape closes it.
+    cx.simulate_keystrokes("cmd-alt-n down down escape");
+    assert!(ws.read_with(cx, |ws, _| ws.adder.is_none()));
     cx.simulate_keystrokes("cmd-z");
     assert_eq!(tracks(cx), 3);
     cx.simulate_keystrokes("space");
@@ -795,7 +841,8 @@ fn a_track_stack_and_routing_another_track_into_it(cx: &mut TestAppContext) {
 fn the_step_sequencer_paints_accents_mutes_fills_and_converts(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
-    click_on(cx, "menu-1", Modifiers::none(), MouseButton::Left); // Drum Kit
+    click_on(cx, "adder-Drums", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "adder-row-0", Modifiers::none(), MouseButton::Left); // tempo's Drum Kit
     let track = ws.read_with(cx, |ws, _| ws.track);
     // Two patterns from the same playhead: the second goes after the first, not on it.
     cx.simulate_keystrokes("cmd-alt-p");
@@ -901,7 +948,8 @@ fn the_step_sequencer_paints_accents_mutes_fills_and_converts(cx: &mut TestAppCo
 fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
-    click_on(cx, "menu-1", Modifiers::none(), MouseButton::Left); // Drum Kit
+    click_on(cx, "adder-Drums", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "adder-row-0", Modifiers::none(), MouseButton::Left); // tempo's Drum Kit
     let (track, instrument) = ws.read_with(cx, |ws, _| {
         (
             ws.track,
@@ -3261,7 +3309,7 @@ fn shots() {
     let song = std::env::var("TEMPO_SHOT_SONG").ok();
     cx.update(|cx| {
         window
-            .update(cx, |ws, _, cx| match page.as_str() {
+            .update(cx, |ws, window, cx| match page.as_str() {
                 "study" => {
                     ws.open_study(cx);
                     if let Some(want) = &song {
@@ -3331,6 +3379,38 @@ fn shots() {
                     ws.select_track(ws.session.project.tracks.len() - 1);
                     ws.sampler_ui.zone = 2;
                     ws.show_bottom(Bottom::Sampler, cx);
+                }
+                p if p.starts_with("adder") => {
+                    // The plugins as last scanned, their presets as last read, the library.
+                    let cached: serde_json::Value = std::fs::read(tempo_engine::scan::cache_file())
+                        .ok()
+                        .and_then(|b| serde_json::from_slice(&b).ok())
+                        .unwrap_or_default();
+                    let plugins: Vec<PluginInfo> = cached
+                        .as_object()
+                        .map(|m| {
+                            m.values()
+                                .flat_map(|c| {
+                                    serde_json::from_value::<Vec<PluginInfo>>(c["plugins"].clone())
+                                        .unwrap_or_default()
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    ws.plugins = Some(plugins);
+                    ws.catalog_plugins();
+                    ws.presets_now();
+                    // Read, not rescanned: the person's library is only looked at.
+                    ws.set_library(tempo_engine::samples::library::Library::load(), cx);
+                    ws.open_adder(gpui::point(px(250.), px(110.)), window, cx);
+                    if let Some(q) = p.strip_prefix("adder-") {
+                        ws.adder
+                            .as_ref()
+                            .unwrap()
+                            .search
+                            .clone()
+                            .update(cx, |s, cx| s.set_text(q, cx));
+                    }
                 }
                 "steps-empty" => {
                     ws.select_track(1);

@@ -331,21 +331,10 @@ impl Workspace {
                     .debug_selector(|| "new-track".into())
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                            let item = |name: &str, instrument| {
-                                (name.to_string(), MenuAction::NewTrack { instrument })
-                            };
-                            let items = vec![
-                                item("Software Instrument", Some(Instrument::Synth)),
-                                item("Drum Kit", Some(Instrument::Drums)),
-                                item("Audio", None),
-                            ];
-                            ws.menu = Some(Menu {
-                                at: e.position,
-                                items,
-                                ..Default::default()
-                            });
-                            cx.notify();
+                        cx.listener(|ws, e: &MouseDownEvent, window, cx| {
+                            // The New Track palette, opening down from the button.
+                            let at = e.position + gpui::point(px(-14.), px(18.));
+                            ws.open_adder(at, window, cx);
                         }),
                     ),
             )

@@ -198,8 +198,13 @@ In the app, mostly as in Logic:
   and Off ignores it.
 - Drag faders, pan knobs and the tempo; option-click a fader or knob to reset it. Click or drag
   in the ruler to move the playhead; ⌘-scroll zooms.
-- The "+" over the track headers adds a software instrument (the sine synth), a drum kit (built
-  in, on the General MIDI drum notes) or an audio track. ⌥⌘P makes a step pattern region on the
+- The "+" over the track headers (or ⌥⌘N) opens the New Track palette: type to search every
+  instrument installed (and tempo's), their presets (their own programs and preset files), kits
+  made from your sample library's packs, and single sounds (an 808, a bass note) played across the
+  keys on a sampler; ↑↓ pick, Enter adds, ▶ plays a sound, ☆ keeps an instrument among the
+  favourites. With nothing typed it shows the kinds of track as tiles (Instrument and Drums narrow
+  the list to theirs; Sampler, Audio and Beat, a kit with a pattern open in the step sequencer, add
+  one at once), then what's been used lately and the favourites. ⌥⌘P makes a step pattern region on the
   selected instrument track (at the first free bar from the playhead); double-click one for the
   step sequencer, as Logic's and FL Studio's channel rack: click a step on or off and drag across
   to paint more (or rub them out), option-click for an accent (again to take it off); each step
