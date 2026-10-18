@@ -1061,14 +1061,15 @@ impl Workspace {
     /// tracks, a new one.
     pub fn device_target(&self, p: gpui::Point<f32>) -> Option<Target> {
         let b = self.lanes_bounds.get();
-        let (left, top) = (f32::from(b.origin.x) - HEADER_W, f32::from(b.origin.y));
-        let (w, h) = (f32::from(b.size.width) + HEADER_W, f32::from(b.size.height));
+        let (left, top) = (f32::from(b.origin.x) - self.header_w, f32::from(b.origin.y));
+        let (w, h) = (
+            f32::from(b.size.width) + self.header_w,
+            f32::from(b.size.height),
+        );
         if p.x < left || p.y < top || p.x > left + w || p.y > top + h {
             return None;
         }
-        let row = ((p.y - top + self.scroll_y) / self.row_h())
-            .floor()
-            .max(0.0) as usize;
+        let row = self.track_at_y(p.y - top).unwrap_or(usize::MAX);
         Some(match row < self.session.project.tracks.len() {
             true => Target::Track(row),
             false => Target::NewTrack,

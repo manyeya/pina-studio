@@ -4,6 +4,7 @@ mod browser;
 mod catalog;
 mod chat;
 mod cli;
+mod context;
 mod editor;
 mod export;
 mod genres;

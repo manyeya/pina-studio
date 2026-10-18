@@ -55,7 +55,7 @@ fn spot(ws: &Entity<Workspace>, cx: &VisualTestContext, tick: u64, track: usize)
     ws.read_with(cx, |ws, _| {
         let b = ws.lanes_bounds.get();
         let x = tick as f32 * ws.px_per_tick() - ws.scroll_x;
-        let y = track as f32 * LANE_H + LANE_H / 2.0 - ws.scroll_y;
+        let y = ws.row_top(track) + ws.lane_h(track) / 2.0;
         point(b.origin.x + px(x), b.origin.y + px(y))
     })
 }
@@ -205,6 +205,134 @@ fn split_at_the_playhead(cx: &mut TestAppContext) {
             .collect::<Vec<_>>()
     });
     assert_eq!(lengths, [(0, BAR * 2), (BAR * 2, BAR * 2)]);
+}
+
+/// Clicks the open menu's item whose label (without its tick) starts with this.
+fn pick(cx: &mut VisualTestContext, ws: &Entity<Workspace>, label: &str) {
+    let i = ws
+        .read_with(cx, |ws, _| {
+            let menu = ws.menu.as_ref()?;
+            menu.items
+                .iter()
+                .position(|(l, _)| l.trim_start_matches("✓ ").starts_with(label))
+        })
+        .unwrap_or_else(|| panic!("no {label} in the menu"));
+    click_on(
+        cx,
+        Box::leak(format!("menu-{i}").into_boxed_str()),
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+}
+
+#[gpui::test]
+fn a_tracks_menu_its_pan_modes_its_height_and_the_columns_widths(cx: &mut TestAppContext) {
+    use tempo_engine::project::{PanLaw, PanMode};
+    let (ws, cx) = open(cx);
+    // The pan knob's menu: Stereo Pan, then the song's pan law.
+    click_on(cx, "track-pan-1", Modifiers::none(), MouseButton::Right);
+    pick(cx, &ws, "Stereo Pan");
+    click_on(cx, "track-pan-1", Modifiers::none(), MouseButton::Right);
+    pick(cx, &ws, "−3 dB");
+    let (mode, law) = ws.read_with(cx, |ws, _| {
+        (
+            ws.session.project.tracks[1].pan_mode,
+            ws.session.project.pan_law,
+        )
+    });
+    assert_eq!((mode, law), (PanMode::Stereo, PanLaw::Minus3));
+    // ⇧-dragging a stereo pan's knob down narrows it.
+    let knob = cx.debug_bounds("track-pan-1").unwrap().center();
+    cx.simulate_mouse_down(knob, MouseButton::Left, Modifiers::shift());
+    cx.simulate_mouse_move(
+        knob + point(px(0.), px(50.)),
+        MouseButton::Left,
+        Modifiers::shift(),
+    );
+    cx.simulate_mouse_up(
+        knob + point(px(0.), px(50.)),
+        MouseButton::Left,
+        Modifiers::shift(),
+    );
+    cx.run_until_parked();
+    let spread = ws.read_with(cx, |ws, _| ws.session.project.tracks[1].spread);
+    assert!(spread.is_some_and(|s| (s - 0.5).abs() < 0.01), "{spread:?}");
+
+    // The header's menu: duplicating, then a height.
+    let (n, name, regions) = ws.read_with(cx, |ws, _| {
+        let t = &ws.session.project.tracks;
+        (t.len(), t[1].name.clone(), t[1].regions.len())
+    });
+    click_on(cx, "header-1", Modifiers::none(), MouseButton::Right);
+    pick(cx, &ws, "Duplicate Track");
+    let copy = ws.read_with(cx, |ws, _| ws.session.project.tracks[2].clone());
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks.len()),
+        n + 1
+    );
+    assert_eq!(
+        (copy.name, copy.regions.len()),
+        (format!("{name} 2"), regions)
+    );
+    click_on(cx, "header-0", Modifiers::none(), MouseButton::Right);
+    pick(cx, &ws, "Height: Large");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.lane_h(0)), 120.0);
+    // A header's bottom edge, dragged: its lane's height; the rows under it move down.
+    let edge = cx.debug_bounds("track-edge-1").unwrap().center();
+    let below = ws.read_with(cx, |ws, _| ws.row_top(2));
+    drag(cx, edge, edge + point(px(0.), px(30.)));
+    let (h, top) = ws.read_with(cx, |ws, _| (ws.lane_h(1), ws.row_top(2)));
+    assert_eq!((h, top), (LANE_H + 30.0, below + 30.0));
+
+    // The headers column and the side panel, wider by their right edges.
+    let (header_w, side_w) = ws.read_with(cx, |ws, _| (ws.header_w, ws.side_w()));
+    let edge = cx.debug_bounds("headers-edge").unwrap().center();
+    drag(cx, edge, edge + point(px(50.), px(0.)));
+    let edge = cx.debug_bounds("side-edge").unwrap().center();
+    drag(cx, edge, edge + point(px(40.), px(0.)));
+    let widths = ws.read_with(cx, |ws, _| (ws.header_w, ws.side_w()));
+    assert_eq!(widths, (header_w + 50.0, side_w + 40.0));
+}
+
+#[gpui::test]
+fn regions_copy_paste_mute_and_repeat_from_their_menus_and_keys(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let count = |cx: &VisualTestContext, t: usize| {
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[t].regions.len())
+    };
+    let (keys, drums) = (count(cx, 0), count(cx, 2));
+    // Copy a drums region; paste it on the drums' lane, four bars in.
+    click_on(cx, "region-2-1", Modifiers::none(), MouseButton::Right);
+    pick(cx, &ws, "Copy");
+    let at = spot(&ws, cx, BAR * 4, 2);
+    cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    pick(cx, &ws, "Paste Here");
+    assert_eq!(count(cx, 2), drums + 1);
+    assert_eq!(selected(&ws, cx), (2, BAR * 4, BAR));
+    // ⌃M mutes it; ⌘R repeats it right after itself; ⌘X cuts the repeat.
+    cx.simulate_keystrokes("ctrl-m");
+    assert!(ws.read_with(cx, |ws, _| ws.session.project.tracks[2].regions[drums].mute));
+    cx.simulate_keystrokes("cmd-r");
+    assert_eq!(selected(&ws, cx), (2, BAR * 5, BAR));
+    cx.simulate_keystrokes("cmd-x");
+    assert_eq!(count(cx, 2), drums + 1);
+    // Audio won't paste on an instrument track.
+    ws.update(cx, |ws, _| ws.select_track(0));
+    cx.simulate_keystrokes("cmd-v");
+    assert_eq!(count(cx, 0), keys);
+    assert!(
+        ws.read_with(cx, |ws, _| ws.status.clone())
+            .unwrap()
+            .contains("audio track")
+    );
+    // The region's menu mutes it too, and undo puts it back.
+    click_on(cx, "region-0-0", Modifiers::none(), MouseButton::Right);
+    pick(cx, &ws, "Mute");
+    assert!(ws.read_with(cx, |ws, _| ws.session.project.tracks[0].regions[0].mute));
+    cx.simulate_keystrokes("cmd-z");
+    assert!(!ws.read_with(cx, |ws, _| ws.session.project.tracks[0].regions[0].mute));
 }
 
 #[gpui::test]
@@ -1754,7 +1882,7 @@ fn the_compact_browser_is_resized_by_its_left_edge(cx: &mut TestAppContext) {
     let edge = cx.debug_bounds("panel-edge").unwrap().center();
     drag(cx, edge, edge - point(px(5000.), px(0.)));
     let widest = ws.read_with(cx, |ws, _| {
-        ws.viewport_w - crate::theme::INSPECTOR_W - crate::theme::HEADER_W - 240.0
+        ws.viewport_w - ws.side_w() - ws.header_w - 240.0
     });
     assert_eq!(width(cx), widest);
     let edge = cx.debug_bounds("panel-edge").unwrap().center();
@@ -3338,7 +3466,7 @@ fn bounce_in_place_puts_a_track_on_audio_and_mutes_it(cx: &mut TestAppContext) {
     let (ws, cx) = open_at(cx, &song);
     let before = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
     click_on(cx, "header-0", Modifiers::none(), MouseButton::Right);
-    click_on(cx, "menu-0", Modifiers::none(), MouseButton::Left); // Bounce in Place
+    pick(cx, &ws, "Bounce in Place");
     settle(cx, &ws, |ws| ws.session.project.tracks.len() == before + 1);
     let (muted, new) = ws.read_with(cx, |ws, _| {
         (
@@ -3573,6 +3701,27 @@ fn shots() {
                         rows[4].mute = false;
                     }
                     ws.steps_row = 2;
+                }
+                // The console headers: a stereo pan, a binaural one, a tall track, a muted region;
+                // and each right-click menu.
+                "tracks" | "track-menu" | "pan-menu" | "region-menu" | "lane-menu" => {
+                    use tempo_engine::project::PanMode;
+                    let tracks = &mut ws.session.project.tracks;
+                    tracks[0].pan = -0.3;
+                    tracks[1].pan_mode = PanMode::Stereo;
+                    tracks[1].spread = Some(0.6);
+                    tracks[2].pan_mode = PanMode::Binaural;
+                    tracks[2].pan = 0.45;
+                    tracks[2].height = Some(130.0);
+                    tracks[2].regions[1].mute = true;
+                    let at = point(px(330.), px(160.));
+                    match page.as_str() {
+                        "track-menu" => ws.track_menu(0, at, cx),
+                        "pan-menu" => ws.pan_menu(1, at, cx),
+                        "region-menu" => ws.region_menu((0, 0), point(px(700.), px(160.)), cx),
+                        "lane-menu" => ws.lane_menu(0, BAR * 6, point(px(900.), px(160.)), cx),
+                        _ => cx.notify(),
+                    }
                 }
                 _ => {}
             })

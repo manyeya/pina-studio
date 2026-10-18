@@ -85,7 +85,7 @@ impl Workspace {
             .border_color(rgb(LINE))
             .child(
                 div()
-                    .w(px(HEADER_W))
+                    .w(px(self.header_w))
                     .flex_none()
                     .h_full()
                     .flex()

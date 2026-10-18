@@ -138,6 +138,11 @@ impl Workspace {
     /// A new empty pattern region, a bar long, at the first free bar from the playhead on the
     /// selected instrument track; and opens it.
     pub fn new_pattern(&mut self, cx: &mut Context<Self>) {
+        self.new_pattern_at(None, cx);
+    }
+
+    /// The same at a tick (snapped), from a lane's menu.
+    pub fn new_pattern_at(&mut self, at: Option<u64>, cx: &mut Context<Self>) {
         let tracks = &self.session.project.tracks;
         if !tracks
             .get(self.track)
@@ -148,7 +153,7 @@ impl Workspace {
             return;
         }
         let bar = self.session.project.bar();
-        let start = self.free_bar(self.track, bar);
+        let start = at.map_or_else(|| self.free_bar(self.track, bar), |t| self.snap(t as f64));
         // A drum kit starts with kick, snare and hats; anything else with the key's chord.
         let instrument = tracks[self.track].instrument.as_ref();
         let starting: Vec<u8> = match (instrument, kit_sounds(instrument)) {
@@ -234,7 +239,7 @@ impl Workspace {
     }
 
     /// A pattern region made a MIDI region, to edit in the piano roll.
-    fn pattern_to_midi(&mut self, at: At, cx: &mut Context<Self>) {
+    pub fn pattern_to_midi(&mut self, at: At, cx: &mut Context<Self>) {
         let r = self.session.project.region(at).clone();
         let Content::Pattern { step, rows, swing } = &r.content else {
             return;
@@ -802,7 +807,7 @@ impl Workspace {
                     .overflow_y_scroll()
                     .child(
                         div()
-                            .w(px(HEADER_W))
+                            .w(px(self.header_w))
                             .flex_none()
                             .min_h_full()
                             .bg(rgb(SURFACE))
@@ -834,7 +839,7 @@ impl Workspace {
                     .border_color(rgb(LINE))
                     .child(
                         div()
-                            .w(px(HEADER_W))
+                            .w(px(self.header_w))
                             .flex_none()
                             .h_full()
                             .px(px(12.))

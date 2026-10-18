@@ -44,6 +44,9 @@ pub struct Project {
     /// Plugins on the master, after its built-in effects.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub master_inserts: Vec<PluginRef>,
+    /// How panning keeps level (Logic's pan law).
+    #[serde(default, skip_serializing_if = "PanLaw::is_flat")]
+    pub pan_law: PanLaw,
     pub tracks: Vec<Track>,
     /// Aux channels: tracks send to them by bus number, and they play into the master.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -222,6 +225,64 @@ impl Default for Saturator {
     }
 }
 
+/// How a track's pan places it, as Logic's pan modes do.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PanMode {
+    /// One side turned down as the other stays: the stereo image kept.
+    #[default]
+    Balance,
+    /// Each side placed on its own: the pan where they centre, `spread` how far apart.
+    Stereo,
+    /// Placed around the listener's head, as headphones hear it: the far ear later, quieter and
+    /// darker.
+    Binaural,
+}
+
+impl PanMode {
+    pub fn is_balance(&self) -> bool {
+        *self == PanMode::Balance
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            PanMode::Balance => "Balance",
+            PanMode::Stereo => "Stereo Pan",
+            PanMode::Binaural => "Binaural",
+        }
+    }
+}
+
+/// How loud a sound panned to the middle is, against one panned hard to a side.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PanLaw {
+    /// Balance: the middle as loud as each side alone.
+    #[default]
+    Flat,
+    /// Equal power: the middle 3 dB down.
+    Minus3,
+    /// Equal power, made up: the middle as it plays, the sides 3 dB up.
+    Minus3Compensated,
+    /// Equal voltage: the middle 6 dB down.
+    Minus6,
+}
+
+impl PanLaw {
+    pub fn is_flat(&self) -> bool {
+        *self == PanLaw::Flat
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            PanLaw::Flat => "0 dB",
+            PanLaw::Minus3 => "−3 dB",
+            PanLaw::Minus3Compensated => "−3 dB compensated",
+            PanLaw::Minus6 => "−6 dB",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Track {
     /// Identifies the track while the project is open, so the engine keeps its instrument and
@@ -253,10 +314,21 @@ pub struct Track {
     /// -1 is hard left, 1 hard right.
     #[serde(default)]
     pub pan: f32,
+    /// How the pan places it, as Logic's: balance, stereo pan (each side placed, `spread`
+    /// apart), or binaural (around the head).
+    #[serde(default, skip_serializing_if = "PanMode::is_balance")]
+    pub pan_mode: PanMode,
+    /// Stereo pan's width: 1 (or none) each side where it was, 0 both in the middle (mono), -1
+    /// swapped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spread: Option<f32>,
     #[serde(default)]
     pub mute: bool,
     #[serde(default)]
     pub solo: bool,
+    /// How tall its lane shows, as dragged (pixels; the usual height without).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f32>,
     #[serde(default)]
     pub regions: Vec<Region>,
     /// Volume, pan and plugin parameters over time. A parameter with points follows them instead
@@ -1074,6 +1146,9 @@ pub struct Region {
     /// Plays over and over, until the next region on its track or the end of the song.
     #[serde(default, rename = "loop", skip_serializing_if = "std::ops::Not::not")]
     pub looped: bool,
+    /// Silent, kept where it is.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mute: bool,
     /// Playback settings, as Logic's region inspector has: MIDI plays moved by `transpose`
     /// semitones, `velocity` louder, and started on a `quantize` grid (ticks), its notes kept as
     /// they are. Audio is moved by `transpose` too, its length kept.
@@ -1494,6 +1569,7 @@ impl Project {
             master_comp: None,
             master_sat: None,
             master_inserts: Vec::new(),
+            pan_law: PanLaw::Flat,
             time_signature: common_time(),
             tracks: Vec::new(),
             auxes: Vec::new(),

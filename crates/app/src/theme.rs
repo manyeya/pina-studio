@@ -58,10 +58,13 @@ pub const TEAL: u32 = 0x2dd4bf;
 pub const CONTROL_BAR_H: f32 = 52.0;
 pub const STATUS_H: f32 = 24.0;
 pub const INSPECTOR_W: f32 = 248.0;
-pub const HEADER_W: f32 = 232.0;
+pub const HEADER_W: f32 = 300.0;
 pub const MARKERS_H: f32 = 22.0;
 pub const RULER_H: f32 = 26.0;
-pub const LANE_H: f32 = 60.0;
+/// A track's lane as it opens, and how short and tall one can be dragged.
+pub const LANE_H: f32 = 76.0;
+pub const MIN_LANE_H: f32 = 40.0;
+pub const MAX_LANE_H: f32 = 240.0;
 /// An automation lane, under its track.
 pub const AUTO_H: f32 = 44.0;
 pub const EDITOR_H: f32 = 296.0;

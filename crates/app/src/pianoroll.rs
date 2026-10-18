@@ -1939,7 +1939,7 @@ impl Workspace {
             .flex()
             .child(
                 div()
-                    .w(px(HEADER_W))
+                    .w(px(self.header_w))
                     .flex_none()
                     .h_full()
                     .flex()

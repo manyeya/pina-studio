@@ -107,8 +107,22 @@ In the app, mostly as in Logic:
 - Over the track headers: the tools (pointer; pencil, which draws a region in an empty lane and a
   note in the piano roll; scissors, which cut a region or note where clicked; eraser), and what
   edits snap to.
-- ⌘T splits the selected region at the playhead, delete deletes it, ⌘Z and ⇧⌘Z undo and redo,
-  ⌥⌘N adds a track and ⌘⌫ deletes the selected one, ⌘S saves.
+- A track's header is a channel strip: its colour and number, its icon (click for its colour and
+  icon), name and what it plays; M S R; and its fader with its meter running inside it, its level
+  and its pan knob (⌥-click or double-click either for 0 dB or the middle). Drag a header's
+  bottom edge for that track's height, and the column's right edge (or the side panel's) for its
+  width; double-click an edge to put it back.
+- Pans as Logic's: right-click a pan knob for Balance, Stereo Pan (each side placed, ⇧-drag the
+  knob to spread them, or swap them) or Binaural (around your head, for headphones), and the
+  song's pan law (0, −3, −3 compensated or −6 dB).
+- Right-click for more: a track's header (new tracks, one with the same channel strip,
+  duplicating, renaming, colour and icon, mute, solo, record, height, pan mode, moving it,
+  stacking, Bounce in Place, Export as Stem, deleting), a region (cut, copy, paste, repeat, split,
+  mute, loop, rename, alias, open it, quantize, into a step pattern or MIDI, bounce, delete) or an
+  empty stretch of a lane (paste, a new MIDI region or step pattern, a marker, an audio file).
+- ⌘T splits the selected region at the playhead, delete deletes it, ⌘C ⌘X ⌘V copy, cut and paste
+  regions (at the playhead, on the selected track), ⌘R repeats one after itself and ⌃M mutes it,
+  ⌘Z and ⇧⌘Z undo and redo, ⌥⌘N adds a track and ⌘⌫ deletes the selected one, ⌘S saves.
 - X shows the mixer, P the piano roll (or double-click a MIDI region), A automation lanes, I the
   side panel, F the sample browser beside the tracks (click a sound to hear it, ↑ ↓ for the next,
   drag it onto a track or double-click it to add it, More Like It for what sounds like it) and ⇧F

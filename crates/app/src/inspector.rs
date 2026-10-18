@@ -145,6 +145,46 @@ impl Workspace {
                     .gap(px(16.))
                     .child(body),
             )
+            // Its right edge: drag it wider or narrower; double-click for its usual width.
+            .relative()
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right(px(-3.))
+                    .w(px(6.))
+                    .h_full()
+                    .cursor_col_resize()
+                    .hover(|d| d.bg(alpha(ACCENT, 0.35)))
+                    .when(
+                        matches!(self.drag, Some(Drag::Width { side: true, .. })),
+                        |d| d.bg(alpha(ACCENT, 0.6)),
+                    )
+                    .debug_selector(|| "side-edge".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            if e.click_count == 2 {
+                                match ws.side {
+                                    Side::Browser => ws.browser_w = INSPECTOR_W + 52.0,
+                                    _ => ws.inspector_w = INSPECTOR_W,
+                                }
+                                cx.notify();
+                                return;
+                            }
+                            let width = ws.side_w();
+                            ws.begin_drag(
+                                Drag::Width {
+                                    side: true,
+                                    x: f32::from(e.position.x),
+                                    width,
+                                },
+                                cx,
+                            );
+                        }),
+                    ),
+            )
     }
 
     fn inspector_tab(&mut self, cx: &mut Context<Self>) -> Div {

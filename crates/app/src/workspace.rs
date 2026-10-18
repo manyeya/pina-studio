@@ -31,6 +31,7 @@ use tempo_engine::{
 };
 
 use crate::{
+    context::RegionOp,
     menu::{Menu, MenuAction},
     pianoroll::RollOp,
     strip::{self, Channel},
@@ -95,6 +96,11 @@ actions!(
         ToggleSamplesPage,
         PreviousSample,
         NextSample,
+        CopyRegion,
+        CutRegion,
+        PasteRegion,
+        RepeatRegion,
+        MuteRegion,
     ]
 );
 
@@ -145,6 +151,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-right", ZoomIn, Some("Workspace")),
         KeyBinding::new("cmd-left", ZoomOut, Some("Workspace")),
         // The piano roll's notes, while it's open.
+        // Regions, while the piano roll doesn't have them.
+        KeyBinding::new("cmd-c", CopyRegion, Some("Arrange && !Roll")),
+        KeyBinding::new("cmd-x", CutRegion, Some("Arrange && !Roll")),
+        KeyBinding::new("cmd-v", PasteRegion, Some("Arrange && !Roll")),
+        KeyBinding::new("cmd-r", RepeatRegion, Some("Arrange && !Roll")),
+        KeyBinding::new("ctrl-m", MuteRegion, Some("Arrange && !Roll")),
         KeyBinding::new("cmd-a", SelectAllNotes, Some("Roll")),
         KeyBinding::new("cmd-c", CopyNotes, Some("Roll")),
         KeyBinding::new("cmd-x", CutNotes, Some("Roll")),
@@ -294,6 +306,32 @@ pub enum Drag {
     VelocityLine {
         at: At,
         x: f32,
+    },
+    /// The track headers' column (or, `side`, the inspector or browser) made wider or narrower,
+    /// from where the drag began and the width it had.
+    Width {
+        side: bool,
+        x: f32,
+        width: f32,
+    },
+    /// A track's lane made taller or shorter by its header's bottom edge.
+    LaneHeight {
+        track: usize,
+        y: f32,
+        height: f32,
+    },
+    /// A track's fader in its header, dragged across.
+    HFader {
+        track: usize,
+        x: f32,
+        pos: f32,
+        width: f32,
+    },
+    /// A track's stereo pan spread, dragged (⇧ on its pan knob).
+    Spread {
+        track: usize,
+        y: f32,
+        spread: f32,
     },
     /// Steps painted in the step sequencer: each the mouse passes over takes `paint` (0 a rest).
     Steps {
@@ -680,6 +718,15 @@ pub struct Workspace {
     pub lane_bounds: Rc<Cell<Bounds<Pixels>>>,
     /// The Bounce sheet, when it's open (and what it's bouncing).
     pub export: Option<crate::export::Export>,
+    /// The track headers' column, and the side panel (the inspector's, the browser's), as wide
+    /// as they've been dragged.
+    pub header_w: f32,
+    pub inspector_w: f32,
+    pub browser_w: f32,
+    /// Regions copied (⌘C on the tracks), to paste at the playhead.
+    pub region_clip: Option<tempo_engine::project::Region>,
+    /// A track's colour and icon picker waiting for the next frame (from a menu), and where.
+    pub pending_look: Option<(usize, Point<Pixels>)>,
     /// The New Track palette, when it's open; and the presets it searches.
     pub adder: Option<crate::adder::Adder>,
     pub sounds: crate::adder::Sounds,
@@ -833,6 +880,11 @@ impl Workspace {
             roll_hover: None,
             lane_bounds: Rc::new(Cell::new(Bounds::default())),
             export: None,
+            header_w: HEADER_W,
+            inspector_w: INSPECTOR_W,
+            browser_w: INSPECTOR_W + 52.0,
+            region_clip: None,
+            pending_look: None,
             adder: None,
             sounds: Default::default(),
             steps_row: 0,
@@ -928,8 +980,8 @@ impl Workspace {
     /// The side panel's width: wider for the Browser, whose names are long.
     pub fn side_w(&self) -> f32 {
         match self.side {
-            Side::Browser => INSPECTOR_W + 52.0,
-            _ => INSPECTOR_W,
+            Side::Browser => self.browser_w,
+            _ => self.inspector_w,
         }
     }
 
@@ -949,13 +1001,43 @@ impl Workspace {
     }
 
     /// A track's row: its lane, and its automation lane under it while automation shows.
-    pub fn row_h(&self) -> f32 {
-        LANE_H + if self.show_automation { AUTO_H } else { 0.0 }
+    pub fn row_h_of(&self, i: usize) -> f32 {
+        self.lane_h(i) + if self.show_automation { AUTO_H } else { 0.0 }
+    }
+
+    /// Track `i`'s lane height, as dragged (the usual, past the last track).
+    pub fn lane_h(&self, i: usize) -> f32 {
+        self.session
+            .project
+            .tracks
+            .get(i)
+            .and_then(|t| t.height)
+            .map_or(LANE_H, |h| h.clamp(MIN_LANE_H, MAX_LANE_H))
     }
 
     /// Where track `i`'s row begins, from the top of the lanes, scrolled.
     pub fn row_top(&self, i: usize) -> f32 {
-        i as f32 * self.row_h() - self.scroll_y
+        (0..i).map(|j| self.row_h_of(j)).sum::<f32>() - self.scroll_y
+    }
+
+    /// Every row, top to bottom.
+    pub fn rows_h(&self) -> f32 {
+        (0..self.session.project.tracks.len())
+            .map(|i| self.row_h_of(i))
+            .sum()
+    }
+
+    /// The track whose row is at `y` (from the top of the lanes, as drawn), if one is.
+    pub fn track_at_y(&self, y: f32) -> Option<usize> {
+        let mut top = -self.scroll_y;
+        for i in 0..self.session.project.tracks.len() {
+            let h = self.row_h_of(i);
+            if y < top + h {
+                return (y >= top).then_some(i);
+            }
+            top += h;
+        }
+        None
     }
 
     /// The editing grid, in ticks.
@@ -1341,6 +1423,8 @@ impl Workspace {
                 | Drag::Device { .. }
                 | Drag::MapBox { .. }
                 | Drag::Marquee { .. }
+                | Drag::Width { .. }
+                | Drag::LaneHeight { .. }
         );
         if edits {
             self.session.checkpoint();
@@ -1375,9 +1459,14 @@ impl Workspace {
                 match edge {
                     Edge::Move => {
                         let start = self.snap(start as f64 + dt);
-                        let tracks = self.session.project.tracks.len() as isize;
-                        let rows = ((p.y - from.y) / self.row_h()).round() as isize;
-                        let to = (track as isize + rows).clamp(0, tracks - 1) as usize;
+                        // To the track under the pointer (its own, above the first or past the
+                        // last), however tall each is.
+                        let _ = (from, track);
+                        let rel = p.y - f32::from(self.lanes_bounds.get().origin.y);
+                        let last = self.session.project.tracks.len().saturating_sub(1);
+                        let to = self
+                            .track_at_y(rel)
+                            .unwrap_or(if rel < 0.0 { 0 } else { last });
                         let now = self.session.project.move_region(at, to, start);
                         if let Some(Drag::Region { at, .. }) = &mut self.drag {
                             *at = now;
@@ -1458,6 +1547,38 @@ impl Workspace {
             Some(Drag::VelocityLine { .. }) => self.drag_velocity_line(p),
             Some(Drag::Control { .. }) => self.drag_control(p),
             Some(Drag::Mark { .. }) => self.drag_mark(p),
+            Some(Drag::Width { side, x, width }) => {
+                let w = width + (p.x - x);
+                match (side, self.side) {
+                    (true, Side::Browser) => self.browser_w = w.clamp(260.0, 560.0),
+                    (true, _) => self.inspector_w = w.clamp(220.0, 520.0),
+                    (false, _) => self.header_w = w.clamp(220.0, 480.0),
+                }
+                cx.notify();
+                return;
+            }
+            Some(Drag::LaneHeight { track, y, height }) => {
+                if let Some(t) = self.session.project.tracks.get_mut(track) {
+                    t.height = Some((height + (p.y - y)).clamp(MIN_LANE_H, MAX_LANE_H).round());
+                }
+                cx.notify();
+                return;
+            }
+            Some(Drag::HFader {
+                track,
+                x,
+                pos,
+                width,
+            }) => {
+                let db = strip::fader_db((pos + (p.x - x) / width.max(1.0)).clamp(0.0, 1.0));
+                self.set_volume(Channel::Track(track), db);
+                self.record_auto(track, Param::Volume, db);
+            }
+            Some(Drag::Spread { track, y, spread }) => {
+                if let Some(t) = self.session.project.tracks.get_mut(track) {
+                    t.spread = Some((spread - (p.y - y) / 100.0).clamp(-1.0, 1.0));
+                }
+            }
             // Each step, and each bar of the lane, paints itself as the mouse comes over it.
             Some(Drag::Steps { .. } | Drag::StepVelocity) => return,
             Some(Drag::Auto {
@@ -1568,6 +1689,10 @@ impl Workspace {
     }
 
     fn end_drag(&mut self, cx: &mut Context<Self>) {
+        // A lane made taller is the song's to keep (as Logic keeps it), not an undo step.
+        if let Some(Drag::LaneHeight { .. }) = self.drag {
+            self.session.edited = true;
+        }
         // An option-click that didn't drag leaves no copy behind.
         if let Some(Drag::Region {
             at,
@@ -1585,7 +1710,8 @@ impl Workspace {
             Some(Drag::Fader {
                 channel: Channel::Track(t),
                 ..
-            }) => Some((t, Param::Volume)),
+            })
+            | Some(Drag::HFader { track: t, .. }) => Some((t, Param::Volume)),
             Some(Drag::Pan {
                 channel: Channel::Track(t),
                 ..
@@ -1707,7 +1833,7 @@ impl Workspace {
             self.zoom_around(self.px_per_beat * (1.0 + d.y * 0.01), x);
         } else {
             let height = f32::from(self.lanes_bounds.get().size.height);
-            let content = self.session.project.tracks.len() as f32 * self.row_h();
+            let content = self.rows_h();
             self.scroll_x = (self.scroll_x - d.x).max(0.0);
             self.scroll_y = (self.scroll_y - d.y).clamp(0.0, (content - height + LANE_H).max(0.0));
         }
@@ -1847,7 +1973,7 @@ impl Workspace {
         });
     }
 
-    fn delete_track(&mut self, cx: &mut Context<Self>) {
+    pub fn delete_track(&mut self, cx: &mut Context<Self>) {
         if self.session.project.tracks.is_empty() {
             return;
         }
@@ -1997,7 +2123,8 @@ impl Workspace {
 
     /// The parameter value at a window y position in a track's automation lane.
     pub fn auto_value(&self, track: usize, param: Param, y: f32) -> f32 {
-        let top = f32::from(self.lanes_bounds.get().origin.y) + self.row_top(track) + LANE_H;
+        let top =
+            f32::from(self.lanes_bounds.get().origin.y) + self.row_top(track) + self.lane_h(track);
         crate::tracks::auto_from_y(param, y - top)
     }
 
@@ -2512,6 +2639,9 @@ impl Render for Workspace {
         if let Some(what) = self.pending_name.take() {
             self.start_naming(what, window, cx);
         }
+        if let Some((track, at)) = self.pending_look.take() {
+            self.open_picker(track, at, window, cx);
+        }
         if let Some(dir) = self.opening.take() {
             self.open_song(dir, window, cx);
         }
@@ -2648,6 +2778,13 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &Delete, _, cx| ws.delete(cx)))
             .on_action(cx.listener(|ws, _: &DeleteTrack, _, cx| ws.delete_track(cx)))
             .on_action(cx.listener(|ws, _: &Split, _, cx| ws.split(cx)))
+            .on_action(cx.listener(|ws, _: &CopyRegion, _, cx| ws.region_key(RegionOp::Copy, cx)))
+            .on_action(cx.listener(|ws, _: &CutRegion, _, cx| ws.region_key(RegionOp::Cut, cx)))
+            .on_action(cx.listener(|ws, _: &PasteRegion, _, cx| ws.paste_key(cx)))
+            .on_action(
+                cx.listener(|ws, _: &RepeatRegion, _, cx| ws.region_key(RegionOp::Duplicate, cx)),
+            )
+            .on_action(cx.listener(|ws, _: &MuteRegion, _, cx| ws.region_key(RegionOp::Mute, cx)))
             .on_action(cx.listener(|ws, _: &NewTrack, window, cx| {
                 let at = gpui::point(px(12.), px(CONTROL_BAR_H + 44.));
                 ws.open_adder(at, window, cx)

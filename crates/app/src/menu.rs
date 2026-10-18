@@ -1,7 +1,9 @@
 //! A pop-up list of choices: plugins and buses on the channel strips, keys, markers, snap,
 //! automation. Long ones narrow down as you type.
 
-use gpui::{Context, MouseButton, Pixels, Point, anchored, deferred, div, prelude::*, px, rgb};
+use gpui::{
+    Context, MouseButton, Pixels, Point, SharedString, anchored, deferred, div, prelude::*, px, rgb,
+};
 use tempo_engine::{
     commands::{self, ChannelRef, Command, PresetChoice},
     project::{
@@ -185,6 +187,9 @@ pub enum MenuAction {
     BounceInPlace(usize),
     /// The Bounce sheet, on stems, with one track ticked.
     ExportStem(usize),
+    /// The right-click menus of the tracks area (`context.rs`).
+    Track(crate::context::TrackOp),
+    Region(At, crate::context::RegionOp),
     /// Makes an alias of a region, after it.
     Alias(At),
     /// Makes an alias a region of its own.
@@ -448,6 +453,8 @@ impl Workspace {
             MenuAction::Export => self.open_export(cx),
             MenuAction::BounceInPlace(t) => self.bounce_in_place(t, cx),
             MenuAction::ExportStem(t) => self.export_stem(t, cx),
+            MenuAction::Track(op) => self.track_op(op, cx),
+            MenuAction::Region(at, op) => self.region_op(at, op, cx),
         }
         cx.notify();
     }
@@ -483,15 +490,30 @@ impl Workspace {
         let menu = self.menu.as_ref()?;
         let shown = menu.shown();
         let more = shown.len().saturating_sub(SHOWN);
+        // Ticks in a column of their own when any item has one; a tab sets a shortcut apart, to
+        // the right; an empty item that does nothing is a rule.
+        let checks = menu.items.iter().any(|(l, _)| l.starts_with("✓ "));
         let row = |name: String, label: &String, action: &MenuAction, cx: &mut Context<Self>| {
             let action = action.clone();
             let inert = matches!(action, MenuAction::Nothing);
+            if inert && label.is_empty() {
+                return div().h(px(1.)).mx(px(6.)).my(px(4.)).bg(rgb(LINE_STRONG));
+            }
+            let (ticked, label) = match label.strip_prefix("✓ ") {
+                Some(rest) => (true, rest),
+                None if checks => (false, label.trim_start()),
+                None => (false, label.as_str()),
+            };
+            let (label, keys) = label.split_once('\t').unwrap_or((label, ""));
+            let group: SharedString = format!("{name}-row").into();
             div()
-                .h(px(28.))
-                .px(px(10.))
+                .group(group.clone())
+                .h(px(24.))
+                .px(px(8.))
                 .flex()
                 .items_center()
-                .rounded(px(6.))
+                .gap(px(4.))
+                .rounded(px(5.))
                 .text_size(px(12.5))
                 .whitespace_nowrap()
                 .text_color(rgb(if inert { TEXT_3 } else { TEXT }))
@@ -500,7 +522,25 @@ impl Workspace {
                         .hover(|s| s.bg(rgb(ACCENT)).text_color(rgb(0xffffff)))
                 })
                 .debug_selector(move || name.clone())
-                .child(label.clone())
+                .when(checks, |d| {
+                    d.child(
+                        div()
+                            .w(px(14.))
+                            .flex_none()
+                            .child(if ticked { "✓" } else { "" }),
+                    )
+                })
+                .child(div().flex_1().child(label.to_string()))
+                .when(!keys.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .pl(px(24.))
+                            .text_size(px(11.5))
+                            .text_color(rgb(TEXT_3))
+                            .group_hover(group, |s| s.text_color(rgb(0xffffff)))
+                            .child(keys.to_string()),
+                    )
+                })
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |ws, _, _, cx| {
@@ -536,7 +576,7 @@ impl Workspace {
         let list = div()
             .id("menu")
             .min_w(px(200.))
-            .max_h(px(440.))
+            .max_h(px(if menu.searchable { 440. } else { 680. }))
             .overflow_y_scroll()
             .p(px(4.))
             .rounded(px(10.))

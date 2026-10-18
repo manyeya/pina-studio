@@ -13,8 +13,8 @@ use crate::{
     plugin::{PluginApi, PluginParam, value_from_text},
     project::{
         AUDIO_DIR, AutoMode, AutoPoint, AuxSend, BEAT_UNITS, Cell, Comp, Content, ControlPoint,
-        Cycle, Eq, Flex, Input, Instrument, Marker, Note, PPQ, Param, PatternRow, PluginRef,
-        Preset, PresetSource, Project, Region, Saturator, Track, Which,
+        Cycle, Eq, Flex, Input, Instrument, Marker, Note, PPQ, PanLaw, PanMode, Param, PatternRow,
+        PluginRef, Preset, PresetSource, Project, Region, Saturator, Track, Which,
     },
 };
 
@@ -33,7 +33,11 @@ pub enum Command {
         unit: u64,
     },
     SetMaster {
-        volume_db: f32,
+        #[serde(default)]
+        volume_db: Option<f32>,
+        /// How loud the middle is against the sides, for every track's pan.
+        #[serde(default)]
+        pan_law: Option<PanLaw>,
     },
     AddTrack {
         name: String,
@@ -61,6 +65,11 @@ pub enum Command {
         volume_db: Option<f32>,
         #[serde(default)]
         pan: Option<f32>,
+        /// Logic's pan modes: balance, stereo (each side placed, `spread` apart) or binaural.
+        #[serde(default)]
+        pan_mode: Option<PanMode>,
+        #[serde(default)]
+        spread: Option<f32>,
         #[serde(default)]
         mute: Option<bool>,
         #[serde(default)]
@@ -718,7 +727,14 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             }
             p.set_tempo(bpm);
         }
-        Command::SetMaster { volume_db } => p.master_volume_db = finite("volume_db", volume_db)?,
+        Command::SetMaster { volume_db, pan_law } => {
+            if let Some(v) = volume_db {
+                p.master_volume_db = finite("volume_db", v)?;
+            }
+            if let Some(law) = pan_law {
+                p.pan_law = law;
+            }
+        }
         Command::SetTimeSignature { beats, unit } => {
             if !(1..=32).contains(&beats) || !BEAT_UNITS.contains(&unit) {
                 return Err("a time signature is 1 to 32 beats of a 1, 2, 4, 8 or 16".into());
@@ -756,10 +772,18 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             icon,
             volume_db,
             pan,
+            pan_mode,
+            spread,
             mute,
             solo,
         } => {
             let t = track(p, t)?;
+            if let Some(v) = pan_mode {
+                t.pan_mode = v;
+            }
+            if let Some(v) = spread {
+                t.spread = Some(finite("spread", v)?.clamp(-1.0, 1.0));
+            }
             if let Some(v) = name {
                 t.name = v;
             }
@@ -1866,6 +1890,32 @@ mod tests {
         );
         assert!(err.unwrap_err().contains("audio"));
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn pan_modes_spread_and_the_pan_law() {
+        let mut p = Project::new(48_000);
+        run(
+            &mut p,
+            r#"{"op": "add_track", "name": "Pad", "instrument": "synth"}"#,
+        )
+        .unwrap();
+        run(
+            &mut p,
+            r#"{"op": "set_track", "track": 0, "pan_mode": "stereo", "spread": 0.4}"#,
+        )
+        .unwrap();
+        run(
+            &mut p,
+            r#"{"op": "set_master", "pan_law": "minus3_compensated"}"#,
+        )
+        .unwrap();
+        let t = &p.tracks[0];
+        assert_eq!((t.pan_mode, t.spread), (PanMode::Stereo, Some(0.4)));
+        assert_eq!(
+            (p.pan_law, p.master_volume_db),
+            (PanLaw::Minus3Compensated, 0.0)
+        );
     }
 
     #[test]

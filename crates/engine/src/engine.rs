@@ -25,8 +25,8 @@ use crate::{
     peaks::Peaks,
     plugin::{self, Control, ControlKind, Libraries, Note, Plugin, Processor},
     project::{
-        AutoMode, AutoPoint, Comp, Content, Eq, Flex, Instrument, PluginRef, Project, Region,
-        Saturator, Which, chase, comp_segments, value_at,
+        AutoMode, AutoPoint, Comp, Content, Eq, Flex, Instrument, PanLaw, PanMode, PluginRef,
+        Project, Region, Saturator, Which, chase, comp_segments, value_at,
     },
     sampler::Sampler,
     stretch::{self, Fit},
@@ -662,6 +662,94 @@ fn balance(g: f32, pan: f32) -> [f32; 2] {
     [g * (1.0 - pan).min(1.0), g * (1.0 + pan).min(1.0)]
 }
 
+/// Left and right gain for a sound at `pan`, by the pan law.
+fn law_gains(law: PanLaw, pan: f32) -> [f32; 2] {
+    let pan = pan.clamp(-1.0, 1.0);
+    let theta = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
+    match law {
+        PanLaw::Flat => balance(1.0, pan),
+        PanLaw::Minus3 => [theta.cos(), theta.sin()],
+        PanLaw::Minus3Compensated => [
+            theta.cos() * std::f32::consts::SQRT_2,
+            theta.sin() * std::f32::consts::SQRT_2,
+        ],
+        PanLaw::Minus6 => [(1.0 - pan) / 2.0, (1.0 + pan) / 2.0],
+    }
+}
+
+/// How a lane's left and right become the mix's: out left = in left × m[0] + in right × m[1],
+/// out right = in left × m[2] + in right × m[3]; at level `g`, panned by its mode.
+pub fn pan_matrix(mode: PanMode, law: PanLaw, pan: f32, spread: f32, g: f32) -> [f32; 4] {
+    match mode {
+        PanMode::Balance => {
+            let [a, b] = law_gains(law, pan);
+            [g * a, 0.0, 0.0, g * b]
+        }
+        // Each side placed by equal power: spread 1 leaves them where they were.
+        PanMode::Stereo => {
+            let s = spread.clamp(-1.0, 1.0);
+            let place = |x: f32| {
+                let theta = (x.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
+                (theta.cos(), theta.sin())
+            };
+            let (ll, lr) = place(pan - s);
+            let (rl, rr) = place(pan + s);
+            [g * ll, g * rl, g * lr, g * rr]
+        }
+        // Level here; where around the head, after.
+        PanMode::Binaural => [g, 0.0, 0.0, g],
+    }
+}
+
+/// A binaural panner's memory: the sound a moment back (for the far ear's delay), and the far
+/// ear's low-pass.
+pub struct Binaural {
+    line: [f32; 256],
+    at: usize,
+    low: f32,
+}
+
+impl Default for Binaural {
+    fn default() -> Self {
+        Binaural {
+            line: [0.0; 256],
+            at: 0,
+            low: 0.0,
+        }
+    }
+}
+
+impl Binaural {
+    /// Places a block around the head at `pan` (-1 hard left, as -90°, to 1): the near ear hears
+    /// it as is, the far one up to 0.66 ms later, quieter and darker the further round it is.
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], pan: f32, rate: f32) {
+        let side = pan.clamp(-1.0, 1.0);
+        let around = (side * std::f32::consts::FRAC_PI_2).sin().abs();
+        let delay = (0.00066 * around * rate).min(250.0);
+        let cutoff = 20_000.0 - 17_500.0 * around;
+        let a = (-std::f32::consts::TAU * cutoff / rate).exp();
+        let far_gain = 1.0 - 0.45 * around;
+        for i in 0..l.len().min(r.len()) {
+            let mono = 0.5 * (l[i] + r[i]);
+            self.line[self.at] = mono;
+            let back = self.at as f32 - delay;
+            let k = back.floor();
+            let t = back - k;
+            let idx = |n: f32| (n.rem_euclid(256.0)) as usize;
+            let delayed = self.line[idx(k)] * (1.0 - t) + self.line[idx(k + 1.0)] * t;
+            self.at = (self.at + 1) % 256;
+            self.low = delayed + (self.low - delayed) * a;
+            let far = self.low * far_gain;
+            let near = mono * (1.0 + 0.2 * around);
+            if side < 0.0 {
+                (l[i], r[i]) = (near, far);
+            } else {
+                (l[i], r[i]) = (far, near);
+            }
+        }
+    }
+}
+
 /// What one lane plays.
 struct Plan {
     slot: usize,
@@ -673,6 +761,9 @@ struct Plan {
     audible: f32,
     volume_db: f32,
     pan: f32,
+    pan_mode: PanMode,
+    pan_law: PanLaw,
+    spread: f32,
     /// Automation, with ticks turned to samples; empty follows the fader.
     volume: Vec<AutoPoint>,
     pans: Vec<AutoPoint>,
@@ -707,11 +798,21 @@ impl Plan {
         }
     }
 
-    /// Left and right gain at a sample.
-    fn gain(&self, at: u64) -> [f32; 2] {
+    /// The pan at a sample, as automated or set.
+    fn pan_at(&self, at: u64) -> f32 {
+        value_at(&self.pans, at as f64).unwrap_or(self.pan)
+    }
+
+    /// How left and right become the mix's at a sample: the fader, and the pan by its mode.
+    fn matrix(&self, at: u64) -> [f32; 4] {
         let volume = value_at(&self.volume, at as f64).unwrap_or(self.volume_db);
-        let pan = value_at(&self.pans, at as f64).unwrap_or(self.pan);
-        balance(self.audible * db(volume), pan)
+        pan_matrix(
+            self.pan_mode,
+            self.pan_law,
+            self.pan_at(at),
+            self.spread,
+            self.audible * db(volume),
+        )
     }
 }
 
@@ -755,6 +856,7 @@ pub struct Lane {
     cell: Option<(usize, u64)>,
     queued: Option<(Option<usize>, u64)>,
     strip: Box<Strip>,
+    binaural: Box<Binaural>,
 }
 
 /// One plugin of a project (whose files are in `dir`) loaded on its own, as the project sets
@@ -849,6 +951,7 @@ pub fn make_lane(
         cell: None,
         queued: None,
         strip: Box::new(Strip::new(rate)),
+        binaural: Box::default(),
     };
     Ok((lane, plugins, latency))
 }
@@ -889,7 +992,7 @@ pub fn compile(
     let master_sidechains = sources(&project.master_inserts);
     for (i, (t, &(slot, _))) in project.tracks.iter().zip(tracks).enumerate() {
         let (mut clips, mut events, mut controls) = (Vec::new(), Vec::new(), Vec::new());
-        for (r, region) in t.regions.iter().enumerate() {
+        for (r, region) in t.regions.iter().enumerate().filter(|(_, r)| !r.mute) {
             // A looped region plays again from each multiple of its length, the last time cut
             // short where the loop stops.
             let until = match region.looped {
@@ -980,6 +1083,9 @@ pub fn compile(
             },
             volume_db: t.volume_db,
             pan: t.pan,
+            pan_mode: t.pan_mode,
+            pan_law: project.pan_law,
+            spread: t.spread.unwrap_or(1.0),
             volume: auto.map_or_else(Vec::new, |a| in_samples(&a.volume)),
             pans: auto.map_or_else(Vec::new, |a| in_samples(&a.pan)),
             params: auto
@@ -1643,6 +1749,7 @@ impl Engine {
     }
 
     fn block(&mut self, out: [&mut [f32]; 2], frames: usize) {
+        let rate = self.rate as f32;
         self.receive();
         // Live notes go to the armed lane, and back to the main thread as played.
         // ponytail: they land at the start of the block, up to MAX_BLOCK samples late; use
@@ -1836,16 +1943,21 @@ impl Engine {
             } else {
                 heard
             };
-            let (g0, g1) = (plan.gain(heard), plan.gain(later));
-            let step = [
-                (g1[0] - g0[0]) / frames as f32,
-                (g1[1] - g0[1]) / frames as f32,
-            ];
-            let mut peak = [0f32; 2];
+            let (m0, m1) = (plan.matrix(heard), plan.matrix(later));
+            let step: [f32; 4] = std::array::from_fn(|k| (m1[k] - m0[k]) / frames as f32);
             for i in 0..frames {
                 let k = i as f32;
-                l[i] *= g0[0] + step[0] * k;
-                r[i] *= g0[1] + step[1] * k;
+                let m: [f32; 4] = std::array::from_fn(|j| m0[j] + step[j] * k);
+                let (a, b) = (l[i], r[i]);
+                l[i] = a * m[0] + b * m[1];
+                r[i] = a * m[2] + b * m[3];
+            }
+            if plan.pan_mode == PanMode::Binaural {
+                lane.binaural
+                    .process(&mut l[..frames], &mut r[..frames], plan.pan_at(heard), rate);
+            }
+            let mut peak = [0f32; 2];
+            for i in 0..frames {
                 peak = [peak[0].max(l[i].abs()), peak[1].max(r[i].abs())];
             }
             // What plugins hearing it as a sidechain get: it, after its fader.
@@ -2413,6 +2525,57 @@ mod tests {
         let [l, r] = render(&project(vec![t]), Path::new("."), BEAT);
         assert!((peak(&l) / peak(&loud[0]) - 0.5).abs() < 1e-4);
         assert_eq!(peak(&r), 0.0);
+    }
+
+    #[test]
+    fn pan_laws_and_stereo_pan_place_each_side() {
+        let close = |a: [f32; 4], b: [f32; 4]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-3);
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        // Balance, as it was: the middle untouched; and by the laws.
+        assert!(close(
+            pan_matrix(PanMode::Balance, PanLaw::Flat, 0.0, 1.0, 1.0),
+            [1.0, 0.0, 0.0, 1.0]
+        ));
+        assert!(close(
+            pan_matrix(PanMode::Balance, PanLaw::Minus3, 0.0, 1.0, 1.0),
+            [h, 0.0, 0.0, h]
+        ));
+        assert!(close(
+            pan_matrix(PanMode::Balance, PanLaw::Minus3Compensated, -1.0, 1.0, 1.0),
+            [std::f32::consts::SQRT_2, 0.0, 0.0, 0.0]
+        ));
+        assert!(close(
+            pan_matrix(PanMode::Balance, PanLaw::Minus6, 0.0, 1.0, 1.0),
+            [0.5, 0.0, 0.0, 0.5]
+        ));
+        // Stereo pan: full spread leaves the sides where they were; none folds them to the
+        // middle; panned hard left with no spread, both sides go left.
+        assert!(close(
+            pan_matrix(PanMode::Stereo, PanLaw::Flat, 0.0, 1.0, 1.0),
+            [1.0, 0.0, 0.0, 1.0]
+        ));
+        assert!(close(
+            pan_matrix(PanMode::Stereo, PanLaw::Flat, 0.0, 0.0, 1.0),
+            [h, h, h, h]
+        ));
+        assert!(close(
+            pan_matrix(PanMode::Stereo, PanLaw::Flat, -1.0, 0.0, 1.0),
+            [1.0, 1.0, 0.0, 0.0]
+        ));
+    }
+
+    #[test]
+    fn binaural_pan_puts_the_far_ear_later_and_quieter_and_a_muted_region_is_silent() {
+        let mut t = synth_track("a", vec![note(0, PPQ, 69)], PPQ);
+        t.pan = -1.0;
+        t.pan_mode = PanMode::Binaural;
+        let [l, r] = render(&project(vec![t.clone()]), Path::new("."), BEAT);
+        let first = |x: &[f32]| x.iter().position(|s| s.abs() > 1e-4).unwrap();
+        assert!(peak(&l) > peak(&r) && peak(&r) > 0.0);
+        assert!(first(&r) > first(&l), "{} {}", first(&l), first(&r));
+        t.regions[0].mute = true;
+        let [l, _] = render(&project(vec![t]), Path::new("."), BEAT);
+        assert_eq!(peak(&l), 0.0);
     }
 
     #[test]

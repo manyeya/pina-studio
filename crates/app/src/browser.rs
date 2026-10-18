@@ -1174,7 +1174,7 @@ impl Workspace {
         } else {
             0.0
         };
-        let room = self.viewport_w - inspector - HEADER_W - LANES_MIN_W;
+        let room = self.viewport_w - inspector - self.header_w - LANES_MIN_W;
         self.panel_w.min(room).max(PANEL_MIN_W)
     }
 
@@ -1492,9 +1492,7 @@ impl Workspace {
         if p.x < left || p.y < top || p.x > left + w || p.y > top + h {
             return None;
         }
-        let row = ((p.y - top + self.scroll_y) / self.row_h())
-            .floor()
-            .max(0.0) as usize;
+        let row = self.track_at_y(p.y - top).unwrap_or(usize::MAX);
         let tick = self.snap(self.tick_at(p.x));
         Some(match self.session.project.tracks.get(row) {
             None => Drop::New(tick),
@@ -2718,7 +2716,7 @@ impl Workspace {
         let scanning = b.scan.is_some();
         div()
             .id("sample-filters")
-            .w(px(HEADER_W))
+            .w(px(self.header_w))
             .flex_none()
             .h_full()
             .overflow_y_scroll()
@@ -4396,7 +4394,7 @@ impl Workspace {
                 .left_0()
                 .top(px(self.row_top(row) + 2.))
                 .w_full()
-                .h(px(LANE_H - 4.))
+                .h(px(self.lane_h(row) - 4.))
                 .rounded(px(6.))
         };
         let p = &self.session.project;
@@ -4411,7 +4409,7 @@ impl Workspace {
                 .left(px(tick as f32 * ppt - self.scroll_x))
                 .top(px(self.row_top(row) + 4.))
                 .w(px((length as f32 * ppt).max(6.)))
-                .h(px(LANE_H - 8.))
+                .h(px(self.lane_h(row) - 8.))
                 .rounded(px(6.))
                 .bg(alpha(color, 0.18))
                 .border_1()
@@ -4438,7 +4436,7 @@ impl Workspace {
                 .left_0()
                 .top(px(self.row_top(row) + 2.))
                 .w_full()
-                .h(px(LANE_H - 4.))
+                .h(px(self.lane_h(row) - 4.))
                 .rounded(px(6.))
                 .bg(alpha(ACCENT, 0.08))
                 .border_1()

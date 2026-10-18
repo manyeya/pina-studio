@@ -42,14 +42,19 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 
 - `set_tempo` `{"bpm": 96}`: audio regions that follow the tempo (`"follow"`) stretch with it,
   so their beats stay on the song's.
-- `set_master` `{"volume_db": -3}`
+- `set_master` `{"volume_db": -3, "pan_law": "minus3"}`: either. The pan law is how loud a sound
+  panned to the middle is against one hard to a side, for every track: `"flat"` (the default),
+  `"minus3"`, `"minus3_compensated"` or `"minus6"`.
 - `set_time_signature` `{"beats": 6, "unit": 8}`: beats to a bar, and the note that's a beat (1,
   2, 4, 8 or 16). The tempo stays in quarter notes a minute.
 - `add_track` `{"name": "Bass", "instrument": "synth", "index": 1}`: without `instrument` it's an
   audio track; `index` defaults to the end.
 - `delete_track` `{"track": 1}`
 - `set_track` `{"track": 1, "name": "Sub", "volume_db": -6, "pan": -0.3, "mute": false, "solo": false}`:
-  any of them. `"color": "#d97757"` and `"icon": "808"` choose how it looks (`"auto"` for each
+  any of them. `"pan_mode"` is Logic's: `"balance"` (the default: turns one side down),
+  `"stereo"` (places each side, `"spread"` -1 to 1 apart: 1 as recorded, 0 both in the middle,
+  below 0 swapped) or `"binaural"` (around the listener's head: for headphones).
+  `"color": "#d97757"` and `"icon": "808"` choose how it looks (`"auto"` for each
   goes back to what it plays saying: drums warm, bass violet, keys teal, vocals pink, each track a
   shade of its family). Icons: kick, snare, clap, hihat, cymbal, tom, drums, sticks, conga, shaker, tambourine, cowbell, 808, bass, synth-bass, piano, keys, organ, chords, guitar, guitar-electric, strings, harp, brass, sax, flute, synth, lead, arp, pluck, pad, bells, mallets, vocals, mic, choir, chop, fx, riser, impact, reverse, vinyl, texture, foley, audio, midi, sampler, loop, reference, click, star, heart, flame, bolt.
 - `set_instrument` `{"track": 1, "instrument": {"plugin": {"path": "…", "class": "…"}}}`

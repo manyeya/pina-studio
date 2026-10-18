@@ -185,7 +185,7 @@ impl Workspace {
             .bg(rgb(LANE))
             .child(
                 div()
-                    .w(px(HEADER_W))
+                    .w(px(self.header_w))
                     .flex_none()
                     .bg(rgb(SURFACE))
                     .py_2()

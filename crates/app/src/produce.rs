@@ -791,6 +791,8 @@ pub fn mix_role(
                 icon: None,
                 volume_db: None,
                 pan: Some(pan),
+                pan_mode: None,
+                spread: None,
                 mute: None,
                 solo: None,
             },
@@ -866,6 +868,8 @@ pub fn mix_role(
                     icon: None,
                     volume_db: Some((volume * 10.0).round() / 10.0),
                     pan: None,
+                    pan_mode: None,
+                    spread: None,
                     mute: None,
                     solo: None,
                 },
@@ -967,7 +971,13 @@ pub fn master(dir: &Path, lufs: Option<f32>) -> Result<Value, String> {
     set_clip(clip)?;
     // The fader comes after the limiter (which stops at 0 dBFS): it sets the ceiling, and the
     // loudness is measured under it.
-    cli::edit_with(dir, Command::SetMaster { volume_db: -0.5 })?;
+    cli::edit_with(
+        dir,
+        Command::SetMaster {
+            volume_db: Some(-0.5),
+            pan_law: None,
+        },
+    )?;
     let p = cli::project(dir)?;
     let whole = cli::report(&p, dir, None, false)?;
     if whole.mix.lufs < -60.0 {

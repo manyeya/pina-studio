@@ -469,12 +469,23 @@ impl Workspace {
     /// on a new audio track under it, from its first region to its last's end and its tail; the
     /// track muted. One undo puts it back.
     pub fn bounce_in_place(&mut self, t: usize, cx: &mut Context<Self>) {
+        self.bounce_range_in_place(t, None, cx);
+    }
+
+    /// The same over a range of ticks (a region's), or the whole track's regions.
+    pub fn bounce_range_in_place(
+        &mut self,
+        t: usize,
+        range: Option<(u64, u64)>,
+        cx: &mut Context<Self>,
+    ) {
         let p = &self.session.project;
         let Some(track) = p.tracks.get(t) else { return };
-        let (Some(from), Some(to)) = (
+        let whole = (
             track.regions.iter().map(|r| r.start).min(),
             track.regions.iter().map(|r| r.start + r.length).max(),
-        ) else {
+        );
+        let (Some(from), Some(to)) = range.map_or(whole, |(a, b)| (Some(a), Some(b))) else {
             self.status = Some(format!("{} has nothing to bounce.", track.name));
             cx.notify();
             return;
