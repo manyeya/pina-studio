@@ -2253,3 +2253,75 @@ fn songs_start_from_a_sheet_and_open_in_this_window(cx: &mut TestAppContext) {
     });
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[gpui::test]
+fn audio_dragged_in_from_the_finder_lands_on_the_timeline(cx: &mut TestAppContext) {
+    use gpui::{ExternalPaths, FileDropEvent};
+    let dir = demo_copy("finder-drop");
+    let outside = dir.join("Outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let (a, b) = (outside.join("Vox Take.wav"), outside.join("Shaker.wav"));
+    tone(&a, 0.5, 220.0);
+    tone(&b, 0.5, 880.0);
+    let (ws, cx) = open_at(cx, &dir);
+    let drop = |cx: &mut VisualTestContext, files: &[&Path], at: Point<Pixels>| {
+        let paths = ExternalPaths(files.iter().map(|f| f.to_path_buf()).collect());
+        cx.simulate_event(FileDropEvent::Entered {
+            position: at,
+            paths,
+        });
+        cx.simulate_event(FileDropEvent::Pending { position: at });
+        cx.simulate_event(FileDropEvent::Submit { position: at });
+        cx.simulate_event(FileDropEvent::Exited);
+        cx.run_until_parked();
+    };
+    let tracks =
+        |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.session.project.tracks.clone());
+    let drums = tracks(cx).iter().position(|t| t.name == "Drums").unwrap();
+    let before = tracks(cx);
+
+    // On an audio track: a region there, at the bar under the pointer, its file copied in.
+    drop(cx, &[&a], spot(&ws, cx, BAR + 30, drums));
+    let now = tracks(cx);
+    let r = now[drums].regions.last().unwrap();
+    assert_eq!(
+        (now[drums].regions.len(), r.start),
+        (before[drums].regions.len() + 1, BAR)
+    );
+    let Content::Audio { file, .. } = &r.content else {
+        panic!()
+    };
+    assert!(dir.join(file).exists() && file.starts_with("Audio Files"));
+
+    // On an instrument track: a new audio track under it, named for the file. Two files, two.
+    let keys = now.iter().position(|t| t.instrument.is_some()).unwrap();
+    drop(cx, &[&a, &b], spot(&ws, cx, 2 * BAR, keys));
+    let now = tracks(cx);
+    assert_eq!(now.len(), before.len() + 2);
+    let names: Vec<&str> = now[keys + 1..keys + 3]
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect();
+    assert_eq!(names, ["Vox Take", "Shaker"]);
+    assert!(now[keys + 1].instrument.is_none() && now[keys + 2].regions[0].start == 2 * BAR);
+
+    // Under the tracks: a new one at the end. One undo takes a drop back.
+    let under = spot(&ws, cx, 0, now.len() + 1);
+    drop(cx, &[&b], under);
+    assert_eq!(tracks(cx).len(), before.len() + 3);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(tracks(cx).len(), before.len() + 2);
+
+    // Not audio: nothing, and it says what it takes. (Dropped after a key press, which gpui's
+    // own drops miss.)
+    let text = outside.join("notes.txt");
+    std::fs::write(&text, "x").unwrap();
+    let at = spot(&ws, cx, 0, drums);
+    drop(cx, &[&text], at);
+    assert_eq!(tracks(cx).len(), before.len() + 2);
+    let status = ws
+        .read_with(cx, |ws, _| ws.status.clone())
+        .unwrap_or_default();
+    assert!(status.contains("WAV"), "{status}");
+    std::fs::remove_dir_all(dir).unwrap();
+}

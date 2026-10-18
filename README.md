@@ -135,6 +135,11 @@ In the app, mostly as in Logic:
   it's made, outlined, undoable on its own. The agent's name at the top picks another (Claude
   Code or Codex, with their logos, each saying whether it's signed in and on what). Edits by any
   other agent show there too.
+- Drag audio files (WAV, AIFF, FLAC, MP3) in from the Finder, or sounds from the browser, and
+  they land on the timeline where they're let go: on the audio track there, or on a new audio
+  track (under an instrument track, or under the tracks); several files, a track each. A sound
+  dropped on a sampler track becomes a pad. A file the library knows is fitted to the song's tempo
+  and key, as from the browser.
 - Drag regions to move them (across tracks too) and their edges to trim; option-drag one to copy
   it, option-shift-drag for an alias: a linked copy, its name in italics with a link, that plays
   the same notes, so editing either edits both (its place, length and playback settings are its

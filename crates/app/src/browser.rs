@@ -16,7 +16,7 @@ use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
     ops::Range,
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{
         Arc,
@@ -26,7 +26,7 @@ use std::{
 };
 
 use gpui::{
-    Bounds, Context, Div, Entity, Focusable, FontWeight, Hsla, MouseButton, MouseDownEvent,
+    App, Bounds, Context, Div, Entity, Focusable, FontWeight, Hsla, MouseButton, MouseDownEvent,
     MouseMoveEvent, PathBuilder, PathPromptOptions, Pixels, Point, ScrollDelta, ScrollStrategy,
     ScrollWheelEvent, SharedString, Subscription, UniformListScrollHandle, Window, canvas, div,
     fill, point, prelude::*, px, relative, rgb, size, uniform_list,
@@ -123,12 +123,12 @@ impl KitPick {
 pub enum Drop {
     /// An audio region on an audio track, at a tick.
     Audio(usize, u64),
-    /// A zone on a sampler track.
-    Zone(usize),
-    /// A new track, under the others (an audio region there starts at the tick).
+    /// A zone on a sampler track (a region at the tick, for a file from the Finder).
+    Zone(usize, u64),
+    /// A new audio track under the others, a region on it at the tick.
     New(u64),
-    /// A track with an instrument of its own.
-    Refused(usize),
+    /// A track with an instrument of its own: a new audio track under it, a region at the tick.
+    Under(usize, u64),
 }
 
 pub struct Browser {
@@ -1262,54 +1262,141 @@ impl Workspace {
         at_end: bool,
         cx: &mut Context<Self>,
     ) {
+        let new = self.new_track_index(at_end);
+        self.add_audio_at(index, track, Some(new), tick, cx);
+    }
+
+    /// As `add_audio`, a new track (without `track`) going at `new`.
+    fn add_audio_at(
+        &mut self,
+        index: usize,
+        track: Option<usize>,
+        new: Option<usize>,
+        tick: u64,
+        cx: &mut Context<Self>,
+    ) {
         let Some(s) = self.browser.sample(index).cloned() else {
             return;
         };
-        let new = self.new_track_index(at_end);
+        let new = new.unwrap_or_else(|| self.new_track_index(true));
         // Heard in the song's key, it goes in in that key.
         let semis = self.sample_transpose(index).round() as i8;
         self.session.checkpoint();
+        let placed = self.put_audio(&s.path, &s.name, Some(&s), semis, track, new, tick);
+        self.placed(placed, &s.name, cx);
+    }
+
+    /// An audio file as a region at `tick` on `track` (a new audio track at `new` without one).
+    /// A library sample (`s`) that's a loop knowing its tempo is stretched to the song's and
+    /// loops on; `semis` moves it into the song's key.
+    #[allow(clippy::too_many_arguments)]
+    fn put_audio(
+        &mut self,
+        file: &Path,
+        name: &str,
+        s: Option<&Sample>,
+        semis: i8,
+        track: Option<usize>,
+        new: usize,
+        tick: u64,
+    ) -> Result<At, String> {
         let dir = self.session.dir.clone();
         let p = &mut self.session.project;
-        let placed = (|| {
-            let t = match track {
-                Some(t) => t,
-                None => {
-                    let add = Command::AddTrack {
-                        name: s.name.clone(),
-                        instrument: None,
-                        index: Some(new),
-                    };
-                    commands::apply(p, &dir, add)?;
-                    new
-                }
-            };
-            let add = Command::AddAudioRegion {
-                track: t,
-                file: s.path.clone(),
-                start: tick,
-                offset: 0,
-                length: None,
-            };
-            commands::apply(p, &dir, add)?;
-            let at: At = (t, p.tracks[t].regions.len() - 1);
-            if let Some(length) = loop_ticks(&s.analysis, p.tempo) {
-                let now = p.region(at).length;
-                if length.abs_diff(now) > now / 200 {
-                    p.flex(at, length)?;
-                }
+        let t = match track {
+            Some(t) => t,
+            None => {
+                let add = Command::AddTrack {
+                    name: name.to_string(),
+                    instrument: None,
+                    index: Some(new),
+                };
+                commands::apply(p, &dir, add)?;
+                new.min(p.tracks.len() - 1)
             }
-            // Looping, as `tempo samples put` leaves one, till the next region or the end; a
-            // loop following the song's tempo.
-            let r = &mut p.tracks[t].regions[at.1];
-            r.transpose = semis;
-            r.looped = s.analysis.kind == Kind::Loop;
-            if let Content::Audio { follow, .. } = &mut r.content {
-                *follow = s.analysis.kind == Kind::Loop;
+        };
+        let add = Command::AddAudioRegion {
+            track: t,
+            file: file.to_path_buf(),
+            start: tick,
+            offset: 0,
+            length: None,
+        };
+        commands::apply(p, &dir, add)?;
+        let at: At = (t, p.tracks[t].regions.len() - 1);
+        let Some(s) = s else {
+            return Ok(at);
+        };
+        if let Some(length) = loop_ticks(&s.analysis, p.tempo) {
+            let now = p.region(at).length;
+            if length.abs_diff(now) > now / 200 {
+                p.flex(at, length)?;
             }
-            Ok::<At, String>(at)
-        })();
-        self.placed(placed, &s.name, cx);
+        }
+        // Looping, as `tempo samples put` leaves one, till the next region or the end; a
+        // loop following the song's tempo.
+        let r = &mut p.tracks[t].regions[at.1];
+        r.transpose = semis;
+        r.looped = s.analysis.kind == Kind::Loop;
+        if let Content::Audio { follow, .. } = &mut r.content {
+            *follow = s.analysis.kind == Kind::Loop;
+        }
+        Ok(at)
+    }
+
+    /// Audio files dropped from the Finder at `at` (a window position): each a region at the
+    /// tick under the pointer, the first on the audio track there, the rest (or all, over any
+    /// other track or under them) on new audio tracks. A file the library knows goes in as from
+    /// the browser: a loop fitted to the song's tempo and key. One undo takes it all back.
+    pub fn drop_files(&mut self, paths: &[PathBuf], at: Point<f32>, cx: &mut Context<Self>) {
+        self.file_drag = None;
+        let audio: Vec<&PathBuf> = paths
+            .iter()
+            .filter(|p| {
+                p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                    ["wav", "wave", "aif", "aiff", "flac", "mp3"]
+                        .contains(&e.to_lowercase().as_str())
+                })
+            })
+            .collect();
+        if audio.is_empty() {
+            self.status = Some("tempo takes WAV, AIFF, FLAC and MP3 files.".into());
+            cx.notify();
+            return;
+        }
+        let n = self.session.project.tracks.len();
+        let (mut track, tick, mut new) = match self.drop_target(at) {
+            Some(Drop::Audio(t, tick)) => (Some(t), tick, t + 1),
+            Some(Drop::Zone(t, tick) | Drop::Under(t, tick)) => (None, tick, t + 1),
+            Some(Drop::New(tick)) => (None, tick, n),
+            None => (None, 0, n),
+        };
+        self.session.checkpoint();
+        let mut placed = Err("nothing dropped".to_string());
+        for file in audio.iter().copied() {
+            let known = self
+                .browser
+                .library
+                .samples
+                .iter()
+                .position(|s| s.path == *file);
+            let s = known.and_then(|k| self.browser.sample(k).cloned());
+            let semis = known.map_or(0, |k| self.sample_transpose(k).round() as i8);
+            let name = file
+                .file_stem()
+                .map_or("Audio".into(), |f| f.to_string_lossy().into_owned());
+            placed = self.put_audio(file, &name, s.as_ref(), semis, track.take(), new, tick);
+            match &placed {
+                Ok((t, _)) => new = t + 1,
+                Err(_) => break,
+            }
+        }
+        let what = match audio.as_slice() {
+            [one] => one
+                .file_stem()
+                .map_or(String::new(), |f| f.to_string_lossy().into_owned()),
+            many => format!("{} files", many.len()),
+        };
+        self.placed(placed, &what, cx);
     }
 
     /// A one-shot as a zone on `track`'s sampler, or on a new sampler track without one.
@@ -1395,8 +1482,8 @@ impl Workspace {
             None => Drop::New(tick),
             Some(t) => match &t.instrument {
                 None => Drop::Audio(row, tick),
-                Some(Instrument::Sampler(_)) => Drop::Zone(row),
-                Some(_) => Drop::Refused(row),
+                Some(Instrument::Sampler(_)) => Drop::Zone(row, tick),
+                Some(_) => Drop::Under(row, tick),
             },
         })
     }
@@ -1434,21 +1521,19 @@ impl Workspace {
                 moved: true,
                 ..
             }) => {
-                let Some(kind) = self.browser.sample(index).map(|s| s.analysis.kind) else {
-                    return;
-                };
+                // On the timeline, a sample is audio there; on a sampler track, a pad.
                 match self.drop_target(at) {
                     Some(Drop::Audio(t, tick)) => self.add_audio(index, Some(t), tick, false, cx),
-                    Some(Drop::Zone(t)) => self.add_zone(index, Some(t), false, cx),
-                    Some(Drop::New(tick)) => match kind {
-                        Kind::Loop => self.add_audio(index, None, tick, true, cx),
-                        Kind::OneShot => self.add_zone(index, None, true, cx),
-                    },
-                    Some(Drop::Refused(t)) => {
-                        let name = &self.session.project.tracks[t].name;
-                        self.status = Some(format!(
-                            "{name} plays its own instrument: drop samples on an audio or sampler track, or under the tracks for a new one."
-                        ));
+                    Some(Drop::Zone(t, _)) => self.add_zone(index, Some(t), false, cx),
+                    Some(Drop::New(tick)) => self.add_audio_at(
+                        index,
+                        None,
+                        Some(self.session.project.tracks.len()),
+                        tick,
+                        cx,
+                    ),
+                    Some(Drop::Under(t, tick)) => {
+                        self.add_audio_at(index, None, Some(t + 1), tick, cx)
                     }
                     None => {}
                 }
@@ -4213,18 +4298,18 @@ impl Workspace {
                 format!("Audio on {}", self.session.project.tracks[t].name),
                 true,
             ),
-            Some(Drop::Zone(t)) => (
+            Some(Drop::Zone(t, _)) => (
                 format!("A pad on {}", self.session.project.tracks[t].name),
                 true,
             ),
-            Some(Drop::New(_)) => (
-                match s.analysis.kind {
-                    Kind::Loop => "A new audio track".to_string(),
-                    Kind::OneShot => "A new sampler track".to_string(),
-                },
+            Some(Drop::New(_)) => ("Audio on a new track".to_string(), true),
+            Some(Drop::Under(t, _)) => (
+                format!(
+                    "Audio on a new track under {}",
+                    self.session.project.tracks[t].name
+                ),
                 true,
             ),
-            Some(Drop::Refused(_)) => ("Not on an instrument track".to_string(), false),
             None => ("Drop it on a track".to_string(), true),
         };
         Some(
@@ -4316,16 +4401,47 @@ impl Workspace {
         };
         Some(match self.drop_target(at)? {
             Drop::Audio(t, tick) => region(t, tick),
-            Drop::New(tick) if s.analysis.kind == Kind::Loop => region(p.tracks.len(), tick),
-            Drop::Zone(t) => lane(t)
+            Drop::New(tick) => region(p.tracks.len(), tick),
+            // A new track goes in under it: the region shows on the line between.
+            Drop::Under(t, tick) => region(t, tick).top(px(self.row_top(t + 1) - 6.)).h(px(12.)),
+            Drop::Zone(t, _) => lane(t)
                 .bg(alpha(color, 0.1))
                 .border_1()
                 .border_color(alpha(color, 0.8)),
-            Drop::New(_) => lane(self.session.project.tracks.len())
+        })
+    }
+
+    /// In the lanes, while files are dragged in from the Finder: where they'd land.
+    pub fn file_drop_view(&self, cx: &App) -> Option<Div> {
+        let at = self.file_drag.as_ref().filter(|_| cx.has_active_drag())?.0;
+        let lane = |row: usize| {
+            div()
+                .absolute()
+                .left_0()
+                .top(px(self.row_top(row) + 2.))
+                .w_full()
+                .h(px(LANE_H - 4.))
+                .rounded(px(6.))
                 .bg(alpha(ACCENT, 0.08))
                 .border_1()
-                .border_color(alpha(ACCENT, 0.6)),
-            Drop::Refused(t) => lane(t).bg(alpha(RECORD, 0.08)),
+                .border_color(alpha(ACCENT, 0.7))
+        };
+        let tick = |t: u64| {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(t as f32 * self.px_per_tick() - self.scroll_x))
+                .w(px(2.))
+                .bg(rgb(ACCENT))
+        };
+        Some(match self.drop_target(at)? {
+            Drop::Audio(t, at) => lane(t).child(tick(at)),
+            Drop::New(at) => lane(self.session.project.tracks.len()).child(tick(at)),
+            Drop::Zone(t, at) | Drop::Under(t, at) => lane(t + 1)
+                .h(px(4.))
+                .top(px(self.row_top(t + 1) - 2.))
+                .child(tick(at)),
         })
     }
 }

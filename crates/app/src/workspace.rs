@@ -14,9 +14,10 @@ use std::{
 pub use crate::record::Recording;
 
 use gpui::{
-    App, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, FontWeight, KeyBinding,
-    KeyDownEvent, KeyUpEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, PromptLevel,
-    ScrollDelta, ScrollWheelEvent, Subscription, Window, actions, canvas, div, prelude::*, px, rgb,
+    App, Bounds, Context, DispatchPhase, DragMoveEvent, Entity, ExternalPaths, FocusHandle,
+    Focusable, FontWeight, KeyBinding, KeyDownEvent, KeyUpEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, Point, PromptLevel, ScrollDelta, ScrollWheelEvent, Subscription, Window, actions,
+    canvas, div, prelude::*, px, rgb,
 };
 use tempo_engine::{
     engine::LiveNote,
@@ -600,6 +601,8 @@ pub struct Workspace {
     /// The plugins installed, once the scan is done.
     pub plugins: Option<Vec<PluginInfo>>,
     pub drag: Option<Drag>,
+    /// Where files dragged in from the Finder are, and which, while they're over the window.
+    pub file_drag: Option<(Point<f32>, Vec<std::path::PathBuf>)>,
     /// Meter readings by track or aux id; None is the master.
     pub levels: HashMap<Option<u64>, Level>,
     /// Compressor gain reduction, in dB, by channel id; None is the master.
@@ -726,6 +729,7 @@ impl Workspace {
             plugins: None,
             live: HashMap::new(),
             drag: None,
+            file_drag: None,
             levels: HashMap::new(),
             reductions: HashMap::new(),
             load: 0.0,
@@ -2193,6 +2197,30 @@ impl Workspace {
         .size_full()
     }
 
+    /// While files from the Finder are over the window: letting go drops them where the pointer
+    /// is, wherever that is.
+    fn file_listener(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity().downgrade();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let t = this.clone();
+                window.on_mouse_event(move |e: &MouseUpEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Bubble {
+                        t.update(cx, |ws, cx| {
+                            if let Some((_, paths)) = ws.file_drag.take() {
+                                ws.drop_files(&paths, pt(e.position), cx);
+                            }
+                        })
+                        .ok();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
     /// Reads the meters and compressors, letting them fall back gently, and the CPU load.
     fn read_meters(&mut self) {
         let ids: Vec<u64> = self
@@ -2518,6 +2546,13 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &ToggleCycle, _, cx| ws.toggle_cycle(cx)))
             .on_action(cx.listener(|ws, _: &ToggleMetronome, _, cx| ws.toggle_metronome(cx)))
             .on_action(cx.listener(|ws, _: &Quit, window, cx| ws.quit(window, cx)))
+            // Audio dragged in from the Finder: followed here, and let go by `file_listener`.
+            // (gpui's own drop needs the pointer to count as hovering, which it doesn't after a
+            // key press, as a Finder drag isn't a mouse move.)
+            .on_drag_move(cx.listener(|ws, e: &DragMoveEvent<ExternalPaths>, _, cx| {
+                ws.file_drag = Some((pt(e.event.position), e.drag(cx).paths().to_vec()));
+                cx.notify();
+            }))
             .on_action(cx.listener(|ws, _: &ToggleMixer, _, cx| ws.toggle_mixer(cx)))
             .on_action(cx.listener(|ws, _: &ToggleAgent, window, cx| ws.toggle_agent(window, cx)))
             .on_action(cx.listener(|ws, _: &NewSong, window, cx| ws.new_song_sheet(window, cx)))
@@ -2566,6 +2601,9 @@ impl Render for Workspace {
             )
             .child(self.status_bar())
             .when(self.drag.is_some(), |d| d.child(self.drag_listener(cx)))
+            .when(self.file_drag.is_some(), |d| {
+                d.child(self.file_listener(cx))
+            })
             .children(self.sample_ghost())
             .children(self.device_ghost())
             .children(self.new_song_view(cx))
