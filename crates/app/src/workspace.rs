@@ -184,8 +184,10 @@ pub enum Edge {
     Move,
     Start,
     End,
-    /// The end, flexing the audio rather than trimming it.
+    /// The end, time-stretching what's in it rather than trimming it (⌥).
     Stretch,
+    /// The top of the end: loops it out to where it's dragged, as Logic's loop tool does.
+    Loop,
 }
 
 /// What a vertical drag turns: a knob, as a value from 0 to 1.
@@ -725,6 +727,8 @@ pub struct Workspace {
     pub browser_w: f32,
     /// Regions copied (⌘C on the tracks), to paste at the playhead.
     pub region_clip: Option<tempo_engine::project::Region>,
+    /// A MIDI or pattern region's contents as they were when its time-stretch drag began.
+    pub stretching: Option<tempo_engine::project::Content>,
     /// A track's colour and icon picker waiting for the next frame (from a menu), and where.
     pub pending_look: Option<(usize, Point<Pixels>)>,
     /// The New Track palette, when it's open; and the presets it searches.
@@ -884,6 +888,7 @@ impl Workspace {
             inspector_w: INSPECTOR_W,
             browser_w: INSPECTOR_W + 52.0,
             region_clip: None,
+            stretching: None,
             pending_look: None,
             adder: None,
             sounds: Default::default(),
@@ -1482,12 +1487,34 @@ impl Workspace {
                         let end = self.snap(end as f64 + dt);
                         self.session.project.trim_end(at, end);
                     }
+                    // MIDI and patterns stretch from how they were, so rounding doesn't build up.
+                    Edge::Stretch if self.stretching.is_some() => {
+                        let length = self.snap(end as f64 + dt).max(start + 1) - start;
+                        let ratio = length as f64 / (end - start).max(1) as f64;
+                        let made = self.stretching.as_ref().and_then(|c| c.stretched(ratio));
+                        if let Some(content) = made {
+                            let r = &mut self.session.project.tracks[at.0].regions[at.1];
+                            r.content = content;
+                            r.length = length;
+                            r.link = None;
+                        }
+                        self.status = Some(format!("Time stretch ×{ratio:.2}"));
+                    }
                     // Stretching audio is slow, so the engine hears of it when the drag ends.
                     Edge::Stretch => {
                         let length = self.snap(end as f64 + dt).max(start + 1) - start;
                         let _ = self.session.project.flex(at, length);
+                        let ratio = length as f64 / (end - start).max(1) as f64;
+                        self.status = Some(format!("Flex ×{ratio:.2}"));
                         cx.notify();
                         return;
+                    }
+                    // Loops to the grid line nearest the pointer; back inside the region, none.
+                    Edge::Loop => {
+                        let to = self.snap(self.tick_at(p.x));
+                        let r = &mut self.session.project.tracks[at.0].regions[at.1];
+                        r.looped = to > r.start + r.length;
+                        r.loop_length = r.looped.then(|| to - r.start);
                     }
                 }
             }
@@ -1771,11 +1798,14 @@ impl Workspace {
         }
         if let Some(Drag::Region {
             edge: Edge::Stretch,
-            moved: true,
+            moved,
             ..
         }) = self.drag
         {
-            self.changed(cx);
+            self.stretching = None;
+            if moved {
+                self.changed(cx);
+            }
         }
         if let Some(Drag::Sample { .. } | Drag::MapBox { .. }) = self.drag {
             let drag = self.drag.take();
@@ -2527,7 +2557,7 @@ impl Workspace {
                 "Click a lane to add a point · ⌥-click a point to delete it · pick Touch or Latch to record while playing"
             }
             _ => {
-                "Drag to move · ⌥-drag to copy · ⌥⇧-drag for an alias · drag an edge to trim · ⌘-scroll to zoom"
+                "Drag to move · ⌥-drag to copy · ⌥⇧-drag for an alias · drag an edge to trim · drag the top of its end to loop · ⌥-drag its end to time-stretch"
             }
         };
         let (text, color) = match &self.status {

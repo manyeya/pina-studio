@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, App, Bounds, Context, Div, FontWeight, Hsla, MouseButton, MouseDownEvent,
-    PathBuilder, Pixels, Point, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
+    PathBuilder, Pixels, Point, SharedString, Window, canvas, div, fill, point, prelude::*, px,
+    rgb, size,
 };
 use tempo_engine::{
     peaks::Peaks,
@@ -1755,20 +1756,18 @@ impl Workspace {
         let inside = self.inside(&region.content, region.length);
         let (start, end) = (region.start, region.start + region.length);
         let ink = Hsla::from(rgb(color));
+        // Its start trims; its end's bottom half trims (⌥ time-stretches), its top half loops,
+        // as Logic's region edges do.
+        let half = (lh - 8.0) / 2.0;
         let handle = |edge: Edge, cx: &mut Context<Self>| {
-            let h = div()
-                .absolute()
-                .top_0()
-                .w(px(6.))
-                .h_full()
-                .cursor_ew_resize();
-            let h = if edge == Edge::Start {
-                h.left_0()
-            } else {
-                h.right_0()
+            let h = div().absolute().w(px(6.)).cursor_ew_resize();
+            let h = match edge {
+                Edge::Start => h.left_0().top_0().h_full(),
+                _ => h.right_0().bottom_0().h(px(half)),
             };
             h.on_mouse_down(MouseButton::Left, grab(at, edge, start, end, cx))
         };
+        let group: SharedString = format!("region-{}-{}", at.0, at.1).into();
         let pill = |left: bool| {
             div()
                 .absolute()
@@ -1800,6 +1799,7 @@ impl Workspace {
                 alpha(color, 0.33)
             })
             .when(track.mute, |d| d.opacity(0.4))
+            .group(group.clone())
             .debug_selector(move || format!("region-{}-{}", at.0, at.1))
             .child({
                 let ink = if selected {
@@ -1842,6 +1842,9 @@ impl Workspace {
             .when(selected, |d| d.child(pill(true)).child(pill(false)))
             .child(handle(Edge::Start, cx))
             .child(handle(Edge::End, cx))
+            .when(!region.looped || project.loop_end(at) <= end, |d| {
+                d.child(loop_tab(at, (start, end), half, color, group.clone(), cx))
+            })
             .when(selected, |d| d.children(self.warp_handles(at, cx)))
             .cursor(match self.tool {
                 Tool::Pointer | Tool::Pencil => gpui::CursorStyle::OpenHand,
@@ -1928,6 +1931,19 @@ impl Workspace {
                 );
             }
             start += region.length;
+        }
+        // The last repeat's top right drags the loops out or back.
+        let group: SharedString = format!("loops-{}-{}", at.0, at.1).into();
+        if let Some(last) = out.pop() {
+            let ends = (region.start, region.start + region.length);
+            out.push(last.group(group.clone()).child(loop_tab(
+                at,
+                ends,
+                (lh - 8.0) / 2.0,
+                color,
+                group,
+                cx,
+            )));
         }
         out
     }
@@ -2058,6 +2074,43 @@ const CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 
 
 /// Starts dragging a region (`start` and `end` are its ticks when the drag starts), or does what
 /// the tool does to it.
+/// The top half of a region's end (or of its last repeat's): drag it to loop the region out to
+/// there, as Logic's loop tool does. A loop sign shows on hover.
+fn loop_tab(
+    at: At,
+    (start, end): (u64, u64),
+    half: f32,
+    color: u32,
+    group: SharedString,
+    cx: &mut Context<Workspace>,
+) -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .right_0()
+        .w(px(18.))
+        .h(px(half))
+        .flex()
+        .justify_end()
+        .pt(px(2.))
+        .pr(px(2.))
+        .cursor(gpui::CursorStyle::ResizeRight)
+        .debug_selector(move || format!("loop-tab-{}-{}", at.0, at.1))
+        .child(
+            div()
+                .size(px(14.))
+                .rounded(px(4.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(rgb(color))
+                .opacity(0.)
+                .group_hover(group, |s| s.opacity(1.))
+                .child(icon(Icon::Loop, 10.).text_color(rgb(0xffffff))),
+        )
+        .on_mouse_down(MouseButton::Left, grab(at, Edge::Loop, start, end, cx))
+}
+
 fn grab(
     at: At,
     edge: Edge,
@@ -2102,12 +2155,19 @@ fn grab(
                 return;
             }
         }
-        // Option-dragging an audio region's end flexes it, as in Logic.
-        let audio = matches!(ws.session.project.region(at).content, Content::Audio { .. });
-        let edge = if edge == Edge::End && e.modifiers.alt && audio {
-            Edge::Stretch
-        } else {
-            edge
+        // Option-dragging a region's end time-stretches it, as in Logic: audio flexes, MIDI
+        // and patterns spread their notes or steps. A take folder only trims.
+        let content = &ws.session.project.region(at).content;
+        let edge = match (edge, content) {
+            (Edge::End, Content::Takes { .. }) => Edge::End,
+            (Edge::End, _) if e.modifiers.alt => Edge::Stretch,
+            _ => edge,
+        };
+        ws.stretching = match (edge, content) {
+            (Edge::Stretch, Content::Midi { .. } | Content::Pattern { .. }) => {
+                Some(content.clone())
+            }
+            _ => None,
         };
         let from = e.position.map(f32::from);
         // Option-dragging a region drags a copy of it; with shift too, an alias, as in Logic.

@@ -1146,6 +1146,10 @@ pub struct Region {
     /// Plays over and over, until the next region on its track or the end of the song.
     #[serde(default, rename = "loop", skip_serializing_if = "std::ops::Not::not")]
     pub looped: bool,
+    /// Where its loops stop, in ticks from its start, as Logic's loop tool drags them out (the
+    /// next region still stops them); none runs them on to the next region or the song's end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_length: Option<u64>,
     /// Silent, kept where it is.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mute: bool,
@@ -1359,6 +1363,37 @@ impl Content {
                 Some(Cow::Owned(pattern_notes(*step, rows, length, *swing)))
             }
             _ => None,
+        }
+    }
+
+    /// Its notes (and controllers) or steps, played `ratio` times as long: a MIDI or pattern
+    /// region time-stretched, as Logic's ⌥-drag of a region's end does. Audio flexes instead.
+    pub fn stretched(&self, ratio: f64) -> Option<Content> {
+        let at = |t: i64| (t as f64 * ratio).round() as i64;
+        match self {
+            Content::Midi { notes, controls } => Some(Content::Midi {
+                notes: notes
+                    .iter()
+                    .map(|n| Note {
+                        start: at(n.start),
+                        length: ((n.length as f64 * ratio).round() as u64).max(1),
+                        ..*n
+                    })
+                    .collect(),
+                controls: controls
+                    .iter()
+                    .map(|c| ControlPoint {
+                        start: at(c.start),
+                        ..*c
+                    })
+                    .collect(),
+            }),
+            Content::Pattern { step, rows, swing } => Some(Content::Pattern {
+                step: ((*step as f64 * ratio).round() as u64).max(1),
+                rows: rows.clone(),
+                swing: *swing,
+            }),
+            Content::Audio { .. } | Content::Takes { .. } => None,
         }
     }
 
@@ -1770,7 +1805,8 @@ impl Project {
         ]
     }
 
-    /// Where a looped region stops: at the next region on its track, or else the end of the song.
+    /// Where a looped region stops: where its loops were dragged to, or the next region on its
+    /// track, or else the end of the song; whichever comes first.
     pub fn loop_end(&self, at: At) -> u64 {
         let r = self.region(at);
         let next = self.tracks[at.0]
@@ -1779,7 +1815,11 @@ impl Project {
             .map(|o| o.start)
             .filter(|&s| s > r.start)
             .min();
-        next.unwrap_or_else(|| self.end()).max(r.start + r.length)
+        let stop = match r.loop_length {
+            Some(l) => (r.start + l).min(next.unwrap_or(u64::MAX)),
+            None => next.unwrap_or_else(|| self.end()),
+        };
+        stop.max(r.start + r.length)
     }
 
     /// Ticks to samples at `rate`.
@@ -1794,11 +1834,15 @@ impl Project {
     }
 
     /// The tick where the last region ends.
+    /// Where the last region stops, or the last loops dragged out past it.
     pub fn end(&self) -> u64 {
         self.tracks
             .iter()
             .flat_map(|t| &t.regions)
-            .map(|r| r.start + r.length)
+            .map(|r| match (r.looped, r.loop_length) {
+                (true, Some(l)) => r.start + l.max(r.length),
+                _ => r.start + r.length,
+            })
             .max()
             .unwrap_or(0)
     }
@@ -1875,8 +1919,18 @@ impl Project {
     pub fn flex(&mut self, at: At, length: u64) -> Result<(), String> {
         let r = &mut self.tracks[at.0].regions[at.1];
         let old = r.length;
+        // MIDI and patterns: their notes or steps, longer or shorter; an alias its own then.
+        if let Some(c) = r
+            .content
+            .stretched(length.max(1) as f64 / old.max(1) as f64)
+        {
+            r.content = c;
+            r.length = length.max(1);
+            r.link = None;
+            return Ok(());
+        }
         let Content::Audio { stretch, warps, .. } = &mut r.content else {
-            return Err("only audio regions flex".into());
+            return Err("a take folder doesn't stretch: flatten it first".into());
         };
         // The stretch that fills `length`, within limits, and the length that gives; warp
         // markers stretch with it.
@@ -2071,6 +2125,10 @@ impl Project {
                         });
                 *comp = pieces(shifted);
             }
+        }
+        // Its loops stop where they did.
+        if let Some(l) = &mut r.loop_length {
+            *l = (old + *l).saturating_sub(start);
         }
         r.start = start;
         r.length = end - start;

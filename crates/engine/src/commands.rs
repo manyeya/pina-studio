@@ -173,6 +173,9 @@ pub enum Command {
         name: Option<String>,
         #[serde(default, rename = "loop")]
         looped: Option<bool>,
+        /// Ticks from its start to where its loops stop; 0 runs them to the next region.
+        #[serde(default)]
+        loop_length: Option<u64>,
         #[serde(default)]
         transpose: Option<i8>,
         #[serde(default)]
@@ -1079,6 +1082,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             region: r,
             name,
             looped,
+            loop_length,
             transpose,
             velocity,
             quantize,
@@ -1113,6 +1117,10 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             }
             if let Some(v) = looped {
                 region.looped = v;
+            }
+            if let Some(v) = loop_length {
+                region.loop_length = (v > 0).then_some(v);
+                region.looped |= v > 0;
             }
             if let Some(v) = transpose {
                 region.transpose = v.clamp(-96, 96);

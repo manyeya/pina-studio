@@ -173,9 +173,12 @@ In the app, mostly as in Logic:
 - Drag regions to move them (across tracks too) and their edges to trim; option-drag one to copy
   it, option-shift-drag for an alias: a linked copy, its name in italics with a link, that plays
   the same notes, so editing either edits both (its place, length and playback settings are its
-  own; "Make unique" in the inspector, splitting it or trimming its start unlinks it). Option-drag
-  an audio region's end to flex it (Flex Time: slower or faster, same pitch, by Signalsmith
-  Stretch).
+  own; "Make unique" in the inspector, splitting it or trimming its start unlinks it).
+- A region's end works as Logic's: its bottom half trims; its top half (a loop sign shows on
+  hover) loops it out to wherever it's dragged, and the last repeat's drags the loops back; and
+  option-dragging it time-stretches the region: audio flexes (slower or faster, same pitch, by
+  Signalsmith Stretch), a MIDI region's notes and controllers spread out or close up, and a step
+  pattern's steps get longer or shorter.
 - Bounce (⌘B, or Export in the control bar) opens the Bounce sheet, as Logic's Bounce and FL
   Studio's Export: the mix, each track as a stem (through the master or not), or each marked
   section as its own file; over the song, the cycle or any bars; as WAV, AIFF, FLAC, MP3 (LAME,

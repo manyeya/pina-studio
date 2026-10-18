@@ -180,8 +180,8 @@ fn regions_move_only_to_tracks_that_can_play_them(cx: &mut TestAppContext) {
 #[gpui::test]
 fn dragging_a_regions_end_trims_it(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
-    // The first drums region's right edge, dragged one beat left.
-    let edge = spot(&ws, cx, BAR, 2) - point(px(2.), px(0.));
+    // The first drums region's right edge (its bottom half: the top loops), one beat left.
+    let edge = spot(&ws, cx, BAR, 2) + point(px(-2.), px(12.));
     drag(cx, edge, edge - point(px(48.), px(0.)));
     assert_eq!(selected(&ws, cx), (2, 0, BAR - PPQ));
 }
@@ -333,6 +333,69 @@ fn regions_copy_paste_mute_and_repeat_from_their_menus_and_keys(cx: &mut TestApp
     assert!(ws.read_with(cx, |ws, _| ws.session.project.tracks[0].regions[0].mute));
     cx.simulate_keystrokes("cmd-z");
     assert!(!ws.read_with(cx, |ws, _| ws.session.project.tracks[0].regions[0].mute));
+}
+
+#[gpui::test]
+fn a_regions_end_loops_from_its_top_and_time_stretches_with_option(cx: &mut TestAppContext) {
+    use tempo_engine::project::Content;
+    let (ws, cx) = open(cx);
+    let region = |cx: &VisualTestContext, at: (usize, usize)| {
+        ws.read_with(cx, |ws, _| ws.session.project.region(at).clone())
+    };
+    let keys = region(cx, (0, 0));
+    let end = keys.start + keys.length;
+    // The top of Keys' end, dragged two bars on: looped to there.
+    let tab = cx.debug_bounds("loop-tab-0-0").unwrap().center();
+    drag(cx, tab, point(spot(&ws, cx, end + BAR * 2, 0).x, tab.y));
+    let looped = region(cx, (0, 0));
+    assert_eq!(
+        (looped.looped, looped.loop_length),
+        (true, Some(keys.length + BAR * 2))
+    );
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.loop_end((0, 0))),
+        end + BAR * 2
+    );
+    // The tab is on the last repeat now: back inside the region, no loops.
+    let tab = cx.debug_bounds("loop-tab-0-0").unwrap().center();
+    drag(cx, tab, point(spot(&ws, cx, end - BAR, 0).x, tab.y));
+    assert!(!region(cx, (0, 0)).looped);
+
+    // ⌥-dragging the bottom of Lead's end a bar on: its notes spread over the longer region.
+    let lead = region(cx, (1, 0));
+    let b = cx.debug_bounds("region-1-0").unwrap();
+    let from = point(b.right() - px(2.), b.bottom() - px(6.));
+    let to = point(
+        spot(&ws, cx, lead.start + lead.length + BAR, 1).x - px(2.),
+        from.y,
+    );
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::alt());
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::alt());
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::alt());
+    cx.run_until_parked();
+    let stretched = region(cx, (1, 0));
+    assert_eq!(stretched.length, lead.length + BAR);
+    let (Content::Midi { notes: was, .. }, Content::Midi { notes: now, .. }) =
+        (&lead.content, &stretched.content)
+    else {
+        panic!("not MIDI")
+    };
+    let ratio = stretched.length as f64 / lead.length as f64;
+    let last = was.len() - 1;
+    assert_eq!(
+        now[last].start,
+        (was[last].start as f64 * ratio).round() as i64
+    );
+    // Without ⌥ it trims: its notes stay put.
+    let b = cx.debug_bounds("region-1-0").unwrap();
+    let from = point(b.right() - px(2.), b.bottom() - px(6.));
+    drag(cx, from, from - point(px(48.), px(0.)));
+    let Content::Midi { notes, .. } = &region(cx, (1, 0)).content else {
+        panic!("not MIDI")
+    };
+    assert_eq!(notes, now);
+    cx.simulate_keystrokes("cmd-z cmd-z");
+    assert_eq!(region(cx, (1, 0)), lead);
 }
 
 #[gpui::test]
@@ -1118,8 +1181,8 @@ fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
 #[gpui::test]
 fn option_dragging_an_audio_regions_end_flexes_it(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
-    // The first drums region's right edge, option-dragged a bar longer.
-    let edge = spot(&ws, cx, BAR, 2) - point(px(2.), px(0.));
+    // The first drums region's right edge (its bottom half), option-dragged a bar longer.
+    let edge = spot(&ws, cx, BAR, 2) + point(px(-2.), px(12.));
     let alt = Modifiers {
         alt: true,
         ..Modifiers::none()

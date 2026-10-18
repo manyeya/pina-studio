@@ -3601,6 +3601,48 @@ mod tests {
     }
 
     #[test]
+    fn loops_dragged_out_stop_where_they_were_dragged_and_stretching_spreads_notes() {
+        // Looped to three beats, with the next region at five: three plays.
+        let mut t = synth_track("a", vec![note(0, 240, 60)], PPQ);
+        t.regions[0].looped = true;
+        t.regions[0].loop_length = Some(PPQ * 3);
+        t.regions.push(Region {
+            start: PPQ * 5,
+            length: PPQ,
+            content: Content::Midi {
+                notes: vec![note(0, 240, 72)],
+                controls: Vec::new(),
+            },
+            ..Default::default()
+        });
+        let b = BEAT as u64;
+        let mut p = project(vec![t]);
+        assert_eq!(
+            note_ons(&p),
+            [
+                (0, 60, 127),
+                (b, 60, 127),
+                (2 * b, 60, 127),
+                (5 * b, 72, 127)
+            ]
+        );
+        // Trimming its start keeps where its loops stop.
+        p.trim_start((0, 0), PPQ / 2);
+        assert_eq!(p.loop_end((0, 0)), PPQ * 3);
+        // Stretched to twice as long: the note starts and lasts twice as late and long.
+        p.tracks[0].regions[1].start = PPQ * 5;
+        p.flex((0, 1), PPQ * 2).unwrap();
+        let r = &p.tracks[0].regions[1];
+        let Content::Midi { notes, .. } = &r.content else {
+            unreachable!()
+        };
+        assert_eq!(
+            (r.length, notes[0].start, notes[0].length),
+            (PPQ * 2, 0, 480)
+        );
+    }
+
+    #[test]
     fn region_playback_settings_change_what_plays_not_the_notes() {
         let mut t = synth_track("a", vec![note(100, 240, 60), note(350, 240, 64)], PPQ);
         let r = &mut t.regions[0];

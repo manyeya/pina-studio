@@ -117,7 +117,8 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `delete_region` `{"track": 0, "region": 1}`
 - `set_region` `{"track": 0, "region": 0, "name": "Hook", "loop": true, "transpose": 12, "velocity": -10, "quantize": 240}`:
   any of them. A looped region plays over and over until the next region on its track (or the end
-  of the song). `transpose` (semitones), `velocity` (added) and `quantize` (a grid in ticks; 0 is
+  of the song); `"loop_length"` (ticks from its start, 0 for none) stops its loops sooner, as
+  dragging out its top right corner does. `transpose` (semitones), `velocity` (added) and `quantize` (a grid in ticks; 0 is
   off) change how a MIDI or pattern region plays, not its notes, as Logic's region inspector does;
   `transpose` moves an audio region's pitch too, keeping its length (a loop into the song's key).
   For audio, `"flex"` is how it's stretched: `"polyphonic"` (the default: Rubber Band's finer
@@ -138,9 +139,10 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   doesn't matter. Without `region`, empties the cell. Launch cells in the app: `tempo launch
   <project> <track> <scene>` starts a cell at the next bar (or now, starting playback), and
   `tempo launch <project> <track>` stops it, the track's own regions playing again.
-- `flex_region` `{"track": 2, "region": 0, "length": 7680}`: Flex Time: stretches an audio region
-  to that length, slower or faster but at the same pitch (up to four times either way), as its
-  `"flex"` says.
+- `flex_region` `{"track": 2, "region": 0, "length": 7680}`: time-stretches a region to that
+  length. Audio plays slower or faster at the same pitch (up to four times either way), as its
+  `"flex"` says; a MIDI region's notes and controllers, or a pattern's steps, spread out or close
+  up.
 - `comp` `{"track": 0, "region": 0, "from": 0, "to": 1920, "take": 1}`: in a take folder (a
   region with `"takes"`, made by recording over a region), take 1 plays for that range (ticks
   from the region's start). Takes are numbered from 0, oldest first; with no comp the newest plays.

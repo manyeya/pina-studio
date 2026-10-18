@@ -766,7 +766,7 @@ impl Workspace {
                     self.player.preview(track, new, 100);
                 }
             }
-            Edge::End | Edge::Stretch => {
+            Edge::End | Edge::Stretch | Edge::Loop => {
                 let end = first.start + first.length as i64;
                 let by = snapped((region_start + end) as f64 + dt) - region_start - end;
                 let Some(notes) = self.session.project.notes_mut(at) else {
