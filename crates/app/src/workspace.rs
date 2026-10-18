@@ -261,8 +261,11 @@ pub enum Drag {
         pos: f32,
         height: f32,
     },
+    /// A pan knob: up or right turns it right. Each move adds to where it was, so ⇧ (fine)
+    /// can come and go mid-drag.
     Pan {
         channel: Channel,
+        x: f32,
         y: f32,
         pan: f32,
     },
@@ -332,6 +335,7 @@ pub enum Drag {
     /// A track's stereo pan spread, dragged (⇧ on its pan knob).
     Spread {
         track: usize,
+        x: f32,
         y: f32,
         spread: f32,
     },
@@ -474,6 +478,9 @@ pub enum Name {
     Aux(usize),
     Marker(usize),
     Region(At),
+    /// A track's volume or pan, typed: "-6", "L30", "C".
+    Volume(usize),
+    Pan(usize),
 }
 
 /// A name being typed, in a text field where the name shows.
@@ -729,6 +736,10 @@ pub struct Workspace {
     pub region_clip: Option<tempo_engine::project::Region>,
     /// A MIDI or pattern region's contents as they were when its time-stretch drag began.
     pub stretching: Option<tempo_engine::project::Content>,
+    /// ⇧ held while dragging a fader or knob: it moves a fifth as far.
+    pub fine: bool,
+    /// The last control a sideways swipe moved, and when: one undo for each swipe.
+    pub swiped: Option<(Name, std::time::Instant)>,
     /// A track's colour and icon picker waiting for the next frame (from a menu), and where.
     pub pending_look: Option<(usize, Point<Pixels>)>,
     /// The New Track palette, when it's open; and the presets it searches.
@@ -889,6 +900,8 @@ impl Workspace {
             browser_w: INSPECTOR_W + 52.0,
             region_clip: None,
             stretching: None,
+            fine: false,
+            swiped: None,
             pending_look: None,
             adder: None,
             sounds: Default::default(),
@@ -1329,6 +1342,11 @@ impl Workspace {
                 .get(at.0)
                 .and_then(|t| t.regions.get(at.1))
                 .map(|r| r.name.clone()),
+            Name::Volume(i) => p.tracks.get(i).map(|t| match t.volume_db <= strip::SILENT {
+                true => "-inf".into(),
+                false => format!("{:.1}", t.volume_db),
+            }),
+            Name::Pan(i) => p.tracks.get(i).map(|t| strip::pan_label(t.pan)),
         }
         .unwrap_or_default()
     }
@@ -1370,10 +1388,25 @@ impl Workspace {
         };
         self.refocus = true;
         let what = naming.what;
-        if let Some(text) = text
-            .filter(|t| !t.is_empty() || matches!(what, Name::Region(_)))
-            .filter(|t| *t != self.name_of(what))
-        {
+        let text = text.filter(|t| *t != self.name_of(what));
+        // A volume or pan typed: set if it reads as one.
+        if let (Name::Volume(i) | Name::Pan(i), Some(text)) = (what, &text) {
+            match (what, strip::parse_db(text), strip::parse_pan(text)) {
+                (Name::Volume(_), Some(db), _) => {
+                    self.edit(cx, |ws| ws.set_volume(Channel::Track(i), db))
+                }
+                (Name::Pan(_), _, Some(pan)) => {
+                    self.edit(cx, |ws| ws.set_pan(Channel::Track(i), pan))
+                }
+                (Name::Volume(_), ..) => {
+                    self.status = Some(format!("{text:?} isn't a level: type dB, as -6 or 0"))
+                }
+                _ => self.status = Some(format!("{text:?} isn't a pan: type L30, C or R45")),
+            }
+            cx.notify();
+            return;
+        }
+        if let Some(text) = text.filter(|t| !t.is_empty() || matches!(what, Name::Region(_))) {
             self.edit(cx, |ws| {
                 let p = &mut ws.session.project;
                 match what {
@@ -1381,10 +1414,36 @@ impl Workspace {
                     Name::Aux(i) => p.auxes[i].name = text,
                     Name::Marker(i) => p.markers[i].name = text,
                     Name::Region(at) => p.tracks[at.0].regions[at.1].name = text,
+                    Name::Volume(_) | Name::Pan(_) => {}
                 }
             });
         }
         cx.notify();
+    }
+
+    /// A sideways swipe over a track's fader or pan knob: nudges it, one undo a swipe.
+    pub fn swipe(&mut self, what: Name, dx: f32, cx: &mut Context<Self>) {
+        let now = std::time::Instant::now();
+        if self
+            .swiped
+            .is_none_or(|(w, at)| w != what || now - at > std::time::Duration::from_millis(600))
+        {
+            self.session.checkpoint();
+        }
+        self.swiped = Some((what, now));
+        match what {
+            Name::Volume(i) => {
+                let pos = strip::fader_pos(self.session.project.tracks[i].volume_db);
+                let db = strip::fader_db((pos + dx * 0.002).clamp(0.0, 1.0));
+                self.set_volume(Channel::Track(i), db);
+            }
+            Name::Pan(i) => {
+                let pan = (self.session.project.tracks[i].pan + dx * 0.004).clamp(-1.0, 1.0);
+                self.set_pan(Channel::Track(i), pan);
+            }
+            _ => return,
+        }
+        self.changed(cx);
     }
 
     /// The text field for `what`, if it's being named.
@@ -1530,8 +1589,18 @@ impl Workspace {
                     self.record_auto(t, Param::Volume, db);
                 }
             }
-            Some(Drag::Pan { channel, y, pan }) => {
-                let pan = (pan - (p.y - y) / 100.0).clamp(-1.0, 1.0);
+            Some(Drag::Pan { channel, x, y, pan }) => {
+                let (dx, dy) = (p.x - x, y - p.y);
+                let by = if dx.abs() > dy.abs() { dx } else { dy };
+                let mut to = (pan + by * if self.fine { 0.002 } else { 0.01 }).clamp(-1.0, 1.0);
+                // A catch at the middle, as it's crossed.
+                if pan != 0.0 && to != 0.0 && pan.signum() != to.signum() {
+                    to = 0.0;
+                }
+                if let Some(Drag::Pan { x, y, pan, .. }) = &mut self.drag {
+                    (*x, *y, *pan) = (p.x, p.y, to);
+                }
+                let pan = to;
                 self.set_pan(channel, pan);
                 if let Channel::Track(t) = channel {
                     self.record_auto(t, Param::Pan, pan);
@@ -1597,13 +1666,29 @@ impl Workspace {
                 pos,
                 width,
             }) => {
-                let db = strip::fader_db((pos + (p.x - x) / width.max(1.0)).clamp(0.0, 1.0));
+                let fine = if self.fine { 0.2 } else { 1.0 };
+                let pos = (pos + (p.x - x) / width.max(1.0) * fine).clamp(0.0, 1.0);
+                if let Some(Drag::HFader { x, pos: was, .. }) = &mut self.drag {
+                    (*x, *was) = (p.x, pos);
+                }
+                let db = strip::fader_db(pos);
                 self.set_volume(Channel::Track(track), db);
                 self.record_auto(track, Param::Volume, db);
             }
-            Some(Drag::Spread { track, y, spread }) => {
+            Some(Drag::Spread {
+                track,
+                x,
+                y,
+                spread,
+            }) => {
+                let (dx, dy) = (p.x - x, y - p.y);
+                let by = if dx.abs() > dy.abs() { dx } else { dy };
+                let to = (spread + by * if self.fine { 0.002 } else { 0.01 }).clamp(-1.0, 1.0);
+                if let Some(Drag::Spread { x, y, spread, .. }) = &mut self.drag {
+                    (*x, *y, *spread) = (p.x, p.y, to);
+                }
                 if let Some(t) = self.session.project.tracks.get_mut(track) {
-                    t.spread = Some((spread - (p.y - y) / 100.0).clamp(-1.0, 1.0));
+                    t.spread = Some(to);
                 }
             }
             // Each step, and each bar of the lane, paints itself as the mouse comes over it.
@@ -2446,7 +2531,11 @@ impl Workspace {
                 let t = this.clone();
                 window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
                     if phase == DispatchPhase::Bubble {
-                        t.update(cx, |ws, cx| ws.drag_to(pt(e.position), cx)).ok();
+                        t.update(cx, |ws, cx| {
+                            ws.fine = e.modifiers.shift;
+                            ws.drag_to(pt(e.position), cx)
+                        })
+                        .ok();
                     }
                 });
                 let t = this.clone();

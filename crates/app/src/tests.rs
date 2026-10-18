@@ -241,19 +241,12 @@ fn a_tracks_menu_its_pan_modes_its_height_and_the_columns_widths(cx: &mut TestAp
         )
     });
     assert_eq!((mode, law), (PanMode::Stereo, PanLaw::Minus3));
-    // ⇧-dragging a stereo pan's knob down narrows it.
+    // ⌘-dragging a stereo pan's knob down narrows it.
     let knob = cx.debug_bounds("track-pan-1").unwrap().center();
-    cx.simulate_mouse_down(knob, MouseButton::Left, Modifiers::shift());
-    cx.simulate_mouse_move(
-        knob + point(px(0.), px(50.)),
-        MouseButton::Left,
-        Modifiers::shift(),
-    );
-    cx.simulate_mouse_up(
-        knob + point(px(0.), px(50.)),
-        MouseButton::Left,
-        Modifiers::shift(),
-    );
+    let down = knob + point(px(0.), px(50.));
+    cx.simulate_mouse_down(knob, MouseButton::Left, Modifiers::command());
+    cx.simulate_mouse_move(down, MouseButton::Left, Modifiers::command());
+    cx.simulate_mouse_up(down, MouseButton::Left, Modifiers::command());
     cx.run_until_parked();
     let spread = ws.read_with(cx, |ws, _| ws.session.project.tracks[1].spread);
     assert!(spread.is_some_and(|s| (s - 0.5).abs() < 0.01), "{spread:?}");
@@ -292,6 +285,78 @@ fn a_tracks_menu_its_pan_modes_its_height_and_the_columns_widths(cx: &mut TestAp
     drag(cx, edge, edge + point(px(40.), px(0.)));
     let widths = ws.read_with(cx, |ws, _| (ws.header_w, ws.side_w()));
     assert_eq!(widths, (header_w + 50.0, side_w + 40.0));
+}
+
+#[gpui::test]
+fn a_headers_fader_and_pan_drag_finely_type_and_reset(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let track = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let t = &ws.session.project.tracks[0];
+            (t.volume_db, t.pan)
+        })
+    };
+    let close = |a: f32, b: f32| (a - b).abs() < 0.011;
+    ws.update(cx, |ws, _| ws.session.project.tracks[0].pan = 0.0);
+    // Dragged right 30 px, the knob turns right 30; then 50 more with ⇧, only 10.
+    let knob = cx.debug_bounds("track-pan-0").unwrap().center();
+    cx.simulate_mouse_down(knob, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        knob + point(px(30.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    assert!(close(track(cx).1, 0.3), "{:?}", track(cx));
+    cx.simulate_mouse_move(
+        knob + point(px(80.), px(0.)),
+        MouseButton::Left,
+        Modifiers::shift(),
+    );
+    cx.simulate_mouse_up(
+        knob + point(px(80.), px(0.)),
+        MouseButton::Left,
+        Modifiers::shift(),
+    );
+    cx.run_until_parked();
+    assert!(close(track(cx).1, 0.4), "{:?}", track(cx));
+    // Dragged back left past the middle, it catches there first.
+    cx.simulate_mouse_down(knob, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        knob - point(px(60.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    assert_eq!(track(cx).1, 0.0);
+    cx.simulate_mouse_up(
+        knob - point(px(60.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    // Typed: a level and a pan.
+    let db = cx.debug_bounds("track-db-0").unwrap().center();
+    double_click(cx, db);
+    cx.simulate_input("-12");
+    cx.simulate_keystrokes("enter");
+    let knob = cx.debug_bounds("track-pan-0").unwrap().center();
+    double_click(cx, knob);
+    cx.simulate_input("L25");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(track(cx), (-12.0, -0.25));
+    // Nonsense is said so, and changes nothing.
+    double_click(cx, db);
+    cx.simulate_input("loud");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(track(cx), (-12.0, -0.25));
+    assert!(
+        ws.read_with(cx, |ws, _| ws.status.clone())
+            .unwrap()
+            .contains("isn't a level")
+    );
+    // ⌥-click: 0 dB, and the middle.
+    click_on(cx, "track-fader-0", Modifiers::alt(), MouseButton::Left);
+    click_on(cx, "track-pan-0", Modifiers::alt(), MouseButton::Left);
+    assert_eq!(track(cx), (0.0, 0.0));
 }
 
 #[gpui::test]

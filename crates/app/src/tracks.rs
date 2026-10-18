@@ -772,7 +772,7 @@ impl Workspace {
         };
         let level = self.levels.get(&Some(t.id)).copied().unwrap_or_default();
         let roomy = lh >= 64.0;
-        let fader_w = (self.header_w - 182.0).max(50.0);
+        let fader_w = (self.header_w - 196.0).max(50.0);
         let pos = strip::fader_pos(volume);
         let db_text = if volume <= strip::SILENT + 0.01 {
             "−∞".to_string()
@@ -780,11 +780,7 @@ impl Workspace {
             format!("{volume:+.1}").replace('-', "−")
         };
         let pan_text = {
-            let side = |p: f32| match (p * 100.0).round() as i32 {
-                0 => "C".to_string(),
-                v if v < 0 => format!("L{}", -v),
-                v => format!("R{v}"),
-            };
+            let side = strip::pan_label;
             match mode {
                 PanMode::Balance => side(pan),
                 PanMode::Stereo => format!(
@@ -811,93 +807,122 @@ impl Workspace {
                 METER_LOW
             }
         };
+        // The fader: a rail filled in the track's colour up to a round cap, 0 dB marked, and the
+        // meter, left over right, under it. Drag it (⇧ for fine), swipe sideways over it,
+        // double-click to type a level, ⌥-click for 0 dB.
+        let rail = fader_w - 14.0;
         let fader = div()
             .id(("fader", i))
             .w(px(fader_w))
-            .h(px(20.))
+            .h(px(22.))
             .flex_none()
             .relative()
-            .rounded(px(5.))
-            .bg(rgb(0x0c0c10))
-            .border_1()
-            .border_color(rgb(LINE_SOFT))
-            .overflow_hidden()
             .cursor_ew_resize()
             .debug_selector(move || format!("track-fader-{i}"))
-            // How far up it's set, as a soft fill.
             .child(
                 div()
                     .absolute()
-                    .left_0()
-                    .top_0()
-                    .bottom_0()
-                    .w(px(fader_w * pos))
-                    .bg(alpha(color, 0.12)),
-            )
-            // The level, left over right, running inside it.
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top(px(5.))
-                    .h(px(3.))
-                    .w(px(fader_w * ml))
-                    .rounded(px(1.5))
-                    .bg(rgb(hot(level.now[0]))),
+                    .left(px(7.))
+                    .top(px(6.))
+                    .w(px(rail))
+                    .h(px(5.))
+                    .rounded(px(2.5))
+                    .bg(rgb(0x26262e)),
             )
             .child(
                 div()
                     .absolute()
-                    .left_0()
-                    .top(px(10.))
-                    .h(px(3.))
-                    .w(px(fader_w * mr))
-                    .rounded(px(1.5))
-                    .bg(rgb(hot(level.now[1]))),
+                    .left(px(7.))
+                    .top(px(6.))
+                    .w(px(rail * pos))
+                    .h(px(5.))
+                    .rounded(px(2.5))
+                    .bg(rgb(color)),
             )
-            // 0 dB, marked.
             .child(
                 div()
                     .absolute()
-                    .left(px(fader_w * strip::fader_pos(0.0)))
-                    .top(px(3.))
-                    .bottom(px(3.))
+                    .left(px(7.0 + rail * strip::fader_pos(0.0) - 0.5))
+                    .top(px(2.))
+                    .h(px(13.))
                     .w(px(1.))
-                    .bg(alpha(0xffffff, 0.18)),
+                    .bg(alpha(0xffffff, 0.28)),
             )
-            // The fader's cap.
+            .children(
+                [(15.0, ml, level.now[0]), (18.5, mr, level.now[1])].map(|(top, m, l)| {
+                    div()
+                        .absolute()
+                        .left(px(7.))
+                        .top(px(top))
+                        .h(px(2.))
+                        .w(px(rail * m))
+                        .rounded(px(1.))
+                        .bg(rgb(hot(l)))
+                }),
+            )
             .child(
                 div()
                     .absolute()
-                    .left(px((fader_w * pos - 3.0).max(0.0)))
-                    .top(px(1.))
-                    .bottom(px(1.))
-                    .w(px(6.))
-                    .rounded(px(2.))
-                    .bg(rgb(0xf0f0f4)),
+                    .left(px(rail * pos))
+                    .top(px(1.5))
+                    .size(px(14.))
+                    .rounded(px(7.))
+                    .bg(rgb(0xf4f4f7))
+                    .border_1()
+                    .border_color(alpha(0x000000, 0.45))
+                    .shadow_sm(),
             )
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
                     ws.select_track(i);
-                    // ⌥-click, or a double-click: back to 0 dB.
-                    if e.modifiers.alt || e.click_count == 2 {
+                    if e.modifiers.alt {
                         ws.edit(cx, |ws| ws.set_volume(Channel::Track(i), 0.0));
                         return;
                     }
+                    if e.click_count == 2 {
+                        ws.start_naming(Name::Volume(i), window, cx);
+                        return;
+                    }
                     let pos = strip::fader_pos(ws.session.project.tracks[i].volume_db);
+                    let x = f32::from(e.position.x);
                     ws.begin_drag(
                         Drag::HFader {
                             track: i,
-                            x: f32::from(e.position.x),
+                            x,
                             pos,
-                            width: fader_w,
+                            width: rail,
                         },
                         cx,
                     );
                 }),
-            );
+            )
+            .on_scroll_wheel(swipe(Name::Volume(i), cx));
+        let readout = match self.name_field(Name::Volume(i)) {
+            Some(field) => div().w(px(44.)).flex_none().child(field),
+            None => div()
+                .w(px(44.))
+                .flex_none()
+                .font_family(MONO)
+                .text_size(px(10.5))
+                .text_color(rgb(TEXT_2))
+                .whitespace_nowrap()
+                .debug_selector(move || format!("track-db-{i}"))
+                .child(db_text)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                        if e.click_count == 2 {
+                            cx.stop_propagation();
+                            ws.start_naming(Name::Volume(i), window, cx);
+                        }
+                    }),
+                ),
+        };
+        // The pan knob: drag up or right to turn it right (⇧ fine; on Stereo Pan ⌘ spreads it),
+        // swipe sideways, double-click to type it, ⌥-click for the middle, right-click for its
+        // mode and the pan law.
         let pan_knob = div()
             .id(("pan", i))
             .flex()
@@ -907,42 +932,48 @@ impl Workspace {
             .debug_selector(move || format!("track-pan-{i}"))
             .child(
                 div()
-                    .size(px(24.))
+                    .size(px(30.))
                     .flex_none()
                     .child(pan_dial(mode, pan, spread, color)),
             )
-            .child(
-                div()
-                    .w(px(40.))
+            .child(match self.name_field(Name::Pan(i)) {
+                Some(field) => div().w(px(44.)).child(field),
+                None => div()
+                    .w(px(44.))
                     .font_family(MONO)
                     .text_size(px(10.))
                     .text_color(rgb(TEXT_2))
                     .whitespace_nowrap()
                     .child(pan_text),
-            )
+            })
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
                     ws.select_track(i);
                     let t = &ws.session.project.tracks[i];
-                    if e.modifiers.alt || e.click_count == 2 {
+                    if e.modifiers.alt {
                         ws.edit(cx, |ws| {
                             ws.set_pan(Channel::Track(i), 0.0);
                             ws.session.project.tracks[i].spread = None;
                         });
                         return;
                     }
-                    let y = f32::from(e.position.y);
-                    // ⇧ on a stereo pan: its spread.
-                    let drag = match (e.modifiers.shift, t.pan_mode) {
+                    if e.click_count == 2 {
+                        ws.start_naming(Name::Pan(i), window, cx);
+                        return;
+                    }
+                    let (x, y) = (f32::from(e.position.x), f32::from(e.position.y));
+                    let drag = match (e.modifiers.platform, t.pan_mode) {
                         (true, PanMode::Stereo) => Drag::Spread {
                             track: i,
+                            x,
                             y,
                             spread: t.spread.unwrap_or(1.0),
                         },
                         _ => Drag::Pan {
                             channel: Channel::Track(i),
+                            x,
                             y,
                             pan: t.pan,
                         },
@@ -950,6 +981,7 @@ impl Workspace {
                     ws.begin_drag(drag, cx);
                 }),
             )
+            .on_scroll_wheel(swipe(Name::Pan(i), cx))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
@@ -1141,16 +1173,7 @@ impl Workspace {
                         .gap(px(8.))
                         .pl(px(24.))
                         .child(fader)
-                        .child(
-                            div()
-                                .w(px(40.))
-                                .flex_none()
-                                .font_family(MONO)
-                                .text_size(px(10.5))
-                                .text_color(rgb(TEXT_2))
-                                .whitespace_nowrap()
-                                .child(db_text),
-                        )
+                        .child(readout)
                         .child(pan_knob),
                 )
             })
@@ -2074,6 +2097,21 @@ const CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 
 
 /// Starts dragging a region (`start` and `end` are its ticks when the drag starts), or does what
 /// the tool does to it.
+/// A sideways swipe over a header's fader or pan knob nudges it; up and down scroll the tracks.
+fn swipe(
+    what: Name,
+    cx: &mut Context<Workspace>,
+) -> impl Fn(&gpui::ScrollWheelEvent, &mut Window, &mut App) + 'static {
+    cx.listener(move |ws, e: &gpui::ScrollWheelEvent, _, cx| {
+        let d = e.delta.pixel_delta(px(16.));
+        let (dx, dy) = (f32::from(d.x), f32::from(d.y));
+        if dx.abs() > dy.abs() {
+            cx.stop_propagation();
+            ws.swipe(what, dx, cx);
+        }
+    })
+}
+
 /// The top half of a region's end (or of its last repeat's): drag it to loop the region out to
 /// there, as Logic's loop tool does. A loop sign shows on hover.
 fn loop_tab(

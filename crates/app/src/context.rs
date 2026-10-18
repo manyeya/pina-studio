@@ -102,7 +102,7 @@ impl Workspace {
                 TrackOp::PanMode(t, PanMode::Balance),
             ),
             op(
-                ticked(mode == PanMode::Stereo, "Stereo Pan\t⇧-drag spreads"),
+                ticked(mode == PanMode::Stereo, "Stereo Pan\t⌘-drag spreads"),
                 TrackOp::PanMode(t, PanMode::Stereo),
             ),
             op(

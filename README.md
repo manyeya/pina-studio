@@ -108,11 +108,13 @@ In the app, mostly as in Logic:
   note in the piano roll; scissors, which cut a region or note where clicked; eraser), and what
   edits snap to.
 - A track's header is a channel strip: its colour and number, its icon (click for its colour and
-  icon), name and what it plays; M S R; and its fader with its meter running inside it, its level
-  and its pan knob (⌥-click or double-click either for 0 dB or the middle). Drag a header's
+  icon), name and what it plays; M S R; and its fader (a round cap on a rail filled in the
+  track's colour, its meter under it), its level and its pan knob. Drag either (the knob up or
+  right to turn it right; ⇧ for fine control, even mid-drag), swipe sideways over it, double-click
+  it (or the level) to type a value (-6, L30, C), ⌥-click for 0 dB or the middle. Drag a header's
   bottom edge for that track's height, and the column's right edge (or the side panel's) for its
   width; double-click an edge to put it back.
-- Pans as Logic's: right-click a pan knob for Balance, Stereo Pan (each side placed, ⇧-drag the
+- Pans as Logic's: right-click a pan knob for Balance, Stereo Pan (each side placed, ⌘-drag the
   knob to spread them, or swap them) or Binaural (around your head, for headphones), and the
   song's pan law (0, −3, −3 compensated or −6 dB).
 - Right-click for more: a track's header (new tracks, one with the same channel strip,

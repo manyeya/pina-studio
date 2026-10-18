@@ -63,6 +63,39 @@ pub const MIXER_INSERTS: usize = 4;
 pub const MIXER_SENDS: usize = 2;
 
 /// Fader position (0 to 1) for a gain in dB: an audio taper, 0 dB at about 0.7, +6 dB at the top.
+/// A pan as a mixer prints it: L30, C, R45.
+pub fn pan_label(pan: f32) -> String {
+    match (pan * 100.0).round() as i32 {
+        0 => "C".to_string(),
+        v if v < 0 => format!("L{}", -v),
+        v => format!("R{v}"),
+    }
+}
+
+/// A pan typed: "L30", "r 45", "C", or -100 to 100.
+pub fn parse_pan(text: &str) -> Option<f32> {
+    let t = text.trim().to_uppercase().replace('−', "-");
+    let (side, rest) = match t.chars().next()? {
+        'L' => (-1.0, &t[1..]),
+        'R' => (1.0, &t[1..]),
+        'C' if t.len() == 1 => return Some(0.0),
+        _ => (1.0, t.as_str()),
+    };
+    let v: f32 = rest.trim().parse().ok()?;
+    (v.is_finite() && v.abs() <= 100.0).then(|| side * v / 100.0)
+}
+
+/// A level typed: "-6", "−6 dB", "+2", "-inf"; up to the fader's top (+6).
+pub fn parse_db(text: &str) -> Option<f32> {
+    let t = text.trim().to_lowercase().replace('−', "-");
+    let t = t.trim_end_matches("db").trim();
+    if matches!(t, "-inf" | "-∞" | "off") {
+        return Some(SILENT);
+    }
+    let db: f32 = t.parse().ok()?;
+    db.is_finite().then(|| db.clamp(SILENT, 6.0))
+}
+
 pub fn fader_pos(db: f32) -> f32 {
     10f32.powf((db - 6.0) / 40.0).clamp(0.0, 1.0)
 }
@@ -1119,6 +1152,7 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                             ws.begin_drag(
                                 Drag::Pan {
                                     channel: ch,
+                                    x: f32::from(e.position.x),
                                     y,
                                     pan,
                                 },
