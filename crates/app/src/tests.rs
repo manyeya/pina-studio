@@ -2739,3 +2739,42 @@ fn the_song_map_toggles_parts_and_genres_duplicate_and_go(cx: &mut TestAppContex
     assert_eq!(playbook::origin(&draft(cx)), Origin::Tempo);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[gpui::test]
+fn the_composer_wraps_and_grows_as_its_written_in(cx: &mut TestAppContext) {
+    let dir = demo_copy("composer-grows");
+    let (ws, cx) = open_at(cx, &dir);
+    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    ws.update(cx, |ws, cx| {
+        ws.show_agent = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let tall = |cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        f32::from(cx.debug_bounds("agent-input").unwrap().size.height)
+    };
+    let empty = tall(cx);
+    click_on(cx, "agent-input", Modifiers::none(), MouseButton::Left);
+    // A long request wraps onto more lines, and the composer grows to show them.
+    let long = "make the whole song hit harder, not the bass, everything from the drums to the pads, the hook especially, and keep the swing";
+    cx.simulate_input(long);
+    let wrapped = tall(cx);
+
+    assert!(wrapped >= empty + 19.0 * 2.0, "{empty} -> {wrapped}");
+    // ⇧Enter starts a new line in it; it grows again.
+    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_input("thanks");
+    let more = tall(cx);
+    assert!(more >= wrapped + 19.0, "{wrapped} -> {more}");
+    let text = ws.read_with(cx, |ws, cx| ws.chat.input.read(cx).text().to_string());
+    assert_eq!(text, format!("{long}\nthanks"));
+    // But not past eight lines: then it scrolls.
+    for _ in 0..12 {
+        cx.simulate_keystrokes("shift-enter");
+        cx.simulate_input("more");
+    }
+    let most = tall(cx);
+    assert!(most <= empty + 19.0 * 8.0, "{most}");
+    std::fs::remove_dir_all(dir).unwrap();
+}

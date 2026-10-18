@@ -81,7 +81,14 @@ pub struct Chat {
 
 impl Chat {
     pub fn new(cx: &mut Context<Workspace>) -> Self {
-        let input = cx.new(|cx| TextInput::search("Ask Claude to make, change or mix…", cx));
+        // It wraps and grows as it's written in, up to 8 lines; ⇧Enter starts a new line.
+        let input = cx.new(|cx| {
+            TextInput::writing("Ask Claude to make, change or mix…", 8, cx).typed(
+                13.,
+                19.,
+                FontWeight::NORMAL,
+            )
+        });
         let sent = cx.subscribe(&input, |ws, input, e: &TextEvent, cx| match e {
             TextEvent::Confirm(text) if !text.is_empty() && !ws.chat.busy => {
                 let text = text.clone();
@@ -675,13 +682,9 @@ impl Workspace {
                 .shadow_lg()
                 .child(
                     div()
-                        .min_h(px(30.))
                         .px(px(13.))
                         .pt(px(12.))
-                        .pb(px(4.))
-                        .flex()
-                        .items_center()
-                        .text_size(px(13.))
+                        .pb(px(6.))
                         .debug_selector(|| "agent-input".into())
                         .child(c.input.clone()),
                 )
