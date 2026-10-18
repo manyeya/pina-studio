@@ -58,7 +58,7 @@ pub const TEAL: u32 = 0x2dd4bf;
 pub const CONTROL_BAR_H: f32 = 52.0;
 pub const STATUS_H: f32 = 24.0;
 pub const INSPECTOR_W: f32 = 248.0;
-pub const HEADER_W: f32 = 300.0;
+pub const HEADER_W: f32 = 344.0;
 pub const MARKERS_H: f32 = 22.0;
 pub const RULER_H: f32 = 26.0;
 /// The top of each column beside the ruler (the headers' tools, a side panel's tabs or title),

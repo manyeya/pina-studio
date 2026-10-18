@@ -107,13 +107,15 @@ In the app, mostly as in Logic:
 - Over the track headers: the tools (pointer; pencil, which draws a region in an empty lane and a
   note in the piano roll; scissors, which cut a region or note where clicked; eraser), and what
   edits snap to.
-- A track's header is a channel strip: its colour and number, its icon (click for its colour and
-  icon), name and what it plays; M S R; and its fader (a round cap on a rail filled in the
-  track's colour, its meter under it), its level and its pan knob. Drag either (the knob up or
-  right to turn it right; ⇧ for fine control, even mid-drag), swipe sideways over it, double-click
-  it (or the level) to type a value (-6, L30, C), ⌥-click for 0 dB or the middle. Drag a header's
-  bottom edge for that track's height, and the column's right edge (or the side panel's) for its
-  width; double-click an edge to put it back.
+- A track's header is a console strip: its colour down its edge, its icon (click for its colour
+  and icon), number, name and what it plays; then a raised strip with lit M S R buttons, an LED
+  meter (left over right, its peak held), a fader with a scale and a ridged cap, an LCD readout
+  and a pan knob with an LED ring. The strip keeps its size however wide the column is. Drag the
+  fader or knob (the knob up or right to turn it right; ⇧ for fine control, even mid-drag), swipe
+  sideways over either, double-click either (or the readout) to type a value (-6, L30, C),
+  ⌥-click for 0 dB or the middle; the readout shows the pan while the knob turns. A short track
+  keeps the buttons and LEDs. Drag a header's bottom edge for that track's height, and the
+  column's right edge (or the side panel's) for its width; double-click an edge to put it back.
 - Pans as Logic's: right-click a pan knob for Balance, Stereo Pan (each side placed, ⌘-drag the
   knob to spread them, or swap them) or Binaural (round your head, for headphones), and the
   song's pan law (0, −3, −3 compensated or −6 dB). Binaural opens the Binaural Panner (again from

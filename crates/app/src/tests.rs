@@ -128,6 +128,22 @@ fn roll_spot(
         });
         cx.run_until_parked();
     }
+    // And the tick, scrolled to if it's off either side of the roll.
+    let scroll = ws.read_with(cx, |ws, _| {
+        let (x, w) = (
+            tick as f32 * ws.px_per_tick(),
+            f32::from(ws.roll_bounds.get().size.width),
+        );
+        let shown = ws.scroll_x + 20.0..ws.scroll_x + w - 40.0;
+        (!shown.contains(&x)).then(|| (x - 80.0).max(0.0))
+    });
+    if let Some(to) = scroll {
+        ws.update(cx, |ws, cx| {
+            ws.scroll_x = to;
+            cx.notify();
+        });
+        cx.run_until_parked();
+    }
     ws.read_with(cx, |ws, _| {
         let x =
             f32::from(ws.roll_bounds.get().origin.x) + tick as f32 * ws.px_per_tick() - ws.scroll_x;
@@ -3920,12 +3936,21 @@ fn shots() {
                     use tempo_engine::project::PanMode;
                     let tracks = &mut ws.session.project.tracks;
                     tracks[0].pan = -0.3;
+                    tracks[1].mute = page == "tracks";
+                    tracks[1].height = (page == "tracks").then_some(44.0);
                     tracks[1].pan_mode = PanMode::Stereo;
                     tracks[1].spread = Some(0.6);
                     tracks[2].pan_mode = PanMode::Binaural;
                     tracks[2].pan = 0.45;
                     tracks[2].height = Some(130.0);
                     tracks[2].regions[1].mute = true;
+                    // Levels, as if playing.
+                    for (t, now) in [(0, [0.62f32, 0.55]), (1, [0.3, 0.34]), (2, [0.9, 0.85])] {
+                        let id = ws.session.project.tracks[t].id;
+                        let mut level = crate::workspace::Level::default();
+                        (level.now, level.held) = (now, now.map(|l| (l * 1.25).min(1.0)));
+                        ws.levels.insert(Some(id), level);
+                    }
                     let at = point(px(330.), px(160.));
                     match page.as_str() {
                         "track-menu" => ws.track_menu(0, at, cx),

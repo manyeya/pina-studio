@@ -5,9 +5,9 @@
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Div, FontWeight, Hsla, MouseButton, MouseDownEvent,
-    PathBuilder, Pixels, Point, SharedString, Window, canvas, div, fill, point, prelude::*, px,
-    rgb, size,
+    AnyElement, App, Bounds, BoxShadow, Context, Div, FontWeight, Hsla, MouseButton,
+    MouseDownEvent, PathBuilder, Pixels, Point, SharedString, Window, canvas, div, fill,
+    linear_color_stop, linear_gradient, point, prelude::*, px, rgb, size,
 };
 use tempo_engine::{
     peaks::Peaks,
@@ -772,13 +772,7 @@ impl Workspace {
         };
         let level = self.levels.get(&Some(t.id)).copied().unwrap_or_default();
         let roomy = lh >= 64.0;
-        let fader_w = (self.header_w - 196.0).max(50.0);
         let pos = strip::fader_pos(volume);
-        let db_text = if volume <= strip::SILENT + 0.01 {
-            "−∞".to_string()
-        } else {
-            format!("{volume:+.1}").replace('-', "−")
-        };
         let pan_text = {
             let side = strip::pan_label;
             match mode {
@@ -792,28 +786,151 @@ impl Workspace {
                     },
                     spread * 100.0
                 ),
-                PanMode::Binaural => format!("3D {}", crate::binaural::azimuth_label(pan)),
+                PanMode::Binaural => crate::binaural::azimuth_label(pan),
             }
         };
-        // The meter, in the fader's own scale: where each side's level would put the fader.
-        let meter = |l: f32| strip::fader_pos(20.0 * l.max(1e-9).log10());
-        let (ml, mr) = (meter(level.now[0]), meter(level.now[1]));
-        let hot = |l: f32| {
-            if l > 1.0 {
-                METER_HIGH
-            } else if l > 0.5 {
-                METER_MID
-            } else {
-                METER_LOW
-            }
+        // The readout shows the level, or the pan while it's turned.
+        let panning = matches!(
+            self.drag,
+            Some(Drag::Pan { channel: Channel::Track(t), .. } | Drag::Spread { track: t, .. }) if t == i
+        );
+        let readout_text = match panning {
+            true => pan_text,
+            false if volume <= strip::SILENT + 0.01 => "−∞".to_string(),
+            false => format!("{volume:+.1}").replace('-', "−"),
         };
-        // The fader: a rail filled in the track's colour up to a round cap, 0 dB marked, and the
-        // meter, left over right, under it. Drag it (⇧ for fine), swipe sideways over it,
-        // double-click to type a level, ⌥-click for 0 dB.
-        let rail = fader_w - 14.0;
+        let lit = tint(color, 0.55);
+
+        // The strip's buttons: dark until on, then lit in their colour.
+        let button = |label: &'static str, on: bool, glow: u32, ink: u32| {
+            div()
+                .w(px(24.))
+                .h(px(18.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.))
+                .border_1()
+                .text_size(px(9.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .cursor_pointer()
+                .when(on, |d| {
+                    d.bg(rgb(glow))
+                        .border_color(rgb(glow))
+                        .text_color(rgb(ink))
+                        .shadow(vec![BoxShadow {
+                            color: alpha(glow, 0.55),
+                            offset: point(px(0.), px(0.)),
+                            blur_radius: px(8.),
+                            spread_radius: px(0.),
+                            inset: false,
+                        }])
+                })
+                .when(!on, |d| {
+                    d.bg(rgb(HEADERS))
+                        .border_color(rgb(RAISED))
+                        .text_color(rgb(0x6a6a75))
+                        .hover(|s| s.text_color(rgb(TEXT_2)))
+                })
+                .child(label)
+        };
+        let buttons = div()
+            .flex()
+            .gap(px(4.))
+            .child(
+                button("M", mute, ACCENT, 0xffffff)
+                    .debug_selector(move || format!("mute-{i}"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| {
+                            cx.stop_propagation();
+                            ws.edit(cx, |ws| ws.session.project.tracks[i].mute ^= true);
+                        }),
+                    ),
+            )
+            .child(
+                button("S", solo, SOLO, BG)
+                    .debug_selector(move || format!("solo-{i}"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| {
+                            cx.stop_propagation();
+                            ws.edit(cx, |ws| ws.session.project.tracks[i].solo ^= true);
+                        }),
+                    ),
+            )
+            .child(
+                button("R", armed == Some(i), RECORD, 0xffffff)
+                    .debug_selector(move || format!("arm-{i}"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| {
+                            cx.stop_propagation();
+                            ws.toggle_arm(i);
+                            cx.notify();
+                        }),
+                    ),
+            );
+        // The level, left over right, as LEDs: green to -7 dB, amber, then red at 0.
+        let (now, held) = (level.now, level.held);
+        let leds = canvas(
+            |_, _, _| {},
+            move |b, _, window, _| {
+                const AT: [f32; 12] = [
+                    -42.0, -36.0, -30.0, -24.0, -18.0, -14.0, -10.0, -7.0, -4.5, -2.5, -1.0, 0.0,
+                ];
+                let w = f32::from(b.size.width);
+                let seg = (w - 11.0) / 12.0;
+                for (row, (l, h)) in [(now[0], held[0]), (now[1], held[1])]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let (db, peak) = (20.0 * l.max(1e-9).log10(), 20.0 * h.max(1e-9).log10());
+                    let top = (AT.iter().rposition(|&a| peak >= a)).filter(|_| h > 1e-6);
+                    for (k, &at) in AT.iter().enumerate() {
+                        let on = db >= at || top == Some(k);
+                        let ink = match (on, k) {
+                            (false, _) => rgb(0x2a2a31),
+                            (true, 0..=7) => rgb(METER_LOW),
+                            (true, 8..=9) => rgb(METER_MID),
+                            _ => rgb(METER_HIGH),
+                        };
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(
+                                    b.origin.x + px(k as f32 * (seg + 1.0)),
+                                    b.origin.y + px(row as f32 * 5.0),
+                                ),
+                                size(px(seg), px(3.)),
+                            ),
+                            ink,
+                        ));
+                    }
+                }
+            },
+        )
+        .flex_1()
+        .h(px(8.));
+
+        // The fader: a groove filled in the track's colour, a scale under it, and a ridged
+        // cap. Drag it (⇧ for fine), swipe sideways over it, double-click to type a level,
+        // ⌥-click for 0 dB.
+        const FADER_W: f32 = 98.0;
+        let ticks = [strip::SILENT, -24.0, -12.0, -6.0, 0.0, 6.0].map(|db| {
+            div()
+                .absolute()
+                .left(px(
+                    (FADER_W * strip::fader_pos(db) - 0.5).clamp(0.0, FADER_W - 1.0)
+                ))
+                .top(px(16.))
+                .w(px(1.))
+                .h(px(4.))
+                .bg(rgb(if db == 0.0 { TEXT_3 } else { 0x3a3a44 }))
+        });
         let fader = div()
             .id(("fader", i))
-            .w(px(fader_w))
+            .w(px(FADER_W))
             .h(px(22.))
             .flex_none()
             .relative()
@@ -822,55 +939,47 @@ impl Workspace {
             .child(
                 div()
                     .absolute()
-                    .left(px(7.))
-                    .top(px(6.))
-                    .w(px(rail))
-                    .h(px(5.))
-                    .rounded(px(2.5))
-                    .bg(rgb(0x26262e)),
+                    .left_0()
+                    .right_0()
+                    .top(px(9.))
+                    .h(px(3.))
+                    .rounded(px(1.5))
+                    .bg(rgb(0x0b0b0e)),
             )
             .child(
                 div()
                     .absolute()
-                    .left(px(7.))
-                    .top(px(6.))
-                    .w(px(rail * pos))
-                    .h(px(5.))
-                    .rounded(px(2.5))
-                    .bg(rgb(color)),
+                    .left_0()
+                    .top(px(9.))
+                    .w(px(FADER_W * pos))
+                    .h(px(3.))
+                    .rounded(px(1.5))
+                    .bg(alpha(color, if mute { 0.35 } else { 0.8 })),
             )
+            .children(ticks)
             .child(
                 div()
                     .absolute()
-                    .left(px(7.0 + rail * strip::fader_pos(0.0) - 0.5))
+                    .left(px((FADER_W * pos - 5.0).clamp(0.0, FADER_W - 10.0)))
                     .top(px(2.))
-                    .h(px(13.))
-                    .w(px(1.))
-                    .bg(alpha(0xffffff, 0.28)),
-            )
-            .children(
-                [(15.0, ml, level.now[0]), (18.5, mr, level.now[1])].map(|(top, m, l)| {
-                    div()
-                        .absolute()
-                        .left(px(7.))
-                        .top(px(top))
-                        .h(px(2.))
-                        .w(px(rail * m))
-                        .rounded(px(1.))
-                        .bg(rgb(hot(l)))
-                }),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(rail * pos))
-                    .top(px(1.5))
-                    .size(px(14.))
-                    .rounded(px(7.))
-                    .bg(rgb(0xf4f4f7))
+                    .w(px(10.))
+                    .h(px(17.))
+                    .rounded(px(2.))
                     .border_1()
-                    .border_color(alpha(0x000000, 0.45))
-                    .shadow_sm(),
+                    .border_color(rgb(0x0b0b0e))
+                    .bg(linear_gradient(
+                        180.,
+                        linear_color_stop(rgb(0xececf0), 0.),
+                        linear_color_stop(rgb(0x9d9da8), 1.),
+                    ))
+                    .shadow(vec![BoxShadow {
+                        color: alpha(0x000000, 0.6),
+                        offset: point(px(0.), px(1.)),
+                        blur_radius: px(2.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
+                    .child(div().mt(px(7.)).mx(px(1.)).h(px(1.)).bg(rgb(0x3a3a44))),
             )
             .on_mouse_down(
                 MouseButton::Left,
@@ -892,86 +1001,58 @@ impl Workspace {
                             track: i,
                             x,
                             pos,
-                            width: rail,
+                            width: FADER_W,
                         },
                         cx,
                     );
                 }),
             )
             .on_scroll_wheel(swipe(Name::Volume(i), cx));
-        let readout = match self.name_field(Name::Volume(i)) {
-            Some(field) => div().w(px(44.)).flex_none().child(field),
-            None => div()
-                .w(px(44.))
-                .flex_none()
-                .font_family(MONO)
-                .text_size(px(10.5))
-                .text_color(rgb(TEXT_2))
-                .whitespace_nowrap()
-                .debug_selector(move || format!("track-db-{i}"))
-                .child(db_text)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
-                        if e.click_count == 2 {
-                            cx.stop_propagation();
-                            ws.start_naming(Name::Volume(i), window, cx);
-                        }
-                    }),
-                ),
-        };
-        // The pan knob: drag up or right to turn it right (⇧ fine; on Stereo Pan ⌘ spreads it),
-        // swipe sideways, double-click to type it, ⌥-click for the middle, right-click for its
-        // mode and the pan law.
-        let pan_knob = div()
-            .id(("pan", i))
+        // The readout, an LCD: the level (double-click to type one), or the pan while it's
+        // turned; a pan typed shows here too.
+        let field = self
+            .name_field(Name::Volume(i))
+            .or_else(|| self.name_field(Name::Pan(i)));
+        let readout = div()
+            .w(px(40.))
+            .h(px(18.))
+            .flex_none()
             .flex()
             .items_center()
-            .gap(px(5.))
+            .justify_center()
+            .rounded(px(4.))
+            .bg(rgb(0x0b0b0e))
+            .border_1()
+            .border_color(rgb(0x22222a))
+            .font_family(MONO)
+            .text_size(px(10.))
+            .text_color(rgb(lit))
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .debug_selector(move || format!("track-db-{i}"))
+            .child(match field {
+                Some(field) => div().w_full().px(px(2.)).child(field),
+                None => div().child(readout_text),
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                    if e.click_count == 2 {
+                        cx.stop_propagation();
+                        ws.start_naming(Name::Volume(i), window, cx);
+                    }
+                }),
+            );
+        // The pan knob, its LED ring showing where: drag up or right to turn it right (⇧ fine;
+        // ⌘ spreads a stereo pan), swipe sideways, double-click to type it (binaural: its
+        // panner), ⌥-click for the middle, right-click for its mode and the pan law.
+        let pan_knob = div()
+            .id(("pan", i))
+            .size(px(24.))
+            .flex_none()
             .cursor_ns_resize()
             .debug_selector(move || format!("track-pan-{i}"))
-            .child(
-                div()
-                    .size(px(30.))
-                    .flex_none()
-                    .child(pan_dial(mode, pan, spread, color)),
-            )
-            .child(match self.name_field(Name::Pan(i)) {
-                Some(field) => div().w(px(44.)).child(field),
-                // Binaural: a button for the panner.
-                None if mode == PanMode::Binaural => div()
-                    .px(px(5.))
-                    .h(px(20.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(5.))
-                    .bg(alpha(color, 0.16))
-                    .border_1()
-                    .border_color(alpha(color, 0.35))
-                    .font_family(MONO)
-                    .text_size(px(10.))
-                    .text_color(rgb(TEXT))
-                    .whitespace_nowrap()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(alpha(color, 0.3)))
-                    .debug_selector(move || format!("track-3d-{i}"))
-                    .child(pan_text)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            cx.stop_propagation();
-                            ws.select_track(i);
-                            ws.open_panner(i, cx);
-                        }),
-                    ),
-                None => div()
-                    .w(px(44.))
-                    .font_family(MONO)
-                    .text_size(px(10.))
-                    .text_color(rgb(TEXT_2))
-                    .whitespace_nowrap()
-                    .child(pan_text),
-            })
+            .child(pan_dial(mode, pan, spread, color))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
@@ -1009,6 +1090,7 @@ impl Workspace {
                         },
                     };
                     ws.begin_drag(drag, cx);
+                    cx.notify();
                 }),
             )
             .on_scroll_wheel(swipe(Name::Pan(i), cx))
@@ -1019,6 +1101,163 @@ impl Workspace {
                     ws.pan_menu(i, e.position, cx);
                 }),
             );
+
+        // The strip: a raised panel, its buttons and LEDs over its fader, readout and knob.
+        let strip_panel = div()
+            .w(px(190.))
+            .h(px(if roomy { 60. } else { 28. }))
+            .flex_none()
+            .mr(px(8.))
+            .px(px(8.))
+            .py(px(if roomy { 6. } else { 4. }))
+            .flex()
+            .flex_col()
+            .justify_between()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(rgb(RAISED))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(rgb(0x1e1e24), 0.),
+                linear_color_stop(rgb(0x17171c), 1.),
+            ))
+            .shadow(vec![BoxShadow {
+                color: alpha(0xffffff, 0.05),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            }])
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(buttons)
+                    .child(leds),
+            )
+            .when(roomy, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(fader)
+                        .child(readout)
+                        .child(pan_knob),
+                )
+            });
+
+        // Who it is: its icon (click for its colour and icon), number and name (double-click to
+        // rename), and what it plays.
+        let icon_size = if roomy { 36. } else { 26. };
+        let identity = div()
+            .flex_1()
+            .min_w(px(0.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .pl(px(13.))
+            .pr(px(8.))
+            .when(mute, |d| d.opacity(0.55))
+            .child(
+                div()
+                    .id(("track-look", i))
+                    .size(px(icon_size))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(icon_size / 4.0))
+                    .bg(alpha(color, 0.14))
+                    .border_1()
+                    .border_color(alpha(color, if picking { 0.8 } else { 0.34 }))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(alpha(color, 0.26)))
+                    .child(crate::looks::glyph(glyph, icon_size * 0.52).text_color(rgb(color)))
+                    .debug_selector(move || format!("track-look-{i}"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            ws.select_track(i);
+                            let at = e.position + gpui::point(gpui::px(24.), gpui::px(-12.));
+                            ws.open_picker(i, at, window, cx);
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(px(6.))
+                            .min_w(px(0.))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .font_family(MONO)
+                                    .text_size(px(10.))
+                                    .text_color(rgb(if selected { TEXT_3 } else { TEXT_4 }))
+                                    .child(format!("{:02}", i + 1)),
+                            )
+                            .child(match self.name_field(Name::Track(i)) {
+                                Some(field) => div().flex_1().child(field),
+                                None => div()
+                                    .min_w(px(0.))
+                                    .text_size(px(13.5))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .line_height(px(17.))
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .text_color(rgb(if selected { 0xffffff } else { 0xe6e6ea }))
+                                    .child(name)
+                                    .debug_selector(move || format!("track-name-{i}"))
+                                    // Double-click the name to rename the track.
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                                            if e.click_count == 2 {
+                                                cx.stop_propagation();
+                                                ws.select_track(i);
+                                                ws.start_naming(Name::Track(i), window, cx);
+                                            }
+                                        }),
+                                    ),
+                            }),
+                    )
+                    .when(lh >= 52.0, |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .text_size(px(10.5))
+                                .line_height(px(13.))
+                                .text_color(rgb(TEXT_3))
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .min_w(px(0.))
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(kind),
+                                )
+                                .when_some(stack, |d, name| {
+                                    d.child(div().flex_none().child(chip(name, VIOLET)))
+                                }),
+                        )
+                    }),
+            );
+
         let height = lh;
         div()
             .absolute()
@@ -1027,11 +1266,7 @@ impl Workspace {
             .w_full()
             .h(px(lh))
             .flex()
-            .flex_col()
-            .justify_center()
-            .gap(px(6.))
-            .pl(px(10.))
-            .pr(px(10.))
+            .items_center()
             .bg(rgb(if selected { HEADER_SELECTED } else { HEADERS }))
             .border_b_1()
             .border_color(rgb(LINE_SOFT))
@@ -1046,167 +1281,8 @@ impl Workspace {
                     .w(px(3.))
                     .bg(alpha(color, if selected { 0.95 } else { 0.5 })),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(
-                        div()
-                            .w(px(16.))
-                            .flex_none()
-                            .flex()
-                            .justify_end()
-                            .font_family(MONO)
-                            .text_size(px(10.5))
-                            .text_color(rgb(if selected { TEXT_2 } else { TEXT_4 }))
-                            .child((i + 1).to_string()),
-                    )
-                    // Its icon, in its colour: click to choose them.
-                    .child(
-                        div()
-                            .id(("track-look", i))
-                            .size(px(30.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(8.))
-                            .bg(alpha(color, 0.15))
-                            .border_1()
-                            .border_color(alpha(color, if picking { 0.8 } else { 0.28 }))
-                            .cursor_pointer()
-                            .hover(|d| d.bg(alpha(color, 0.26)))
-                            .child(crate::looks::glyph(glyph, 16.).text_color(rgb(color)))
-                            .debug_selector(move || format!("track-look-{i}"))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    ws.select_track(i);
-                                    let at =
-                                        e.position + gpui::point(gpui::px(24.), gpui::px(-12.));
-                                    ws.open_picker(i, at, window, cx);
-                                }),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(1.))
-                            .child(match self.name_field(Name::Track(i)) {
-                                Some(field) => div().child(field),
-                                None => div()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .line_height(px(16.))
-                                    .whitespace_nowrap()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .text_color(rgb(if mute {
-                                        TEXT_3
-                                    } else if selected {
-                                        0xffffff
-                                    } else {
-                                        0xe6e6ea
-                                    }))
-                                    .child(name)
-                                    .debug_selector(move || format!("track-name-{i}"))
-                                    // Double-click the name to rename the track.
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
-                                            if e.click_count == 2 {
-                                                cx.stop_propagation();
-                                                ws.select_track(i);
-                                                ws.start_naming(Name::Track(i), window, cx);
-                                            }
-                                        }),
-                                    ),
-                            })
-                            .when(lh >= 52.0, |d| {
-                                d.child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(4.))
-                                        .text_size(px(10.5))
-                                        .line_height(px(13.))
-                                        .text_color(rgb(TEXT_3))
-                                        .whitespace_nowrap()
-                                        .overflow_hidden()
-                                        .child(
-                                            div()
-                                                .min_w(px(0.))
-                                                .overflow_hidden()
-                                                .text_ellipsis()
-                                                .child(kind),
-                                        )
-                                        .when_some(stack, |d, name| {
-                                            d.child(div().flex_none().child(chip(name, VIOLET)))
-                                        }),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(3.))
-                            .child(
-                                toggle("M", mute, TEXT, BG, 20.)
-                                    .debug_selector(move || format!("mute-{i}"))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |ws, _, _, cx| {
-                                            cx.stop_propagation();
-                                            ws.edit(cx, |ws| {
-                                                ws.session.project.tracks[i].mute ^= true
-                                            });
-                                        }),
-                                    ),
-                            )
-                            .child(
-                                toggle("S", solo, SOLO, BG, 20.)
-                                    .debug_selector(move || format!("solo-{i}"))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |ws, _, _, cx| {
-                                            cx.stop_propagation();
-                                            ws.edit(cx, |ws| {
-                                                ws.session.project.tracks[i].solo ^= true
-                                            });
-                                        }),
-                                    ),
-                            )
-                            .child(
-                                toggle("R", armed == Some(i), RECORD, 0xffffff, 20.)
-                                    .debug_selector(move || format!("arm-{i}"))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |ws, _, _, cx| {
-                                            cx.stop_propagation();
-                                            ws.toggle_arm(i);
-                                            cx.notify();
-                                        }),
-                                    ),
-                            ),
-                    ),
-            )
-            .when(roomy, |d| {
-                d.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .pl(px(24.))
-                        .child(fader)
-                        .child(readout)
-                        .child(pan_knob),
-                )
-            })
+            .child(identity)
+            .child(strip_panel)
             // The bottom edge: drag the track taller or shorter; double-click for its usual size.
             .child(
                 div()
@@ -2415,115 +2491,100 @@ fn pan_dial(mode: PanMode, pan: f32, spread: f32, color: u32) -> impl IntoElemen
         |_, _, _| {},
         move |b, _, window, _| {
             let c = b.center();
-            let r = f32::from(b.size.width.min(b.size.height)) / 2.0 - 2.0;
+            let r = f32::from(b.size.width.min(b.size.height)) / 2.0 - 1.5;
             let at = |deg: f32, rr: f32| {
                 point(
                     c.x + px(rr * deg.to_radians().cos()),
                     c.y + px(rr * deg.to_radians().sin()),
                 )
             };
-            // -1 to 1 round the dial's top, 135° either way.
-            let deg = |p: f32| 270.0 + p.clamp(-1.0, 1.0) * 135.0;
-            let arc = |from: f32, to: f32, width: f32, window: &mut Window, ink: Hsla| {
+            let arc = |from: f32, to: f32, ink: Hsla, window: &mut Window| {
                 if (to - from).abs() < 0.5 {
                     return;
                 }
-                let mut p = gpui::PathBuilder::stroke(px(width));
+                let mut p = gpui::PathBuilder::stroke(px(2.));
                 let steps = ((to - from).abs() / 6.0).ceil().max(2.0) as usize;
                 for k in 0..=steps {
                     let d = from + (to - from) * k as f32 / steps as f32;
-                    if k == 0 {
-                        p.move_to(at(d, r));
-                    } else {
-                        p.line_to(at(d, r));
+                    match k {
+                        0 => p.move_to(at(d, r)),
+                        _ => p.line_to(at(d, r)),
                     }
                 }
                 if let Ok(p) = p.build() {
                     window.paint_path(p, ink);
                 }
             };
-            // Binaural: from above, the head in the middle facing up, the sound round it.
-            if mode == PanMode::Binaural {
-                let ring = |rr: f32, ink: Hsla, width: f32, window: &mut Window| {
-                    let mut p = gpui::PathBuilder::stroke(px(width));
-                    for k in 0..=48 {
-                        let d = k as f32 * 7.5;
-                        match k {
-                            0 => p.move_to(at(d, rr)),
-                            _ => p.line_to(at(d, rr)),
-                        }
-                    }
-                    if let Ok(p) = p.build() {
-                        window.paint_path(p, ink);
-                    }
-                };
-                ring(r, rgb(RAISED).into(), 2.0, window);
-                ring(r * 0.62, alpha(0xffffff, 0.07), 1.0, window);
-                let head = r * 0.3;
+            let dot = |p: Point<Pixels>, d: f32, ink: Hsla, window: &mut Window| {
+                window.paint_quad(
+                    fill(Bounds::centered_at(p, size(px(d), px(d))), ink).corner_radii(px(d / 2.0)),
+                );
+            };
+            let body = r * 0.62;
+            let knob = |window: &mut Window| {
                 window.paint_quad(
                     fill(
-                        Bounds::centered_at(c, size(px(head * 2.0), px(head * 2.0))),
-                        rgb(0x3b3b48),
+                        Bounds::centered_at(c, size(px(body * 2.0), px(body * 2.0))),
+                        rgb(0x2e2e36),
                     )
-                    .corner_radii(px(head)),
+                    .corner_radii(px(body))
+                    .border_widths(px(1.))
+                    .border_color(rgb(0x0b0b0e)),
                 );
-                window.paint_quad(
-                    fill(
-                        Bounds::centered_at(at(270.0, head), size(px(3.), px(3.))),
-                        alpha(ACCENT, 0.9),
-                    )
-                    .corner_radii(px(1.5)),
-                );
-                let d = deg(pan) + (pan.clamp(-1.0, 1.0) * 45.0);
-                let dot = at(d, r);
-                let mut beam = gpui::PathBuilder::stroke(px(1.));
-                beam.move_to(c);
-                beam.line_to(dot);
-                if let Ok(p) = beam.build() {
-                    window.paint_path(p, alpha(color, 0.5));
-                }
-                window.paint_quad(
-                    fill(Bounds::centered_at(dot, size(px(7.), px(7.))), rgb(color))
-                        .corner_radii(px(3.5)),
-                );
-                return;
-            }
-            arc(deg(-1.0), deg(1.0), 2.5, window, rgb(RAISED).into());
+            };
+            // -1 to 1 round the top, 135° either way; binaural all the way round.
+            let deg = |p: f32| 270.0 + p.clamp(-1.0, 1.0) * 135.0;
+            let ink: Hsla = rgb(color).into();
             match mode {
-                PanMode::Stereo => {
-                    let (a, z) = (deg(pan - spread.abs()), deg(pan + spread.abs()));
-                    arc(a.min(z), a.max(z), 2.5, window, rgb(color).into());
-                    for d in [deg(pan - spread), deg(pan + spread)] {
-                        window.paint_quad(
-                            fill(
-                                Bounds::centered_at(at(d, r), size(px(5.), px(5.))),
-                                rgb(0xffffff),
-                            )
-                            .corner_radii(px(2.5)),
-                        );
-                    }
-                }
-                _ => {
-                    let (a, z) = (deg(0.0), deg(pan));
-                    arc(a.min(z), a.max(z), 2.5, window, rgb(color).into());
-                    window.paint_quad(
-                        fill(
-                            Bounds::centered_at(at(deg(pan), r), size(px(5.), px(5.))),
-                            rgb(0xffffff),
-                        )
-                        .corner_radii(px(2.5)),
+                PanMode::Binaural => {
+                    arc(0.0, 360.0, rgb(0x26262d).into(), window);
+                    knob(window);
+                    dot(c, body * 0.7, rgb(0x4a4a58).into(), window);
+                    dot(
+                        at(270.0 + pan.clamp(-1.0, 1.0) * 180.0, r),
+                        5.0,
+                        ink,
+                        window,
                     );
                 }
+                PanMode::Stereo => {
+                    arc(deg(-1.0), deg(1.0), rgb(0x26262d).into(), window);
+                    let (a, z) = (deg(pan - spread.abs()), deg(pan + spread.abs()));
+                    arc(a.min(z), a.max(z), ink, window);
+                    knob(window);
+                    for d in [deg(pan - spread), deg(pan + spread)] {
+                        let mut p = gpui::PathBuilder::stroke(px(1.6));
+                        p.move_to(at(d, body * 0.35));
+                        p.line_to(at(d, body * 0.85));
+                        if let Ok(p) = p.build() {
+                            window.paint_path(p, Hsla::from(rgb(TEXT)));
+                        }
+                    }
+                }
+                PanMode::Balance => {
+                    arc(deg(-1.0), deg(1.0), rgb(0x26262d).into(), window);
+                    let (a, z) = (deg(0.0), deg(pan));
+                    arc(a.min(z), a.max(z), ink, window);
+                    // The middle, marked.
+                    dot(
+                        at(270.0, r + 0.2),
+                        2.4,
+                        if pan.abs() < 0.005 {
+                            ink
+                        } else {
+                            rgb(0x3a3a44).into()
+                        },
+                        window,
+                    );
+                    knob(window);
+                    let mut p = gpui::PathBuilder::stroke(px(1.6));
+                    p.move_to(at(deg(pan), body * 0.3));
+                    p.line_to(at(deg(pan), body * 0.85));
+                    if let Ok(p) = p.build() {
+                        window.paint_path(p, Hsla::from(rgb(TEXT)));
+                    }
+                }
             }
-            // The middle: a disc.
-            let body = r * 0.55;
-            window.paint_quad(
-                fill(
-                    Bounds::centered_at(c, size(px(body * 2.0), px(body * 2.0))),
-                    rgb(0x2a2a32),
-                )
-                .corner_radii(px(body)),
-            );
         },
     )
     .size_full()

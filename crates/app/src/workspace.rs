@@ -1678,7 +1678,7 @@ impl Workspace {
                 match (side, self.side) {
                     (true, Side::Browser) => self.browser_w = w.clamp(260.0, 560.0),
                     (true, _) => self.inspector_w = w.clamp(220.0, 520.0),
-                    (false, _) => self.header_w = w.clamp(220.0, 480.0),
+                    (false, _) => self.header_w = w.clamp(280.0, 520.0),
                 }
                 cx.notify();
                 return;
