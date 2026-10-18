@@ -305,9 +305,9 @@ agent can send, with examples. An agent can:
   - `tempo analyze` and `tempo render` take `--bars 9-16` to hear part of a song.
 
 The Agent panel is a producer's desk as well as a conversation: under its header the song at a
-glance (its genre, picked from the playbooks, its key, tempo and length) and the producer's path,
-Genre → Chords → Loop → Arrange → Mix → Master, each stage lit when the song has it and a click
-away from asking the agent for it; over the composer the critic, tempo's notes on the song kept
+glance (its genre, picked from the playbooks, its key, tempo and length); a new conversation
+offers the stages the song hasn't had yet (genre, chords, a loop, arrangement, mix, master), a
+click each, or for a finished song what it wants next; in the composer the critic, tempo's notes on the song kept
 up to date as it changes, each with a Fix to ask for (or Fix all), and Listen to the mix for the
 notes a render gives; after an answer, Undo this turn puts the song back as it was when it was
 asked (one step, so ⌘Z puts it back again); and what's selected (a region and its bars, or a

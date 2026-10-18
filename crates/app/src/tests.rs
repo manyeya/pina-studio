@@ -2611,7 +2611,8 @@ fn the_agent_panel_knows_the_song_and_its_critic(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
 
-    // The path: the demo has a loop, its keys playing chords, but no genre or mix.
+    // The stages: the demo has a loop, its keys playing chords, but no genre or mix; a new
+    // conversation offers what it hasn't had, the genre first.
     let done: Vec<bool> = ws.read_with(cx, |ws, _| {
         crate::producer::STAGES
             .iter()
@@ -2619,6 +2620,8 @@ fn the_agent_panel_knows_the_song_and_its_critic(cx: &mut TestAppContext) {
             .collect()
     });
     assert_eq!(done, [false, true, true, false, false, false]);
+    let first = ws.read_with(cx, |ws, _| ws.suggestions()[0].0.clone());
+    assert_eq!(first, "Pick a genre for this song");
 
     // The genre picker sets the song's genre, from the playbooks.
     click_on(cx, "agent-genre", Modifiers::none(), MouseButton::Left);

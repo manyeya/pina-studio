@@ -54,14 +54,6 @@ pub enum Item {
     },
 }
 
-/// Ideas for a first request.
-const STARTERS: [&str; 4] = [
-    "Make a 4-bar drum groove that fits this song",
-    "Find samples that fit this song's key and tempo",
-    "Write a bassline that follows the chords",
-    "Balance the mix and give it some space",
-];
-
 pub struct Chat {
     pub items: Vec<Item>,
     /// The agent to work with, as last chosen.
@@ -792,33 +784,35 @@ impl Workspace {
                 )
             })
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .children(STARTERS.iter().enumerate().map(|(i, s)| {
-                        div()
-                            .id(("starter", i))
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .px(px(10.))
-                            .py(px(8.))
-                            .rounded(px(8.))
-                            .bg(rgb(CARD))
-                            .border_1()
-                            .border_color(rgb(LINE))
-                            .text_size(px(12.5))
-                            .text_color(rgb(TEXT_2))
-                            .cursor_pointer()
-                            .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
-                            .child(icon(Icon::Forward, 12.).flex_none().text_color(rgb(AGENT)))
-                            .child(div().flex_1().min_w(px(0.)).line_height(px(17.)).child(*s))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |ws, _, _, cx| ws.ask_agent(s.to_string(), cx)),
-                            )
-                    })),
+                div().flex().flex_col().gap(px(6.)).children(
+                    self.suggestions()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, (s, ask))| {
+                            div()
+                                .id(("starter", i))
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .px(px(10.))
+                                .py(px(8.))
+                                .rounded(px(8.))
+                                .bg(rgb(CARD))
+                                .border_1()
+                                .border_color(rgb(LINE))
+                                .text_size(px(12.5))
+                                .text_color(rgb(TEXT_2))
+                                .cursor_pointer()
+                                .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+                                .child(icon(Icon::Forward, 12.).flex_none().text_color(rgb(AGENT)))
+                                .child(div().flex_1().min_w(px(0.)).line_height(px(17.)).child(s))
+                                .debug_selector(move || format!("starter-{i}"))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, _, _, cx| ws.ask_agent(ask.clone(), cx)),
+                                )
+                        }),
+                ),
             )
             .child(
                 div()

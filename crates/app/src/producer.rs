@@ -1,7 +1,7 @@
 //! The Agent panel's producer tools: the song at a glance (its genre, key, tempo and length),
-//! the path from a genre to a master (each stage lit by what the song has, and a click asking
-//! the agent for it), the critic (tempo's notes on the song, each with a fix to ask for), undo
-//! for a whole turn, and what's selected, sent along as context.
+//! what to ask for first (the stages from a genre to a master the song hasn't had), the critic
+//! (tempo's notes on the song, each with a fix to ask for), undo for a whole turn, and what's
+//! selected, sent along as context.
 
 use std::time::Instant;
 
@@ -75,26 +75,15 @@ pub const STAGES: [Stage; 6] = [
 ];
 
 impl Stage {
-    pub fn name(self) -> &'static str {
+    /// Its suggestion, as a new conversation offers it.
+    pub fn starter(self) -> &'static str {
         match self {
-            Stage::Genre => "Genre",
-            Stage::Chords => "Chords",
-            Stage::Loop => "Loop",
-            Stage::Arrange => "Arrange",
-            Stage::Mix => "Mix",
-            Stage::Master => "Master",
-        }
-    }
-
-    /// What the agent does for it, in a few words.
-    pub fn about(self) -> &'static str {
-        match self {
-            Stage::Genre => "pick the genre its parts and mix aim at",
-            Stage::Chords => "find a progression and set the chord track",
-            Stage::Loop => "write an 8-bar loop on real sounds",
-            Stage::Arrange => "lay the loop out as a song, with transitions",
-            Stage::Mix => "mix it by part, then fix what the critic hears",
-            Stage::Master => "master it to the genre's loudness",
+            Stage::Genre => "Pick a genre for this song",
+            Stage::Chords => "Write the chords",
+            Stage::Loop => "Make an 8-bar loop on real sounds",
+            Stage::Arrange => "Arrange the loop into a full song",
+            Stage::Mix => "Mix it, and fix what the critic hears",
+            Stage::Master => "Master it to the genre's loudness",
         }
     }
 
@@ -302,10 +291,9 @@ impl Workspace {
         }
     }
 
-    /// Under the panel's header: the song at a glance, and the path from a genre to a master.
+    /// Under the panel's header: the song at a glance.
     pub fn agent_context(&mut self, cx: &mut Context<Self>) -> Div {
         let p = &self.session.project;
-        let busy = self.chat.busy;
         let genre = p.genre.as_deref().and_then(playbook::find);
         let color = genre.as_ref().map_or(TEXT_3, |g| genre_color(&g.id));
         let bars = p.end().div_ceil(p.bar());
@@ -357,155 +345,41 @@ impl Workspace {
             .whitespace_nowrap()
             .child(format!("{key} · {:.0} bpm · {bars} bars", p.tempo));
 
-        // The path: a segment a stage, lit when the song has it; the first it hasn't, breathing.
-        let done: Vec<bool> = STAGES.iter().map(|s| s.done(p)).collect();
-        let next = done.iter().position(|d| !d);
-        let segments: Vec<_> = STAGES
-            .iter()
-            .enumerate()
-            .map(|(i, &stage)| {
-                let (is_done, is_next) = (done[i], next == Some(i));
-                let bar = div()
-                    .h(px(4.))
-                    .rounded(px(2.))
-                    .map(|d| match (is_done, is_next) {
-                        (true, _) => d.bg(rgb(AGENT)),
-                        (false, true) => d.bg(alpha(AGENT, 0.35)),
-                        _ => d.bg(rgb(LINE_STRONG)),
-                    });
-                let bar = match is_next && !busy {
-                    true => bar
-                        .with_animation(
-                            ("path-next", i),
-                            Animation::new(std::time::Duration::from_millis(1600))
-                                .repeat()
-                                .with_easing(gpui::pulsating_between(0.4, 1.0)),
-                            |d, t| d.opacity(t),
-                        )
-                        .into_any_element(),
-                    false => bar.into_any_element(),
-                };
-                let ask = stage.ask(p);
-                div()
-                    .id(("stage", i))
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .when(!busy, |d| d.cursor_pointer())
-                    .group("stage")
-                    .child(bar)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(3.))
-                            .text_size(px(10.5))
-                            .text_color(rgb(match (is_done, is_next) {
-                                (true, _) => TEXT_2,
-                                (_, true) => AGENT_TEXT,
-                                _ => TEXT_4,
-                            }))
-                            .when(!busy, |d| d.hover(|d| d.text_color(rgb(TEXT))))
-                            .whitespace_nowrap()
-                            .child(stage.name()),
-                    )
-                    .debug_selector(move || format!("stage-{}", stage.name().to_lowercase()))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            if !ws.chat.busy {
-                                ws.ask_agent(ask.clone(), cx);
-                            }
-                        }),
-                    )
-            })
-            .collect();
-        // What's next, said, with a button to ask for it.
-        let next_line = next.map(|i| {
-            let stage = STAGES[i];
-            let ask = stage.ask(p);
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(AGENT_TEXT))
-                                .child(format!("Next: {}", stage.name())),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .line_height(px(15.))
-                                .text_color(rgb(TEXT_3))
-                                .child(sentence(stage.about())),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("path-ask")
-                        .flex_none()
-                        .h(px(22.))
-                        .px(px(9.))
-                        .flex()
-                        .items_center()
-                        .gap(px(4.))
-                        .rounded(px(11.))
-                        .text_size(px(11.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .when(busy, |d| d.bg(rgb(RAISED)).text_color(rgb(TEXT_4)))
-                        .when(!busy, |d| {
-                            d.bg(rgb(AGENT))
-                                .text_color(rgb(BG))
-                                .cursor_pointer()
-                                .hover(|d| d.opacity(0.85))
-                        })
-                        .child("Ask")
-                        .child(icon(Icon::Forward, 10.).text_color(rgb(if busy {
-                            TEXT_4
-                        } else {
-                            BG
-                        })))
-                        .debug_selector(|| "path-ask".into())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |ws, _, _, cx| {
-                                if !ws.chat.busy {
-                                    ws.ask_agent(ask.clone(), cx);
-                                }
-                            }),
-                        ),
-                )
-        });
         div()
             .flex_none()
             .flex()
-            .flex_col()
-            .gap(px(11.))
+            .items_center()
+            .gap(px(10.))
             .px(px(12.))
-            .pt(px(10.))
-            .pb(px(11.))
+            .py(px(9.))
             .border_b_1()
             .border_color(rgb(LINE))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .child(chip)
-                    .child(facts),
-            )
-            .child(div().flex().gap(px(3.)).children(segments))
-            .children(next_line)
+            .child(chip)
+            .child(facts)
+    }
+
+    /// What to ask for first, in a new conversation: the stages this song hasn't had (the
+    /// next first); for a song that's had them all, what a finished song wants.
+    pub fn suggestions(&self) -> Vec<(String, String)> {
+        let p = &self.session.project;
+        let left: Vec<(String, String)> = STAGES
+            .iter()
+            .filter(|s| !s.done(p))
+            .take(4)
+            .map(|s| (s.starter().to_string(), s.ask(p)))
+            .collect();
+        if !left.is_empty() {
+            return left;
+        }
+        [
+            ("Listen to the mix and fix what the critic hears", "Critique the song with a render, then fix every mix issue it finds, and critique again to check."),
+            ("Make the hook hit harder", "Make the hook (or chorus, or drop) hit harder than the section before it: more parts, a lift in the melody, a transition into it. Then critique quick."),
+            ("Write a variation for the second hook", "Write a variation for the second hook so it doesn't repeat the first exactly: a new melody seed or style, a part added. Then critique quick."),
+            ("Tighten the low end", "Tighten the low end: the kick and bass shouldn't clash, the sub should sit in mono, nothing else should fill under 150 Hz. Check with a render."),
+        ]
+        .into_iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
     }
 
     /// The critic, in the composer's toolbar: a dot in the color of the worst it found, and
