@@ -205,8 +205,12 @@ your words short: a sentence before a group of steps saying what you're doing, a
 at the end saying what changed. Use tempo's tools, passing \"{p}\" as the project: `describe` \
 before your first edit (the commands, and how ticks, levels and notes work), `show` to read the \
 song, `edit` to change it, `samples_find`, `samples_kit` and `samples_put` for sounds that fit, \
-`analyze` to check levels. You can't hear the song: trust `analyze` and the samples' analysis, \
-and say what you couldn't check."
+`analyze` to check levels. You can't hear the song: `critique` is your ears (quick after each \
+edit, with a render after mixing), trust it and the samples' analysis, and say what you couldn't \
+check.\n\nWrite music with tempo's write commands, not note by note: set_chords, then \
+write_chords, write_bass, write_melody and write_drums put parts on the chords that are in key, \
+voice-led and played like a player would. To make a song that sounds finished: {}",
+        crate::produce::WORKFLOW
     )
 }
 
@@ -748,6 +752,36 @@ pub fn label(name: &str, input: &Value, bar: u64) -> (String, String) {
         "plugins" => ("Looking at plugins", String::new()),
         "params" => ("Reading a plugin", String::new()),
         "presets" => ("Reading presets", String::new()),
+        "critique" => (
+            "Listening critically",
+            if input["quick"].as_bool() == Some(true) {
+                "the notes".into()
+            } else {
+                "a render".into()
+            },
+        ),
+        "playbook" => ("Reading the playbook", s("genre")),
+        "theory" => (
+            "Finding chords",
+            format!("{} {}", s("key"), s("words")).trim().to_string(),
+        ),
+        "reference" => ("Measuring a reference", file("file")),
+        "sounds" => (
+            "Finding sounds",
+            format!("{} {}", s("role"), s("words")).trim().to_string(),
+        ),
+        "mix" => (
+            "Mixing",
+            input["track"]
+                .as_u64()
+                .map_or("every part".into(), |t| format!("track {t}")),
+        ),
+        "master" => (
+            "Mastering",
+            input["lufs"]
+                .as_f64()
+                .map_or(String::new(), |l| format!("{l} LUFS")),
+        ),
         other => return (other.replace('_', " "), String::new()),
     };
     (what.to_string(), detail)

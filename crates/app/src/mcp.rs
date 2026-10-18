@@ -3,17 +3,21 @@
 
 use std::{
     io::{BufRead, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use serde_json::{Value, json};
 use tempo_engine::commands::{Command, DESCRIBE};
 
-use crate::{cli, server::Request};
+use crate::{cli, produce, server::Request};
 
 const INSTRUCTIONS: &str = "tempo is a DAW. A project is a folder; call `describe` first for the \
 commands and how time and levels work, `show` to see a project, `edit` to change it one command at \
-a time, and `analyze` to hear it as numbers (loudness, peaks, balance).";
+a time, and `analyze` to hear it as numbers (loudness, peaks, balance). To make a song that sounds \
+finished, work as a producer: `playbook` for the genre, `theory` for chords, write parts with the \
+write_* commands (tempo gets the notes right), `sounds` for real instruments, `critique` after \
+every step and fix what it says, `arrange` and `transition` for the song's shape, `mix` and \
+`master` to finish. `critique` is your ears: trust it over your guesses.";
 
 fn tools() -> Value {
     let project = json!({ "type": "string", "description": "The project folder." });
@@ -42,20 +46,104 @@ fn tools() -> Value {
         },
         {
             "name": "analyze",
-            "description": "Measures a project (the mix, then each track alone) or a WAV file: peak, RMS, LUFS, clipping, and low/mid/high balance.",
+            "description": "Measures a project (the mix, its sections, then each track alone) or an audio file (WAV, AIFF, FLAC, MP3): peak, RMS, LUFS, crest, clipping, spectrum, stereo, the notes sounding and their key. `from_bar` and `to_bar` (from 1, both in) measure just those bars of a project.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "path": { "type": "string", "description": "A project folder or a .wav file." } },
+                "properties": {
+                    "path": { "type": "string", "description": "A project folder or an audio file." },
+                    "from_bar": { "type": "integer", "minimum": 1 },
+                    "to_bar": { "type": "integer", "minimum": 1 }
+                },
                 "required": ["path"]
             }
         },
         {
             "name": "render",
-            "description": "Bounces a project to a WAV file.",
+            "description": "Bounces a project to a WAV file; `from_bar` and `to_bar` (from 1, both in) bounce just those bars.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "project": project, "out": { "type": "string", "description": "The .wav to write." } },
+                "properties": {
+                    "project": project,
+                    "out": { "type": "string", "description": "The .wav to write." },
+                    "from_bar": { "type": "integer", "minimum": 1 },
+                    "to_bar": { "type": "integer", "minimum": 1 }
+                },
                 "required": ["project", "out"]
+            }
+        },
+        {
+            "name": "critique",
+            "description": "A producer's notes on the song, worst first, each with where and the command that fixes it: wrong notes and semitone clashes, a bass off its chords, kick and bass flamming, robotic velocities, missing swing, placeholder sounds, a song that never changes or starts with everything, a hook weaker than its verse, no transitions; and (unless `quick`) from a render: clipping, loudness, tonal balance against the genre or reference, low end in the wrong parts, parts too loud for their role, stereo trouble. `quick` skips the render (fast: use it after each edit). `from_bar`/`to_bar` limit the render.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": project,
+                    "quick": { "type": "boolean" },
+                    "from_bar": { "type": "integer", "minimum": 1 },
+                    "to_bar": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["project"]
+            }
+        },
+        {
+            "name": "playbook",
+            "description": "What a genre is: tempo range, swing, key, its parts with the sounds they take and how to write them, its sections (bars, parts, energy), progressions, mix targets (LUFS and spectrum) and what makes it sound right or amateur, with the workflow. Without `genre`, the genres there are.",
+            "inputSchema": { "type": "object", "properties": { "genre": { "type": "string" } } }
+        },
+        {
+            "name": "theory",
+            "description": "Chords for a key: its scale, its chords by degree, and progressions from the library that suit `words` (a genre or mood: \"lofi\", \"dark sad\", \"gospel\"), as numerals and as chords in the key, for set_chords.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "key": { "type": "string", "description": "\"A minor\", \"Eb major\"." }, "words": { "type": "string" } },
+                "required": ["key"]
+            }
+        },
+        {
+            "name": "reference",
+            "description": "Measures a finished song (an audio file) to aim the mix at: loudness, crest, spectrum, width, key. With `project`, makes it the song's reference (critique and master aim at it) and says how the song differs, band by band.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "file": { "type": "string" }, "project": project },
+                "required": ["file"]
+            }
+        },
+        {
+            "name": "sounds",
+            "description": "Real sounds for a part (`role`: drums, perc, bass, chords, pad, lead, counter, arp, fx, vocals, texture), for `genre`, matching `words` (\"warm rhodes\", \"dark bell\"): Surge XT patches with the set_preset that loads each, the instrument plugins installed, and samples from the library. With `project` and `track`, the commands are ready for that track.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "role": { "type": "string" },
+                    "genre": { "type": "string" },
+                    "words": { "type": "string" },
+                    "project": project,
+                    "track": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["role"]
+            }
+        },
+        {
+            "name": "mix",
+            "description": "Mixes tracks by the part each plays (all with regions, or `track`): a channel EQ (low cut, mud cut, presence), compression, saturation, pan, a send to a shared reverb aux (made if there's none), then each track's level, measured alone, to where its part sits against the drums. `role` overrides the part; `levels: false` leaves the faders.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": project,
+                    "track": { "type": "integer", "minimum": 0 },
+                    "role": { "type": "string" },
+                    "levels": { "type": "boolean" }
+                },
+                "required": ["project"]
+            }
+        },
+        {
+            "name": "master",
+            "description": "Masters the song: a limiter on the master, its gain set and measured again until the song is at `lufs` (the reference's, else the genre's, else -10), peaks under -0.5 dBFS. Mix first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "project": project, "lufs": { "type": "number" } },
+                "required": ["project"]
             }
         },
         {
@@ -177,6 +265,21 @@ fn path(args: &Value, key: &str) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("`{key}` is required"))
 }
 
+fn text<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+    args.get(key).and_then(Value::as_str)
+}
+
+/// `from_bar` and `to_bar`, if given (one alone is that bar).
+fn bar_range(args: &Value) -> Result<Option<(u64, u64)>, String> {
+    let bar = |k: &str| args.get(k).and_then(Value::as_u64);
+    Ok(match (bar("from_bar"), bar("to_bar")) {
+        (None, None) => None,
+        (Some(a), None) => Some((a, a)),
+        (None, Some(b)) => Some((1, b)),
+        (Some(a), Some(b)) => Some((a, b)),
+    })
+}
+
 fn call(name: &str, args: &Value) -> Result<Value, String> {
     match name {
         "describe" => Ok(Value::String(DESCRIBE.to_string())),
@@ -187,8 +290,46 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
                     .map_err(|e| format!("not a command: {e}"))?;
             cli::edit_with(&path(args, "project")?, command)
         }
-        "analyze" => cli::analyze(&path(args, "path")?),
-        "render" => cli::render(&path(args, "project")?, &path(args, "out")?),
+        "analyze" => cli::analyze(&path(args, "path")?, bar_range(args)?),
+        "render" => cli::render(
+            &path(args, "project")?,
+            &path(args, "out")?,
+            bar_range(args)?,
+        ),
+        "critique" => produce::critique(
+            &path(args, "project")?,
+            args.get("quick").and_then(Value::as_bool).unwrap_or(false),
+            bar_range(args)?,
+        ),
+        "playbook" => produce::playbook(text(args, "genre")),
+        "theory" => produce::theory(
+            text(args, "key").ok_or("`key` is required")?,
+            text(args, "words").unwrap_or(""),
+        ),
+        "reference" => {
+            produce::reference(&path(args, "file")?, text(args, "project").map(Path::new))
+        }
+        "sounds" => produce::sounds(
+            text(args, "role").ok_or("`role` is required")?,
+            text(args, "genre"),
+            text(args, "words").unwrap_or(""),
+            text(args, "project").map(Path::new),
+            args.get("track")
+                .and_then(Value::as_u64)
+                .map(|t| t as usize),
+        ),
+        "mix" => produce::mix_role(
+            &path(args, "project")?,
+            args.get("track")
+                .and_then(Value::as_u64)
+                .map(|t| t as usize),
+            text(args, "role"),
+            args.get("levels").and_then(Value::as_bool).unwrap_or(true),
+        ),
+        "master" => produce::master(
+            &path(args, "project")?,
+            args.get("lufs").and_then(Value::as_f64).map(|l| l as f32),
+        ),
         "transport" => {
             let request = match args.get("action").and_then(Value::as_str) {
                 Some("play") => Request::Play,
@@ -385,6 +526,13 @@ mod tests {
                 "edit",
                 "analyze",
                 "render",
+                "critique",
+                "playbook",
+                "theory",
+                "reference",
+                "sounds",
+                "mix",
+                "master",
                 "transport",
                 "plugins",
                 "params",

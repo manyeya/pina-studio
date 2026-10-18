@@ -15,6 +15,12 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   `dsp.rs`), keys, scales and note edits like quantize and legato (`music.rs`), MIDI input
   (`midi.rs`), audio recording (`record.rs`), the plugin scan (`scan.rs`), edits as data
   (`commands.rs`, described in `commands.md`) and measuring audio (`analysis.rs`).
+- `crates/engine` also writes music for agents: `theory.rs` (chords from symbols and numerals,
+  progressions by genre and mood, voice-leading, basslines, melodies, genre grooves),
+  `compose.rs` (the song's chord track, and the parts written on it), `arrange.rs` (a loop made
+  into a song, copied bars, transitions with their sounds synthesized), `playbook.rs` (genres:
+  tempo, swing, parts, sounds, sections, mix targets measured from released songs) and
+  `critique.rs` (a producer's notes, from the notes and from a render).
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
   `topbar.rs` (transport and display), `inspector.rs` (the side panel: inspector and browser),
   `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`),
@@ -27,7 +33,8 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   map, kits, adding samples to the song); `mixer.rs`, `strip.rs` (channel strips),
   `record.rs` (recording takes), `menu.rs`, `text.rs` (the text field names are typed in),
   `theme.rs` (colors, Geist, icons, controls),
-  `server.rs` (the project's socket), `cli.rs` (the commands for agents), `mcp.rs`, and
+  `server.rs` (the project's socket), `cli.rs` (the commands for agents), `produce.rs` (the
+  critic, playbooks, chords, references, sounds, mixing and mastering for agents), `mcp.rs`, and
   `tests.rs`, which drives the window headless with simulated mouse and keys.
 
 ## Run
@@ -245,6 +252,32 @@ agent can send, with examples. An agent can:
   pitch bend, pressure and per-note expression with the notes (`set_controls`), and feed a track
   into its sidechain (`set_sidechain`).
 
+- Make songs that sound finished, as a producer would. An agent can't hear, and isn't a
+  musician, so tempo does the parts it would get wrong:
+  - `tempo playbook <genre>`: what a genre is (17 of them, lofi to amapiano): its tempo, swing and
+    keys, its parts with the sounds they take and how to write them, its sections, progressions,
+    and where its mixes sit (loudness and six-band balance, measured from released songs).
+  - `tempo theory "A minor" dark trap`: the key's chords and progressions that suit the words.
+    `set_chords` takes them as symbols (`Am9 | Fmaj9`) or numerals (`i9 | VImaj9`) and makes them
+    the song's chord track; `write_chords`, `write_bass`, `write_melody` and `write_drums` write
+    parts on it that are in key and on the chords, voice-led, with a player's rhythm and a
+    genre's groove (swing, ghosts, rolls, fills); an 808 can follow the kick.
+  - `tempo sounds <role> --genre trap`: real sounds for a part instead of the built-in sine:
+    Surge XT patches (with the command that loads each), instrument plugins, and samples.
+  - `tempo critique <project> [--quick]`: what's wrong, worst first, each with where and the
+    command that fixes it: wrong notes and semitone clashes, a bass off its chords, kick and 808
+    flamming, robotic velocities, missing swing, placeholder sounds, a song that never changes or
+    a hook weaker than its verse; and from a render, clipping, loudness, tonal balance against the
+    genre (or a reference), low end in the wrong parts, parts too loud for their role, stereo.
+  - `arrange` lays a loop out as a song (the genre's sections, or given ones: parts by role or
+    track, marked, quieter sections lower), `copy_bars` copies, and `transition` puts a riser,
+    reversed cymbal, impact, downlifter, drum fill, gap or a whole build into a section.
+  - `tempo mix <project>` sets each part's channel EQ, compression, saturation, pan, reverb send
+    (a shared reverb aux, made once) and level, measured alone; `tempo master <project>` soft-clips
+    and limits the master to the genre's loudness (or a reference's: `tempo reference <file>
+    <project>`), measuring until it's there.
+  - `tempo analyze` and `tempo render` take `--bars 9-16` to hear part of a song.
+
 When the project is open in the app, commands go to the app over a socket. Each lands on screen as
 one undoable edit, and `tempo save` saves it. The agent shows up like a collaborator in a shared
 file: its avatar in the top bar, an outline and cursor on what it just changed, a line in the
@@ -268,8 +301,9 @@ pack's names (held out from the fit) and, with `--fit`, fits the models again.
 `tempo mcp` is the same as an MCP server on stdio, for agents without a shell (Claude Desktop,
 claude.ai and the like): its tools list themselves with typed inputs, and a user can allow them
 without allowing a shell. Its tools are `describe`, `show`, `edit`, `analyze`, `render`,
-`transport`, `plugins`, `params`, `presets`, `samples_find`, `samples_similar`, `samples_kit`,
-`samples_put` and `samples_library`. For Claude Code:
+`critique`, `playbook`, `theory`, `reference`, `sounds`, `mix`, `master`, `transport`,
+`plugins`, `params`, `presets`, `samples_find`, `samples_similar`, `samples_kit`, `samples_put`
+and `samples_library`. For Claude Code:
 
     claude mcp add tempo -- /path/to/tempo mcp
 

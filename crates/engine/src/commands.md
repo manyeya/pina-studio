@@ -178,6 +178,62 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `set_cycle` `{"start": 0, "end": 15360, "on": true}`: playback loops over that range (ticks);
   `"on": false` keeps the range without looping.
 
+## Writing music
+
+tempo writes parts that are right (in the key, on the chords, voiced and played like a player
+would) so an agent picks what to write and tempo gets the notes right. The song's chords are its
+chord track; parts are written over it, and the critic checks against it.
+
+- `set_genre` `{"genre": "lofi"}`: what the song is, by its playbook (`tempo playbook` lists them:
+  lofi, boom_bap, trap, drill, rnb, neo_soul, pop, house, deep_house, techno, afrobeats, amapiano,
+  dnb, reggaeton, edm, cinematic, ambient). Drums, arrangement and the critic's targets follow it.
+- `set_chords` `{"chords": "i9 | VImaj9 | III | VII7", "start": 0, "bars": 8}`: the chord track.
+  Chords are symbols (`Am9`, `Fmaj9`, `E7b9`, `C/E`, `F#m7b5`, `Bbsus4`, `G13`) or roman numerals
+  in the song's key (`ii9 V13 Imaj9`, `bVII`, `iiø7`, `#iv°7`; in a minor key the degrees are the
+  natural minor's). Bars are split by `|`; chords in one bar share it. It repeats to fill `bars`
+  (one pass by default) from `start` (ticks), replacing what was there. Without `chords`, clears.
+  Answers the chords bar by bar. `tempo theory` suggests progressions for a genre or mood.
+- `write_chords` `{"track": 2, "chords": "Am9 | Fmaj9", "voicing": "open", "rhythm": "push", "register": [55, 79], "bars": 8, "start": 0, "seed": 1}`:
+  plays the chords (`chords` sets the chord track there first) on an instrument track as a new
+  region, each voiced from the last by the smallest moves. `voicing`: `open` (root low, the rest
+  close above; default), `close`, `rootless` (when a bass plays the roots), `triad`, `spread`
+  (two octaves, for pads and strings). `rhythm`: `held` (default), `push` (each an eighth early),
+  `stabs`, `comp` (a player comping), `pulse` (eighths), `offbeat` (house), `arp`. Regions wholly
+  inside the stretch it writes are replaced. Everything but `track` is optional: by default it
+  covers the chord track from `start`.
+- `write_bass` `{"track": 1, "style": "kick", "register": [26, 45]}`: a bassline on the chords:
+  `roots` (default), `root_fifth`, `walking` (quarters walking to the next root), `octaves`,
+  `offbeat` (house), `syncopated` (funk, neo-soul, with approach notes), `kick` (on every kick of
+  the drums, the chord's root held to the next: how an 808 plays; `kick_track` picks the drums).
+- `write_melody` `{"track": 3, "style": "hook", "density": 0.5, "register": [62, 86], "seed": 4}`:
+  `hook` (a motif, repeated, changed, answered and resolved over four-bar phrases; chord tones on
+  the beats), `riff` (a one-bar figure following the chords), `arp`, or `counter` (long notes
+  moving by the chords' thirds and sevenths). `density` 0-1 thins it; try seeds for others.
+- `write_drums` `{"track": 0, "style": "trap", "bars": 8, "fill_every": 8, "seed": 2}`: the
+  genre's groove as a step pattern, with its swing, accents and ghost notes, a variation every
+  other bar, hat rolls (trap, drill), and a fill every `fill_every` bars (8 by default for 8 bars
+  or more; 0 for none) with a crash after. Styles: boom_bap, lofi, trap, drill, house, techno,
+  afrobeats, amapiano, rnb, pop, reggaeton, dnb, rock, neo_soul (or the genre's). Rows the kit has
+  no sound on are left out and named in `not_played`.
+- `arrange` `{"from": 0, "bars": 8, "sections": [{"name": "Intro", "bars": 4, "parts": ["chords"], "energy": 2}, {"name": "Hook", "bars": 16, "parts": ["drums", "bass", "chords", "lead"], "energy": 5}], "roles": {"3": "lead"}}`:
+  makes the loop at `from` (`bars` long; what's there by default) into a song: its sections one
+  after another, each with its parts (by role: drums, perc, bass, chords, pad, lead, counter, arp,
+  fx, vocals, texture; or by track number, `"3"`), marked, the chords carried along; quieter
+  sections play softer (`energy` 1-5, 4 as written). Without `sections`, the genre playbook's.
+  A track's role comes from its name, what tempo wrote on it, then its sound; `roles` corrects it.
+- `copy_bars` `{"from": 0, "bars": 8, "to": 30720, "tracks": [0, 1]}`: copies bars of tracks
+  (all by default) to `to`, replacing what's there; the chords come too.
+- `transition` `{"at": 30720, "kind": "build", "length": 2}`: into the downbeat at `at`:
+  `riser` (noise and a tone sweeping up, `length` bars, 2 by default), `reverse` (a reversed
+  cymbal swelling into it, 1 bar), `impact` (a low boom on it), `downlifter` (a sweep falling away
+  from it), `fill` (a drum fill in the bar before, a crash on it; `track` the drums), `gap`
+  (everything but the FX stops for `length` beats, 1 by default) or `build` (a riser, a fill, a
+  beat's gap and an impact). Sounds are made at the song's tempo and go on an `FX` audio track
+  (made if there's none).
+- `set_reference` `{"reference": {"file": "/path/song.wav", "lufs": -9, "crest_db": 10, "spectrum": [-3, -4, -8, -14, -18, -20], "width_db": -10}}`:
+  a finished song the mix aims at instead of the genre's targets; the `reference` tool measures
+  one and sets it. Without `reference`, none.
+
 ## Listening
 
 An agent can't hear, so tempo measures:

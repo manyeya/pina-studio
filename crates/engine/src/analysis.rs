@@ -407,6 +407,25 @@ pub fn analyze(l: &[f32], r: &[f32], rate: f64) -> Analysis {
 }
 
 /// Reads a WAV file's first two channels.
+/// Stereo audio to a 32-bit float WAV file, written whole or not at all.
+pub fn write_wav(path: &std::path::Path, l: &[f32], r: &[f32], rate: u32) -> Result<(), String> {
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let part = path.with_extension("wav.part");
+    let err = |e: hound::Error| e.to_string();
+    let mut w = hound::WavWriter::create(&part, spec).map_err(err)?;
+    for (a, b) in l.iter().zip(r) {
+        w.write_sample(*a).map_err(err)?;
+        w.write_sample(*b).map_err(err)?;
+    }
+    w.finalize().map_err(err)?;
+    std::fs::rename(&part, path).map_err(|e| e.to_string())
+}
+
 pub fn read_wav(path: &std::path::Path) -> Result<(Vec<f32>, Vec<f32>, f64), String> {
     let err = |e: hound::Error| format!("{}: {e}", path.display());
     let mut wav = hound::WavReader::open(path).map_err(err)?;

@@ -11,6 +11,7 @@ mod mcp;
 mod menu;
 mod mixer;
 mod pianoroll;
+mod produce;
 mod projects;
 mod record;
 mod samples_cli;
@@ -46,8 +47,10 @@ const USAGE: &str = "usage:
   tempo describe                   the commands an agent can send, with examples
   tempo show <project>             the project, as JSON
   tempo do <project> <command>     apply a command (JSON); live in the app if it's open there
-  tempo analyze <project|file.wav> loudness, peaks and balance, of the mix and each track
-  tempo render <project> <out>     bounce to a WAV file
+  tempo analyze <project|audio file> [--bars 9-16]
+                                   loudness, peaks and balance, of the mix and each track
+  tempo render <project> <out> [--bars 9-16]
+                                   bounce to a WAV file
   tempo play <project>             play it (in the app if it's open, else through the output)
   tempo stop|save|undo|redo <project>, tempo locate <project> <tick>,
   tempo launch <project> <track> [scene]
@@ -74,6 +77,20 @@ const USAGE: &str = "usage:
                                    into the song, made to fit: a loop stretched to its
                                    tempo and moved into its key; a one-shot as a sampler
                                    zone in tune
+  tempo critique <project> [--quick] [--bars 9-16]
+                                   a producer's notes on the song, worst first, each with
+                                   the command that fixes it; --quick skips the render
+  tempo playbook [genre]           what a genre is: tempo, swing, parts and their sounds,
+                                   sections, progressions, mix targets
+  tempo theory <key> [words]       the key's chords, and progressions for a genre or mood
+  tempo reference <file> [project] measure a finished song; with a project, aim its mix there
+  tempo sounds <role> [--genre g] [words]
+                                   Surge XT patches, instruments and samples for a part
+  tempo mix <project> [--track N] [--no-levels]
+                                   EQ, compression, saturation, pan, reverb and level, by
+                                   the part each track plays
+  tempo master <project> [--lufs -9]
+                                   a limiter on the master, set to the loudness
   tempo ask [--agent <id>] <project> <words>
                                    an agent does what's asked to the song, saying so as it
                                    goes (live in the app, and its Agent panel, if it's open):
@@ -96,8 +113,16 @@ fn main() {
         }
         ["show", dir] => print(cli::show(p(dir))),
         ["do", dir, command] => print(cli::edit(p(dir), command)),
-        ["analyze", path] => print(cli::analyze(p(path))),
-        ["render", dir, out] => print(cli::render(p(dir), p(out))),
+        ["analyze", path] => print(cli::analyze(p(path), None)),
+        ["analyze", path, "--bars", range] => match bar_range(range) {
+            Some(r) => print(cli::analyze(p(path), Some(r))),
+            None => Err(USAGE.to_string()),
+        },
+        ["render", dir, out] => print(cli::render(p(dir), p(out), None)),
+        ["render", dir, out, "--bars", range] => match bar_range(range) {
+            Some(r) => print(cli::render(p(dir), p(out), Some(r))),
+            None => Err(USAGE.to_string()),
+        },
         ["play", dir] => match server::ask(p(dir), &Request::Play) {
             Some(reply) => print(reply),
             None => play(p(dir)),
@@ -135,6 +160,43 @@ fn main() {
             }
         }
         ["samples", rest @ ..] => print(samples_cli::command(rest)),
+        ["critique", dir, rest @ ..] => {
+            let quick = rest.contains(&"--quick");
+            match rest.iter().position(|a| *a == "--bars") {
+                Some(i) => match rest.get(i + 1).and_then(|r| bar_range(r)) {
+                    Some(range) => print(produce::critique(p(dir), quick, Some(range))),
+                    None => Err(USAGE.to_string()),
+                },
+                None => print(produce::critique(p(dir), quick, None)),
+            }
+        }
+        ["playbook"] => print(produce::playbook(None)),
+        ["playbook", genre @ ..] => print(produce::playbook(Some(&genre.join(" ")))),
+        ["theory", key, words @ ..] => print(produce::theory(key, &words.join(" "))),
+        ["reference", file] => print(produce::reference(p(file), None)),
+        ["reference", file, dir] => print(produce::reference(p(file), Some(p(dir)))),
+        ["sounds", role, rest @ ..] => {
+            let (genre, words) = match rest {
+                ["--genre", g, words @ ..] => (Some(*g), words),
+                words => (None, words),
+            };
+            print(produce::sounds(role, genre, &words.join(" "), None, None))
+        }
+        ["mix", dir, rest @ ..] => {
+            let levels = !rest.contains(&"--no-levels");
+            match rest {
+                ["--track", t, ..] => match t.parse() {
+                    Ok(t) => print(produce::mix_role(p(dir), Some(t), None, levels)),
+                    Err(_) => Err(USAGE.to_string()),
+                },
+                _ => print(produce::mix_role(p(dir), None, None, levels)),
+            }
+        }
+        ["master", dir] => print(produce::master(p(dir), None)),
+        ["master", dir, "--lufs", lufs] => match lufs.parse() {
+            Ok(l) => print(produce::master(p(dir), Some(l))),
+            Err(_) => Err(USAGE.to_string()),
+        },
         ["mcp"] => mcp::serve(),
         ["projects"] => print(Ok(serde_json::to_value(projects::list(
             &projects::root(),
@@ -172,6 +234,14 @@ fn main() {
     if let Err(e) = result {
         eprintln!("{e}");
         exit(1);
+    }
+}
+
+/// "9-16" (bars from 1, both in) or "9".
+fn bar_range(s: &str) -> Option<(u64, u64)> {
+    match s.split_once('-') {
+        Some((a, b)) => Some((a.trim().parse().ok()?, b.trim().parse().ok()?)),
+        None => s.trim().parse().ok().map(|a| (a, a)),
     }
 }
 

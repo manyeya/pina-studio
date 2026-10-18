@@ -103,6 +103,14 @@ pub fn app(dir: &Path, request: Request) -> Result<Value, String> {
     })
 }
 
+/// An audio file (WAV, AIFF, FLAC or MP3) as left and right, and its rate.
+pub fn audio(path: &Path) -> Result<(Vec<f32>, Vec<f32>, f64), String> {
+    let (mut channels, rate) = tempo_engine::engine::read_audio(path)?;
+    let l = channels.remove(0);
+    let r = channels.pop().unwrap_or_else(|| l.clone());
+    Ok((l, r, rate))
+}
+
 /// How long a project plays, tail included, in samples.
 fn length(p: &Project) -> u64 {
     let rate = p.sample_rate as f64;
@@ -115,42 +123,73 @@ fn mixed(p: &Project, dir: &Path, samples: u64) -> Result<[Vec<f32>; 2], String>
     Ok(engine.render(samples))
 }
 
-/// Measures a WAV file, or a project: the mix, each section (marker to marker), then each track
-/// soloed.
-pub fn analyze(path: &Path) -> Result<Value, String> {
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("wav"))
-    {
-        let (l, r, rate) = analysis::read_wav(path)?;
-        return json(analysis::analyze(&l, &r, rate));
+/// What a render of a project measures: the mix, each marked section in it, and (soloed) each
+/// track alone, by index.
+pub struct Report {
+    pub mix: analysis::Analysis,
+    pub sections: Vec<(String, u64, analysis::Analysis)>,
+    pub tracks: Vec<analysis::Analysis>,
+}
+
+/// Bars `first..=last` (from 1) as ticks.
+pub fn bars(p: &Project, first: u64, last: u64) -> Result<(u64, u64), String> {
+    if first == 0 || last < first {
+        return Err("bars run from 1, the last no earlier than the first".into());
     }
-    let p = project(path)?;
+    Ok(((first - 1) * p.bar(), last * p.bar()))
+}
+
+/// `p` rendered from tick `from` to `to` (the whole song and its tail by default), a bar played
+/// first and dropped so effects are going.
+fn rendered(p: &Project, dir: &Path, range: Option<(u64, u64)>) -> Result<[Vec<f32>; 2], String> {
+    let Some((from, to)) = range else {
+        return mixed(p, dir, length(p));
+    };
     let rate = p.sample_rate as f64;
-    let [l, r] = mixed(&p, path, length(&p))?;
+    let lead = p.samples(from.min(p.bar()), rate);
+    let start = p.samples(from, rate) - lead;
+    let frames = p.samples(to, rate) - start;
+    let (mut engine, _plugins) = Engine::load(p, dir, rate)?;
+    let [mut l, mut r] = engine.render_from(start, frames);
+    l.drain(..lead as usize);
+    r.drain(..lead as usize);
+    Ok([l, r])
+}
+
+/// Measures a project (as the app has it, if open) over `range` (ticks; all of it by default):
+/// the mix, its sections, and with `solo` each track alone, through the auxes and master it
+/// plays into.
+pub fn report(
+    p: &Project,
+    dir: &Path,
+    range: Option<(u64, u64)>,
+    solo: bool,
+) -> Result<Report, String> {
+    let rate = p.sample_rate as f64;
+    let [l, r] = rendered(p, dir, range)?;
     let mix = analysis::analyze(&l, &r, rate);
-    let at = |tick: u64| (p.samples(tick, rate) as usize).min(l.len());
-    let sections: Vec<Value> = p
+    let origin = range.map_or(0, |r| r.0);
+    let at = |tick: u64| (p.samples(tick.saturating_sub(origin), rate) as usize).min(l.len());
+    let sections = p
         .markers
         .iter()
         .enumerate()
         .filter_map(|(i, m)| {
-            let end = p.markers.get(i + 1).map_or(l.len(), |next| at(next.tick));
-            let (a, b) = (at(m.tick), end);
-            (b > a).then(|| {
-                json!({
-                    "name": m.name,
-                    "tick": m.tick,
-                    "analysis": analysis::analyze(&l[a..b], &r[a..b], rate),
-                })
+            let next = p.markers.get(i + 1).map(|n| n.tick);
+            let (a, b) = (at(m.tick.max(origin)), next.map_or(l.len(), at));
+            (b > a && range.is_none_or(|(_, to)| m.tick < to)).then(|| {
+                (
+                    m.name.clone(),
+                    m.tick,
+                    analysis::analyze(&l[a..b], &r[a..b], rate),
+                )
             })
         })
         .collect();
     let mut tracks = Vec::new();
-    for (i, t) in p.tracks.iter().enumerate() {
-        // Alone, through the auxes and master it plays into. The others stay as silent
-        // placeholders (their regions empty, so the song ends and loops run as before), so
-        // their plugins and audio don't run for nothing.
+    for i in (0..p.tracks.len()).filter(|_| solo) {
+        // The others stay as silent placeholders (their regions empty, so the song ends and
+        // loops run as before), so their plugins and audio don't run for nothing.
         let mut alone = p.clone();
         for (j, other) in alone.tracks.iter_mut().enumerate() {
             if j == i {
@@ -172,17 +211,56 @@ pub fn analyze(path: &Path) -> Result<Value, String> {
                 ..Track::default()
             };
         }
-        // As long as the song: a looped region plays past its own end.
-        let [l, r] = mixed(&alone, path, length(&p))?;
-        let analysis = analysis::analyze(&l, &r, rate);
-        tracks.push(json!({ "track": i, "name": t.name, "analysis": analysis }));
+        let [l, r] = rendered(&alone, dir, range)?;
+        tracks.push(analysis::analyze(&l, &r, rate));
     }
-    Ok(json!({ "mix": mix, "sections": sections, "tracks": tracks }))
+    Ok(Report {
+        mix,
+        sections,
+        tracks,
+    })
+}
+
+/// Measures an audio file, or a project: the mix, each section (marker to marker), then each
+/// track soloed; for a project, over bars `first..=last` if given.
+pub fn analyze(path: &Path, bars_given: Option<(u64, u64)>) -> Result<Value, String> {
+    if path.is_file() {
+        let (l, r, rate) = audio(path)?;
+        return json(analysis::analyze(&l, &r, rate));
+    }
+    let p = project(path)?;
+    let range = bars_given.map(|(a, b)| bars(&p, a, b)).transpose()?;
+    let report = report(&p, path, range, true)?;
+    let sections: Vec<Value> = report
+        .sections
+        .iter()
+        .map(|(name, tick, a)| json!({ "name": name, "tick": tick, "analysis": a }))
+        .collect();
+    let tracks: Vec<Value> = report
+        .tracks
+        .iter()
+        .enumerate()
+        .map(|(i, a)| json!({ "track": i, "name": p.tracks[i].name, "analysis": a }))
+        .collect();
+    let mut out = json!({ "mix": report.mix, "sections": sections, "tracks": tracks });
+    if let Some((a, b)) = bars_given {
+        out["bars"] = json!(format!("{a}-{b}"));
+    }
+    Ok(out)
 }
 
 /// Bounces the project (as the app has it, if open) to a WAV file.
-pub fn render(dir: &Path, out: &Path) -> Result<Value, String> {
+pub fn render(dir: &Path, out: &Path, bars_given: Option<(u64, u64)>) -> Result<Value, String> {
     let p = project(dir)?;
+    if let Some((a, b)) = bars_given {
+        let range = bars(&p, a, b)?;
+        let [l, r] = rendered(&p, dir, Some(range))?;
+        analysis::write_wav(out, &l, &r, p.sample_rate)?;
+        let seconds = l.len() as f64 / p.sample_rate as f64;
+        return Ok(
+            json!({ "file": out, "seconds": seconds, "bars": format!("{a}-{b}"), "sample_rate": p.sample_rate }),
+        );
+    }
     bounce(&p, dir, out)?;
     let rate = p.sample_rate as f64;
     let seconds = length(&p) as f64 / rate;

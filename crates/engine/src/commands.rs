@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
+    arrange::{self, Arrangement, Transition},
+    compose::{self, BassPart, ChordPart, DrumPart, MelodyPart},
     music::{Key, NoteEdit},
     plugin::{PluginApi, PluginParam, value_from_text},
     project::{
@@ -372,6 +374,49 @@ pub enum Command {
         edit: NoteEdit,
         #[serde(default)]
         note: Option<usize>,
+    },
+    /// The song's chords, as symbols or numerals in its key, bars split by "|" and chords in a
+    /// bar sharing it: "Am9 | Fmaj9 | C | G" or "i9 | VImaj9 | III | VII". From `start` (ticks,
+    /// 0 by default) for `bars` bars (one pass by default), repeating; without `chords`, clears.
+    SetChords {
+        #[serde(default)]
+        chords: Option<String>,
+        #[serde(default)]
+        start: Option<u64>,
+        #[serde(default)]
+        bars: Option<u64>,
+    },
+    /// Plays the song's chords on an instrument track, voiced from chord to chord.
+    WriteChords(ChordPart),
+    /// A bassline on the song's chords; `kick` style plays on the kick, as an 808 does.
+    WriteBass(BassPart),
+    /// A melody, riff, arpeggio or counter-line on the song's chords, in its key.
+    WriteMelody(MelodyPart),
+    /// A genre's groove as a step pattern, with fills and its swing.
+    WriteDrums(DrumPart),
+    /// What the song is: a playbook's id ("lofi", "trap"); without one, none.
+    SetGenre {
+        #[serde(default)]
+        genre: Option<String>,
+    },
+    /// Makes a loop into a song: sections laid out one after another, each with its parts,
+    /// marked, the chords carried along.
+    Arrange(Arrangement),
+    /// Copies bars of some tracks (all by default) to another place, replacing what's there.
+    CopyBars {
+        from: u64,
+        bars: u64,
+        to: u64,
+        #[serde(default)]
+        tracks: Option<Vec<usize>>,
+    },
+    /// A riser, reverse cymbal, impact, downlifter, drum fill, gap or a whole build into a bar.
+    Transition(Transition),
+    /// A finished song the mix aims at (the `reference` tool measures one and sets it); without
+    /// one, the genre's targets.
+    SetReference {
+        #[serde(default)]
+        reference: Option<crate::project::Reference>,
     },
 }
 
@@ -1333,6 +1378,38 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             }
             edit.apply(notes, note);
         }
+        Command::SetChords {
+            chords,
+            start,
+            bars,
+        } => return compose::set_chords(p, chords.as_deref(), start, bars),
+        Command::WriteChords(w) => return compose::write_chords(p, w),
+        Command::WriteBass(w) => return compose::write_bass(p, w),
+        Command::WriteMelody(w) => return compose::write_melody(p, w),
+        Command::WriteDrums(w) => return compose::write_drums(p, w),
+        Command::Arrange(a) => return arrange::arrange(p, a),
+        Command::CopyBars {
+            from,
+            bars,
+            to,
+            tracks,
+        } => return arrange::copy_bars(p, from, bars, to, tracks),
+        Command::Transition(t) => return arrange::transition(p, dir, t),
+        Command::SetReference { reference } => p.reference = reference,
+        Command::SetGenre { genre } => {
+            p.genre = match genre {
+                None => None,
+                Some(g) => Some(
+                    crate::playbook::find(&g)
+                        .ok_or(format!(
+                            "no playbook for {g:?}; there are {}",
+                            crate::playbook::ids().join(", ")
+                        ))?
+                        .id
+                        .to_string(),
+                ),
+            };
+        }
     }
     Ok(json!({}))
 }
@@ -1840,6 +1917,16 @@ mod tests {
             "set_controls",
             "set_preset",
             "set_sidechain",
+            "set_chords",
+            "write_chords",
+            "write_bass",
+            "write_melody",
+            "write_drums",
+            "set_genre",
+            "arrange",
+            "copy_bars",
+            "transition",
+            "set_reference",
         ];
         for op in samples {
             assert!(

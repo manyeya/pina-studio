@@ -1966,10 +1966,16 @@ impl Engine {
 
     /// Plays `frames` from the start into memory, straight through.
     pub fn render(&mut self, frames: u64) -> [Vec<f32>; 2] {
+        self.render_from(0, frames)
+    }
+
+    /// `frames` of the song from sample `start`, as a bounce plays them (notes begun before it
+    /// aside).
+    pub fn render_from(&mut self, start: u64, frames: u64) -> [Vec<f32>; 2] {
         let mut out = [vec![0f32; frames as usize], vec![0f32; frames as usize]];
         // A bounce plays the song through once, cycle or not.
         self.arrangement.cycle = None;
-        self.locate(0);
+        self.locate(start);
         self.play();
         for at in (0..frames as usize).step_by(MAX_BLOCK) {
             let n = MAX_BLOCK.min(frames as usize - at);

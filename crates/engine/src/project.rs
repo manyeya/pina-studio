@@ -57,6 +57,38 @@ pub struct Project {
     /// The stretch playback loops over, while it's on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cycle: Option<Cycle>,
+    /// The song's chords, in time order: what its parts are written over.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chords: Vec<ChordSpan>,
+    /// What the song is, as a playbook's id ("lofi", "trap"): what its parts and mix aim for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genre: Option<String>,
+    /// A finished song it's measured against: its mix targets, over the genre's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<Reference>,
+}
+
+/// What a reference song measures, for the mix to aim at.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Reference {
+    /// Its file, as it was measured.
+    pub file: PathBuf,
+    pub lufs: f32,
+    pub crest_db: f32,
+    /// Sub, bass, low mid, mid, presence and air, dB of the total (as `analysis::Spectrum`).
+    pub spectrum: [f32; 6],
+    pub width_db: f32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+}
+
+/// A chord on the song's chord track, by its symbol ("Am9", "C/E"), from `start` for `length`
+/// ticks.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ChordSpan {
+    pub start: u64,
+    pub length: u64,
+    pub chord: String,
 }
 
 fn common_time() -> [u64; 2] {
@@ -1310,6 +1342,9 @@ impl Project {
             markers: Vec::new(),
             key: None,
             cycle: None,
+            chords: Vec::new(),
+            genre: None,
+            reference: None,
         }
     }
 
