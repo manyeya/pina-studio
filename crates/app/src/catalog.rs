@@ -1118,18 +1118,27 @@ impl Workspace {
             });
         let scope_seg = |label: &'static str, s: Scope, cx: &mut Context<Self>| {
             let on = scope == s;
+            // Each as wide as its word and the rest shared, so none is cramped; the star small.
+            let star = s == Scope::Favourites;
             div()
                 .id(label)
-                .flex_1()
-                .h(px(24.))
+                .when(star, |d| d.w(px(34.)).flex_none())
+                .when(!star, |d| d.flex_auto().px(px(10.)))
+                .h(px(26.))
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(6.))
-                .text_size(px(11.5))
+                .rounded(px(7.))
+                .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
+                .whitespace_nowrap()
                 .cursor_pointer()
-                .when(on, |d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+                .when(on, |d| {
+                    d.bg(rgb(RAISED))
+                        .border_1()
+                        .border_color(rgb(LINE_STRONG))
+                        .text_color(rgb(if star { AMBER } else { TEXT }))
+                })
                 .when(!on, |d| {
                     d.text_color(rgb(TEXT_3))
                         .hover(|d| d.text_color(rgb(TEXT_2)))
@@ -1275,9 +1284,12 @@ impl Workspace {
             .child(
                 div()
                     .flex()
-                    .p(px(2.))
-                    .rounded(px(8.))
+                    .gap(px(2.))
+                    .p(px(3.))
+                    .rounded(px(9.))
                     .bg(rgb(WELL))
+                    .border_1()
+                    .border_color(rgb(LINE_SOFT))
                     .child(scope_seg("All", Scope::All, cx))
                     .child(scope_seg("Instruments", Scope::Instruments, cx))
                     .child(scope_seg("Effects", Scope::Effects, cx))
