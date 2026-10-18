@@ -149,6 +149,17 @@ pub enum MenuAction {
     Roll(crate::pianoroll::RollOp),
     /// What a click in the piano roll writes: a note or a chord.
     Stamp(crate::pianoroll::Stamp),
+    /// A step pattern's swing.
+    PatternSwing {
+        at: tempo_engine::project::At,
+        swing: f32,
+    },
+    /// Something done to a row of a step pattern.
+    Row {
+        at: tempo_engine::project::At,
+        row: usize,
+        op: crate::steps::RowOp,
+    },
     /// The Sampler's picked zone cut into slices across the keys.
     Slice(crate::sampler::Slicing),
     /// Which parameter a track's automation lane shows, by track id.
@@ -377,6 +388,7 @@ impl Workspace {
                     rows.push(PatternRow {
                         pitch,
                         cells: vec![0; steps],
+                        mute: false,
                     });
                 }
             }),
@@ -395,6 +407,19 @@ impl Workspace {
             MenuAction::Roll(op) => self.roll_op(op, cx),
             MenuAction::Stamp(stamp) => self.roll.stamp = stamp,
             MenuAction::Slice(how) => self.slice_zone(how, cx),
+            MenuAction::Row { at, row, op } => self.row_op(at, row, op, cx),
+            MenuAction::PatternSwing { at, swing } => self.edit(cx, |ws| {
+                if let Some(r) = ws
+                    .session
+                    .project
+                    .tracks
+                    .get_mut(at.0)
+                    .and_then(|t| t.regions.get_mut(at.1))
+                    && let Content::Pattern { swing: s, .. } = &mut r.content
+                {
+                    *s = swing;
+                }
+            }),
             MenuAction::AutoParam(track, param) => {
                 self.params.insert(track, param);
                 self.show_automation = true;

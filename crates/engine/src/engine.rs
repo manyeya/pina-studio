@@ -2618,6 +2618,7 @@ mod tests {
         let rows = vec![PatternRow {
             pitch: 36,
             cells: vec![100, 0, 90, 0],
+            mute: false,
         }];
         let region = Region {
             start: 0,

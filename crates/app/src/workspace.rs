@@ -291,6 +291,13 @@ pub enum Drag {
         at: At,
         x: f32,
     },
+    /// Steps painted in the step sequencer: each the mouse passes over takes `paint` (0 a rest).
+    Steps {
+        at: At,
+        paint: u8,
+    },
+    /// The step sequencer's velocity lane, drawn.
+    StepVelocity,
     /// A mark on the Sampler's waveform: a zone's start, end or loop point; `left` and `width`
     /// where the waveform is.
     Mark {
@@ -667,6 +674,9 @@ pub struct Workspace {
     pub roll_hover: Option<u8>,
     /// Where the lane under the piano roll was drawn last frame.
     pub lane_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// The step sequencer's picked row (its velocities in the lane), and where its lane was drawn.
+    pub steps_row: usize,
+    pub steps_lane: Rc<Cell<Bounds<Pixels>>>,
     /// The Sampler editor: the zone picked and the waveforms read; where its waveform was drawn.
     pub sampler_ui: crate::sampler::SamplerUi,
     pub sampler_wave_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -813,6 +823,8 @@ impl Workspace {
             painting: Vec::new(),
             roll_hover: None,
             lane_bounds: Rc::new(Cell::new(Bounds::default())),
+            steps_row: 0,
+            steps_lane: Rc::new(Cell::new(Bounds::default())),
             sampler_ui: Default::default(),
             sampler_wave_bounds: Rc::new(Cell::new(Bounds::default())),
             roll_scroll_y: crate::pianoroll::scroll_to(72),
@@ -1434,6 +1446,8 @@ impl Workspace {
             Some(Drag::VelocityLine { .. }) => self.drag_velocity_line(p),
             Some(Drag::Control { .. }) => self.drag_control(p),
             Some(Drag::Mark { .. }) => self.drag_mark(p),
+            // Each step, and each bar of the lane, paints itself as the mouse comes over it.
+            Some(Drag::Steps { .. } | Drag::StepVelocity) => return,
             Some(Drag::Auto {
                 track,
                 param,

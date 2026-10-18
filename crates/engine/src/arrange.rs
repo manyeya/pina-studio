@@ -152,6 +152,7 @@ pub fn clip(p: &Project, r: &Region, from: u64, to: u64) -> Option<Region> {
                         crate::project::PatternRow {
                             pitch: row.pitch,
                             cells,
+                            mute: row.mute,
                         }
                     })
                     .collect(),

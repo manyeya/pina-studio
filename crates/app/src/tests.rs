@@ -792,6 +792,112 @@ fn a_track_stack_and_routing_another_track_into_it(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_step_sequencer_paints_accents_mutes_fills_and_converts(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "menu-1", Modifiers::none(), MouseButton::Left); // Drum Kit
+    let track = ws.read_with(cx, |ws, _| ws.track);
+    // Two patterns from the same playhead: the second goes after the first, not on it.
+    cx.simulate_keystrokes("cmd-alt-p");
+    ws.update(cx, |ws, cx| {
+        ws.region = None;
+        cx.notify();
+    });
+    cx.simulate_keystrokes("cmd-alt-p");
+    let starts = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[track]
+            .regions
+            .iter()
+            .map(|r| r.start)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(starts, [0, BAR]);
+    let rows = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            match &ws.session.project.region(ws.pattern().unwrap()).content {
+                Content::Pattern { rows, .. } => rows.clone(),
+                _ => panic!(),
+            }
+        })
+    };
+    // Painting the kick row across four steps, then rubbing two out.
+    let from = cx.debug_bounds("step-0-0").unwrap().center();
+    let to = cx.debug_bounds("step-0-3").unwrap().center();
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    for k in 1..=3 {
+        let at = cx
+            .debug_bounds(Box::leak(format!("step-0-{k}").into_boxed_str()))
+            .unwrap()
+            .center();
+        cx.simulate_mouse_move(at, MouseButton::Left, Modifiers::none());
+    }
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(&rows(cx)[0].cells[..5], [100, 100, 100, 100, 0]);
+    let a = cx.debug_bounds("step-0-2").unwrap().center();
+    let b = cx.debug_bounds("step-0-3").unwrap().center();
+    drag(cx, a, b);
+    assert_eq!(&rows(cx)[0].cells[..5], [100, 100, 0, 0, 0]);
+    // ⌥: an accent, and ⌥ again takes it off.
+    let alt = Modifiers {
+        alt: true,
+        ..Modifiers::none()
+    };
+    click_on(cx, "step-1-4", alt, MouseButton::Left);
+    assert_eq!(rows(cx)[1].cells[4], 127);
+    click_on(cx, "step-1-4", alt, MouseButton::Left);
+    assert_eq!(rows(cx)[1].cells[4], 100);
+    // The hat row muted; filled every 2 steps from its menu; the clap three steps long.
+    click_on(cx, "row-mute-2", Modifiers::none(), MouseButton::Left);
+    assert!(rows(cx)[2].mute);
+    ws.update(cx, |ws, cx| {
+        let at = ws.pattern().unwrap();
+        ws.row_op(at, 2, crate::steps::RowOp::Fill(2), cx);
+        ws.row_op(at, 4, crate::steps::RowOp::Length(3), cx);
+    });
+    let r = rows(cx);
+    assert_eq!(&r[2].cells[..4], [100, 0, 100, 0]);
+    assert_eq!(r[4].cells.len(), 3);
+    // The kick's velocities drawn low in the lane (the kick picked by clicking it).
+    click_on(cx, "step-0-1", Modifiers::none(), MouseButton::Left); // off
+    click_on(cx, "step-0-1", Modifiers::none(), MouseButton::Left); // on again, kick picked
+    let lane = cx.debug_bounds("steps-lane").unwrap();
+    let bar = cx.debug_bounds("step-velocity-0").unwrap().center();
+    let low = point(bar.x, lane.origin.y + lane.size.height - px(12.));
+    drag(cx, low, low);
+    let kick = rows(cx)[0].cells[0];
+    assert!(kick > 0 && kick < 40, "{kick}");
+    // 32 steps: the bar's groove twice.
+    click_on(cx, "steps-32", Modifiers::none(), MouseButton::Left);
+    let r = rows(cx);
+    assert_eq!(r[0].cells.len(), 32);
+    assert_eq!(r[0].cells[16..18], r[0].cells[0..2]);
+    // To MIDI: the piano roll, with the notes it played.
+    click_on(cx, "pattern-to-midi", Modifiers::none(), MouseButton::Left);
+    let (bottom, notes) = ws.read_with(cx, |ws, _| {
+        let at = ws.region.unwrap();
+        (
+            ws.bottom,
+            ws.session
+                .project
+                .region(at)
+                .content
+                .notes(0)
+                .map(|n| n.len()),
+        )
+    });
+    assert_eq!(bottom, Some(Bottom::PianoRoll));
+    assert!(notes.unwrap() > 0);
+    // And back: a MIDI region made a pattern.
+    let at = ws.read_with(cx, |ws, _| ws.region.unwrap());
+    ws.update(cx, |ws, cx| ws.midi_to_pattern(at, cx));
+    assert!(ws.read_with(cx, |ws, _| matches!(
+        ws.session.project.region(at).content,
+        Content::Pattern { .. }
+    )));
+}
+
+#[gpui::test]
 fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
@@ -3237,8 +3343,22 @@ fn shots() {
                         });
                     ws.session.project.assign_ids();
                     ws.track = ws.session.project.tracks.len() - 1;
-                    ws.editor_h = 360.0;
+                    ws.editor_h = 380.0;
                     ws.new_pattern(cx);
+                    // A groove to look at: kick, snare, hats with accents, a three-step perc.
+                    let at = ws.pattern().unwrap();
+                    if let Content::Pattern { rows, .. } =
+                        &mut ws.session.project.tracks[at.0].regions[at.1].content
+                    {
+                        rows[0].cells = vec![120, 0, 0, 0, 0, 0, 90, 0, 110, 0, 0, 0, 0, 0, 70, 0];
+                        rows[1].cells = vec![0, 0, 0, 0, 127, 0, 0, 0, 0, 0, 0, 0, 127, 0, 0, 40];
+                        rows[2].cells =
+                            (0..16).map(|k| if k % 2 == 0 { 100 } else { 55 }).collect();
+                        rows[3].cells = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0];
+                        rows[4].cells = vec![90, 0, 0];
+                        rows[4].mute = false;
+                    }
+                    ws.steps_row = 2;
                 }
                 _ => {}
             })

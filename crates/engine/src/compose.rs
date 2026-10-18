@@ -552,7 +552,11 @@ pub fn write_drums(p: &mut Project, w: DrumPart) -> Result<Value, String> {
             }
             keep
         })
-        .map(|(pitch, cells)| PatternRow { pitch, cells })
+        .map(|(pitch, cells)| PatternRow {
+            pitch,
+            cells,
+            mute: false,
+        })
         .collect();
     if rows.is_empty() {
         return Err(format!("track {} has no sound on any drum note", w.track));

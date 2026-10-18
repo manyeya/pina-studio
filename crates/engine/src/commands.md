@@ -94,7 +94,8 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `add_pattern_region` `{"track": 0, "start": 0, "length": 3840, "step": 240, "swing": 58, "rows": [{"pitch": 36, "cells": [110, 0, 0, 0, 100, 0, 0, 0, 110, 0, 0, 0, 100, 0, 0, 0]}]}`:
   a step-sequencer pattern: each row a note, each cell a step's velocity (0 rests), looping over
   the region. `step` is ticks per step (240, a sixteenth, by default); `swing` (50 straight, up
-  to 75) makes every second step late, as an MPC does. On a `"drums"` track:
+  to 75) makes every second step late, as an MPC does. A row shorter than the others loops on
+  its own length (a polymeter); `"mute": true` silences a row and keeps its steps. On a `"drums"` track:
   36 kick, 38 snare, 37 side stick, 39 clap, 42 closed hat, 46 open hat, 41/45/48 toms, 49 crash.
 - `set_pattern` `{"track": 0, "region": 0, "rows": […], "swing": 62}`: replaces a pattern's
   rows, or its swing.

@@ -200,8 +200,16 @@ In the app, mostly as in Logic:
   in the ruler to move the playhead; ⌘-scroll zooms.
 - The "+" over the track headers adds a software instrument (the sine synth), a drum kit (built
   in, on the General MIDI drum notes) or an audio track. ⌥⌘P makes a step pattern region on the
-  selected instrument track; double-click one for the step sequencer: click steps on, option-click
-  for an accent, "+ Sound" for more rows. Patterns loop over their region.
+  selected instrument track (at the first free bar from the playhead); double-click one for the
+  step sequencer, as Logic's and FL Studio's channel rack: click a step on or off and drag across
+  to paint more (or rub them out), option-click for an accent (again to take it off); each step
+  shows how hard it hits, and the picked row's velocities stand in a lane under the grid, drawn
+  with the mouse. A row's name plays its sound; M mutes it; its menu (right-click, or ⋯) fills
+  every 2, 4 or 8 steps, shifts, reverses, randomizes, clears, removes it, or gives it a length of
+  its own (three steps against sixteen: a polymeter). The bar sets the pattern's length (8 to 64
+  steps, repeating the groove as it grows), its rate (1/8, 1/16, 1/32) and swing; To MIDI turns it
+  into notes for the piano roll, and on a track with MIDI (the drums an agent wrote) the step
+  sequencer makes a pattern of it in a click. Patterns loop over their region.
 - N shows the score: the selected MIDI region as notation on a grand staff, in time with the
   tracks; click a note to select and hear it, delete to delete it.
 - L shows Live Loops: a grid of loop cells, a row per track and a column per scene. Click an

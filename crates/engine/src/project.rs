@@ -1198,26 +1198,52 @@ fn is_straight(v: &f32) -> bool {
     *v == 50.0
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct PatternRow {
     pub pitch: u8,
-    /// A velocity per step; 0 is a rest.
+    /// A velocity per step; 0 is a rest. A row shorter than the others loops on its own length
+    /// (a polymeter: three steps against sixteen).
     pub cells: Vec<u8>,
+    /// Silent, its steps kept.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mute: bool,
 }
 
-/// The notes a pattern plays over `length` ticks, its steps repeating, every second step late by
-/// its swing.
+/// A MIDI region's notes as a pattern's rows: a row a pitch (lowest last, as drums read: kick at
+/// the bottom), each note on the step nearest its start, `steps` long, at its velocity.
+pub fn to_pattern(notes: &[Note], step: u64, steps: usize) -> Vec<PatternRow> {
+    let mut pitches: Vec<u8> = notes.iter().map(|n| n.pitch).collect();
+    pitches.sort_unstable_by(|a, b| b.cmp(a));
+    pitches.dedup();
+    pitches
+        .into_iter()
+        .map(|pitch| {
+            let mut cells = vec![0u8; steps];
+            for n in notes.iter().filter(|n| n.pitch == pitch && n.start >= 0) {
+                let k = ((n.start as f64 / step.max(1) as f64).round() as usize) % steps.max(1);
+                cells[k] = cells[k].max(n.velocity.max(1));
+            }
+            PatternRow {
+                pitch,
+                cells,
+                mute: false,
+            }
+        })
+        .collect()
+}
+
+/// The notes a pattern plays over `length` ticks, each row's steps repeating, every second step
+/// late by its swing.
 pub fn pattern_notes(step: u64, rows: &[PatternRow], length: u64, swing: f32) -> Vec<Note> {
     // Swing is where in a pair of steps the second lands: at 50% exactly between.
     let late = ((swing.clamp(50.0, 75.0) - 50.0) / 50.0 * step as f32) as i64;
-    let steps = rows.iter().map(|r| r.cells.len()).max().unwrap_or(0) as u64;
     let mut notes = Vec::new();
-    if steps == 0 || step == 0 {
+    if step == 0 {
         return notes;
     }
     for k in 0..length.div_ceil(step) {
-        for row in rows {
-            let velocity = row.cells.get((k % steps) as usize).copied().unwrap_or(0);
+        for row in rows.iter().filter(|r| !r.mute && !r.cells.is_empty()) {
+            let velocity = row.cells[(k % row.cells.len() as u64) as usize];
             if velocity > 0 {
                 let swung = if k % 2 == 1 { late } else { 0 };
                 let (start, length) = ((k * step) as i64 + swung, (step * 3 / 4).max(1));
@@ -2705,6 +2731,7 @@ mod tests {
         let rows = [PatternRow {
             pitch: 42,
             cells: vec![100; 4],
+            mute: false,
         }];
         let starts = |swing| {
             pattern_notes(PPQ / 4, &rows, PPQ, swing)
@@ -2715,5 +2742,46 @@ mod tests {
         assert_eq!(starts(50.0), [0, 240, 480, 720]);
         // 66%: the second of each pair two thirds of the way through it, a triplet feel.
         assert_eq!(starts(66.0), [0, 316, 480, 796]);
+    }
+
+    #[test]
+    fn rows_loop_on_their_own_lengths_muted_rows_rest_and_midi_becomes_a_pattern() {
+        let step = PPQ / 4;
+        let row = |pitch: u8, cells: Vec<u8>, mute: bool| PatternRow { pitch, cells, mute };
+        let rows = vec![
+            row(36, vec![100, 0, 0, 0], false),
+            row(42, vec![80, 0, 0], false),
+            row(38, vec![100; 4], true),
+        ];
+        let notes = pattern_notes(step, &rows, step * 8, 50.0);
+        let at = |p: u8| {
+            notes
+                .iter()
+                .filter(|n| n.pitch == p)
+                .map(|n| n.start)
+                .collect::<Vec<_>>()
+        };
+        let s = step as i64;
+        assert_eq!(at(36), [0, 4 * s]);
+        assert_eq!(at(42), [0, 3 * s, 6 * s]);
+        assert!(at(38).is_empty());
+        // A beat of MIDI: kick on 1 and 3 (a little late), a hat between; highest row first.
+        let n = |start: i64, pitch: u8, velocity: u8| Note {
+            start,
+            length: 100,
+            pitch,
+            velocity,
+        };
+        let rows = to_pattern(
+            &[n(0, 36, 110), n(2 * s + 20, 36, 90), n(s, 42, 70)],
+            step,
+            4,
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.pitch, r.cells.clone()))
+                .collect::<Vec<_>>(),
+            [(42, vec![0, 70, 0, 0]), (36, vec![110, 0, 90, 0])]
+        );
     }
 }
