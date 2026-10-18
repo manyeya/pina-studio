@@ -1,5 +1,6 @@
 mod adder;
 mod agent;
+mod binaural;
 mod browser;
 mod catalog;
 mod chat;

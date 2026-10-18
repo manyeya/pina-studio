@@ -25,8 +25,8 @@ use crate::{
     peaks::Peaks,
     plugin::{self, Control, ControlKind, Libraries, Note, Plugin, Processor},
     project::{
-        AutoMode, AutoPoint, Comp, Content, Eq, Flex, Instrument, PanLaw, PanMode, PluginRef,
-        Project, Region, Saturator, Which, chase, comp_segments, value_at,
+        AutoMode, AutoPoint, Comp, Content, Eq, Flex, Instrument, PanLaw, PanMode, Place,
+        PluginRef, Project, Region, Saturator, Which, chase, comp_segments, value_at,
     },
     sampler::Sampler,
     stretch::{self, Fit},
@@ -701,12 +701,16 @@ pub fn pan_matrix(mode: PanMode, law: PanLaw, pan: f32, spread: f32, g: f32) -> 
     }
 }
 
-/// A binaural panner's memory: the sound a moment back (for the far ear's delay), and the far
-/// ear's low-pass.
+/// A binaural panner's memory: the sound a moment back (for the far ear's delay), and each
+/// ear's filters.
 pub struct Binaural {
     line: [f32; 256],
     at: usize,
-    low: f32,
+    /// The far ear's head shadow; each ear's dulling (behind, below, far off); each ear's
+    /// presence, lifted above.
+    shadow: f32,
+    dull: [f32; 2],
+    air: [f32; 2],
 }
 
 impl Default for Binaural {
@@ -714,38 +718,52 @@ impl Default for Binaural {
         Binaural {
             line: [0.0; 256],
             at: 0,
-            low: 0.0,
+            shadow: 0.0,
+            dull: [0.0; 2],
+            air: [0.0; 2],
         }
     }
 }
 
 impl Binaural {
-    /// Places a block around the head at `pan` (-1 hard left, as -90°, to 1): the near ear hears
-    /// it as is, the far one up to 0.66 ms later, quieter and darker the further round it is.
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], pan: f32, rate: f32) {
-        let side = pan.clamp(-1.0, 1.0);
-        let around = (side * std::f32::consts::FRAC_PI_2).sin().abs();
-        let delay = (0.00066 * around * rate).min(250.0);
-        let cutoff = 20_000.0 - 17_500.0 * around;
-        let a = (-std::f32::consts::TAU * cutoff / rate).exp();
-        let far_gain = 1.0 - 0.45 * around;
+    /// Places a block round the head, as a head hears it: the far ear later (up to 0.66 ms, by
+    /// Woodworth's formula), quieter and darker in the head's shadow; behind and below duller
+    /// (the ears face forward, the body's below); above brighter; further off quieter and
+    /// duller (the air).
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], place: Place, rate: f32) {
+        let [x, y, z] = place.xyz();
+        let d = place.distance;
+        let side = (x / d).clamp(-1.0, 1.0);
+        let around = side.abs();
+        let (back, up) = ((-z / d).max(0.0), (y / d).clamp(-1.0, 1.0));
+        let delay = (0.000_255 * (around.asin() + around) * rate).min(250.0);
+        let pole = |hz: f32| (-std::f32::consts::TAU * hz.min(rate * 0.45) / rate).exp();
+        let shadow = pole(20_000.0 - 17_500.0 * around);
+        let dulled = (0.55 * back + 0.6 * (-up).max(0.0) + 0.3 * (d - 1.0).max(0.0)).min(0.85);
+        let dull = pole(20_000.0 * (1.0 - dulled));
+        let air = pole(3_000.0);
+        let lift = 0.5 * up.max(0.0);
+        let gain = 1.0 / (0.5 + 0.5 * d) * (1.0 - 0.12 * back);
+        let (far_gain, near_gain) = (1.0 - 0.45 * around, 1.0 + 0.2 * around);
         for i in 0..l.len().min(r.len()) {
             let mono = 0.5 * (l[i] + r[i]);
             self.line[self.at] = mono;
-            let back = self.at as f32 - delay;
-            let k = back.floor();
-            let t = back - k;
+            let behind = self.at as f32 - delay;
+            let k = behind.floor();
+            let t = behind - k;
             let idx = |n: f32| (n.rem_euclid(256.0)) as usize;
             let delayed = self.line[idx(k)] * (1.0 - t) + self.line[idx(k + 1.0)] * t;
             self.at = (self.at + 1) % 256;
-            self.low = delayed + (self.low - delayed) * a;
-            let far = self.low * far_gain;
-            let near = mono * (1.0 + 0.2 * around);
-            if side < 0.0 {
-                (l[i], r[i]) = (near, far);
-            } else {
-                (l[i], r[i]) = (far, near);
+            self.shadow = delayed + (self.shadow - delayed) * shadow;
+            let (near, far) = (mono * near_gain, self.shadow * far_gain);
+            let mut ears = if side < 0.0 { [near, far] } else { [far, near] };
+            for (e, v) in ears.iter_mut().enumerate() {
+                self.dull[e] = *v + (self.dull[e] - *v) * dull;
+                let s = self.dull[e];
+                self.air[e] = s + (self.air[e] - s) * air;
+                *v = (s + (s - self.air[e]) * lift) * gain;
             }
+            (l[i], r[i]) = (ears[0], ears[1]);
         }
     }
 }
@@ -764,6 +782,8 @@ struct Plan {
     pan_mode: PanMode,
     pan_law: PanLaw,
     spread: f32,
+    /// Binaural: its height and distance (the way round follows the pan).
+    place: Place,
     /// Automation, with ticks turned to samples; empty follows the fader.
     volume: Vec<AutoPoint>,
     pans: Vec<AutoPoint>,
@@ -1086,6 +1106,7 @@ pub fn compile(
             pan_mode: t.pan_mode,
             pan_law: project.pan_law,
             spread: t.spread.unwrap_or(1.0),
+            place: Place::of(t, t.pan),
             volume: auto.map_or_else(Vec::new, |a| in_samples(&a.volume)),
             pans: auto.map_or_else(Vec::new, |a| in_samples(&a.pan)),
             params: auto
@@ -1953,8 +1974,12 @@ impl Engine {
                 r[i] = a * m[2] + b * m[3];
             }
             if plan.pan_mode == PanMode::Binaural {
+                let place = Place {
+                    azimuth: plan.pan_at(heard).clamp(-1.0, 1.0) * 180.0,
+                    ..plan.place
+                };
                 lane.binaural
-                    .process(&mut l[..frames], &mut r[..frames], plan.pan_at(heard), rate);
+                    .process(&mut l[..frames], &mut r[..frames], place, rate);
             }
             let mut peak = [0f32; 2];
             for i in 0..frames {
@@ -2567,7 +2592,7 @@ mod tests {
     #[test]
     fn binaural_pan_puts_the_far_ear_later_and_quieter_and_a_muted_region_is_silent() {
         let mut t = synth_track("a", vec![note(0, PPQ, 69)], PPQ);
-        t.pan = -1.0;
+        t.pan = -0.5; // 90° left
         t.pan_mode = PanMode::Binaural;
         let [l, r] = render(&project(vec![t.clone()]), Path::new("."), BEAT);
         let first = |x: &[f32]| x.iter().position(|s| s.abs() > 1e-4).unwrap();
@@ -2576,6 +2601,32 @@ mod tests {
         t.regions[0].mute = true;
         let [l, _] = render(&project(vec![t]), Path::new("."), BEAT);
         assert_eq!(peak(&l), 0.0);
+    }
+
+    #[test]
+    fn binaural_behind_is_duller_above_brighter_and_far_off_quieter() {
+        // A high note (8.4 kHz), where the ears' filters tell.
+        let level = |pan: f32, elevation: Option<f32>, distance: Option<f32>| {
+            let mut t = synth_track("a", vec![note(0, PPQ, 120)], PPQ);
+            (t.pan, t.pan_mode, t.elevation, t.distance) =
+                (pan, PanMode::Binaural, elevation, distance);
+            let [l, r] = render(&project(vec![t]), Path::new("."), BEAT);
+            peak(&l[2_000..]).max(peak(&r[2_000..]))
+        };
+        let front = level(0.0, None, None);
+        assert!(level(1.0, None, None) < front * 0.8, "behind");
+        assert!(level(0.0, Some(90.0), None) > front * 1.2, "above");
+        assert!(level(0.0, None, Some(3.0)) < front * 0.6, "far");
+        // Its place, there and back.
+        let p = Place::from_xyz(
+            Place {
+                azimuth: -120.0,
+                elevation: 30.0,
+                distance: 2.0,
+            }
+            .xyz(),
+        );
+        assert!((p.azimuth + 120.0).abs() < 0.01 && (p.elevation - 30.0).abs() < 0.01);
     }
 
     #[test]

@@ -115,8 +115,14 @@ In the app, mostly as in Logic:
   bottom edge for that track's height, and the column's right edge (or the side panel's) for its
   width; double-click an edge to put it back.
 - Pans as Logic's: right-click a pan knob for Balance, Stereo Pan (each side placed, ⌘-drag the
-  knob to spread them, or swap them) or Binaural (around your head, for headphones), and the
-  song's pan law (0, −3, −3 compensated or −6 dB).
+  knob to spread them, or swap them) or Binaural (round your head, for headphones), and the
+  song's pan law (0, −3, −3 compensated or −6 dB). Binaural opens the Binaural Panner (again from
+  the 3D button beside the knob, or double-clicking it): the sound round the listener's head in
+  3D, all the way round, above or below, near or far. Drag the sound round the head, ⌘-drag it up
+  or down, drag the space to look from another side, or use Front, Left, Right, Behind, Above,
+  Below and the sliders. It pulses with the track's level. The pan knob turns it round the head
+  (so pan automation circles it), and the far ear hears it later, quieter and darker; behind and
+  below sound duller, above brighter, further off quieter.
 - Right-click for more: a track's header (new tracks, one with the same channel strip,
   duplicating, renaming, colour and icon, mute, solo, record, height, pan mode, moving it,
   stacking, Bounce in Place, Export as Stem, deleting), a region (cut, copy, paste, repeat, split,

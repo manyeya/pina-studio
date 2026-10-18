@@ -53,7 +53,9 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `set_track` `{"track": 1, "name": "Sub", "volume_db": -6, "pan": -0.3, "mute": false, "solo": false}`:
   any of them. `"pan_mode"` is Logic's: `"balance"` (the default: turns one side down),
   `"stereo"` (places each side, `"spread"` -1 to 1 apart: 1 as recorded, 0 both in the middle,
-  below 0 swapped) or `"binaural"` (around the listener's head: for headphones).
+  below 0 swapped) or `"binaural"` (round the listener's head, for headphones: its `pan` is
+  then the way round, 0 in front, 0.5 right, -0.5 left, ±1 behind; `"elevation"` is degrees above
+  (-90 to 90) and `"distance"` metres away (0.25 to 3, 1 by default)).
   `"color": "#d97757"` and `"icon": "808"` choose how it looks (`"auto"` for each
   goes back to what it plays saying: drums warm, bass violet, keys teal, vocals pink, each track a
   shade of its family). Icons: kick, snare, clap, hihat, cymbal, tom, drums, sticks, conga, shaker, tambourine, cowbell, 808, bass, synth-bass, piano, keys, organ, chords, guitar, guitar-electric, strings, harp, brass, sax, flute, synth, lead, arp, pluck, pad, bells, mallets, vocals, mic, choir, chop, fx, riser, impact, reverse, vinyl, texture, foley, audio, midi, sampler, loop, reference, click, star, heart, flame, bolt.

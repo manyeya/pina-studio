@@ -792,7 +792,7 @@ impl Workspace {
                     },
                     spread * 100.0
                 ),
-                PanMode::Binaural => format!("3D {}", side(pan)),
+                PanMode::Binaural => format!("3D {}", crate::binaural::azimuth_label(pan)),
             }
         };
         // The meter, in the fader's own scale: where each side's level would put the fader.
@@ -938,6 +938,32 @@ impl Workspace {
             )
             .child(match self.name_field(Name::Pan(i)) {
                 Some(field) => div().w(px(44.)).child(field),
+                // Binaural: a button for the panner.
+                None if mode == PanMode::Binaural => div()
+                    .px(px(5.))
+                    .h(px(20.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(5.))
+                    .bg(alpha(color, 0.16))
+                    .border_1()
+                    .border_color(alpha(color, 0.35))
+                    .font_family(MONO)
+                    .text_size(px(10.))
+                    .text_color(rgb(TEXT))
+                    .whitespace_nowrap()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(alpha(color, 0.3)))
+                    .debug_selector(move || format!("track-3d-{i}"))
+                    .child(pan_text)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| {
+                            cx.stop_propagation();
+                            ws.select_track(i);
+                            ws.open_panner(i, cx);
+                        }),
+                    ),
                 None => div()
                     .w(px(44.))
                     .font_family(MONO)
@@ -955,12 +981,16 @@ impl Workspace {
                     if e.modifiers.alt {
                         ws.edit(cx, |ws| {
                             ws.set_pan(Channel::Track(i), 0.0);
-                            ws.session.project.tracks[i].spread = None;
+                            let t = &mut ws.session.project.tracks[i];
+                            (t.spread, t.elevation, t.distance) = (None, None, None);
                         });
                         return;
                     }
                     if e.click_count == 2 {
-                        ws.start_naming(Name::Pan(i), window, cx);
+                        match t.pan_mode {
+                            PanMode::Binaural => ws.open_panner(i, cx),
+                            _ => ws.start_naming(Name::Pan(i), window, cx),
+                        }
                         return;
                     }
                     let (x, y) = (f32::from(e.position.x), f32::from(e.position.y));
@@ -2412,6 +2442,52 @@ fn pan_dial(mode: PanMode, pan: f32, spread: f32, color: u32) -> impl IntoElemen
                     window.paint_path(p, ink);
                 }
             };
+            // Binaural: from above, the head in the middle facing up, the sound round it.
+            if mode == PanMode::Binaural {
+                let ring = |rr: f32, ink: Hsla, width: f32, window: &mut Window| {
+                    let mut p = gpui::PathBuilder::stroke(px(width));
+                    for k in 0..=48 {
+                        let d = k as f32 * 7.5;
+                        match k {
+                            0 => p.move_to(at(d, rr)),
+                            _ => p.line_to(at(d, rr)),
+                        }
+                    }
+                    if let Ok(p) = p.build() {
+                        window.paint_path(p, ink);
+                    }
+                };
+                ring(r, rgb(RAISED).into(), 2.0, window);
+                ring(r * 0.62, alpha(0xffffff, 0.07), 1.0, window);
+                let head = r * 0.3;
+                window.paint_quad(
+                    fill(
+                        Bounds::centered_at(c, size(px(head * 2.0), px(head * 2.0))),
+                        rgb(0x3b3b48),
+                    )
+                    .corner_radii(px(head)),
+                );
+                window.paint_quad(
+                    fill(
+                        Bounds::centered_at(at(270.0, head), size(px(3.), px(3.))),
+                        alpha(ACCENT, 0.9),
+                    )
+                    .corner_radii(px(1.5)),
+                );
+                let d = deg(pan) + (pan.clamp(-1.0, 1.0) * 45.0);
+                let dot = at(d, r);
+                let mut beam = gpui::PathBuilder::stroke(px(1.));
+                beam.move_to(c);
+                beam.line_to(dot);
+                if let Ok(p) = beam.build() {
+                    window.paint_path(p, alpha(color, 0.5));
+                }
+                window.paint_quad(
+                    fill(Bounds::centered_at(dot, size(px(7.), px(7.))), rgb(color))
+                        .corner_radii(px(3.5)),
+                );
+                return;
+            }
             arc(deg(-1.0), deg(1.0), 2.5, window, rgb(RAISED).into());
             match mode {
                 PanMode::Stereo => {
@@ -2439,7 +2515,7 @@ fn pan_dial(mode: PanMode, pan: f32, spread: f32, color: u32) -> impl IntoElemen
                     );
                 }
             }
-            // The middle: a disc, or for binaural a head (and its ears).
+            // The middle: a disc.
             let body = r * 0.55;
             window.paint_quad(
                 fill(
@@ -2448,25 +2524,6 @@ fn pan_dial(mode: PanMode, pan: f32, spread: f32, color: u32) -> impl IntoElemen
                 )
                 .corner_radii(px(body)),
             );
-            if mode == PanMode::Binaural {
-                window.paint_quad(
-                    fill(
-                        Bounds::centered_at(c, size(px(body), px(body))),
-                        alpha(color, 0.9),
-                    )
-                    .corner_radii(px(body / 2.0)),
-                );
-                for dx in [-0.62f32, 0.62] {
-                    let ear = point(c.x + px(body * dx), c.y);
-                    window.paint_quad(
-                        fill(
-                            Bounds::centered_at(ear, size(px(2.5), px(4.))),
-                            alpha(color, 0.9),
-                        )
-                        .corner_radii(px(1.)),
-                    );
-                }
-            }
         },
     )
     .size_full()

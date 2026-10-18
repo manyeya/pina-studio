@@ -14,7 +14,7 @@ use crate::{
     project::{
         AUDIO_DIR, AutoMode, AutoPoint, AuxSend, BEAT_UNITS, Cell, Comp, Content, ControlPoint,
         Cycle, Eq, Flex, Input, Instrument, Marker, Note, PPQ, PanLaw, PanMode, Param, PatternRow,
-        PluginRef, Preset, PresetSource, Project, Region, Saturator, Track, Which,
+        Place, PluginRef, Preset, PresetSource, Project, Region, Saturator, Track, Which,
     },
 };
 
@@ -70,6 +70,11 @@ pub enum Command {
         pan_mode: Option<PanMode>,
         #[serde(default)]
         spread: Option<f32>,
+        /// Binaural: degrees above (or below) the head, and metres from it.
+        #[serde(default)]
+        elevation: Option<f32>,
+        #[serde(default)]
+        distance: Option<f32>,
         #[serde(default)]
         mute: Option<bool>,
         #[serde(default)]
@@ -777,6 +782,8 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             pan,
             pan_mode,
             spread,
+            elevation,
+            distance,
             mute,
             solo,
         } => {
@@ -786,6 +793,12 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             }
             if let Some(v) = spread {
                 t.spread = Some(finite("spread", v)?.clamp(-1.0, 1.0));
+            }
+            if let Some(v) = elevation {
+                t.elevation = Some(finite("elevation", v)?.clamp(-90.0, 90.0));
+            }
+            if let Some(v) = distance {
+                t.distance = Some(finite("distance", v)?.clamp(Place::NEAREST, Place::FARTHEST));
             }
             if let Some(v) = name {
                 t.name = v;

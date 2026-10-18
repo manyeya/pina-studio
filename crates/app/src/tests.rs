@@ -360,6 +360,81 @@ fn a_headers_fader_and_pan_drag_finely_type_and_reset(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_binaural_panner_places_a_sound_round_the_head(cx: &mut TestAppContext) {
+    use crate::binaural::Camera;
+    use tempo_engine::project::{PanMode, Place};
+    let (ws, cx) = open(cx);
+    // Binaural, from the pan knob's menu: the panner opens.
+    click_on(cx, "track-pan-1", Modifiers::none(), MouseButton::Right);
+    pick(cx, &ws, "Binaural");
+    assert!(ws.read_with(cx, |ws, _| ws.panner.map(|p| p.0)) == Some(1));
+    let place = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.place_of(1).unwrap());
+    // Behind, with a click.
+    click_on(cx, "panner-behind", Modifiers::none(), MouseButton::Left);
+    assert_eq!(place(cx).azimuth, 180.0);
+    click_on(cx, "panner-front", Modifiers::none(), MouseButton::Left);
+    // Dragging the space round looks from elsewhere; the sound stays.
+    let view = cx.debug_bounds("panner-view").unwrap();
+    let corner = view.origin + point(px(20.), px(20.));
+    drag(cx, corner, corner + point(px(50.), px(10.)));
+    let orbit = ws.read_with(cx, |ws, _| ws.orbit);
+    assert_ne!(orbit, crate::binaural::ORBIT);
+    assert_eq!(place(cx).azimuth, 0.0);
+    // The sound, dragged to a spot 1.5 m to the right of the head on the floor, goes there.
+    let camera = Camera::new(orbit);
+    // Inside its border.
+    let origin = view.origin + point(px(1.), px(1.));
+    let on_screen = |p: [f32; 3]| {
+        let (x, y, _) = camera.project(p).unwrap();
+        origin + point(px(x), px(y))
+    };
+    let from = on_screen(place(cx).xyz());
+    drag(cx, from, on_screen([1.5, 0.0, 0.0]));
+    let p = place(cx);
+    assert!(
+        (p.azimuth - 90.0).abs() < 1.0 && (p.distance - 1.5).abs() < 0.02,
+        "{p:?}"
+    );
+    // ⌘-dragging it up raises it, still to the right.
+    let from = on_screen(p.xyz());
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::command());
+    cx.simulate_mouse_move(
+        from - point(px(0.), px(80.)),
+        MouseButton::Left,
+        Modifiers::command(),
+    );
+    cx.simulate_mouse_up(
+        from - point(px(0.), px(80.)),
+        MouseButton::Left,
+        Modifiers::command(),
+    );
+    cx.run_until_parked();
+    let up = place(cx);
+    assert!(
+        up.elevation > 20.0 && (up.azimuth - 90.0).abs() < 1.0,
+        "{up:?}"
+    );
+    let track = ws.read_with(cx, |ws, _| ws.session.project.tracks[1].clone());
+    assert_eq!((track.pan_mode, track.pan), (PanMode::Binaural, 0.5));
+    assert_eq!(track.elevation.map(f32::round), Some(up.elevation.round()));
+    // The knob's ⌥-click: in front, level, a metre off.
+    click_on(cx, "panner-close", Modifiers::none(), MouseButton::Left);
+    let knob = cx.debug_bounds("track-pan-1").unwrap();
+    let dial = point(knob.left() + px(15.), knob.center().y);
+    cx.simulate_mouse_down(dial, MouseButton::Left, Modifiers::alt());
+    cx.simulate_mouse_up(dial, MouseButton::Left, Modifiers::alt());
+    cx.run_until_parked();
+    assert_eq!(
+        place(cx),
+        Place {
+            azimuth: 0.0,
+            elevation: 0.0,
+            distance: 1.0
+        }
+    );
+}
+
+#[gpui::test]
 fn regions_copy_paste_mute_and_repeat_from_their_menus_and_keys(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     let count = |cx: &VisualTestContext, t: usize| {
@@ -3832,7 +3907,7 @@ fn shots() {
                 }
                 // The console headers: a stereo pan, a binaural one, a tall track, a muted region;
                 // and each right-click menu.
-                "tracks" | "track-menu" | "pan-menu" | "region-menu" | "lane-menu" => {
+                "tracks" | "track-menu" | "pan-menu" | "region-menu" | "lane-menu" | "panner" => {
                     use tempo_engine::project::PanMode;
                     let tracks = &mut ws.session.project.tracks;
                     tracks[0].pan = -0.3;
@@ -3848,6 +3923,12 @@ fn shots() {
                         "pan-menu" => ws.pan_menu(1, at, cx),
                         "region-menu" => ws.region_menu((0, 0), point(px(700.), px(160.)), cx),
                         "lane-menu" => ws.lane_menu(0, BAR * 6, point(px(900.), px(160.)), cx),
+                        "panner" => {
+                            let t = &mut ws.session.project.tracks[2];
+                            (t.pan, t.elevation, t.distance) = (0.3, Some(28.0), Some(1.7));
+                            ws.levels.insert(Some(t.id), Default::default());
+                            ws.open_panner(2, cx);
+                        }
                         _ => cx.notify(),
                     }
                 }

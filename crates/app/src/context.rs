@@ -37,6 +37,8 @@ pub enum TrackOp {
     Move(usize, i32),
     Stack(usize),
     Look(usize, Point<Pixels>),
+    /// The Binaural Panner, on a track.
+    Panner(usize),
     Automation,
     /// On an empty stretch of a lane, at a tick.
     NewRegion(usize, u64),
@@ -121,6 +123,12 @@ impl Workspace {
             items.push(op(ticked(law == l, l.name()), TrackOp::PanLaw(l)));
         }
         items.push(rule());
+        if mode == PanMode::Binaural {
+            items.push(op(
+                "Binaural Panner…\tdouble-click".into(),
+                TrackOp::Panner(t),
+            ));
+        }
         items.push(op("Centre\t⌥-click".into(), TrackOp::ResetPan(t)));
         self.open_menu(at, items, cx);
     }
@@ -339,12 +347,19 @@ impl Workspace {
                 self.session.edited = true;
             }
             TrackOp::PanMode(t, mode) if t < n => {
-                self.edit(cx, |ws| ws.session.project.tracks[t].pan_mode = mode)
+                self.edit(cx, |ws| ws.session.project.tracks[t].pan_mode = mode);
+                // Binaural opens its panner, as Logic's does.
+                if mode == PanMode::Binaural {
+                    self.open_panner(t, cx);
+                }
             }
+            TrackOp::Panner(t) if t < n => self.open_panner(t, cx),
             TrackOp::PanLaw(law) => self.edit(cx, |ws| ws.session.project.pan_law = law),
             TrackOp::ResetPan(t) if t < n => self.edit(cx, |ws| {
                 ws.session.project.tracks[t].pan = 0.0;
                 ws.session.project.tracks[t].spread = None;
+                ws.session.project.tracks[t].elevation = None;
+                ws.session.project.tracks[t].distance = None;
             }),
             TrackOp::Move(t, by) if t < n => {
                 let to = (t as i64 + by as i64).clamp(0, n as i64 - 1) as usize;

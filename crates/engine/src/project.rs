@@ -225,6 +225,51 @@ impl Default for Saturator {
     }
 }
 
+/// Where a binaural track's sound is round the listener's head.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Place {
+    /// Degrees: 0 in front, 90 right, -90 left, ±180 behind.
+    pub azimuth: f32,
+    /// Degrees: 90 above, -90 below.
+    pub elevation: f32,
+    /// Metres from the head.
+    pub distance: f32,
+}
+
+impl Place {
+    pub const NEAREST: f32 = 0.25;
+    pub const FARTHEST: f32 = 3.0;
+
+    /// A track's place at a pan (its way round).
+    pub fn of(track: &Track, pan: f32) -> Place {
+        Place {
+            azimuth: pan.clamp(-1.0, 1.0) * 180.0,
+            elevation: track.elevation.unwrap_or(0.0).clamp(-90.0, 90.0),
+            distance: track
+                .distance
+                .unwrap_or(1.0)
+                .clamp(Place::NEAREST, Place::FARTHEST),
+        }
+    }
+
+    /// Right, up and forward of the head, in metres.
+    pub fn xyz(&self) -> [f32; 3] {
+        let (a, e) = (self.azimuth.to_radians(), self.elevation.to_radians());
+        let d = self.distance;
+        [d * a.sin() * e.cos(), d * e.sin(), d * a.cos() * e.cos()]
+    }
+
+    /// From right, up and forward of the head.
+    pub fn from_xyz([x, y, z]: [f32; 3]) -> Place {
+        let flat = x.hypot(z);
+        Place {
+            azimuth: x.atan2(z).to_degrees(),
+            elevation: y.atan2(flat).to_degrees(),
+            distance: (flat.hypot(y)).clamp(Place::NEAREST, Place::FARTHEST),
+        }
+    }
+}
+
 /// How a track's pan places it, as Logic's pan modes do.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -322,6 +367,13 @@ pub struct Track {
     /// swapped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spread: Option<f32>,
+    /// Binaural: how high round the head (degrees, -90 below to 90 above; none level) and how
+    /// far from it (metres, 0.25 to 3; none 1). Its pan is the way round: 0 in front, 0.5 right,
+    /// -0.5 left, ±1 behind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elevation: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance: Option<f32>,
     #[serde(default)]
     pub mute: bool,
     #[serde(default)]

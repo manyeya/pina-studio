@@ -23,8 +23,8 @@ use tempo_engine::{
     engine::LiveNote,
     player::Player,
     project::{
-        At, AutoMode, Comp, Content, Cycle, Eq, Instrument, PPQ, Param, Project, RECOVERY_DIR,
-        STATES_DIR, Track, Which, value_at,
+        At, AutoMode, Comp, Content, Cycle, Eq, Instrument, PPQ, Param, Place, Project,
+        RECOVERY_DIR, STATES_DIR, Track, Which, value_at,
     },
     scan::{self, PluginInfo},
     session::Session,
@@ -239,6 +239,10 @@ pub enum Slider {
     },
     /// How much one aspect of a sound counts in the sample browser's Similar list.
     Aspect(usize),
+    /// A binaural track's sound: the way round, how high, how far.
+    Azimuth(usize),
+    Elevation(usize),
+    Distance(usize),
 }
 
 /// A mouse drag in progress. Edits checkpoint when they start, so a drag is one undo step.
@@ -338,6 +342,23 @@ pub enum Drag {
         x: f32,
         y: f32,
         spread: f32,
+    },
+    /// The Binaural Panner's view, looked round; its sound dragged round the head at a height,
+    /// or (⌘) up and down.
+    Orbit {
+        x: f32,
+        y: f32,
+        yaw: f32,
+        pitch: f32,
+    },
+    Source {
+        track: usize,
+        height: f32,
+    },
+    Raise {
+        track: usize,
+        y: f32,
+        height: f32,
     },
     /// Steps painted in the step sequencer: each the mouse passes over takes `paint` (0 a rest).
     Steps {
@@ -738,6 +759,11 @@ pub struct Workspace {
     pub stretching: Option<tempo_engine::project::Content>,
     /// ⇧ held while dragging a fader or knob: it moves a fifth as far.
     pub fine: bool,
+    /// The Binaural Panner, open on a track, where; where its view looks from (degrees round
+    /// and down); and where the view is on screen.
+    pub panner: Option<(usize, Point<Pixels>)>,
+    pub orbit: (f32, f32),
+    pub panner_bounds: Rc<Cell<Bounds<Pixels>>>,
     /// The last control a sideways swipe moved, and when: one undo for each swipe.
     pub swiped: Option<(Name, std::time::Instant)>,
     /// A track's colour and icon picker waiting for the next frame (from a menu), and where.
@@ -901,6 +927,9 @@ impl Workspace {
             region_clip: None,
             stretching: None,
             fine: false,
+            panner: None,
+            orbit: crate::binaural::ORBIT,
+            panner_bounds: Default::default(),
             swiped: None,
             pending_look: None,
             adder: None,
@@ -1489,6 +1518,7 @@ impl Workspace {
                 | Drag::Marquee { .. }
                 | Drag::Width { .. }
                 | Drag::LaneHeight { .. }
+                | Drag::Orbit { .. }
         );
         if edits {
             self.session.checkpoint();
@@ -1674,6 +1704,18 @@ impl Workspace {
                 let db = strip::fader_db(pos);
                 self.set_volume(Channel::Track(track), db);
                 self.record_auto(track, Param::Volume, db);
+            }
+            Some(Drag::Orbit { x, y, yaw, pitch }) => {
+                self.orbit = (
+                    yaw + (p.x - x) * 0.4,
+                    (pitch + (p.y - y) * 0.3).clamp(4.0, 88.0),
+                );
+                cx.notify();
+                return;
+            }
+            Some(Drag::Source { track, height }) => self.drag_source(track, height, p),
+            Some(Drag::Raise { track, y, height }) => {
+                self.raise_source(track, height + (y - p.y) / 80.0)
             }
             Some(Drag::Spread {
                 track,
@@ -2349,6 +2391,16 @@ impl Workspace {
                 strip::fader_pos(db)
             }
             Slider::Aspect(i) => *crate::browser::aspect(&mut self.browser.aspects.clone(), i),
+            Slider::Azimuth(t) | Slider::Elevation(t) | Slider::Distance(t) => {
+                let Some(place) = self.place_of(t) else {
+                    return 0.0;
+                };
+                match slider {
+                    Slider::Azimuth(_) => (place.azimuth / 180.0 + 1.0) / 2.0,
+                    Slider::Elevation(_) => (place.elevation + 90.0) / 180.0,
+                    _ => (place.distance - Place::NEAREST) / (Place::FARTHEST - Place::NEAREST),
+                }
+            }
         }
     }
 
@@ -2366,6 +2418,20 @@ impl Workspace {
             Slider::Aspect(i) => {
                 *crate::browser::aspect(&mut self.browser.aspects, i) = (v * 20.0).round() / 20.0;
                 self.find_similar();
+            }
+            Slider::Azimuth(t) | Slider::Elevation(t) | Slider::Distance(t) => {
+                let Some(mut place) = self.place_of(t) else {
+                    return;
+                };
+                match slider {
+                    Slider::Azimuth(_) => place.azimuth = ((v * 2.0 - 1.0) * 180.0).round(),
+                    Slider::Elevation(_) => place.elevation = (v * 180.0 - 90.0).round(),
+                    _ => {
+                        let d = Place::NEAREST + v * (Place::FARTHEST - Place::NEAREST);
+                        place.distance = (d * 20.0).round() / 20.0;
+                    }
+                }
+                self.set_place(t, place);
             }
         }
     }
@@ -3010,6 +3076,7 @@ impl Render for Workspace {
             .children(self.sample_ghost())
             .children(self.device_ghost())
             .children(self.new_song_view(cx))
+            .children(self.panner_view(cx))
             .children(self.menu_view(cx))
             .children(self.adder_view(cx))
             .children(self.export_view(cx))
