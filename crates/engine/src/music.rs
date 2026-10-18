@@ -269,6 +269,23 @@ pub enum NoteEdit {
     Velocity {
         by: i32,
     },
+    /// Chords spread as a guitar strums them: each note `ticks` after the one below.
+    Strum {
+        ticks: u64,
+    },
+    /// Played backwards: each note ends where its mirror started.
+    Reverse,
+    /// Upside down: each pitch mirrored about the middle of the lowest and highest.
+    Flip,
+    /// Notes of a pitch that touch or overlap made one.
+    Glue,
+    /// Velocities scaled about their middle by `percent` (100 as they are, 0 all the same), then
+    /// moved by `by`.
+    Dynamics {
+        percent: u32,
+        #[serde(default)]
+        by: i32,
+    },
 }
 
 fn full() -> f32 {
@@ -288,15 +305,17 @@ fn loudness() -> u8 {
 }
 
 impl NoteEdit {
-    /// Applies the edit to a region's notes; with `only`, to that note alone (where an edit on one
-    /// note makes sense: not legato or arpeggiate).
-    pub fn apply(&self, notes: &mut Vec<Note>, only: Option<usize>) {
-        let all = 0..notes.len();
-        let chosen: Vec<usize> = match only {
-            Some(i) if i < notes.len() => vec![i],
-            Some(_) => return,
-            None => all.collect(),
+    /// Applies the edit to a region's notes: those in `only`, or with it empty, all of them.
+    pub fn apply(&self, notes: &mut Vec<Note>, only: &[usize]) {
+        let mut chosen: Vec<usize> = match only.is_empty() {
+            true => (0..notes.len()).collect(),
+            false => only.iter().copied().filter(|&i| i < notes.len()).collect(),
         };
+        chosen.sort_unstable();
+        chosen.dedup();
+        if chosen.is_empty() {
+            return;
+        }
         match *self {
             NoteEdit::Quantize {
                 grid,
@@ -340,10 +359,12 @@ impl NoteEdit {
                 }
             }
             NoteEdit::Legato => {
+                // Each chosen note held to the next note to start, chosen or not, as Logic's.
                 let mut starts: Vec<i64> = notes.iter().map(|n| n.start).collect();
                 starts.sort_unstable();
                 starts.dedup();
-                for n in notes.iter_mut() {
+                for &i in &chosen {
+                    let n = &mut notes[i];
                     let at = starts.partition_point(|&s| s <= n.start);
                     if let Some(&next) = starts.get(at) {
                         n.length = (next - n.start) as u64;
@@ -370,9 +391,10 @@ impl NoteEdit {
                 }
                 *notes = out;
             }
-            NoteEdit::Arpeggiate { grid } => {
+            NoteEdit::Arpeggiate { grid } | NoteEdit::Strum { ticks: grid } => {
+                let strum = matches!(self, NoteEdit::Strum { .. });
                 let grid = grid.max(1);
-                let mut order: Vec<usize> = (0..notes.len()).collect();
+                let mut order = chosen.clone();
                 order.sort_by_key(|&i| (notes[i].start, notes[i].pitch));
                 let mut k = 0;
                 while k < order.len() {
@@ -386,7 +408,12 @@ impl NoteEdit {
                         let shift = step as u64 * grid;
                         let n = &mut notes[i];
                         n.start += shift as i64;
-                        n.length = n.length.saturating_sub(shift).max(grid);
+                        // A strum lets each string ring to the chord's end; an arpeggio's notes
+                        // keep a step at least.
+                        n.length = match strum {
+                            true => n.length.saturating_sub(shift).max(1),
+                            false => n.length.saturating_sub(shift).max(grid),
+                        };
                     }
                     k += chord.len();
                 }
@@ -401,6 +428,71 @@ impl NoteEdit {
                 for &i in &chosen {
                     let v = notes[i].velocity as i32 + by;
                     notes[i].velocity = v.clamp(1, 127) as u8;
+                }
+            }
+            NoteEdit::Reverse => {
+                let from = chosen.iter().map(|&i| notes[i].start).min().unwrap_or(0);
+                let to = chosen
+                    .iter()
+                    .map(|&i| notes[i].start + notes[i].length as i64)
+                    .max()
+                    .unwrap_or(0);
+                for &i in &chosen {
+                    let n = &mut notes[i];
+                    n.start = from + to - (n.start + n.length as i64);
+                }
+            }
+            NoteEdit::Flip => {
+                let lo = chosen
+                    .iter()
+                    .map(|&i| notes[i].pitch as i32)
+                    .min()
+                    .unwrap_or(0);
+                let hi = chosen
+                    .iter()
+                    .map(|&i| notes[i].pitch as i32)
+                    .max()
+                    .unwrap_or(0);
+                for &i in &chosen {
+                    notes[i].pitch = (lo + hi - notes[i].pitch as i32).clamp(0, 127) as u8;
+                }
+            }
+            NoteEdit::Glue => {
+                let mut order = chosen.clone();
+                order.sort_by_key(|&i| (notes[i].pitch, notes[i].start));
+                let mut gone = vec![false; notes.len()];
+                let mut k = 0;
+                while k < order.len() {
+                    let first = order[k];
+                    let mut end = notes[first].start + notes[first].length as i64;
+                    let mut j = k + 1;
+                    while j < order.len()
+                        && notes[order[j]].pitch == notes[first].pitch
+                        && notes[order[j]].start <= end
+                    {
+                        let n = notes[order[j]];
+                        end = end.max(n.start + n.length as i64);
+                        gone[order[j]] = true;
+                        j += 1;
+                    }
+                    notes[first].length = (end - notes[first].start) as u64;
+                    k = j;
+                }
+                let mut i = 0;
+                notes.retain(|_| {
+                    i += 1;
+                    !gone[i - 1]
+                });
+            }
+            NoteEdit::Dynamics { percent, by } => {
+                let vs: Vec<f32> = chosen.iter().map(|&i| notes[i].velocity as f32).collect();
+                let mid = (vs.iter().copied().fold(f32::MAX, f32::min)
+                    + vs.iter().copied().fold(f32::MIN, f32::max))
+                    / 2.0;
+                for &i in &chosen {
+                    let v =
+                        mid + (notes[i].velocity as f32 - mid) * percent as f32 / 100.0 + by as f32;
+                    notes[i].velocity = v.round().clamp(1.0, 127.0) as u8;
                 }
             }
         }
@@ -468,7 +560,7 @@ mod tests {
             strength: 1.0,
             swing: 50.0,
         }
-        .apply(&mut notes, None);
+        .apply(&mut notes, &[]);
         assert_eq!((notes[0].start, notes[1].start), (g, 2 * g));
 
         let mut notes = vec![n(g + 40, 100, 60)];
@@ -477,7 +569,7 @@ mod tests {
             strength: 0.5,
             swing: 50.0,
         }
-        .apply(&mut notes, None);
+        .apply(&mut notes, &[]);
         assert_eq!(notes[0].start, g + 20);
 
         // 66% swing: the odd step lands about a third of a step late.
@@ -487,7 +579,7 @@ mod tests {
             strength: 1.0,
             swing: 66.0,
         }
-        .apply(&mut notes, None);
+        .apply(&mut notes, &[]);
         assert_eq!(notes[0].start, g + (g as f64 * 0.32).round() as i64);
         assert_eq!(notes[1].start, 2 * g);
     }
@@ -495,14 +587,14 @@ mod tests {
     #[test]
     fn legato_chop_and_arpeggiate() {
         let mut notes = vec![n(0, 100, 60), n(480, 100, 62), n(960, 100, 64)];
-        NoteEdit::Legato.apply(&mut notes, None);
+        NoteEdit::Legato.apply(&mut notes, &[]);
         assert_eq!(
             notes.iter().map(|n| n.length).collect::<Vec<_>>(),
             [480, 480, 100]
         );
 
         let mut notes = vec![n(0, 1000, 60)];
-        NoteEdit::Chop { grid: 480 }.apply(&mut notes, None);
+        NoteEdit::Chop { grid: 480 }.apply(&mut notes, &[]);
         assert_eq!(
             notes
                 .iter()
@@ -512,10 +604,60 @@ mod tests {
         );
 
         let mut notes = vec![n(0, 960, 64), n(0, 960, 60), n(0, 960, 67)];
-        NoteEdit::Arpeggiate { grid: 240 }.apply(&mut notes, None);
+        NoteEdit::Arpeggiate { grid: 240 }.apply(&mut notes, &[]);
         let mut by_pitch: Vec<(u8, i64)> = notes.iter().map(|n| (n.pitch, n.start)).collect();
         by_pitch.sort();
         assert_eq!(by_pitch, [(60, 0), (64, 240), (67, 480)]);
+    }
+
+    #[test]
+    fn edits_on_a_selection_strum_reverse_flip_glue_and_dynamics() {
+        // Legato on the chosen alone, each held to the next note whichever it is.
+        let mut notes = vec![n(0, 100, 60), n(480, 100, 62), n(960, 100, 64)];
+        NoteEdit::Legato.apply(&mut notes, &[0, 2]);
+        assert_eq!(
+            notes.iter().map(|n| n.length).collect::<Vec<_>>(),
+            [480, 100, 100]
+        );
+
+        let mut notes = vec![n(0, 960, 64), n(0, 960, 60), n(0, 960, 67)];
+        NoteEdit::Strum { ticks: 30 }.apply(&mut notes, &[]);
+        let mut by_pitch: Vec<(u8, i64, u64)> =
+            notes.iter().map(|n| (n.pitch, n.start, n.length)).collect();
+        by_pitch.sort();
+        assert_eq!(by_pitch, [(60, 0, 960), (64, 30, 930), (67, 60, 900)]);
+
+        let mut notes = vec![n(0, 240, 60), n(480, 480, 62)];
+        NoteEdit::Reverse.apply(&mut notes, &[]);
+        assert_eq!((notes[0].start, notes[1].start), (720, 0));
+
+        let mut notes = vec![n(0, 240, 60), n(240, 240, 64), n(480, 240, 67)];
+        NoteEdit::Flip.apply(&mut notes, &[]);
+        assert_eq!(
+            notes.iter().map(|n| n.pitch).collect::<Vec<_>>(),
+            [67, 63, 60]
+        );
+
+        let mut notes = vec![
+            n(0, 240, 60),
+            n(240, 240, 60),
+            n(600, 100, 60),
+            n(0, 100, 62),
+        ];
+        NoteEdit::Glue.apply(&mut notes, &[]);
+        assert_eq!(
+            notes
+                .iter()
+                .map(|n| (n.start, n.length, n.pitch))
+                .collect::<Vec<_>>(),
+            [(0, 480, 60), (600, 100, 60), (0, 100, 62)]
+        );
+
+        let mut notes = vec![n(0, 1, 60), n(1, 1, 60)];
+        notes[0].velocity = 40;
+        notes[1].velocity = 120;
+        NoteEdit::Dynamics { percent: 50, by: 0 }.apply(&mut notes, &[]);
+        assert_eq!((notes[0].velocity, notes[1].velocity), (60, 100));
     }
 
     #[test]
@@ -527,8 +669,8 @@ mod tests {
         };
         let base: Vec<Note> = (0..32).map(|i| n(1000 + i * 480, 100, 60)).collect();
         let (mut a, mut b) = (base.clone(), base.clone());
-        edit.apply(&mut a, None);
-        edit.apply(&mut b, None);
+        edit.apply(&mut a, &[]);
+        edit.apply(&mut b, &[]);
         assert_eq!(a, b);
         assert_ne!(a, base);
         for (x, y) in a.iter().zip(&base) {
@@ -540,9 +682,9 @@ mod tests {
     #[test]
     fn one_note_only() {
         let mut notes = vec![n(0, 100, 60), n(480, 100, 62)];
-        NoteEdit::Transpose { semitones: 12 }.apply(&mut notes, Some(1));
+        NoteEdit::Transpose { semitones: 12 }.apply(&mut notes, &[1]);
         assert_eq!((notes[0].pitch, notes[1].pitch), (60, 74));
-        NoteEdit::Velocity { by: 50 }.apply(&mut notes, None);
+        NoteEdit::Velocity { by: 50 }.apply(&mut notes, &[]);
         assert_eq!(notes[0].velocity, 127);
     }
 

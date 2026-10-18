@@ -1376,7 +1376,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             if note.is_some_and(|i| i >= notes.len()) {
                 return Err(format!("that region has {} notes", notes.len()));
             }
-            edit.apply(notes, note);
+            edit.apply(notes, note.as_slice());
         }
         Command::SetChords {
             chords,

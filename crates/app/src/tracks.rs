@@ -1741,7 +1741,7 @@ fn grab(
             Tool::Pointer | Tool::Pencil => {}
         }
         if ws.region != Some(at) {
-            ws.note = None;
+            ws.picked.clear();
         }
         ws.region = Some(at);
         ws.select_track(at.0);

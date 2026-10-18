@@ -809,13 +809,11 @@ impl Workspace {
         edit: NoteEdit,
         cx: &mut Context<Self>,
     ) {
-        let only = match edit {
-            NoteEdit::Legato | NoteEdit::Arpeggiate { .. } => None,
-            _ => self.note,
-        };
+        // The notes picked, else all of them.
+        let only = self.picked.clone();
         self.edit(cx, |ws| {
             if let Some(notes) = ws.session.project.notes_mut(at) {
-                edit.apply(notes, only);
+                edit.apply(notes, &only);
             }
         });
     }

@@ -166,7 +166,10 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `edit_notes` `{"track": 1, "region": 0, "edit": {"kind": "quantize", "grid": 240, "strength": 1, "swing": 50}}`:
   changes a MIDI region's notes in one go (or one note, with `"note": 3`). `kind` is `quantize`
   (`strength` 0-1, `swing` 50 straight to 75), `humanize` (`timing` ticks, `velocity`, `seed`),
-  `legato`, `chop` (`grid`), `arpeggiate` (`grid`), `transpose` (`semitones`) or `velocity` (`by`).
+  `legato`, `chop` (`grid`), `arpeggiate` (`grid`), `strum` (`ticks` between strings), `reverse`,
+  `flip` (pitches upside down), `glue` (touching notes of a pitch made one), `transpose`
+  (`semitones`), `velocity` (`by`) or `dynamics` (`percent` of their spread, 100 as they are, and
+  `by`).
 - `add_marker` `{"tick": 15360, "name": "Chorus"}`: names a place in the song; answers with its
   index, markers being numbered in time order.
 - `set_marker` `{"marker": 0, "name": "Verse 2", "tick": 7680}`, `delete_marker` `{"marker": 0}`

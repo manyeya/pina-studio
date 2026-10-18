@@ -233,7 +233,7 @@ impl Workspace {
                 .project
                 .add_take(t, region.start, end, region.content);
             ws.region = Some(at);
-            ws.note = None;
+            ws.picked.clear();
         });
     }
 }

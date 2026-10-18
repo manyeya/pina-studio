@@ -161,10 +161,21 @@ In the app, mostly as in Logic:
   the same notes, so editing either edits both (its place, length and playback settings are its
   own; "Make unique" in the inspector, splitting it or trimming its start unlinks it). Option-drag
   an audio region's end to flex it (Flex Time: slower or faster, same pitch, by Signalsmith
-  Stretch). In
-  the piano roll, double-click to add a note, drag it to move it, drag its right edge to resize
-  it, drag its dot in the velocity lane; its tools quantize (grid, strength, swing), humanize,
-  make legato, chop and arpeggiate; Ghost shows another track's notes behind.
+  Stretch).
+- The piano roll works as Logic's and FL Studio's do. Pick notes by clicking (shift adds), by
+  dragging a band over the grid, ⌘A for all, or ⌘-click a key for every note of its pitch; drag
+  them together, by either edge to resize, ⌥-drag to copy. ↑↓ move them a semitone (⇧ an octave),
+  ←→ a grid step (⌥ finer); ⌘C ⌘X ⌘V copy, cut and paste at the playhead, ⌘D duplicates them
+  after themselves, ⌫ deletes, Q quantizes; right-click for the rest. Double-click (or click with
+  the pencil) writes a note at the length last picked or stretched, or a chord with a stamp (triad,
+  7th, 9th, sus, power, octave: stacked on the song's scale, so they stay in key); drag the pencil
+  on to paint more. "In key" keeps drawn and moved notes on the scale; Velocity colours notes
+  cool to hot. Each note shows its velocity along its foot. Under the notes a lane for velocity
+  (drag a dot, the picked notes move with it, or draw across) or a controller: the mod wheel,
+  pitch bend, expression or the sustain pedal, drawn freehand, ⌥ to erase. Its tools work on the
+  picked notes (or all): quantize (grid, strength, swing), humanize, legato, chop, arpeggiate,
+  strum, glue, reverse, flip, softer and harder. Ghost shows another track's notes behind; Fit
+  fits the notes' range; ⌥-scroll makes rows taller or shorter.
 - Recording over a region of the same kind makes a take folder, as in Logic. Double-click it to
   see its takes; swipe across a take to comp that stretch from it, click one to use all of it,
   and Flatten to turn the comp back into plain regions.

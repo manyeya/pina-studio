@@ -1056,7 +1056,7 @@ impl Workspace {
     fn reset_for_song(&mut self) {
         self.track = 0;
         self.region = None;
-        self.note = None;
+        self.picked.clear();
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
         self.picker = None;

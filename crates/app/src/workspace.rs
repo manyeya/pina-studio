@@ -32,6 +32,7 @@ use tempo_engine::{
 
 use crate::{
     menu::{Menu, MenuAction},
+    pianoroll::RollOp,
     strip::{self, Channel},
     text::{TextEvent, TextInput},
     theme::*,
@@ -61,6 +62,21 @@ actions!(
         NewTrack,
         ZoomIn,
         ZoomOut,
+        SelectAllNotes,
+        CopyNotes,
+        CutNotes,
+        PasteNotes,
+        DuplicateNotes,
+        NotesUp,
+        NotesDown,
+        NotesOctaveUp,
+        NotesOctaveDown,
+        NudgeLeft,
+        NudgeRight,
+        NudgeLeftFine,
+        NudgeRightFine,
+        QuantizeNotes,
+        DeselectNotes,
         Quit,
         TogglePianoRoll,
         ToggleAutomation,
@@ -126,6 +142,22 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-alt-n", NewTrack, Some("Workspace")),
         KeyBinding::new("cmd-right", ZoomIn, Some("Workspace")),
         KeyBinding::new("cmd-left", ZoomOut, Some("Workspace")),
+        // The piano roll's notes, while it's open.
+        KeyBinding::new("cmd-a", SelectAllNotes, Some("Roll")),
+        KeyBinding::new("cmd-c", CopyNotes, Some("Roll")),
+        KeyBinding::new("cmd-x", CutNotes, Some("Roll")),
+        KeyBinding::new("cmd-v", PasteNotes, Some("Roll")),
+        KeyBinding::new("cmd-d", DuplicateNotes, Some("Roll")),
+        KeyBinding::new("up", NotesUp, Some("Roll")),
+        KeyBinding::new("down", NotesDown, Some("Roll")),
+        KeyBinding::new("shift-up", NotesOctaveUp, Some("Roll")),
+        KeyBinding::new("shift-down", NotesOctaveDown, Some("Roll")),
+        KeyBinding::new("left", NudgeLeft, Some("Roll")),
+        KeyBinding::new("right", NudgeRight, Some("Roll")),
+        KeyBinding::new("alt-left", NudgeLeftFine, Some("Roll")),
+        KeyBinding::new("alt-right", NudgeRightFine, Some("Roll")),
+        KeyBinding::new("q", QuantizeNotes, Some("Roll")),
+        KeyBinding::new("escape", DeselectNotes, Some("Roll")),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-w", Quit, None),
     ]);
@@ -223,23 +255,42 @@ pub enum Drag {
         bpm: f64,
     },
     Locate,
-    /// A note in the piano roll: `start`, `pitch` and `length` are where it began.
-    Note {
+    /// Notes in the piano roll, picked up together: each as it began, `lead` the one grabbed
+    /// (its snapping moves them all).
+    Notes {
         at: At,
-        index: usize,
+        lead: usize,
         edge: Edge,
         from: Point<f32>,
-        start: i64,
-        pitch: u8,
-        length: u64,
         moved: bool,
     },
-    /// A note's velocity, in the lane under the piano roll.
+    /// A rubber band over the piano roll, picking the notes it touches (and those already
+    /// picked, with shift: `held_picks`).
+    Marquee {
+        from: Point<f32>,
+        to: Point<f32>,
+    },
+    /// The pencil dragged along: a note (or chord) painted at each step it passes, `last` the
+    /// latest's start (`painting`, the pitches it sounds).
+    Paint {
+        at: At,
+        last: i64,
+    },
+    /// Velocities, in the lane under the piano roll: the dragged dot's notes (`held`).
     Velocity {
         at: At,
-        index: usize,
         y: f32,
-        velocity: u8,
+    },
+    /// Drawing velocities across the lane, from the x it was at.
+    VelocityLine {
+        at: At,
+        x: f32,
+    },
+    /// Drawing a controller's moves in the lane under the piano roll, from the tick it was at.
+    Control {
+        at: At,
+        last: Option<i64>,
+        erase: bool,
     },
     /// An automation point.
     Auto {
@@ -485,6 +536,18 @@ pub struct RollSettings {
     pub ghost: Option<u64>,
     /// Shading the rows out of the song's key.
     pub scale: bool,
+    /// Notes drawn and moved land on the key's notes.
+    pub in_key: bool,
+    /// A chord drawn for each note, as FL Studio's stamps.
+    pub stamp: crate::pianoroll::Stamp,
+    /// Notes coloured by velocity, cool to hot, as Logic does; else the track's colour.
+    pub by_velocity: bool,
+    /// The length a new note is drawn at: the last note picked or stretched (0, the grid).
+    pub length: u64,
+    /// How tall a pitch's row is, as zoomed.
+    pub key_h: f32,
+    /// What the lane under the notes shows and edits.
+    pub lane: crate::pianoroll::Lane,
 }
 
 /// A level meter's reading: falling back gently, and its peak held a moment.
@@ -575,8 +638,20 @@ pub struct Workspace {
     pub channels: Channels,
     /// The mixer's rows: EQ, inserts and sends.
     pub mixer_rows: [bool; 3],
-    /// The selected note in the piano roll, by index in the selected region.
-    pub note: Option<usize>,
+    /// The notes picked in the piano roll (or score), by index in the region shown; the last
+    /// the one clicked.
+    pub picked: Vec<usize>,
+    /// Notes copied in the piano roll, their starts from the first's.
+    pub clip: Vec<tempo_engine::project::Note>,
+    /// What a piano roll drag carries: the notes picked up, as they began; the notes picked
+    /// before a rubber band; the pitches the pencil sounds.
+    pub held: Vec<(usize, tempo_engine::project::Note)>,
+    pub held_picks: Vec<usize>,
+    pub painting: Vec<u8>,
+    /// The pitch under the mouse in the piano roll.
+    pub roll_hover: Option<u8>,
+    /// Where the lane under the piano roll was drawn last frame.
+    pub lane_bounds: Rc<Cell<Bounds<Pixels>>>,
     /// The piano roll's vertical scroll, and where its grid was drawn last frame.
     pub roll_scroll_y: f32,
     pub roll_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -713,7 +788,13 @@ impl Workspace {
             channel: Channel::Track(0),
             channels: Channels::All,
             mixer_rows: [true; 3],
-            note: None,
+            picked: Vec::new(),
+            clip: Vec::new(),
+            held: Vec::new(),
+            held_picks: Vec::new(),
+            painting: Vec::new(),
+            roll_hover: None,
+            lane_bounds: Rc::new(Cell::new(Bounds::default())),
             roll_scroll_y: crate::pianoroll::scroll_to(72),
             roll_bounds: Rc::new(Cell::new(Bounds::default())),
             roll: RollSettings {
@@ -722,6 +803,12 @@ impl Workspace {
                 swing: 50.0,
                 ghost: None,
                 scale: true,
+                in_key: false,
+                stamp: crate::pianoroll::Stamp::Note,
+                by_velocity: false,
+                length: 0,
+                key_h: crate::pianoroll::KEY_H,
+                lane: crate::pianoroll::Lane::Velocity,
             },
             show_automation: false,
             editor_h: EDITOR_H,
@@ -905,9 +992,7 @@ impl Workspace {
             .region
             .and_then(|at| self.session.project.notes_mut(at))
             .map(|n| n.len());
-        if self.note.is_some_and(|i| notes.is_none_or(|n| i >= n)) {
-            self.note = None;
-        }
+        self.picked.retain(|&i| notes.is_some_and(|n| i < n));
         let valid = match self.channel {
             Channel::Track(i) => i < self.session.project.tracks.len(),
             Channel::Aux(i) => i < self.session.project.auxes.len(),
@@ -1211,6 +1296,7 @@ impl Workspace {
                 | Drag::Sample { .. }
                 | Drag::Device { .. }
                 | Drag::MapBox { .. }
+                | Drag::Marquee { .. }
         );
         if edits {
             self.session.checkpoint();
@@ -1223,7 +1309,7 @@ impl Workspace {
         let ppt = self.px_per_tick();
         if let Some(
             Drag::Region { moved, .. }
-            | Drag::Note { moved, .. }
+            | Drag::Notes { moved, .. }
             | Drag::Auto { moved, .. }
             | Drag::Cycle { moved, .. }
             | Drag::Marker { moved, .. },
@@ -1307,36 +1393,26 @@ impl Workspace {
                 }
             }
             Some(Drag::Locate) => self.locate_at(p.x, cx),
-            Some(Drag::Note {
-                at,
-                index,
-                edge,
-                from,
-                start,
-                pitch,
-                length,
-                ..
-            }) => {
-                self.drag_note(at, index, edge, p - from, (start, pitch, length));
+            Some(Drag::Notes { .. }) => self.drag_notes(p),
+            Some(Drag::Marquee { .. }) => {
+                self.drag_marquee(p);
+                cx.notify();
+                return;
             }
-            Some(Drag::Velocity {
-                at,
-                index,
-                y,
-                velocity,
-            }) => {
-                let v = (velocity as f32 - (p.y - y) * 127.0 / crate::pianoroll::VELOCITY_H)
-                    .round()
-                    .clamp(1.0, 127.0) as u8;
-                if let Some(n) = self
-                    .session
-                    .project
-                    .notes_mut(at)
-                    .and_then(|n| n.get_mut(index))
-                {
-                    n.velocity = v;
+            Some(Drag::Paint { .. }) => self.drag_paint(p),
+            Some(Drag::Velocity { at, y }) => {
+                let dv = -(p.y - y) * 127.0 / crate::pianoroll::VELOCITY_H;
+                let held = self.held.clone();
+                if let Some(notes) = self.session.project.notes_mut(at) {
+                    for (i, was) in held {
+                        if let Some(n) = notes.get_mut(i) {
+                            n.velocity = (was.velocity as f32 + dv).round().clamp(1.0, 127.0) as u8;
+                        }
+                    }
                 }
             }
+            Some(Drag::VelocityLine { .. }) => self.drag_velocity_line(p),
+            Some(Drag::Control { .. }) => self.drag_control(p),
             Some(Drag::Auto {
                 track,
                 param,
@@ -1475,7 +1551,7 @@ impl Workspace {
         }
         if let Some(
             Drag::Region { moved: false, .. }
-            | Drag::Note { moved: false, .. }
+            | Drag::Notes { moved: false, .. }
             | Drag::Auto { moved: false, .. }
             | Drag::Marker { moved: false, .. },
         ) = self.drag
@@ -1539,15 +1615,16 @@ impl Workspace {
         // Release whatever note the drag was sounding.
         match self.drag {
             Some(Drag::Key { track, pitch }) => self.player.preview(track, pitch, 0),
-            Some(Drag::Note { at, index, .. }) => {
+            Some(Drag::Notes { at, lead, .. }) => {
                 let track = self.session.project.tracks[at.0].id;
-                if let Some(n) = self
-                    .session
-                    .project
-                    .notes_mut(at)
-                    .and_then(|n| n.get(index))
-                {
+                if let Some(n) = self.session.project.notes_mut(at).and_then(|n| n.get(lead)) {
                     let pitch = n.pitch;
+                    self.player.preview(track, pitch, 0);
+                }
+            }
+            Some(Drag::Paint { at, .. }) => {
+                let track = self.session.project.tracks[at.0].id;
+                for pitch in std::mem::take(&mut self.painting) {
                     self.player.preview(track, pitch, 0);
                 }
             }
@@ -1712,11 +1789,8 @@ impl Workspace {
 
     fn delete(&mut self, cx: &mut Context<Self>) {
         let notes_shown = matches!(self.bottom, Some(Bottom::PianoRoll | Bottom::Score));
-        if let (Some(at), Some(i), true) = (self.region, self.note, notes_shown) {
-            self.edit(cx, |ws| {
-                ws.session.project.notes_mut(at).unwrap().remove(i);
-                ws.note = None;
-            });
+        if let (Some(at), false, true) = (self.region, self.picked.is_empty(), notes_shown) {
+            self.delete_notes(at, cx);
             return;
         }
         let Some((t, r)) = self.region else { return };
@@ -1877,41 +1951,6 @@ impl Workspace {
     }
 
     /// Moves or resizes a note in the piano roll by `d` pixels from where the drag began.
-    fn drag_note(&mut self, at: At, index: usize, edge: Edge, d: Point<f32>, was: (i64, u8, u64)) {
-        let (start, pitch, length) = was;
-        let dt = (d.x / self.px_per_tick()) as f64;
-        let region_start = self.session.project.region(at).start as i64;
-        let grid = self.grid() as i64;
-        let snapped = |t: f64| self.snap(t.max(0.0)) as i64;
-        let new_start = snapped((region_start + start) as f64 + dt) - region_start;
-        let new_end = snapped((region_start + start) as f64 + length as f64 + dt) - region_start;
-        let track = self.session.project.tracks[at.0].id;
-        let Some(n) = self
-            .session
-            .project
-            .notes_mut(at)
-            .and_then(|n| n.get_mut(index))
-        else {
-            return;
-        };
-        match edge {
-            Edge::Move => {
-                n.start = new_start;
-                let rows = (d.y / crate::pianoroll::KEY_H).round() as i32;
-                let new = (pitch as i32 - rows).clamp(0, 127) as u8;
-                if new != n.pitch {
-                    let old = n.pitch;
-                    n.pitch = new;
-                    self.player.preview(track, old, 0);
-                    self.player.preview(track, new, 100);
-                }
-            }
-            Edge::End | Edge::Start | Edge::Stretch => {
-                n.length = (new_end - n.start).max(grid) as u64
-            }
-        }
-    }
-
     fn zoom(&mut self, by: f32, cx: &mut Context<Self>) {
         self.px_per_beat = (self.px_per_beat * by).clamp(4.0, 800.0);
         cx.notify();
@@ -2340,7 +2379,7 @@ impl Workspace {
             (_, Tool::Scissors, _) => "Click a region or note to cut it there",
             (_, Tool::Eraser, _) => "Click a region or note to delete it",
             (_, _, Some(Bottom::PianoRoll)) => {
-                "Double-click to add a note · drag to move · drag its end to resize"
+                "Double-click writes · drag a band to pick · ⌥-drag copies · ↑↓ ⇧↑↓ ←→ move · ⌘C ⌘V ⌘D · Q quantize · right-click for more"
             }
             _ if self.show_automation => {
                 "Click a lane to add a point · ⌥-click a point to delete it · pick Touch or Latch to record while playing"
@@ -2538,6 +2577,13 @@ impl Render for Workspace {
                     // The search field has the keyboard: letters and space type.
                     _ if self.browser.searching => "Search",
                     _ if self.typing.is_some() => "Workspace Typing",
+                    // The piano roll open: arrows, copy and paste work on its notes.
+                    _ if self.view == View::Arrange
+                        && self.bottom == Some(Bottom::PianoRoll)
+                        && !self.browser_open() =>
+                    {
+                        "Workspace Arrange Roll"
+                    }
                     _ => "Workspace Arrange",
                 };
                 // Up and down pick sounds while the browser shows.
@@ -2612,6 +2658,37 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &ShowSongs, _, cx| ws.toggle_songs(cx)))
             .on_action(cx.listener(|ws, _: &EditPlaybooks, _, cx| ws.open_genres(None, cx)))
             .on_action(cx.listener(|ws, _: &StudySong, _, cx| ws.open_study(cx)))
+            .on_action(
+                cx.listener(|ws, _: &SelectAllNotes, _, cx| ws.roll_op(RollOp::SelectAll, cx)),
+            )
+            .on_action(cx.listener(|ws, _: &CopyNotes, _, cx| ws.roll_op(RollOp::Copy, cx)))
+            .on_action(cx.listener(|ws, _: &CutNotes, _, cx| ws.roll_op(RollOp::Cut, cx)))
+            .on_action(cx.listener(|ws, _: &PasteNotes, _, cx| ws.roll_op(RollOp::Paste, cx)))
+            .on_action(
+                cx.listener(|ws, _: &DuplicateNotes, _, cx| ws.roll_op(RollOp::Duplicate, cx)),
+            )
+            .on_action(cx.listener(|ws, _: &NotesUp, _, cx| ws.roll_op(RollOp::Transpose(1), cx)))
+            .on_action(
+                cx.listener(|ws, _: &NotesDown, _, cx| ws.roll_op(RollOp::Transpose(-1), cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &NotesOctaveUp, _, cx| ws.roll_op(RollOp::Transpose(12), cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &NotesOctaveDown, _, cx| {
+                    ws.roll_op(RollOp::Transpose(-12), cx)
+                }),
+            )
+            .on_action(cx.listener(|ws, _: &NudgeLeft, _, cx| ws.roll_op(RollOp::Nudge(-4), cx)))
+            .on_action(cx.listener(|ws, _: &NudgeRight, _, cx| ws.roll_op(RollOp::Nudge(4), cx)))
+            .on_action(
+                cx.listener(|ws, _: &NudgeLeftFine, _, cx| ws.roll_op(RollOp::Nudge(-1), cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &NudgeRightFine, _, cx| ws.roll_op(RollOp::Nudge(1), cx)),
+            )
+            .on_action(cx.listener(|ws, _: &QuantizeNotes, _, cx| ws.roll_op(RollOp::Quantize, cx)))
+            .on_action(cx.listener(|ws, _: &DeselectNotes, _, cx| ws.roll_op(RollOp::Deselect, cx)))
             .on_action(cx.listener(|ws, _: &BrowserUp, _, cx| ws.move_picked(-1, cx)))
             .on_action(cx.listener(|ws, _: &BrowserDown, _, cx| ws.move_picked(1, cx)))
             .on_action(cx.listener(|ws, _: &BrowserNewTrack, _, cx| ws.use_picked(true, cx)))

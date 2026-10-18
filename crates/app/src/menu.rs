@@ -145,6 +145,10 @@ pub enum MenuAction {
     Snap(Snap),
     /// The track whose notes the piano roll shows faintly, by id.
     Ghost(Option<u64>),
+    /// Something done to the piano roll's notes.
+    Roll(crate::pianoroll::RollOp),
+    /// What a click in the piano roll writes: a note or a chord.
+    Stamp(crate::pianoroll::Stamp),
     /// Which parameter a track's automation lane shows, by track id.
     AutoParam(u64, Param),
     /// How a track follows its automation.
@@ -386,6 +390,8 @@ impl Workspace {
             }
             MenuAction::Snap(snap) => self.snap = snap,
             MenuAction::Ghost(id) => self.roll.ghost = id,
+            MenuAction::Roll(op) => self.roll_op(op, cx),
+            MenuAction::Stamp(stamp) => self.roll.stamp = stamp,
             MenuAction::AutoParam(track, param) => {
                 self.params.insert(track, param);
                 self.show_automation = true;

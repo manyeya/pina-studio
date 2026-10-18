@@ -205,7 +205,7 @@ impl Workspace {
                     .collect();
             }
         }
-        let selected = self.note;
+        let selected = self.picked.last().copied();
         let ink = Hsla::from(rgb(0xe8e8ec));
         let faint = Hsla::from(rgb(0x3a3a44));
         let shown = notes.clone();
@@ -329,7 +329,7 @@ impl Workspace {
                     MouseButton::Left,
                     cx.listener(move |ws, _, _, cx| {
                         cx.stop_propagation();
-                        ws.note = Some(i);
+                        ws.picked = vec![i];
                         // It sounds until the mouse comes up, as a piano roll key does.
                         if let Some(at) = ws.region {
                             let track = ws.session.project.tracks[at.0].id;
@@ -442,7 +442,7 @@ impl Workspace {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, _, _, cx| {
-                            ws.note = None;
+                            ws.picked.clear();
                             cx.notify();
                         }),
                     )
