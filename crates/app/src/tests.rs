@@ -3332,6 +3332,12 @@ fn shots() {
                     ws.sampler_ui.zone = 2;
                     ws.show_bottom(Bottom::Sampler, cx);
                 }
+                "steps-empty" => {
+                    ws.select_track(1);
+                    ws.region = Some((1, 0));
+                    ws.editor_h = 380.0;
+                    ws.show_bottom(Bottom::Steps, cx);
+                }
                 "steps" => {
                     ws.session
                         .project
