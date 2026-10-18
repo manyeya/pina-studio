@@ -14,7 +14,7 @@ use tempo_engine::{
 
 use crate::{
     menu::{Menu, MenuAction},
-    strip::{self, Builtin, Channel, Layout},
+    strip::{self, Channel, Layout},
     theme::*,
     workspace::{Bottom, CompField, Drag, Name, Side, Target, Workspace, pt},
 };
@@ -121,10 +121,10 @@ impl Workspace {
             ));
         let body = match self.side {
             Side::Inspector => self.inspector_tab(cx).into_any_element(),
-            Side::Browser => self.browser_tab(cx).into_any_element(),
+            Side::Browser => self.device_browser(cx).into_any_element(),
         };
         div()
-            .w(px(INSPECTOR_W))
+            .w(px(self.side_w()))
             .flex_none()
             .h_full()
             .flex()
@@ -682,201 +682,6 @@ impl Workspace {
                     })
                     .child(strip::strip(self, Channel::Master, Layout::Compact, cx)),
             )
-    }
-
-    fn browser_tab(&mut self, cx: &mut Context<Self>) -> Div {
-        let entry =
-            |name: String, sub: String, i: Icon, action: MenuAction, cx: &mut Context<Self>| {
-                div()
-                    .h(px(34.))
-                    .px(px(6.))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .rounded(px(7.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgb(OFF)))
-                    .child(
-                        div()
-                            .size(px(24.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(6.))
-                            .bg(rgb(FIELD))
-                            .text_color(rgb(TEXT_2))
-                            .child(icon(i, 13.).text_color(rgb(TEXT_2))),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .min_w(px(0.))
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .whitespace_nowrap()
-                                    .overflow_hidden()
-                                    .child(name),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(TEXT_3))
-                                    .whitespace_nowrap()
-                                    .overflow_hidden()
-                                    .child(sub),
-                            ),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| ws.choose(action.clone(), cx)),
-                    )
-            };
-        let t = self.track;
-        let ch = Channel::Track(t);
-        let has_track = !self.session.project.tracks.is_empty();
-        let mut instruments = vec![
-            entry(
-                "Sine Synth".into(),
-                "Built in".into(),
-                Icon::Sine,
-                MenuAction::Instrument {
-                    track: t,
-                    instrument: Instrument::Synth,
-                },
-                cx,
-            ),
-            entry(
-                "Drum Kit".into(),
-                format!("Built in · {} sounds", tempo_engine::drums::SOUNDS.len()),
-                Icon::Drum,
-                MenuAction::Instrument {
-                    track: t,
-                    instrument: Instrument::Drums,
-                },
-                cx,
-            ),
-        ];
-        // The built-ins: one the track has already shows it in the mixer.
-        let (has_eq, has_comp, has_sat) = match has_track {
-            true => {
-                let (eq, comp) = self.strip_dsp(ch);
-                (eq.is_some(), comp.is_some(), self.sat(ch).is_some())
-            }
-            false => (false, false, false),
-        };
-        let builtin = |name: &str, about: &str, has: bool, i: Icon, b: Builtin, cx: &mut _| {
-            let sub = match has {
-                true => "On this track · click to show it".to_string(),
-                false => format!("Built in · {about}"),
-            };
-            let action = MenuAction::AddBuiltin {
-                channel: ch,
-                builtin: b,
-            };
-            entry(name.into(), sub, i, action, cx)
-        };
-        let mut effects = vec![
-            builtin(
-                "Channel EQ",
-                "low cut, bells, shelf",
-                has_eq,
-                Icon::Scale,
-                Builtin::Eq,
-                cx,
-            ),
-            builtin(
-                "Compressor",
-                "soft knee",
-                has_comp,
-                Icon::Mixer,
-                Builtin::Comp,
-                cx,
-            ),
-            builtin(
-                "Saturator",
-                "drive, tone, mix",
-                has_sat,
-                Icon::Burst,
-                Builtin::Sat,
-                cx,
-            ),
-        ];
-        let inserts = self
-            .session
-            .project
-            .tracks
-            .get(t)
-            .map_or(0, |tr| tr.inserts.len());
-        for p in self.plugins.iter().flatten() {
-            let plugin = p.plugin_ref();
-            if p.instrument {
-                instruments.push(entry(
-                    p.class.clone(),
-                    p.vendor.clone(),
-                    Icon::Plug,
-                    MenuAction::Instrument {
-                        track: t,
-                        instrument: Instrument::Plugin(plugin),
-                    },
-                    cx,
-                ));
-            } else {
-                effects.push(entry(
-                    p.class.clone(),
-                    p.vendor.clone(),
-                    Icon::Plug,
-                    MenuAction::Insert {
-                        channel: ch,
-                        index: inserts,
-                        plugin: Some(plugin),
-                    },
-                    cx,
-                ));
-            }
-        }
-        let scanning = self.plugins.is_none();
-        let target = self
-            .session
-            .project
-            .tracks
-            .get(t)
-            .map_or("No track selected".to_string(), |tr| {
-                format!("Adds to {}", tr.name)
-            });
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(14.))
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(TEXT_3))
-                    .child(target),
-            )
-            .when(has_track, |d| {
-                d.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .child(section_title("Instruments").mb(px(4.)))
-                        .children(instruments),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .child(section_title("Effects").mb(px(4.)))
-                        .children(effects),
-                )
-            })
-            .when(scanning, |d| {
-                d.child(div().text_color(rgb(TEXT_3)).child("Looking for plugins…"))
-            })
     }
 }
 

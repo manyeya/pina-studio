@@ -75,6 +75,16 @@ impl Menu {
 #[derive(Clone)]
 pub enum MenuAction {
     Nothing,
+    /// Songs: open one in this window, start one, show them all, or do something to one.
+    OpenSong(std::path::PathBuf),
+    NewSong,
+    ShowSongs,
+    DuplicateSong(std::path::PathBuf),
+    RenameSong(std::path::PathBuf),
+    RevealSong(std::path::PathBuf),
+    TrashSong(std::path::PathBuf),
+    /// The new-song sheet's key.
+    NewSongKey(Option<String>),
     /// Works with this agent in the Agent panel.
     Agent(crate::agent::Kind),
     Instrument {
@@ -190,6 +200,19 @@ impl Workspace {
         self.menu = None;
         match action {
             MenuAction::Nothing => {}
+            MenuAction::NewSongKey(key) => {
+                if let Some(s) = self.new_song.as_mut() {
+                    s.key = key.as_deref().and_then(tempo_engine::music::Key::parse);
+                }
+            }
+            // Songs need the window (to ask about saving): the next frame does them.
+            a @ (MenuAction::OpenSong(_)
+            | MenuAction::NewSong
+            | MenuAction::ShowSongs
+            | MenuAction::DuplicateSong(_)
+            | MenuAction::RenameSong(_)
+            | MenuAction::RevealSong(_)
+            | MenuAction::TrashSong(_)) => self.song_pending = Some(a),
             MenuAction::Agent(kind) => self.pick_agent(kind, cx),
             MenuAction::SampleKey(key) => self.set_sample_key(key, cx),
             MenuAction::SampleCompatible(at) => {

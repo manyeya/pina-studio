@@ -116,6 +116,8 @@ struct Descriptor {
     name: String,
     vendor: String,
     instrument: bool,
+    /// Its features: "instrument", "synthesizer"; "audio-effect", "reverb".
+    features: Vec<String>,
 }
 
 impl Library {
@@ -206,6 +208,10 @@ impl Library {
                         name: text(d.name),
                         vendor: text(d.vendor),
                         instrument: features(d.features).contains(&CLAP_PLUGIN_FEATURE_INSTRUMENT),
+                        features: features(d.features)
+                            .iter()
+                            .map(|f| f.to_string_lossy().into_owned())
+                            .collect(),
                     })
                 })
                 .collect()
@@ -294,6 +300,7 @@ pub fn inspect(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
             uid: Some(d.id.to_string_lossy().into_owned()),
             vendor: d.vendor,
             instrument: d.instrument,
+            categories: d.features,
         })
         .collect())
 }

@@ -1,5 +1,6 @@
 mod agent;
 mod browser;
+mod catalog;
 mod chat;
 mod cli;
 mod editor;
@@ -10,6 +11,7 @@ mod mcp;
 mod menu;
 mod mixer;
 mod pianoroll;
+mod projects;
 mod record;
 mod samples_cli;
 mod score;
@@ -77,6 +79,10 @@ const USAGE: &str = "usage:
                                    goes (live in the app, and its Agent panel, if it's open):
                                    claude-code or codex; the last one picked in the app by
                                    default
+  tempo projects                   every song in ~/Music/tempo (and opened lately), as JSON
+  tempo new <name> [--tempo N] [--key \"A minor\"] [--time 6/8] [--template beat]
+                                   start a song in ~/Music/tempo from a template: empty,
+                                   beat, band, lofi or electronic
   tempo mcp                        an MCP server on stdin and stdout";
 
 fn main() {
@@ -130,6 +136,12 @@ fn main() {
         }
         ["samples", rest @ ..] => print(samples_cli::command(rest)),
         ["mcp"] => mcp::serve(),
+        ["projects"] => print(Ok(serde_json::to_value(projects::list(
+            &projects::root(),
+            &projects::recent(),
+        ))
+        .unwrap())),
+        ["new", name, rest @ ..] => new_song(name, rest),
         ["ask", "--agent", id, dir, words @ ..] if !words.is_empty() => {
             match agent::Kind::from_id(id) {
                 Some(kind) => agent::ask(kind, p(dir), &words.join(" ")),
@@ -197,6 +209,9 @@ fn default_project() -> PathBuf {
 
 fn open(dir: &Path) -> Result<(), String> {
     let session = Session::open(dir)?;
+    if session.on_disk {
+        projects::opened(dir);
+    }
     let player = Player::start(&session.project, dir)?;
     gpui_platform::application().run(move |cx: &mut App| {
         if let Err(e) = cx.text_system().add_fonts(theme::fonts()) {
@@ -206,6 +221,9 @@ fn open(dir: &Path) -> Result<(), String> {
         cx.set_menus([
             Menu::new("tempo").items([MenuItem::action("Quit tempo", Quit)]),
             Menu::new("File").items([
+                MenuItem::action("New Song…", NewSong),
+                MenuItem::action("Songs…", ShowSongs),
+                MenuItem::separator(),
                 MenuItem::action("Save", Save),
                 MenuItem::action("Export to WAV", Export),
             ]),
@@ -268,6 +286,46 @@ fn open(dir: &Path) -> Result<(), String> {
         cx.on_window_closed(|cx, _| cx.quit()).detach();
         cx.activate(true);
     });
+    Ok(())
+}
+
+/// `tempo new <name> [--tempo N] [--key "A minor"] [--time 6/8] [--template beat]`.
+fn new_song(name: &str, rest: &[&str]) -> Result<(), String> {
+    let mut tempo = 120.0;
+    let mut key = None;
+    let mut time = [4, 4];
+    let mut template = projects::Template::Empty;
+    let mut it = rest.iter();
+    while let Some(&flag) = it.next() {
+        let value = it.next().copied().ok_or(format!("{flag} takes a value"))?;
+        match flag {
+            "--tempo" => {
+                tempo = value
+                    .parse()
+                    .map_err(|_| format!("{value} isn't a tempo"))?
+            }
+            "--key" => {
+                key = Some(
+                    tempo_engine::music::Key::parse(value).ok_or(format!("{value} isn't a key"))?,
+                )
+            }
+            "--time" => {
+                let (b, u) = value.split_once('/').ok_or("--time is like 4/4")?;
+                time = [
+                    b.parse().map_err(|_| "--time is like 4/4")?,
+                    u.parse().map_err(|_| "--time is like 4/4")?,
+                ];
+            }
+            "--template" => {
+                template = projects::Template::from_name(value).ok_or(format!(
+                    "no template {value}: empty, beat, band, lofi, electronic"
+                ))?
+            }
+            _ => return Err(USAGE.to_string()),
+        }
+    }
+    let dir = projects::create(&projects::root(), name, tempo, key, time, template)?;
+    println!("{}", dir.display());
     Ok(())
 }
 

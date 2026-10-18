@@ -123,10 +123,7 @@ pub enum Icon {
     Eraser,
     Magnet,
     Agent,
-    Drum,
-    Sine,
     Keys,
-    Burst,
     Wave,
     Bus,
     Output,
@@ -191,16 +188,7 @@ impl Icon {
             }
             Icon::Magnet => r##"<path d="M6 4v7a6 6 0 0 0 12 0V4M6 8h4M14 8h4"/>"##,
             Icon::Agent => r##"<path stroke-width="2.25" d="M5 7l5 5-5 5M12.5 17.5H19"/>"##,
-            Icon::Drum => {
-                r##"<path d="M4 8.5c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 8.5V15c0 1.7 3.6 3 8 3s8-1.3 8-3V8.5M8.5 11.3v6.4M15.5 11.3v6.4"/>"##
-            }
-            Icon::Sine => {
-                r##"<path d="M3 12c1.5-4.5 3-4.5 4.5 0s3 4.5 4.5 0 3-4.5 4.5 0 3 4.5 4.5 0"/>"##
-            }
             Icon::Keys => r##"<path d="M4 5h16v14H4zM8.5 5v8M15.5 5v8M12 13v6"/>"##,
-            Icon::Burst => {
-                r##"<path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/>"##
-            }
             Icon::Wave => r##"<path d="M3 12h2M7 8v8M10 5v14M13 9v6M16 7v10M19 11v2"/>"##,
             Icon::Bus => r##"<path d="M4 7h16M4 12h16M4 17h16M8 4v6M16 9v6M11 14v6"/>"##,
             Icon::Output => r##"<path d="M4 12h11M11 7l5 5-5 5M19 5v14"/>"##,

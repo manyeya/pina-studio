@@ -29,6 +29,11 @@ pub struct PluginInfo {
     pub uid: Option<String>,
     pub vendor: String,
     pub instrument: bool,
+    /// What it says it is, in its format's words: VST3's subcategories ("Fx", "Reverb"),
+    /// CLAP's features ("audio-effect", "delay"), VST2's category; for an Audio Unit, its type
+    /// and subtype codes are in `uid`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
 }
 
 impl PluginInfo {
@@ -51,7 +56,13 @@ pub const AUDIO_UNITS: &str = "au";
 struct Cached {
     modified: u64,
     plugins: Vec<PluginInfo>,
+    /// What the scan that wrote it read: a bundle scanned by an older one is scanned again.
+    #[serde(default)]
+    version: u32,
 }
+
+/// What a scan reads; 2 added each plugin's categories.
+const VERSION: u32 = 2;
 
 /// Where VST3, CLAP and VST2 plugins are installed, and the folders in `TEMPO_PLUGIN_PATH` (or,
 /// as before, `TEMPO_VST3_PATH`; colon-separated).
@@ -184,13 +195,15 @@ pub fn scan(exe: &Path, bundles: &[PathBuf], cache: &Path) -> Vec<PluginInfo> {
             false => modified(bundle),
         };
         let entry = match old.get(bundle) {
-            Some(c) if c.modified == modified => Cached {
+            Some(c) if c.modified == modified && c.version == VERSION => Cached {
                 modified,
                 plugins: c.plugins.clone(),
+                version: VERSION,
             },
             _ => Cached {
                 modified,
                 plugins: scan_one(exe, bundle),
+                version: VERSION,
             },
         };
         new.insert(bundle.clone(), entry);

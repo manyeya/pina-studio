@@ -958,6 +958,19 @@ pub fn inspect(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
         .open(0, 44_100.0, 512)
         .map_err(|e| format!("{}: {e}", bundle.display()))?;
     let vendor = i.string(eff::GET_VENDOR_STRING, 0);
+    // VST2's categories, as words.
+    let category = match i.category() {
+        1 => "Fx",
+        2 => "Instrument",
+        3 => "Analyzer",
+        4 => "Mastering",
+        5 => "Spatial",
+        6 => "Reverb",
+        7 => "Surround",
+        8 => "Restoration",
+        11 => "Generator",
+        _ => "",
+    };
     let info = |class: String, uid: i32, instrument: bool| PluginInfo {
         format: Format::Vst2,
         path: bundle.to_path_buf(),
@@ -965,6 +978,11 @@ pub fn inspect(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
         uid: Some(uid_text(uid)),
         vendor: vendor.clone(),
         instrument,
+        categories: [category]
+            .iter()
+            .filter(|c| !c.is_empty())
+            .map(|c| c.to_string())
+            .collect(),
     };
     if i.category() == CATEGORY_SHELL {
         // ponytail: a shell's plugins are listed as effects, without opening each (slow for

@@ -174,14 +174,8 @@ impl Workspace {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                            ws.menu = Some(Menu {
-                                at: e.position,
-                                items: vec![
-                                    ("Save".into(), MenuAction::Save),
-                                    ("Export to WAV".into(), MenuAction::Export),
-                                ],
-                                ..Default::default()
-                            });
+                            ws.refresh_songs(cx);
+                            ws.menu = Some(ws.song_menu(e.position));
                             cx.notify();
                         }),
                     ),

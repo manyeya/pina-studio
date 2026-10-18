@@ -77,6 +77,9 @@ pub struct TextInput {
     /// A search field: it stays, so Enter and Escape tell every time; whoever holds it draws its
     /// box, and it says what to type while it's empty.
     search: Option<SharedString>,
+    /// Losing focus confirms it, as naming a track does; a search, a message to an agent or a
+    /// form's field wait for Enter.
+    confirm_on_blur: bool,
 }
 
 impl EventEmitter<TextEvent> for TextInput {}
@@ -95,6 +98,7 @@ impl TextInput {
             selecting: false,
             done: false,
             search: None,
+            confirm_on_blur: true,
         }
     }
 
@@ -102,7 +106,17 @@ impl TextInput {
     pub fn search(placeholder: &str, cx: &mut Context<Self>) -> Self {
         TextInput {
             search: Some(placeholder.to_string().into()),
+            confirm_on_blur: false,
             ..TextInput::new("", cx)
+        }
+    }
+
+    /// A form's field: it stays, only Enter confirms it, and whoever holds it draws its box.
+    pub fn field(text: &str, cx: &mut Context<Self>) -> Self {
+        TextInput {
+            search: Some("".into()),
+            confirm_on_blur: false,
+            ..TextInput::new(text, cx)
         }
     }
 
@@ -631,7 +645,7 @@ impl Render for TextInput {
             .on_mouse_move(cx.listener(Self::mouse_move))
             // A click anywhere else keeps what's typed, whatever it lands on.
             .on_mouse_down_out(cx.listener(|this, _, window, cx| {
-                if this.focus.is_focused(window) {
+                if this.confirm_on_blur && this.focus.is_focused(window) {
                     this.confirm(cx)
                 }
             }))

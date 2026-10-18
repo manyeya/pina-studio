@@ -18,7 +18,8 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
   `topbar.rs` (transport and display), `inspector.rs` (the side panel: inspector and browser),
   `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`),
-  `looks.rs` (track colours and icons, and their picker),
+  `looks.rs` (track colours and icons, and their picker), `catalog.rs` (the Browser),
+  `projects.rs` (songs: the Songs page, the new-song sheet, opening another in the window),
   `tracks.rs` (tools, markers, ruler, headers, regions, automation), `editor.rs` (the
   editor under the tracks) with `pianoroll.rs`, `steps.rs` (the step sequencer), `score.rs`,
   `takes.rs` (take folders), `liveloops.rs` and `browser.rs` (the sample browser, a page of
@@ -96,7 +97,24 @@ In the app, mostly as in Logic:
   and for MIDI and patterns Quantize, Transpose and Velocity, which change what plays but not
   the notes ("Apply to notes" writes them in). Then Smart Controls (a plugin instrument's filter
   and envelope, else the channel's EQ and compressor; turning them is an undoable edit) and the
-  channel strips. Browser lists instruments and effects to put on the selected track.
+  channel strips.
+- Browser, beside it: one search for everything that goes on a track, and more. tempo's own
+  instruments and effects and every plugin installed, each once however many formats it comes in
+  (CLAP, VST3, AU, VST2 shown as badges, the best used), in the categories the plugin says it
+  belongs to (VST3 subcategories, CLAP features, an Audio Unit's type, VST2's category; its name
+  where those are silent): Synths, Samplers, Drums, Keys, Orchestral, EQ, Dynamics, Reverb,
+  Delay, Distortion, Modulation, Filter, Pitch, Stereo & space, Utility. Words that mean a thing
+  find it ("echo" a delay, "space" a reverb, "glue" a compressor); sounds from the sample library
+  and songs come up too. Favourites (★), what's in this song and what's used lately come first. A
+  plugin's arrow shows its preset files. Click puts it on the selected track (an instrument in
+  place of its own, an effect after its others), double-click or ⇧↵ on a new track, or drag it
+  onto any track; ↑ ↓ and ↵ work from the search.
+- Songs (⌘O, or the song's name in the top bar): every song in `~/Music/tempo`, each card's cover
+  its arrangement in miniature, coloured by what each track plays, with its tempo, key, tracks
+  and length. Open one in this window (asked first whether to save the one open), or from its
+  card's menu rename, duplicate (a clone, taking no space until it changes), show in the Finder,
+  or move to the Trash. New Song (⌘N): a name, tempo, key and time, and a start: empty, or a
+  beat, band, lo-fi or electronic set of tracks. The top bar's menu has the songs opened lately.
 - Every track is coloured and drawn by what it plays, worked out from its sound (its samples' and
   audio's analysis), the plugin it plays, its name and its notes: drums warm, bass violet, keys
   teal, vocals pink, effects grey, each track a shade of its family's colour so they read as one
@@ -257,7 +275,9 @@ without allowing a shell. Its tools are `describe`, `show`, `edit`, `analyze`, `
 
 ## Projects
 
-A project is a folder holding `project.json` and, for audio regions, `Audio Files/`. Positions
+`tempo projects` lists every song as JSON; `tempo new <name> [--tempo N] [--key "A minor"]
+[--time 6/8] [--template beat|band|lofi|electronic]` starts one in `~/Music/tempo` (or
+`TEMPO_SONGS`). A project is a folder holding `project.json` and, for audio regions, `Audio Files/`. Positions
 are in ticks, 960 to a quarter note; audio offsets are in samples. Unsaved edits are kept every
 30 seconds in `.recovery/`, a project of its own; if tempo stops before they're saved, opening the
 project offers them back.

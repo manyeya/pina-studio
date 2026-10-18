@@ -41,6 +41,11 @@ actions!(
     [
         PlayStop,
         ToggleAgent,
+        NewSong,
+        ShowSongs,
+        BrowserUp,
+        BrowserDown,
+        BrowserNewTrack,
         GoToStart,
         Undo,
         Redo,
@@ -105,6 +110,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("r", Record, Some("Workspace && !TextInput")),
         KeyBinding::new("cmd-k", ToggleTyping, Some("Workspace")),
         KeyBinding::new("cmd-l", ToggleAgent, None),
+        KeyBinding::new("cmd-n", NewSong, None),
+        KeyBinding::new("cmd-o", ShowSongs, None),
+        // The Browser's results, walked while its search is typed.
+        KeyBinding::new("up", BrowserUp, Some("DeviceBrowser")),
+        KeyBinding::new("down", BrowserDown, Some("DeviceBrowser")),
+        KeyBinding::new("shift-enter", BrowserNewTrack, Some("DeviceBrowser")),
         KeyBinding::new("cmd-shift-d", CreateStack, Some("Workspace")),
         KeyBinding::new("cmd-alt-p", NewPattern, Some("Workspace")),
         KeyBinding::new("cmd-s", Save, None),
@@ -298,6 +309,13 @@ pub enum Drag {
         at: Point<f32>,
         moved: bool,
     },
+    /// A device from the Browser, to drop on a track.
+    Device {
+        device: usize,
+        from: Point<f32>,
+        at: Point<f32>,
+        moved: bool,
+    },
     /// A box being drawn on the sample browser's map, from corner to corner.
     MapBox {
         from: Point<f32>,
@@ -321,6 +339,8 @@ pub enum View {
     Arrange,
     Mixer,
     Samples,
+    /// Every song, to open, start or manage.
+    Songs,
 }
 
 /// What a name being typed is for.
@@ -508,6 +528,18 @@ pub struct Workspace {
     pub show_agent: bool,
     /// The conversation with Claude in it.
     pub chat: crate::chat::Chat,
+    /// The Browser: devices, presets, sounds and songs.
+    pub catalog: crate::catalog::Catalog,
+    /// Every song, for the Songs page and the menus.
+    pub songs: Vec<crate::projects::Song>,
+    /// A song to open, once the next frame has the window to ask about saving with.
+    pub opening: Option<std::path::PathBuf>,
+    /// A song action from a menu, for the next frame.
+    pub song_pending: Option<crate::menu::MenuAction>,
+    /// The new-song sheet, while it's open.
+    pub new_song: Option<crate::projects::NewSong>,
+    /// A song being renamed on its card.
+    pub renaming: Option<crate::projects::Renaming>,
     /// Each track's icon and colour, as what it plays says or as chosen (`looks.rs`).
     pub looks: Vec<crate::looks::Shown>,
     /// The analysis of the song's audio the looks are worked out from.
@@ -616,6 +648,12 @@ impl Workspace {
         let links = session.project.link_contents();
         let browser = crate::browser::Browser::new(cx);
         let chat = crate::chat::Chat::new(cx);
+        let catalog = crate::catalog::Catalog::new(cx);
+        // A song not saved yet opens on the Songs page.
+        let view = match session.on_disk {
+            true => View::Arrange,
+            false => View::Songs,
+        };
         // The CPU load and meters refresh while nothing else redraws.
         cx.spawn(async move |this, cx| {
             loop {
@@ -646,7 +684,7 @@ impl Workspace {
             px_per_beat: 48.0,
             scroll_x: 0.0,
             scroll_y: 0.0,
-            view: View::Arrange,
+            view,
             bottom: None,
             show_inspector: true,
             show_samples: false,
@@ -702,6 +740,12 @@ impl Workspace {
             viewport_w: 1440.0,
             browser,
             chat,
+            catalog,
+            songs: Vec::new(),
+            opening: None,
+            song_pending: None,
+            new_song: None,
+            renaming: None,
             looks: Vec::new(),
             heard: Default::default(),
             picker: None,
@@ -709,7 +753,21 @@ impl Workspace {
             title: String::new(),
         };
         ws.refresh_looks(cx);
+        ws.refresh_songs(cx);
         ws
+    }
+
+    /// The side panel's width: wider for the Browser, whose names are long.
+    pub fn side_w(&self) -> f32 {
+        match self.side {
+            Side::Browser => INSPECTOR_W + 52.0,
+            _ => INSPECTOR_W,
+        }
+    }
+
+    /// The aliases' shared contents, from the song as it is.
+    pub fn reset_links(&mut self) {
+        self.links = self.session.project.link_contents();
     }
 
     pub fn px_per_tick(&self) -> f32 {
@@ -1113,6 +1171,7 @@ impl Workspace {
                 | Drag::Editor { .. }
                 | Drag::Panel { .. }
                 | Drag::Sample { .. }
+                | Drag::Device { .. }
                 | Drag::MapBox { .. }
         );
         if edits {
@@ -1314,6 +1373,17 @@ impl Workspace {
                 self.drag_sample(p, cx);
                 return;
             }
+            Some(Drag::Device { .. }) => {
+                if let Some(Drag::Device {
+                    from, at, moved, ..
+                }) = &mut self.drag
+                {
+                    *at = p;
+                    *moved |= (p.x - from.x).hypot(p.y - from.y) > 4.0;
+                }
+                cx.notify();
+                return;
+            }
             Some(Drag::Warp { at, from }) => self.drag_warp(at, from, p.x),
             Some(Drag::Key { .. }) | None => return,
         }
@@ -1421,6 +1491,10 @@ impl Workspace {
         if let Some(Drag::Sample { .. } | Drag::MapBox { .. }) = self.drag {
             let drag = self.drag.take();
             self.drop_sample(drag, cx);
+        }
+        if let Some(Drag::Device { .. }) = self.drag {
+            let drag = self.drag.take();
+            self.drop_device(drag, cx);
         }
         // Release whatever note the drag was sounding.
         match self.drag {
@@ -2288,6 +2362,7 @@ impl Workspace {
             let plugins = found.await;
             this.update(cx, |ws, cx| {
                 ws.plugins = Some(plugins);
+                ws.catalog_plugins();
                 cx.notify();
             })
             .ok();
@@ -2300,6 +2375,12 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(what) = self.pending_name.take() {
             self.start_naming(what, window, cx);
+        }
+        if let Some(dir) = self.opening.take() {
+            self.open_song(dir, window, cx);
+        }
+        if let Some(action) = self.song_pending.take() {
+            self.song_action(action, window, cx);
         }
         self.browser_frame(window, cx);
         if std::mem::take(&mut self.refocus) && self.naming.is_none() {
@@ -2438,6 +2519,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &Quit, window, cx| ws.quit(window, cx)))
             .on_action(cx.listener(|ws, _: &ToggleMixer, _, cx| ws.toggle_mixer(cx)))
             .on_action(cx.listener(|ws, _: &ToggleAgent, window, cx| ws.toggle_agent(window, cx)))
+            .on_action(cx.listener(|ws, _: &NewSong, window, cx| ws.new_song_sheet(window, cx)))
+            .on_action(cx.listener(|ws, _: &ShowSongs, _, cx| ws.toggle_songs(cx)))
+            .on_action(cx.listener(|ws, _: &BrowserUp, _, cx| ws.move_picked(-1, cx)))
+            .on_action(cx.listener(|ws, _: &BrowserDown, _, cx| ws.move_picked(1, cx)))
+            .on_action(cx.listener(|ws, _: &BrowserNewTrack, _, cx| ws.use_picked(true, cx)))
             .on_action(cx.listener(|ws, _: &ToggleInspector, _, cx| {
                 ws.show_inspector = !ws.show_inspector;
                 cx.notify();
@@ -2452,6 +2538,7 @@ impl Render for Workspace {
                     .when(self.view == View::Samples, |d| {
                         d.child(self.samples_page(cx))
                     })
+                    .when(self.view == View::Songs, |d| d.child(self.songs_page(cx)))
                     .when(self.view == View::Arrange, |d| {
                         d.when(self.show_inspector, |d| d.child(self.inspector(cx)))
                             .child(
@@ -2474,6 +2561,8 @@ impl Render for Workspace {
             .child(self.status_bar())
             .when(self.drag.is_some(), |d| d.child(self.drag_listener(cx)))
             .children(self.sample_ghost())
+            .children(self.device_ghost())
+            .children(self.new_song_view(cx))
             .children(self.menu_view(cx))
             .children(self.picker_view(cx))
     }

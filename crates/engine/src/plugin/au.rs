@@ -272,6 +272,7 @@ pub fn list() -> Vec<PluginInfo> {
                 uid: Some(uid),
                 vendor: c.vendor,
                 instrument: c.desc.componentType == kAudioUnitType_MusicDevice,
+                categories: Vec::new(),
             }
         })
         .collect()

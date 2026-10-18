@@ -69,6 +69,8 @@ pub struct ClassInfo {
     pub vendor: String,
     /// An instrument rather than an effect, by its subcategories.
     pub instrument: bool,
+    /// Its subcategories: "Fx", "Reverb"; "Instrument", "Synth".
+    pub sub: Vec<String>,
     cid: TUID,
 }
 
@@ -121,6 +123,11 @@ impl Module {
                                 category: text(&info.category),
                                 vendor: text(&info.vendor),
                                 instrument: text(&info.subCategories).contains("Instrument"),
+                                sub: text(&info.subCategories)
+                                    .split('|')
+                                    .filter(|s| !s.is_empty())
+                                    .map(str::to_string)
+                                    .collect(),
                                 cid: info.cid,
                             });
                         }
@@ -131,6 +138,7 @@ impl Module {
                         category: text(&info.category),
                         vendor: String::new(),
                         instrument: false,
+                        sub: Vec::new(),
                         cid: info.cid,
                     })
                 })
@@ -194,6 +202,7 @@ pub fn inspect(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
             uid: None,
             vendor: c.vendor,
             instrument: c.instrument,
+            categories: c.sub,
         })
         .collect())
 }

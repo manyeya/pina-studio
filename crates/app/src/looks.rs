@@ -264,6 +264,11 @@ fn family_color(f: Family) -> (f32, f32, f32) {
     }
 }
 
+/// The `n`th shade of a family's colour.
+pub fn family_shade(f: Family, n: usize) -> u32 {
+    shade(family_color(f), n)
+}
+
 /// The `n`th shade of a colour: the first as it is, then lighter and darker by turns, its hue
 /// nudged, so tracks of a family read as one and each as itself.
 pub fn shade(base: (f32, f32, f32), n: usize) -> u32 {

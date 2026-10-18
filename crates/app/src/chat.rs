@@ -228,6 +228,16 @@ impl Chat {
         self.ready.iter().find(|(k, _)| *k == kind).map(|(_, r)| r)
     }
 
+    /// Ends the conversation, for another song.
+    pub fn forget(&mut self) {
+        self.run += 1;
+        self.agent = None;
+        self.items.clear();
+        self.busy = false;
+        self.remote = false;
+        self.since = None;
+    }
+
     /// Notes an edit by an agent outside the conversation.
     pub fn outside(&mut self, what: &str) {
         self.items.push(Item::Outside(what.to_string()));

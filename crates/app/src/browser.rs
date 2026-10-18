@@ -260,7 +260,7 @@ impl Browser {
         self.audition.is_some()
     }
 
-    fn sample(&self, index: usize) -> Option<&Sample> {
+    pub fn sample(&self, index: usize) -> Option<&Sample> {
         self.library.samples.get(index)
     }
 
@@ -1170,7 +1170,7 @@ impl Workspace {
     /// nor so narrow its controls don't fit.
     pub fn panel_width(&self) -> f32 {
         let inspector = if self.show_inspector {
-            INSPECTOR_W
+            self.side_w()
         } else {
             0.0
         };

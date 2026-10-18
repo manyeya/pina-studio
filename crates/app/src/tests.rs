@@ -385,6 +385,7 @@ fn a_plugin_that_wont_load_is_reported_and_removable(cx: &mut TestAppContext) {
         uid: None,
         vendor: "Nobody".into(),
         instrument: false,
+        categories: Vec::new(),
     };
     ws.update(cx, |ws, _| ws.plugins = Some(vec![missing]));
     // The Keys strip's empty insert slot offers No Plug-in and the effect.
@@ -1941,6 +1942,9 @@ fn the_compact_browser_hears_finds_alike_and_drags_onto_tracks(cx: &mut TestAppC
     let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_samples));
     assert_eq!(shown, (View::Arrange, true));
     cx.simulate_keystrokes("escape");
+    // Escape hands the keyboard back to the window, the frame after.
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
     cx.simulate_keystrokes("f");
     assert!(!ws.read_with(cx, |ws, _| ws.show_samples));
     std::fs::remove_dir_all(dir).unwrap();
@@ -2144,4 +2148,108 @@ fn a_tracks_icon_opens_a_picker_for_its_colour_and_icon(cx: &mut TestAppContext)
     cx.simulate_keystrokes("cmd-z cmd-z");
     cx.run_until_parked();
     assert_eq!(ws.read_with(cx, |ws, _| ws.shown(2)), before);
+}
+
+#[gpui::test]
+fn the_browser_finds_by_words_and_puts_devices_on_tracks(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| {
+        ws.side = Side::Browser;
+        ws.plugins = Some(vec![PluginInfo {
+            format: tempo_engine::project::Format::Au,
+            path: "".into(),
+            class: "AUDelay".into(),
+            uid: Some("aufx dely appl".into()),
+            vendor: "Apple".into(),
+            instrument: false,
+            categories: Vec::new(),
+        }]);
+        ws.catalog_plugins();
+        ws.track = 0;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    // "glue" means a compressor: typed, picked, Enter puts it on the selected track.
+    let search = cx.debug_bounds("browser-search").unwrap().center();
+    cx.simulate_click(search, Modifiers::none());
+    cx.simulate_input("glue");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(ws.read_with(cx, |ws, _| ws.session.project.tracks[0].comp.is_some()));
+    // "echo" finds the delay; dragged onto the Lead track, it goes in its inserts.
+    let input = ws.read_with(cx, |ws, _| ws.catalog.search.clone());
+    input.update(cx, |i, cx| i.set_text("echo", cx));
+    cx.run_until_parked();
+    let row = cx
+        .debug_bounds("device-plugin:apple/audelay")
+        .expect("the delay is found")
+        .center();
+    let lead = spot(&ws, cx, 960, 1);
+    cx.simulate_mouse_down(row, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(lead, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(lead, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    let inserts = ws.read_with(cx, |ws, _| ws.session.project.tracks[1].inserts.clone());
+    assert_eq!(inserts.first().map(|p| p.class.as_str()), Some("AUDelay"));
+    // Both are remembered as used lately.
+    let recent = ws.read_with(cx, |ws, _| ws.catalog.recent.clone());
+    assert_eq!(recent, ["plugin:apple/audelay", "own:comp"]);
+}
+
+#[gpui::test]
+fn songs_start_from_a_sheet_and_open_in_this_window(cx: &mut TestAppContext) {
+    let root = std::env::temp_dir().join(format!("tempo-test-window-songs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let other = crate::projects::create(
+        &root,
+        "Other",
+        96.0,
+        tempo_engine::music::Key::parse("D minor"),
+        [3, 4],
+        crate::projects::Template::Band,
+    )
+    .unwrap();
+    let (ws, cx) = open(cx);
+    // Open another song here: its tracks, tempo and key; this one's agent and picker gone.
+    cx.update(|window, cx| ws.update(cx, |ws, cx| ws.switch_to(other.clone(), window, cx)));
+    cx.run_until_parked();
+    ws.read_with(cx, |ws, _| {
+        assert_eq!(ws.session.dir, other);
+        let p = &ws.session.project;
+        assert_eq!(
+            (p.tempo, p.key.as_deref(), p.tracks.len()),
+            (96.0, Some("D minor"), 5)
+        );
+        assert_eq!(ws.view, View::Arrange);
+        // A band's tracks look like what they are.
+        let icons: Vec<&str> = (0..5).map(|i| ws.shown(i).look.icon).collect();
+        assert_eq!(icons, ["drums", "bass", "keys", "guitar", "vocals"]);
+    });
+    // ⌘N: the sheet. A name, a template, Create: the song is made where songs are kept (here a
+    // scratch folder) and opens.
+    // SAFETY: no other test reads TEMPO_SONGS.
+    unsafe { std::env::set_var("TEMPO_SONGS", &root) };
+    cx.simulate_keystrokes("cmd-n");
+    cx.run_until_parked();
+    let name = ws
+        .read_with(cx, |ws, _| ws.new_song.as_ref().map(|s| s.name.clone()))
+        .expect("the sheet");
+    name.update(cx, |i, cx| i.set_text("Rain", cx));
+    click_on(cx, "template-Lo-fi", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "new-song-create", Modifiers::none(), MouseButton::Left);
+    ws.read_with(cx, |ws, _| {
+        assert!(ws.new_song.is_none());
+        assert_eq!(ws.session.dir, root.join("Rain"));
+        let names: Vec<&str> = ws
+            .session
+            .project
+            .tracks
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        assert_eq!(names, ["Vinyl", "Drums", "Keys", "Bass"]);
+    });
+    std::fs::remove_dir_all(root).unwrap();
 }
