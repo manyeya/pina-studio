@@ -28,6 +28,20 @@ impl Workspace {
             _ => self.region,
         };
         let (title, detail, color) = match (pane, shown) {
+            (Bottom::Sampler, _) => match self.sampler_track() {
+                Some(t) => {
+                    let zones = match &self.session.project.tracks[t].instrument {
+                        Some(tempo_engine::project::Instrument::Sampler(s)) => s.zones.len(),
+                        _ => 0,
+                    };
+                    (
+                        self.session.project.tracks[t].name.clone(),
+                        format!("{zones} zones"),
+                        self.color(t),
+                    )
+                }
+                None => ("Sampler".to_string(), String::new(), TEXT_4),
+            },
             (Bottom::Loops, _) => (
                 "Live Loops".to_string(),
                 format!("{} tracks", self.session.project.tracks.len()),
@@ -57,6 +71,7 @@ impl Workspace {
         let controls = match pane {
             Bottom::PianoRoll => Some(self.roll_controls(cx)),
             Bottom::Steps => self.steps_controls(cx),
+            Bottom::Sampler => self.sampler_controls(cx),
             _ => None,
         };
         let bar = div()
@@ -119,6 +134,7 @@ impl Workspace {
                             .rounded(px(8.))
                             .child(tab("Piano Roll", Bottom::PianoRoll, cx))
                             .child(tab("Step Sequencer", Bottom::Steps, cx))
+                            .child(tab("Sampler", Bottom::Sampler, cx))
                             .child(tab("Score", Bottom::Score, cx))
                             .child(tab("Takes", Bottom::Takes, cx))
                             .child(tab("Live Loops", Bottom::Loops, cx)),
@@ -140,6 +156,7 @@ impl Workspace {
         let body = match pane {
             Bottom::PianoRoll => self.roll_body(cx).into_any_element(),
             Bottom::Steps => self.steps_body(cx).into_any_element(),
+            Bottom::Sampler => self.sampler_body(cx).into_any_element(),
             Bottom::Score => self.score_body(cx).into_any_element(),
             Bottom::Takes => self.takes_body(cx).into_any_element(),
             Bottom::Loops => self.loops_body(cx).into_any_element(),

@@ -149,6 +149,8 @@ pub enum MenuAction {
     Roll(crate::pianoroll::RollOp),
     /// What a click in the piano roll writes: a note or a chord.
     Stamp(crate::pianoroll::Stamp),
+    /// The Sampler's picked zone cut into slices across the keys.
+    Slice(crate::sampler::Slicing),
     /// Which parameter a track's automation lane shows, by track id.
     AutoParam(u64, Param),
     /// How a track follows its automation.
@@ -392,6 +394,7 @@ impl Workspace {
             MenuAction::Ghost(id) => self.roll.ghost = id,
             MenuAction::Roll(op) => self.roll_op(op, cx),
             MenuAction::Stamp(stamp) => self.roll.stamp = stamp,
+            MenuAction::Slice(how) => self.slice_zone(how, cx),
             MenuAction::AutoParam(track, param) => {
                 self.params.insert(track, param);
                 self.show_automation = true;

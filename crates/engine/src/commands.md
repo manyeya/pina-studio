@@ -23,7 +23,16 @@ A zone is a sample on a note (a drum kit has one each), or with `"high"` a range
 played across, repitched from `"root"` (the note it sounds at: an 808 or a bass). Drum hits play
 to their end; `"gate": true` stops it with its note (fading over `"release_ms"`). Zones with the
 same `"choke"` group cut each other off, as a closed hat cuts an open one. `"gain_db"` and
-`"pan"` set its level, `"tune_cents"` its fine tuning. Samples are copied into the project, and
+`"pan"` set its level, `"tune_cents"` its fine tuning. `"start"` and `"end"` (shares of the
+sample, 0 to 1) play part of it, as a slice; `"reverse": true` backwards; `"loop_mode"` `forward`
+or `ping_pong` loops it while held (between `"loop_start"` and `"loop_end"`, its play range by
+default). `"velocities": [1, 63]` plays it for those velocities only (layers); zones on the same
+notes and velocities take turns (round robins). How every voice plays is the sampler's `"voice"`:
+`{"attack_ms": 5, "decay_ms": 300, "sustain": 0.6, "release_ms": 200, "filter": "low_pass",
+"cutoff_hz": 2500, "resonance": 0.3, "filter_env": 2, "filter_decay_ms": 400, "key_track": 0.5,
+"velocity": 1, "mono": true, "legato": true, "glide_ms": 80, "lfo_hz": 5, "vibrato_cents": 15,
+"lfo_filter": 0, "tremolo": 0, "transpose": 0, "gain_db": 0}` (any left out stay as they are by
+default: no envelope shaping, no filter, polyphonic). Samples are copied into the project, and
 any WAV works: other sample rates are converted.
 
 Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]}`,

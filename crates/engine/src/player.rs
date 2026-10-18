@@ -115,8 +115,11 @@ fn sound(instrument: Option<&Instrument>, inserts: &[PluginRef]) -> Sound {
     let instrument = instrument.map(|i| match i {
         Instrument::Synth => "synth".to_string(),
         Instrument::Drums => "drums".to_string(),
-        // A sampler is rebuilt when its samples or their settings change.
-        Instrument::Sampler(s) => format!("sampler {:?}", s.zones),
+        // A sampler is rebuilt when its samples change; its settings it follows as it plays.
+        Instrument::Sampler(s) => format!(
+            "sampler {:?}",
+            s.zones.iter().map(|z| &z.file).collect::<Vec<_>>()
+        ),
         Instrument::Plugin(r) => format!("{}#{}", r.path.display(), r.class),
     });
     (instrument, inserts.iter().map(key).collect())

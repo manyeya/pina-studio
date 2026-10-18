@@ -16,6 +16,7 @@ mod produce;
 mod producer;
 mod projects;
 mod record;
+mod sampler;
 mod samples_cli;
 mod score;
 mod server;

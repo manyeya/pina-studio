@@ -1967,14 +1967,17 @@ mod tests {
                 zone("Moog_Bass_C1.wav", Some(36)),
                 zone("Moog_Bass_A#2.wav", Some(46)),
             ],
+            ..Default::default()
         };
         assert_eq!(sampler_name(&multi), "Moog Bass");
         let mixed = Sampler {
             zones: vec![zone("Sub.wav", Some(48)), zone("Bass.wav", Some(60))],
+            ..Default::default()
         };
         assert_eq!(sampler_name(&mixed), "2 zones");
         let kit = Sampler {
             zones: vec![zone("Kick.wav", None), zone("Snare.wav", None)],
+            ..Default::default()
         };
         assert_eq!(sampler_name(&kit), "2-piece kit");
         let kit = Some(Instrument::Sampler(kit));

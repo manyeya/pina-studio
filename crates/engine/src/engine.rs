@@ -690,6 +690,8 @@ struct Plan {
     feeds: bool,
     /// The aux it plays into instead of the master.
     output: Option<usize>,
+    /// The sampler's settings, which it follows as they change.
+    sampler: Option<Arc<crate::project::Sampler>>,
     /// Delay compensation before the sends, and on the direct path after them.
     delay: usize,
     direct: usize,
@@ -820,9 +822,7 @@ pub fn make_lane(
         None => Source::Audio,
         Some(Instrument::Synth) => Source::Synth(Synth::new(rate)),
         Some(Instrument::Drums) => Source::Drums(Box::new(Drums::new(rate))),
-        Some(Instrument::Sampler(s)) => {
-            Source::Sampler(Box::new(Sampler::load(&s.zones, dir, rate)?))
-        }
+        Some(Instrument::Sampler(s)) => Source::Sampler(Box::new(Sampler::load(s, dir, rate)?)),
         Some(Instrument::Plugin(r)) => {
             let (plugin, processor) = instantiate(r)?;
             plugins.instrument = Some(plugin);
@@ -1005,6 +1005,10 @@ pub fn compile(
             // Through an aux, the aux's own compensation lines it up.
             direct: if t.output.is_some() { 0 } else { pdc.direct },
             dsp: strip_dsp(t.eq.as_ref(), t.comp.as_ref(), t.sat.as_ref()),
+            sampler: match &t.instrument {
+                Some(Instrument::Sampler(s)) => Some(Arc::new(s.clone())),
+                _ => None,
+            },
         });
     }
     let auxes = project
@@ -1796,7 +1800,12 @@ impl Engine {
                 Source::Audio => {}
                 Source::Synth(s) => s.process([&mut *l, &mut *r], frames, notes),
                 Source::Drums(d) => d.process([&mut *l, &mut *r], frames, notes),
-                Source::Sampler(s) => s.process([&mut *l, &mut *r], frames, notes, controls),
+                Source::Sampler(s) => {
+                    if let Some(settings) = &plan.sampler {
+                        s.follow(settings, Arc::as_ptr(settings) as usize);
+                    }
+                    s.process([&mut *l, &mut *r], frames, notes, controls)
+                }
                 Source::Plugin(p) => {
                     plan.automate(Which::Instrument, p, (from, to));
                     p.set_transport(playing, from, tempo);

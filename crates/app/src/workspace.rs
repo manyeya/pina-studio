@@ -185,6 +185,11 @@ pub enum Target {
     Gain(Channel, usize),
     Comp(Channel, CompField),
     Sat(Channel, SatField),
+    /// A setting of a track's built-in sampler (by track index).
+    Sampler {
+        track: usize,
+        field: crate::sampler::Field,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -286,6 +291,15 @@ pub enum Drag {
         at: At,
         x: f32,
     },
+    /// A mark on the Sampler's waveform: a zone's start, end or loop point; `left` and `width`
+    /// where the waveform is.
+    Mark {
+        track: usize,
+        zone: usize,
+        mark: crate::sampler::Mark,
+        left: f32,
+        width: f32,
+    },
     /// Drawing a controller's moves in the lane under the piano roll, from the tick it was at.
     Control {
         at: At,
@@ -382,6 +396,7 @@ pub enum Drag {
 pub enum Bottom {
     PianoRoll,
     Steps,
+    Sampler,
     Score,
     Takes,
     Loops,
@@ -652,6 +667,9 @@ pub struct Workspace {
     pub roll_hover: Option<u8>,
     /// Where the lane under the piano roll was drawn last frame.
     pub lane_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// The Sampler editor: the zone picked and the waveforms read; where its waveform was drawn.
+    pub sampler_ui: crate::sampler::SamplerUi,
+    pub sampler_wave_bounds: Rc<Cell<Bounds<Pixels>>>,
     /// The piano roll's vertical scroll, and where its grid was drawn last frame.
     pub roll_scroll_y: f32,
     pub roll_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -795,6 +813,8 @@ impl Workspace {
             painting: Vec::new(),
             roll_hover: None,
             lane_bounds: Rc::new(Cell::new(Bounds::default())),
+            sampler_ui: Default::default(),
+            sampler_wave_bounds: Rc::new(Cell::new(Bounds::default())),
             roll_scroll_y: crate::pianoroll::scroll_to(72),
             roll_bounds: Rc::new(Cell::new(Bounds::default())),
             roll: RollSettings {
@@ -1413,6 +1433,7 @@ impl Workspace {
             }
             Some(Drag::VelocityLine { .. }) => self.drag_velocity_line(p),
             Some(Drag::Control { .. }) => self.drag_control(p),
+            Some(Drag::Mark { .. }) => self.drag_mark(p),
             Some(Drag::Auto {
                 track,
                 param,
@@ -1881,6 +1902,10 @@ impl Workspace {
     pub fn show_bottom(&mut self, pane: Bottom, cx: &mut Context<Self>) {
         self.view = View::Arrange;
         self.bottom = Some(pane);
+        // The Sampler wants room for its waveform, keys and knobs.
+        if pane == Bottom::Sampler {
+            self.editor_h = self.editor_h.max(500.0);
+        }
         if pane == Bottom::PianoRoll {
             self.focus_roll();
         }
@@ -2005,6 +2030,7 @@ impl Workspace {
             Target::Sat(ch, field) => {
                 crate::strip::sat_pos(field, &self.sat(ch).unwrap_or_default())
             }
+            Target::Sampler { track, field } => self.sampler_pos(track, field),
         }
     }
 
@@ -2038,6 +2064,7 @@ impl Workspace {
             Target::Comp(ch, field) => {
                 comp_set(field, self.strip_dsp_mut(ch).1.get_or_insert_default(), v)
             }
+            Target::Sampler { track, field } => self.sampler_set(track, field, v),
             Target::Sat(ch, field) => {
                 crate::strip::sat_set(field, self.sat_mut(ch).get_or_insert_default(), v)
             }

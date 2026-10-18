@@ -907,6 +907,7 @@ mod tests {
                         ..Default::default()
                     })
                     .collect(),
+                ..Default::default()
             })),
         );
         let heard = |p: &Path| match p.to_str() {

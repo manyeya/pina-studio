@@ -30,7 +30,7 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   `topbar.rs` (transport and display), `inspector.rs` (the side panel: inspector and browser),
   `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`)
   and `producer.rs` (its song strip, producer's path, critic, undo for a turn and selection),
-  `genres.rs` (the Playbooks page, where genres are read and changed), `study.rs` (the Song
+  `sampler.rs` (the Sampler editor), `genres.rs` (the Playbooks page, where genres are read and changed), `study.rs` (the Song
   Study page) with `study_cli.rs` (studies kept, and lyrics, year and genre looked up),
   `looks.rs` (track colours and icons, and their picker), `catalog.rs` (the Browser),
   `projects.rs` (songs: the Songs page, the new-song sheet, opening another in the window),
@@ -179,6 +179,17 @@ In the app, mostly as in Logic:
 - Recording over a region of the same kind makes a take folder, as in Logic. Double-click it to
   see its takes; swipe across a take to comp that stretch from it, click one to use all of it,
   and Flatten to turn the comp back into plain regions.
+- The Sampler tab (in the editor under the tracks, on a sampler track) is tempo's sampler, as
+  Logic's Sampler, Ableton's Simpler and FL Studio's Slicex: its zones down the left (drop samples
+  on it, or click; right-click removes one), the picked zone's waveform with its start, end and
+  loop points dragged in place and its sample's other slices marked, the keys with each zone over
+  its notes (click to hear), and knobs for the zone (notes, root, fine tune, level, pan,
+  velocities) and the instrument: amp envelope, filter (low-, high- or band-pass, with its own
+  envelope and key tracking), transpose, glide, LFO (vibrato, wah, tremolo) and volume. A zone
+  plays one-shot or gated, loops (forward or ping-pong) and reverses; zones split by velocity are
+  layers, and zones on the same notes take turns (round robins). Mono and Legato play one note at
+  a time, gliding. Slice… cuts a loop across the keys from C1 at its hits, or into equal parts.
+  Turning a knob while it plays changes what's playing, without a reload.
 - With automation showing, each track has a lane under it: click to add a point, drag points,
   option-click to delete one. Its menu picks what it shows: volume, pan, or any parameter of the
   track's plugins (type to search; those with automation are marked). Its mode, as in Logic: Read

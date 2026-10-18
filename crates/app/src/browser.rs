@@ -49,7 +49,7 @@ use crate::{
     menu::{Menu, MenuAction},
     text::{TextEvent, TextInput},
     theme::*,
-    workspace::{Drag, Slider, View, Workspace, pt},
+    workspace::{Bottom, Drag, Slider, View, Workspace, pt},
 };
 
 /// Takes a filter off, when nothing was found.
@@ -1361,6 +1361,17 @@ impl Workspace {
         if audio.is_empty() {
             self.status = Some("tempo takes WAV, AIFF, FLAC and MP3 files.".into());
             cx.notify();
+            return;
+        }
+        // On the Sampler, with its editor open, samples dropped on it go into it.
+        let editor_top = self.viewport_h - STATUS_H - self.editor_height();
+        if self.view == View::Arrange
+            && self.bottom == Some(Bottom::Sampler)
+            && self.sampler_track().is_some()
+            && at.y >= editor_top
+        {
+            let files: Vec<PathBuf> = audio.iter().map(|p| p.to_path_buf()).collect();
+            self.add_samples(&files, cx);
             return;
         }
         // On the Song Study page, a song dropped is studied.
