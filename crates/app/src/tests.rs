@@ -806,9 +806,9 @@ fn the_pencil_draws_the_scissors_cut_and_the_eraser_erases(cx: &mut TestAppConte
         })
     };
     click_on(cx, "tool-Pencil", Modifiers::none(), MouseButton::Left);
-    // After the Lead region, in bar 6.
+    // After the Lead region, in bar 6: four bars from there.
     cx.simulate_click(spot(&ws, cx, BAR * 5 + PPQ, 1), Modifiers::none());
-    assert_eq!(regions(cx, 1).last(), Some(&(BAR * 5, BAR)));
+    assert_eq!(regions(cx, 1).last(), Some(&(BAR * 5, BAR * 4)));
 
     click_on(cx, "tool-Scissors", Modifiers::none(), MouseButton::Left);
     cx.simulate_click(spot(&ws, cx, BAR * 2, 0), Modifiers::none());
@@ -2369,5 +2369,168 @@ fn the_inspectors_strips_line_up_row_for_row(cx: &mut TestAppContext) {
         ];
     });
     assert_eq!(lined_up(cx, drums), (true, true));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn writing_notes_starts_with_a_double_click_anywhere(cx: &mut TestAppContext) {
+    use tempo_engine::project::Instrument;
+    let dir = demo_copy("write-notes");
+    let (ws, cx) = open_at(cx, &dir);
+    // A new instrument track, empty: it says how to start.
+    ws.update(cx, |ws, cx| ws.new_track(Some(Instrument::Synth), cx));
+    cx.run_until_parked();
+    let t = ws.read_with(cx, |ws, _| ws.track);
+    assert!(ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[t].name.starts_with("Synth")
+    }));
+
+    // A double-click on its lane: a four-bar region from that bar, the piano roll open on it.
+    double_click(cx, spot(&ws, cx, BAR * 2 + 100, t));
+    let (regions, bottom, region) = ws.read_with(cx, |ws, _| {
+        let r = &ws.session.project.tracks[t].regions;
+        (
+            r.iter().map(|r| (r.start, r.length)).collect::<Vec<_>>(),
+            ws.bottom,
+            ws.region,
+        )
+    });
+    assert_eq!(regions, [(BAR * 2, BAR * 4)]);
+    assert_eq!((bottom, region), (Some(Bottom::PianoRoll), Some((t, 0))));
+
+    // In the roll, a note past the region's end grows it to that bar's end.
+    double_click(cx, roll_spot(&ws, cx, BAR * 7 + 10, 64));
+    let (length, notes) = ws.read_with(cx, |ws, _| {
+        let r = &ws.session.project.tracks[t].regions[0];
+        let Content::Midi { notes, .. } = &r.content else {
+            panic!()
+        };
+        (
+            r.length,
+            notes.iter().map(|n| (n.start, n.pitch)).collect::<Vec<_>>(),
+        )
+    });
+    assert_eq!(length, BAR * 6);
+    assert_eq!(notes, [((BAR * 5) as i64, 64)]);
+
+    // With nothing selected, the roll still writes: a note before the region makes a new one
+    // round it (kept clear of the first), in the same step.
+    ws.update(cx, |ws, cx| {
+        ws.region = None;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let undo_to = ws.read_with(cx, |ws, _| ws.session.project.tracks[t].regions.len());
+    double_click(cx, roll_spot(&ws, cx, 10, 60));
+    let regions = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[t]
+            .regions
+            .iter()
+            .map(|r| (r.start, r.length))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(regions, [(BAR * 2, BAR * 6), (0, BAR * 2)]);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[t].regions.len()),
+        undo_to
+    );
+
+    // Inside a cycle that's on, a new region takes the cycle's stretch.
+    ws.update(cx, |ws, cx| {
+        ws.session.project.cycle = Some(tempo_engine::project::Cycle {
+            start: 0,
+            end: BAR,
+            off: false,
+        });
+        ws.bottom = None;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    double_click(cx, spot(&ws, cx, BAR / 2, t));
+    let last = ws.read_with(cx, |ws, _| {
+        let r = ws.session.project.tracks[t].regions.last().unwrap();
+        (r.start, r.length)
+    });
+    assert_eq!(last, (0, BAR));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn the_cycle_is_swept_in_the_rulers_top_half_and_c_follows_the_selection(cx: &mut TestAppContext) {
+    let dir = demo_copy("cycle-sweep");
+    let (ws, cx) = open_at(cx, &dir);
+    // Pattern mode on (a region selected), then a stretch swept in the ruler's top half: the
+    // song plays that stretch, not the pattern.
+    ws.update(cx, |ws, cx| {
+        ws.region = Some((0, 0));
+        ws.set_pattern_mode(true, cx);
+    });
+    let ruler = cx.debug_bounds("ruler").unwrap();
+    let y = ruler.origin.y + px(RULER_H / 2.0 - 2.0);
+    let x = |tick: u64| spot(&ws, cx, tick, 0).x;
+    drag(cx, point(x(BAR), y), point(x(BAR * 3), y));
+    let (cycle, pattern) = ws.read_with(cx, |ws, _| (ws.session.project.cycle, ws.pattern_mode));
+    let c = cycle.unwrap();
+    assert_eq!(
+        (c.start, c.end, c.off, pattern),
+        (BAR, BAR * 3, false, false)
+    );
+    // C with a region selected that the cycle isn't round: the cycle moves to it.
+    let r = ws.read_with(cx, |ws, _| {
+        let r = &ws.session.project.tracks[0].regions[0];
+        (r.start, r.start + r.length)
+    });
+    ws.update(cx, |ws, cx| {
+        ws.region = Some((0, 0));
+        ws.toggle_cycle(cx);
+    });
+    let c = ws.read_with(cx, |ws, _| ws.session.project.cycle.unwrap());
+    assert_eq!((c.start, c.end, c.off), (r.0, r.1, false));
+    // C again, the cycle already round it: off.
+    ws.update(cx, |ws, cx| ws.toggle_cycle(cx));
+    assert!(ws.read_with(cx, |ws, _| ws.session.project.cycle.unwrap().off));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn the_browser_names_new_tracks_and_puts_effects_on_them(cx: &mut TestAppContext) {
+    use crate::catalog::Target;
+    let dir = demo_copy("browser-new-track");
+    let (ws, cx) = open_at(cx, &dir);
+    let device = |cx: &VisualTestContext, name: &str| {
+        let name = name.to_string();
+        ws.read_with(cx, move |ws, _| {
+            ws.catalog
+                .devices
+                .iter()
+                .position(|d| d.name == name)
+                .unwrap()
+        })
+    };
+    // An instrument on a new track, from the first track: after it, named for it, selected.
+    ws.update(cx, |ws, _| ws.select_track(0));
+    let synth = device(cx, "Sine Synth");
+    ws.update(cx, |ws, cx| {
+        ws.use_device(synth, Target::NewTrack, None, cx)
+    });
+    let (name, selected, status) = ws.read_with(cx, |ws, _| {
+        (
+            ws.session.project.tracks[1].name.clone(),
+            ws.track,
+            ws.status.clone().unwrap_or_default(),
+        )
+    });
+    assert_eq!((name.as_str(), selected), ("Sine Synth", 1));
+    assert!(status.contains("double-click"), "{status}");
+    // An effect on a new track: an audio track with the effect on it.
+    let eq = device(cx, "Channel EQ");
+    ws.update(cx, |ws, cx| ws.use_device(eq, Target::NewTrack, None, cx));
+    let t = ws.read_with(cx, |ws, _| ws.track);
+    let (audio, has_eq) = ws.read_with(cx, |ws, _| {
+        let tr = &ws.session.project.tracks[t];
+        (tr.instrument.is_none(), tr.eq.is_some())
+    });
+    assert!(audio && has_eq);
     std::fs::remove_dir_all(dir).unwrap();
 }

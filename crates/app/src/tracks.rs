@@ -509,7 +509,7 @@ impl Workspace {
                 .left(px(x0))
                 .top(px(2.))
                 .w(px((x1 - x0).max(2.)))
-                .h(px(7.))
+                .h(px(8.))
                 .rounded(px(3.))
                 .bg(if c.off {
                     alpha(TEXT_4, 0.6)
@@ -572,9 +572,10 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                    // The strip along the top is the cycle's; the rest moves the playhead.
+                    // The ruler's top half is the cycle's: sweep it to loop a stretch, click it
+                    // to turn the cycle on or off. The rest moves the playhead.
                     let top = f32::from(ws.lanes_bounds.get().origin.y) - RULER_H;
-                    if f32::from(e.position.y) < top + 10.0 {
+                    if f32::from(e.position.y) < top + RULER_H / 2.0 {
                         let anchor = ws.snap(ws.tick_at(f32::from(e.position.x)));
                         ws.begin_drag(
                             Drag::Cycle {
@@ -990,13 +991,38 @@ impl Workspace {
                     .w_full()
                     .h(px(LANE_H))
                     .when(self.tool == Tool::Pencil, |d| d.cursor_crosshair())
+                    .debug_selector(move || format!("lane-{i}"))
+                    // An empty instrument track says how to start.
+                    .when(
+                        self.session.project.tracks[i].instrument.is_some()
+                            && self.session.project.tracks[i].regions.is_empty(),
+                        |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .left(px(12.))
+                                    .top_0()
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(TEXT_4))
+                                    .child("Double-click to write notes, or play your keyboard"),
+                            )
+                        },
+                    )
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                             ws.select_track(i);
                             ws.region = None;
+                            // The pencil draws a region; so does a double-click, opening the
+                            // piano roll on it to write in.
+                            let x = f32::from(e.position.x);
                             if ws.tool == Tool::Pencil {
-                                ws.draw_region(i, f32::from(e.position.x), cx);
+                                ws.draw_region(i, x, cx);
+                            } else if e.click_count == 2 && ws.draw_region(i, x, cx).is_some() {
+                                ws.show_bottom(Bottom::PianoRoll, cx);
                             }
                             cx.notify();
                         }),
@@ -1173,20 +1199,54 @@ impl Workspace {
 
     /// The pencil's click on an empty lane: a MIDI region over the bar clicked, on an instrument
     /// track.
-    fn draw_region(&mut self, track: usize, x: f32, cx: &mut Context<Self>) {
+    /// Where a new MIDI region for `tick` on `track` goes: the cycle's stretch if it's on and
+    /// the tick is in it, else four bars from the tick's bar; kept clear of the track's other
+    /// regions. None if one's there already.
+    pub fn new_region_span(&self, track: usize, tick: u64) -> Option<(u64, u64)> {
+        let p = &self.session.project;
+        let bar = p.bar();
+        let regions = &p.tracks.get(track)?.regions;
+        if regions
+            .iter()
+            .any(|r| r.start <= tick && tick < r.start + r.length)
+        {
+            return None;
+        }
+        let (start, end) = match p
+            .cycle
+            .filter(|c| !c.off && c.start <= tick && tick < c.end)
+        {
+            Some(c) => (c.start, c.end),
+            None => (tick / bar * bar, tick / bar * bar + 4 * bar),
+        };
+        let start = regions
+            .iter()
+            .map(|r| r.start + r.length)
+            .filter(|&e| e <= tick)
+            .fold(start, u64::max);
+        let end = regions
+            .iter()
+            .map(|r| r.start)
+            .filter(|&s| s > tick)
+            .fold(end, u64::min);
+        (end > start).then_some((start, end - start))
+    }
+
+    /// A new, empty MIDI region at `x` on an instrument track (see `new_region_span`),
+    /// selected.
+    fn draw_region(&mut self, track: usize, x: f32, cx: &mut Context<Self>) -> Option<At> {
         if self.session.project.tracks[track].instrument.is_none() {
             self.status = Some(
-                "Draw regions on instrument tracks; audio tracks record or import theirs.".into(),
+                "Audio tracks take recordings and audio files: drag one in from the Finder or the browser.".into(),
             );
-            return;
+            return None;
         }
-        let bar = self.session.project.bar();
-        let start = self.tick_at(x) as u64 / bar * bar;
+        let (start, length) = self.new_region_span(track, self.tick_at(x) as u64)?;
         self.edit(cx, |ws| {
             let regions = &mut ws.session.project.tracks[track].regions;
             regions.push(Region {
                 start,
-                length: bar,
+                length,
                 content: Content::Midi {
                     notes: Vec::new(),
                     controls: Vec::new(),
@@ -1195,6 +1255,7 @@ impl Workspace {
             });
             ws.region = Some((track, regions.len() - 1));
         });
+        self.region
     }
 
     /// An audio region's warp geometry, once its file is loaded.

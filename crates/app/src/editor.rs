@@ -21,8 +21,13 @@ impl Workspace {
                     cx.listener(move |ws, _, _, cx| ws.show_bottom(b, cx)),
                 )
         };
-        // What's being edited: the selected region, or the whole song for Live Loops.
-        let (title, detail, color) = match (pane, self.region) {
+        // What's being edited: the selected region (the piano roll's, which may be the selected
+        // track's own), or the whole song for Live Loops.
+        let shown = match pane {
+            Bottom::PianoRoll => self.roll_region(),
+            _ => self.region,
+        };
+        let (title, detail, color) = match (pane, shown) {
             (Bottom::Loops, _) => (
                 "Live Loops".to_string(),
                 format!("{} tracks", self.session.project.tracks.len()),
@@ -39,6 +44,14 @@ impl Workspace {
                 };
                 (t.name.clone(), detail, self.color(at.0))
             }
+            (Bottom::PianoRoll, None) => match self.session.project.tracks.get(self.track) {
+                Some(t) if t.instrument.is_some() => (
+                    t.name.clone(),
+                    "double-click to write a note".to_string(),
+                    self.color(self.track),
+                ),
+                _ => ("No region".to_string(), String::new(), TEXT_4),
+            },
             (_, None) => ("No region".to_string(), String::new(), TEXT_4),
         };
         let controls = match pane {

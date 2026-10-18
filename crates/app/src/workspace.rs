@@ -1333,6 +1333,8 @@ impl Workspace {
                         end,
                         off: false,
                     });
+                    // A stretch swept out is what plays: the song, not one region's pattern.
+                    self.pattern_mode = false;
                 }
             }
             Some(Drag::Marker { index, x, tick, .. }) => {
@@ -1591,28 +1593,33 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Turns the cycle on or off; with none yet, cycles the selected region (or four bars from
-    /// the playhead's bar).
+    /// Turns the cycle on or off. With a region selected that the cycle isn't already round, it
+    /// cycles that region; with no cycle yet and nothing selected, four bars from the playhead's
+    /// bar.
     pub fn toggle_cycle(&mut self, cx: &mut Context<Self>) {
         let bar = self.session.project.bar();
-        let (start, end) = match self.region {
-            Some(at) => {
-                let r = self.session.project.region(at);
-                (r.start, r.start + r.length)
-            }
+        let selected = self.region.map(|at| {
+            let r = self.session.project.region(at);
+            (r.start, r.start + r.length)
+        });
+        let current = self.session.project.cycle;
+        let (start, end) = match selected {
+            Some(span) => span,
             None => {
                 let start = self.playhead() / bar * bar;
                 (start, start + bar * 4)
             }
         };
+        let moves = selected.is_some_and(|s| current.is_none_or(|c| (c.start, c.end) != s));
         self.edit(cx, |ws| match &mut ws.session.project.cycle {
-            Some(c) => c.off = !c.off,
-            none => {
-                *none = Some(Cycle {
+            Some(c) if !moves => c.off = !c.off,
+            cycle => {
+                *cycle = Some(Cycle {
                     start,
                     end,
                     off: false,
-                })
+                });
+                ws.pattern_mode = false;
             }
         });
     }
@@ -1719,13 +1726,26 @@ impl Workspace {
     /// Adds a track after the selected one: an instrument track (the synth, the drum kit) or,
     /// without an instrument, an audio track.
     pub fn new_track(&mut self, instrument: Option<Instrument>, cx: &mut Context<Self>) {
+        self.new_track_named(instrument, None, cx);
+    }
+
+    /// A new track after the selected one, selected (so it plays what's played on a keyboard);
+    /// called `name`, or after its instrument.
+    pub fn new_track_named(
+        &mut self,
+        instrument: Option<Instrument>,
+        name: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         let n = self.session.project.tracks.len();
         let at = if n == 0 { 0 } else { self.track + 1 };
-        let name = match &instrument {
+        let name = name.unwrap_or_else(|| match &instrument {
             Some(Instrument::Drums) => format!("Drums {}", n + 1),
-            Some(_) => format!("Inst {}", n + 1),
+            Some(Instrument::Plugin(p)) => p.class.clone(),
+            Some(Instrument::Sampler(_)) => format!("Sampler {}", n + 1),
+            Some(Instrument::Synth) => format!("Synth {}", n + 1),
             None => format!("Audio {}", n + 1),
-        };
+        });
         self.edit(cx, |ws| {
             let track = Track {
                 name,

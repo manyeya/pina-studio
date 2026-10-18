@@ -886,10 +886,17 @@ impl Workspace {
                     .instrument()
                     .then(|| instrument_of(&device))
                     .flatten();
-                self.new_track(instrument, cx);
+                let plays = instrument.is_some();
+                // Named for what it plays: the preset, else the instrument.
+                let name = preset
+                    .as_ref()
+                    .filter(|_| plays)
+                    .map_or(device.name.clone(), |p| p.name.clone());
+                self.new_track_named(instrument, Some(name), cx);
                 self.remember(&device.key);
-                if let Some(p) = preset {
-                    let t = self.session.project.tracks.len() - 1;
+                // The new track goes after the selected one, and is selected now.
+                let t = self.track;
+                if plays && let Some(p) = preset.clone() {
                     self.choose(
                         MenuAction::Preset {
                             channel: Channel::Track(t),
@@ -899,7 +906,19 @@ impl Workspace {
                         cx,
                     );
                 }
-                return;
+                if plays {
+                    self.status = Some(format!(
+                        "{} is ready: play it on your keyboard (⌘K for the computer's), or double-click its lane to write notes.",
+                        self.session.project.tracks[t].name
+                    ));
+                    // A plugin shows its window, as it does in any DAW.
+                    if device.own.is_none() {
+                        self.open_editor_when_loaded(Channel::Track(t), Which::Instrument, cx);
+                    }
+                    return;
+                }
+                // An effect: on the new audio track, as on any other.
+                t
             }
         };
         self.track = t;
@@ -942,7 +961,11 @@ impl Workspace {
             MenuAction::Insert { index, .. } => Which::Insert(*index),
             _ => Which::Instrument,
         };
+        let plugin = device.own.is_none();
         self.choose(action, cx);
+        if plugin {
+            self.open_editor_when_loaded(channel, which, cx);
+        }
         if let Some(p) = preset {
             self.choose(
                 MenuAction::Preset {

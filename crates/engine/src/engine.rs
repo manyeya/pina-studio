@@ -1604,6 +1604,15 @@ impl Engine {
     pub fn process(&mut self, out: [&mut [f32]; 2], frames: usize) {
         let began = Instant::now();
         let [l, r] = out;
+        // Past the cycle's end (it was drawn behind the playhead, or play began after it): back
+        // to its start, so the cycle is what plays. Before it, play runs on into it.
+        if let Some((start, end)) = self.arrangement.cycle
+            && self.playing
+            && self.position >= end
+        {
+            self.position = start;
+            self.release = true;
+        }
         // What's heard wraps here; what's read, ahead of it by the plugins' latency, wraps in
         // `block`.
         let wrap = match self.arrangement.cycle {
@@ -3266,6 +3275,12 @@ mod tests {
         engine.play();
         run(&mut engine, BEAT + 1000);
         assert_eq!(engine.position(), BEAT as u64 + 1000);
+        // After it, it goes back to its start rather than playing on past it.
+        let (mut engine, _) = Engine::load(&p, Path::new("."), RATE).unwrap();
+        engine.locate(3 * BEAT as u64);
+        engine.play();
+        run(&mut engine, 1000);
+        assert!((BEAT as u64..2 * BEAT as u64).contains(&engine.position()));
         // Before the cycle, it plays on into it; switched off, it plays straight through.
         p.cycle.as_mut().unwrap().off = true;
         let (mut engine, _) = Engine::load(&p, Path::new("."), RATE).unwrap();

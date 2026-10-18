@@ -10,7 +10,7 @@ use gpui::{
 };
 use tempo_engine::{
     music::{Key, NoteEdit},
-    project::{At, Content, Note, PPQ},
+    project::{At, Content, Note, PPQ, Region},
 };
 
 use crate::{
@@ -69,13 +69,64 @@ impl Workspace {
 
 impl Workspace {
     /// The MIDI region the piano roll shows: the selected one, if it's MIDI.
+    /// The MIDI region the piano roll shows: the one selected, else the selected track's under
+    /// the playhead, else its first.
     pub fn roll_region(&self) -> Option<At> {
-        self.region.filter(|&at| {
-            matches!(
-                self.session.project.region(at).content,
-                Content::Midi { .. }
-            )
+        let p = &self.session.project;
+        let midi = |at: At| matches!(p.region(at).content, Content::Midi { .. });
+        self.region.filter(|&at| midi(at)).or_else(|| {
+            let track = p.tracks.get(self.track)?;
+            let tick = self.playhead();
+            let mine: Vec<At> = (0..track.regions.len())
+                .map(|r| (self.track, r))
+                .filter(|&at| midi(at))
+                .collect();
+            mine.iter()
+                .copied()
+                .find(|&at| {
+                    let r = p.region(at);
+                    r.start <= tick && tick < r.start + r.length
+                })
+                .or(mine.first().copied())
         })
+    }
+
+    /// A MIDI region on `track` that `tick` is inside.
+    pub fn midi_region_at(&self, track: usize, tick: u64) -> Option<At> {
+        let t = self.session.project.tracks.get(track)?;
+        t.regions
+            .iter()
+            .position(|r| {
+                r.start <= tick
+                    && tick < r.start + r.length
+                    && matches!(r.content, Content::Midi { .. })
+            })
+            .map(|r| (track, r))
+    }
+
+    /// Grows a MIDI region to the end of the bar its last note starts in, when a note starts
+    /// past its end, as far as the next region on its track allows.
+    pub fn grow_to_notes(&mut self, at: At) {
+        let p = &mut self.session.project;
+        let bar = p.bar();
+        let r = p.region(at);
+        let Content::Midi { notes, .. } = &r.content else {
+            return;
+        };
+        let last = notes.iter().map(|n| n.start).max().unwrap_or(0);
+        if last < r.length as i64 {
+            return;
+        }
+        let next = p.tracks[at.0]
+            .regions
+            .iter()
+            .map(|o| o.start)
+            .filter(|&s| s > r.start)
+            .min();
+        let want = (last as u64 / bar + 1) * bar;
+        let room = next.map_or(u64::MAX, |n| n - r.start);
+        let length = want.min(room).max(r.length);
+        p.tracks[at.0].regions[at.1].length = length;
     }
 
     /// Scrolls the piano roll to the selected region's notes, bringing the region into view if
@@ -131,40 +182,93 @@ impl Workspace {
     }
 
     /// A double-click on empty grid (or a click, with the pencil) adds a note there, a grid step
-    /// long; a single click deselects.
+    /// long; a single click deselects. The note goes in the region it lands in, or the region
+    /// shown (grown to take it), or, with none there, a new region round it: drawing is all it
+    /// takes to start writing.
     fn roll_click(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
         self.note = None;
         let adds = e.click_count == 2 || self.tool == Tool::Pencil;
-        let Some(at) = self.roll_region().filter(|_| adds) else {
+        if !adds {
             cx.notify();
             return;
-        };
+        }
         let p = e.position.map(f32::from);
         let tick = self.snap_down(self.tick_at(p.x));
-        let region = self.session.project.region(at);
-        if tick < region.start || tick >= region.start + region.length {
+        let pitch = self.pitch_at(p.y);
+        let shown = self.roll_region();
+        let track = shown.map_or(self.track, |at| at.0);
+        let Some(t) = self.session.project.tracks.get(track) else {
+            return;
+        };
+        if t.instrument.is_none() {
+            self.status = Some(format!(
+                "{} plays audio: notes go on an instrument track (⌥⌘N, or an instrument from the Browser).",
+                t.name
+            ));
+            cx.notify();
             return;
         }
-        let note = Note {
-            start: (tick - region.start) as i64,
-            length: self.grid(),
-            pitch: self.pitch_at(p.y),
-            velocity: 100,
-        };
-        let track = self.session.project.tracks[at.0].id;
-        self.edit(cx, |ws| {
-            let notes = ws.session.project.notes_mut(at).unwrap();
-            notes.push(note);
-            ws.note = Some(notes.len() - 1);
+        let project = &self.session.project;
+        // The shown region takes notes after its start, up to the next region on its track.
+        let grows = shown.filter(|&at| {
+            let r = project.region(at);
+            let next = project.tracks[at.0]
+                .regions
+                .iter()
+                .map(|o| o.start)
+                .filter(|&s| s > r.start)
+                .min()
+                .unwrap_or(u64::MAX);
+            tick >= r.start && tick < next
         });
-        self.player.preview(track, note.pitch, note.velocity);
-        self.begin_drag(
-            Drag::Key {
-                track,
-                pitch: note.pitch,
+        let target = self.midi_region_at(track, tick).or(grows);
+        let span = match target {
+            Some(_) => None,
+            None => match self.new_region_span(track, tick) {
+                Some(span) => Some(span),
+                None => {
+                    self.status = Some("A region's there already: click inside it.".into());
+                    cx.notify();
+                    return;
+                }
             },
-            cx,
-        );
+        };
+        let grid = self.grid();
+        let id = self.session.project.tracks[track].id;
+        self.edit(cx, |ws| {
+            let at = match (target, span) {
+                (Some(at), _) => at,
+                (None, Some((start, length))) => {
+                    let regions = &mut ws.session.project.tracks[track].regions;
+                    regions.push(Region {
+                        start,
+                        length,
+                        content: Content::Midi {
+                            notes: Vec::new(),
+                            controls: Vec::new(),
+                        },
+                        ..Default::default()
+                    });
+                    (track, regions.len() - 1)
+                }
+                (None, None) => return,
+            };
+            let start = ws.session.project.region(at).start;
+            let Some(notes) = ws.session.project.notes_mut(at) else {
+                return;
+            };
+            notes.push(Note {
+                start: (tick - start) as i64,
+                length: grid,
+                pitch,
+                velocity: 100,
+            });
+            ws.note = Some(notes.len() - 1);
+            ws.region = Some(at);
+            ws.grow_to_notes(at);
+        });
+        self.player.preview(id, pitch, 100);
+        self.begin_drag(Drag::Key { track: id, pitch }, cx);
     }
 
     /// The quantize grid, strength, swing and one-click tools, left of the keyboard.

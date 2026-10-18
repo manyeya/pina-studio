@@ -316,6 +316,26 @@ impl Workspace {
         }
     }
 
+    /// Opens a plugin's window once the engine has it loaded (a just-added plugin loads in the
+    /// background), giving up after a few seconds.
+    pub fn open_editor_when_loaded(&mut self, ch: Channel, which: Which, cx: &mut Context<Self>) {
+        let id = self.owner_id(ch);
+        cx.spawn(async move |this, cx| {
+            for _ in 0..50 {
+                let opened = this
+                    .update(cx, |ws, _| ws.player.open_editor(id, which).is_ok())
+                    .unwrap_or(true);
+                if opened {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+            }
+        })
+        .detach();
+    }
+
     /// The plugin in a slot, if there's one.
     fn slot_plugin(&self, ch: Channel, which: Which) -> Option<&PluginRef> {
         match (ch, which) {

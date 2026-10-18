@@ -72,10 +72,18 @@ In the app, mostly as in Logic:
 - Space plays and stops, return goes to the start, R records onto the armed track: the selected
   one, until a track's R button arms another (click it again to disarm). An instrument track
   records MIDI from any MIDI keyboard or musical typing; an audio track records the input its strip
-  picks (any channel or pair of the default input device). C turns the cycle on and off, K the
-  metronome; the cycle can also be swept out (or clicked on and off) in the strip along the
-  ruler's top.
-- Song plays the arrangement; Pattern (as in FL Studio) loops the selected region alone.
+  picks (any channel or pair of the default input device). C turns the cycle on and off (with a
+  region selected, it cycles that region), K the metronome; the cycle can also be swept out (or
+  clicked on and off) in the ruler's top half. With the cycle on, the playhead stays in it: play
+  from before it runs into it, from after it (or a cycle drawn behind the playhead) jumps to its
+  start.
+- Song plays the arrangement; Pattern (as in FL Studio) loops the selected region alone. Sweeping
+  a cycle goes back to Song.
+- To write notes: double-click an empty spot on an instrument track (a four-bar region there, or
+  the cycle's, opens in the piano roll), or just draw in the piano roll: with no region there it
+  makes one round the note, and a note past a region's end grows it. A new instrument track says
+  so in its lane. An instrument or effect added from the Browser opens its window, a new track
+  named for it.
 - The display shows the position, the time, the tempo (drag it), the time signature (pick one:
   4/4, 3/4, 6/8, 7/8…) and the key: worked out from the notes, or chosen from its menu. Choosing
   one moves the music into it (each step of the scale onto the new scale's, so major to minor
