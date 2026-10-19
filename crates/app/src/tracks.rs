@@ -957,29 +957,23 @@ impl Workspace {
                     .bg(alpha(color, if mute { 0.35 } else { 0.8 })),
             )
             .children(ticks)
+            // The cap, as the mixer's are, stood on end.
             .child(
                 div()
                     .absolute()
-                    .left(px((FADER_W * pos - 5.0).clamp(0.0, FADER_W - 10.0)))
-                    .top(px(2.))
-                    .w(px(10.))
-                    .h(px(17.))
-                    .rounded(px(2.))
+                    .left(px((FADER_W * pos - 7.0).clamp(0.0, FADER_W - 14.0)))
+                    .top(px(1.))
+                    .w(px(14.))
+                    .h(px(20.))
+                    .rounded(px(4.))
+                    .bg(rgb(0x3a3a44))
                     .border_1()
-                    .border_color(rgb(0x0b0b0e))
-                    .bg(linear_gradient(
-                        180.,
-                        linear_color_stop(rgb(0xececf0), 0.),
-                        linear_color_stop(rgb(0x9d9da8), 1.),
-                    ))
-                    .shadow(vec![BoxShadow {
-                        color: alpha(0x000000, 0.6),
-                        offset: point(px(0.), px(1.)),
-                        blur_radius: px(2.),
-                        spread_radius: px(0.),
-                        inset: false,
-                    }])
-                    .child(div().mt(px(7.)).mx(px(1.)).h(px(1.)).bg(rgb(0x3a3a44))),
+                    .border_color(rgb(0x4e4e5a))
+                    .shadow_md()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(div().w(px(1.)).h(px(12.)).bg(rgb(TEXT))),
             )
             .on_mouse_down(
                 MouseButton::Left,

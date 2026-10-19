@@ -109,7 +109,7 @@ In the app, mostly as in Logic:
   edits snap to.
 - A track's header is a console strip: its colour down its edge, its icon (click for its colour
   and icon), number, name and what it plays; then a raised strip with lit M S R buttons, an LED
-  meter (left over right, its peak held), a fader with a scale and a ridged cap, an LCD readout
+  meter (left over right, its peak held), a fader with a scale and a cap like the mixer's, an LCD readout
   and a pan knob with an LED ring. The strip keeps its size however wide the column is. Drag the
   fader or knob (the knob up or right to turn it right; ⇧ for fine control, even mid-drag), swipe
   sideways over either, double-click either (or the readout) to type a value (-6, L30, C),
