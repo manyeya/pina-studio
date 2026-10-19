@@ -355,6 +355,30 @@ pub enum Drag {
         track: usize,
         height: f32,
     },
+    /// A modulator's ↗, carried to a knob; a route's depth, a card's knob, its steps painted.
+    Modulator {
+        track: usize,
+        index: usize,
+    },
+    ModDepth {
+        track: usize,
+        index: usize,
+        target: tempo_engine::modulate::ModTarget,
+        x: f32,
+        y: f32,
+        depth: f32,
+    },
+    ModValue {
+        track: usize,
+        index: usize,
+        field: crate::modulation::ModField,
+        y: f32,
+        value: f32,
+    },
+    ModSteps {
+        track: usize,
+        index: usize,
+    },
     Raise {
         track: usize,
         y: f32,
@@ -473,6 +497,7 @@ pub enum Bottom {
     PianoRoll,
     Steps,
     Sampler,
+    Modulation,
     Score,
     Takes,
     Loops,
@@ -749,6 +774,17 @@ pub struct Workspace {
     pub stretching: Option<tempo_engine::project::Content>,
     /// ⇧ held while dragging a fader or knob: it moves a fifth as far.
     pub fine: bool,
+    /// Modulation: each track's modulators' values and their recent ones; the knobs a
+    /// modulator can be dropped on, where they were drawn; the steps' editors; the modulator
+    /// being dragged, where; the one picked (knobs it moves set its depth); a clock for those
+    /// running free.
+    pub mod_values: HashMap<u64, [f32; tempo_engine::modulate::MAX_MODS]>,
+    pub mod_trace: HashMap<(u64, usize), std::collections::VecDeque<f32>>,
+    pub mod_targets: crate::modulation::DropTargets,
+    pub mod_steps: crate::modulation::StepsAt,
+    pub mod_drag_at: Option<Point<f32>>,
+    pub mod_edit: Option<(usize, usize)>,
+    pub mod_clock: Instant,
     /// The Binaural Panner, open on a track, where; where its view looks from (degrees round
     /// and down); and where the view is on screen.
     pub panner: Option<(usize, Point<Pixels>)>,
@@ -919,6 +955,13 @@ impl Workspace {
             stretching: None,
             fine: false,
             panner: None,
+            mod_values: HashMap::new(),
+            mod_trace: HashMap::new(),
+            mod_targets: Default::default(),
+            mod_steps: Default::default(),
+            mod_drag_at: None,
+            mod_edit: None,
+            mod_clock: Instant::now(),
             orbit: crate::binaural::ORBIT,
             panner_bounds: Default::default(),
             swiped: None,
@@ -1486,6 +1529,8 @@ impl Workspace {
     }
 
     pub fn begin_drag(&mut self, drag: Drag, cx: &mut Context<Self>) {
+        // A knob a picked modulator moves: its depth, not the knob.
+        let drag = self.depth_drag(drag);
         let edits = !matches!(
             drag,
             Drag::Locate
@@ -1508,6 +1553,7 @@ impl Workspace {
                 | Drag::Width { .. }
                 | Drag::LaneHeight { .. }
                 | Drag::Orbit { .. }
+                | Drag::Modulator { .. }
         );
         if edits {
             self.session.checkpoint();
@@ -1702,6 +1748,30 @@ impl Workspace {
                 return;
             }
             Some(Drag::Source { track, height }) => self.drag_source(track, height, p),
+            Some(Drag::Modulator { .. }) => {
+                self.mod_drag_at = Some(p);
+                cx.notify();
+                return;
+            }
+            Some(Drag::ModDepth {
+                track,
+                index,
+                target,
+                x,
+                y,
+                depth,
+            }) => self.drag_depth((track, index, target), (x, y), depth, p),
+            Some(Drag::ModValue {
+                track,
+                index,
+                field,
+                y,
+                value,
+            }) => {
+                let fine = if self.fine { 0.2 } else { 1.0 };
+                self.set_mod_field(track, index, field, value + (y - p.y) / 150.0 * fine);
+            }
+            Some(Drag::ModSteps { track, index }) => self.paint_mod_step(track, index, p),
             Some(Drag::Raise { track, y, height }) => {
                 self.raise_source(track, height + (y - p.y) / 80.0)
             }
@@ -1831,6 +1901,11 @@ impl Workspace {
     }
 
     fn end_drag(&mut self, cx: &mut Context<Self>) {
+        if let Some(Drag::Modulator { track, index }) = self.drag
+            && let Some(at) = self.mod_drag_at.take()
+        {
+            self.drop_modulator(track, index, at, cx);
+        }
         if let Some(r) = self.steps_pick.take() {
             self.steps_row = r;
         }
@@ -2650,6 +2725,7 @@ impl Workspace {
             let gr = self.reductions.entry(id).or_default();
             *gr = self.player.reduction(id).max(*gr * 0.9);
         }
+        self.read_mods();
         // A spike shows, then falls away by half every half second.
         let since = std::mem::replace(&mut self.load_read, Instant::now()).elapsed();
         self.load = (self.player.load()).max(self.load * 0.5f32.powf(since.as_secs_f32() / 0.5));
@@ -2812,6 +2888,8 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The knobs a modulator can be dropped on, as this frame draws them.
+        self.mod_targets.borrow_mut().clear();
         if let Some(what) = self.pending_name.take() {
             self.start_naming(what, window, cx);
         }
@@ -2856,7 +2934,14 @@ impl Render for Workspace {
             || self.reductions.values().any(|&g| g > 0.01)
             || self.agent_presence().is_some()
             || self.browser.auditioning()
-            || self.player.rendering();
+            || self.player.rendering()
+            || (self.bottom == Some(Bottom::Modulation)
+                && self
+                    .session
+                    .project
+                    .tracks
+                    .get(self.track)
+                    .is_some_and(|t| !t.modulators.is_empty()));
         if busy || self.drag.is_some() {
             window.request_animation_frame();
         }
@@ -3068,6 +3153,7 @@ impl Render for Workspace {
             .children(self.device_ghost())
             .children(self.new_song_view(cx))
             .children(self.panner_view(cx))
+            .children(self.mod_ghost())
             .children(self.menu_view(cx))
             .children(self.adder_view(cx))
             .children(self.export_view(cx))

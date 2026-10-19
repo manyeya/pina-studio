@@ -580,7 +580,7 @@ impl Workspace {
                     .cursor_ns_resize()
                     .hover(|s| s.bg(rgb(OFF)))
                     .debug_selector(move || format!("smart-{i}"))
-                    .child(knob(v, 34., color, false))
+                    .child(self.modded(self.mod_key(target), 34., knob(v, 34., color, false)))
                     .child(
                         div()
                             .flex()

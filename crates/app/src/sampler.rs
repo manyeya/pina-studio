@@ -691,7 +691,7 @@ impl Workspace {
             .gap(px(2.))
             .cursor_ns_resize()
             .debug_selector(move || format!("sampler-{f:?}"))
-            .child(div().size(px(28.)).child(knob(shown, 28., color, bipolar)))
+            .child(self.modded(self.mod_key(target), 28., knob(shown, 28., color, bipolar)))
             .child(
                 div()
                     .text_size(px(9.5))

@@ -187,6 +187,8 @@ pub enum MenuAction {
     BounceInPlace(usize),
     /// The Bounce sheet, on stems, with one track ticked.
     ExportStem(usize),
+    /// A modulator's setting, from its card (track, modulator).
+    Mod(usize, usize, crate::modulation::ModChange),
     /// The right-click menus of the tracks area (`context.rs`).
     Track(crate::context::TrackOp),
     Region(At, crate::context::RegionOp),
@@ -454,6 +456,7 @@ impl Workspace {
             MenuAction::BounceInPlace(t) => self.bounce_in_place(t, cx),
             MenuAction::ExportStem(t) => self.export_stem(t, cx),
             MenuAction::Track(op) => self.track_op(op, cx),
+            MenuAction::Mod(t, k, change) => self.mod_change(t, k, change, cx),
             MenuAction::Region(at, op) => self.region_op(at, op, cx),
         }
         cx.notify();

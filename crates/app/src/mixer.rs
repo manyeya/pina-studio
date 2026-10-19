@@ -735,7 +735,7 @@ impl Workspace {
                 .gap(px(4.))
                 .cursor_ns_resize()
                 .debug_selector(move || format!("comp-{field:?}"))
-                .child(knob(value, 36., color, false))
+                .child(self.modded(self.mod_key(target), 36., knob(value, 36., color, false)))
                 .child(
                     div()
                         .font_family(MONO)
@@ -904,7 +904,7 @@ impl Workspace {
                 .gap(px(4.))
                 .cursor_ns_resize()
                 .debug_selector(move || format!("sat-{field:?}"))
-                .child(knob(shown, 36., color, bipolar))
+                .child(self.modded(self.mod_key(target), 36., knob(shown, 36., color, bipolar)))
                 .child(
                     div()
                         .font_family(MONO)

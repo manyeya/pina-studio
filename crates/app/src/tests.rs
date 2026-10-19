@@ -451,6 +451,64 @@ fn the_binaural_panner_places_a_sound_round_the_head(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn modulators_are_added_mapped_by_dragging_and_their_depth_set(cx: &mut TestAppContext) {
+    use tempo_engine::modulate::{ModKind, ModTarget};
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| {
+        ws.select_track(0);
+        ws.show_bottom(Bottom::Modulation, cx);
+    });
+    cx.run_until_parked();
+    let mods = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[0].modulators.clone())
+    };
+    click_on(cx, "add-mod-LFO", Modifiers::none(), MouseButton::Left);
+    assert!(matches!(mods(cx)[0].kind, ModKind::Lfo { .. }));
+    // Its ↗ dragged onto the header's pan knob: the pan follows it, by its usual depth.
+    let handle = cx.debug_bounds("mod-0-map").unwrap().center();
+    let knob = cx.debug_bounds("track-pan-0").unwrap();
+    let dial = point(knob.left() + px(12.), knob.center().y);
+    drag(cx, handle, dial);
+    let routes: Vec<_> = mods(cx)[0]
+        .routes
+        .iter()
+        .map(|r| (r.target, r.depth))
+        .collect();
+    assert_eq!(routes, [(ModTarget::Pan, 0.8)]);
+    // Its route dragged right: deeper (as far as pan goes, 2).
+    let route = cx.debug_bounds("mod-0-route-Pan").unwrap().center();
+    drag(cx, route, route + point(px(40.), px(0.)));
+    let depth = mods(cx)[0].routes[0].depth;
+    assert!((depth - 1.3).abs() < 0.01, "{depth}");
+    // Picked, dragging the knob it moves sets its depth, not the pan.
+    let pan = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].pan);
+    click_on(cx, "mod-card-0", Modifiers::none(), MouseButton::Left);
+    drag(cx, dial, dial - point(px(0.), px(40.)));
+    let after = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].pan);
+    assert_eq!(after, pan);
+    assert!(
+        mods(cx)[0].routes[0].depth > 1.6,
+        "{}",
+        mods(cx)[0].routes[0].depth
+    );
+    // Steps: painted in its picture, the first step set low.
+    click_on(cx, "add-mod-Steps", Modifiers::none(), MouseButton::Left);
+    let pic = cx.debug_bounds("mod-1-visual").unwrap();
+    // Clear of its rounded corner: the first step, at the bottom.
+    let low = point(pic.left() + px(10.), pic.bottom() - px(1.5));
+    drag(cx, low, low);
+    let ModKind::Steps { values, .. } = &mods(cx)[1].kind else {
+        panic!("not steps")
+    };
+    assert_eq!(values[0], 0.0);
+    // Taken off: the LFO and its route.
+    click_on(cx, "mod-0-remove", Modifiers::none(), MouseButton::Left);
+    let left = mods(cx);
+    assert_eq!(left.len(), 1);
+    assert!(matches!(left[0].kind, ModKind::Steps { .. }));
+}
+
+#[gpui::test]
 fn regions_copy_paste_mute_and_repeat_from_their_menus_and_keys(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     let count = |cx: &VisualTestContext, t: usize| {
@@ -3968,6 +4026,66 @@ fn shots() {
                     }
                     ws.track = 1;
                     ws.show_bottom(Bottom::PianoRoll, cx);
+                }
+                // Modulation: an LFO, steps, an envelope, a follower and random on the keys,
+                // mapped to its pan, volume, low cut and presence; values as if playing.
+                "modulation" => {
+                    use tempo_engine::modulate::{
+                        LfoShape, ModKind, ModRate, ModRoute, ModTarget, Modulator,
+                    };
+                    let drums = ws.session.project.tracks[2].id;
+                    let route = |target, depth| ModRoute { target, depth };
+                    let t = &mut ws.session.project.tracks[0];
+                    t.eq = Some(Default::default());
+                    t.modulators = vec![
+                        Modulator {
+                            kind: ModKind::Lfo {
+                                shape: LfoShape::Sine,
+                                rate: ModRate::Beats(0.5),
+                                phase: 0.0,
+                                unipolar: false,
+                            },
+                            routes: vec![
+                                route(ModTarget::Pan, 0.7),
+                                route(ModTarget::EqGain(2), 6.0),
+                            ],
+                        },
+                        Modulator {
+                            kind: ModKind::steps(),
+                            routes: vec![route(ModTarget::LowCut, 2.5)],
+                        },
+                        Modulator {
+                            kind: ModKind::envelope(),
+                            routes: vec![],
+                        },
+                        Modulator {
+                            kind: ModKind::follower(drums),
+                            routes: vec![route(ModTarget::Volume, -18.0)],
+                        },
+                        Modulator {
+                            kind: ModKind::Random {
+                                rate: ModRate::Beats(0.25),
+                                smooth: true,
+                            },
+                            routes: vec![],
+                        },
+                    ];
+                    let id = t.id;
+                    ws.mod_values
+                        .insert(id, [0.6, 0.85, 0.4, 0.7, -0.3, 0.0, 0.0, 0.0]);
+                    for k in 0..5 {
+                        let trace = (0..96)
+                            .map(|i| match k {
+                                3 => (1.0 - (i % 24) as f32 / 24.0).powf(2.0) * 0.9,
+                                _ => ((i as f32) * 0.21).sin() * 0.7,
+                            })
+                            .collect();
+                        ws.mod_trace.insert((id, k), trace);
+                    }
+                    ws.track = 0;
+                    ws.mod_edit = Some((0, 0));
+                    ws.editor_h = 330.0;
+                    ws.show_bottom(Bottom::Modulation, cx);
                 }
                 // The console headers: a stereo pan, a binaural one, a tall track, a muted region;
                 // and each right-click menu.

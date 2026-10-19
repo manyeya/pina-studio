@@ -957,6 +957,7 @@ impl Workspace {
                     .bg(alpha(color, if mute { 0.35 } else { 0.8 })),
             )
             .children(ticks)
+            .child(self.modded_fader(i, FADER_W, 22.))
             // The cap, as the mixer's are, stood on end.
             .child(
                 div()
@@ -1046,7 +1047,11 @@ impl Workspace {
             .flex_none()
             .cursor_ns_resize()
             .debug_selector(move || format!("track-pan-{i}"))
-            .child(pan_dial(mode, pan, spread, color))
+            .child(self.modded(
+                Some((i, tempo_engine::modulate::ModTarget::Pan)),
+                24.,
+                pan_dial(mode, pan, spread, color),
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |ws, e: &MouseDownEvent, window, cx| {

@@ -1050,7 +1050,11 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                     .justify_between()
                     .pr(px(3.))
                     .cursor_ns_resize()
-                    .child(knob(fader_pos(level), 16., tone, false))
+                    .child(ws.modded(
+                        Some((track, tempo_engine::modulate::ModTarget::Send(index))),
+                        16.,
+                        knob(fader_pos(level), 16., tone, false),
+                    ))
                     .debug_selector(move || format!("send-{track}-{index}"))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -1140,7 +1144,14 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
         .child(match pan {
             Some(pan) => div()
                 .cursor_ns_resize()
-                .child(knob(pan, if mixer { 32. } else { 26. }, TEXT, true))
+                .child(ws.modded(
+                    match ch {
+                        Channel::Track(t) => Some((t, tempo_engine::modulate::ModTarget::Pan)),
+                        _ => None,
+                    },
+                    if mixer { 32. } else { 26. },
+                    knob(pan, if mixer { 32. } else { 26. }, TEXT, true),
+                ))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |ws, e: &MouseDownEvent, _, cx| {

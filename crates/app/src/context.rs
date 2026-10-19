@@ -39,6 +39,8 @@ pub enum TrackOp {
     Look(usize, Point<Pixels>),
     /// The Binaural Panner, on a track.
     Panner(usize),
+    /// Its modulators, in the editor.
+    Modulation(usize),
     Automation,
     /// On an empty stretch of a lane, at a tick.
     NewRegion(usize, u64),
@@ -193,6 +195,7 @@ impl Workspace {
             },
             op("Create Track Stack\t⇧⌘D".into(), TrackOp::Stack(t)),
             rule(),
+            op("Modulation…".into(), TrackOp::Modulation(t)),
             ("Bounce in Place".to_string(), MenuAction::BounceInPlace(t)),
             ("Export as Stem…".to_string(), MenuAction::ExportStem(t)),
             rule(),
@@ -354,6 +357,10 @@ impl Workspace {
                 }
             }
             TrackOp::Panner(t) if t < n => self.open_panner(t, cx),
+            TrackOp::Modulation(t) if t < n => {
+                self.select_track(t);
+                self.show_bottom(Bottom::Modulation, cx);
+            }
             TrackOp::PanLaw(law) => self.edit(cx, |ws| ws.session.project.pan_law = law),
             TrackOp::ResetPan(t) if t < n => self.edit(cx, |ws| {
                 ws.session.project.tracks[t].pan = 0.0;

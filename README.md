@@ -260,6 +260,21 @@ In the app, mostly as in Logic:
   and swing; To MIDI turns it
   into notes for the piano roll, and on a track with MIDI (the drums an agent wrote) the step
   sequencer makes a pattern of it in a click. Patterns loop over their region.
+- Modulation (its tab in the editor, or a track's right-click menu): a track's modulators as
+  cards, each moving as it plays in its own colour: an LFO (sine, triangle, saw up or down,
+  square; in time with the song, 4 bars to 1/32 with dotted and triplet notes, or free in Hz; its
+  phase; ± or 0 → 1), Steps (values you paint, 4 to 32 of them, a glide, dice for random ones),
+  an Envelope its notes set off (attack, decay, sustain, release), a Follower of another track's
+  level (sidechain pumping and ducking: the bass under the kick), Random (stepped or smooth) and
+  a Macro to turn by hand. Drag a card's ↗ Map onto any knob or fader of its track to have it
+  move it: the header's volume and pan, the strip's pan and sends, Smart Controls, the EQ's low
+  cut and gains, the compressor's threshold and makeup, the saturator's drive, tone and mix, the
+  Sampler's cutoff, resonance, filter envelope, transpose, level, vibrato, LFO filter and
+  tremolo, and a plugin's parameters. A modulated knob wears a ring in the modulator's colour,
+  its range, and a dot where it has it now. Each card lists where it goes: drag a route sideways
+  for how far (⇧ finer), ✕ to take it off; click a card to pick it, and dragging any knob it moves
+  sets its depth instead. Modulation plays in bounces too, and agents use it as well
+  (`add_modulator`, `modulate`).
 - N shows the score: the selected MIDI region as notation on a grand staff, in time with the
   tracks; click a note to select and hear it, delete to delete it.
 - L shows Live Loops: a grid of loop cells, a row per track and a column per scene. Click an
