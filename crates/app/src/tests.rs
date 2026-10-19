@@ -3540,10 +3540,14 @@ fn an_agent_that_isnt_signed_in_says_how_rather_than_starting(cx: &mut TestAppCo
         chat::Item,
     };
     let (ws, cx) = open(cx);
+    // Not signed in when last asked: it's asked again first, then (still not) says how.
     ws.update(cx, |ws, cx| {
         ws.chat.ready = vec![(Kind::Codex, Readiness::SignIn)];
         ws.chat.kind = Kind::Codex;
         ws.ask_agent("Make it 101".into(), cx);
+    });
+    cx.run_until_parked();
+    ws.read_with(cx, |ws, _| {
         assert!(!ws.chat.busy);
         assert!(
             matches!(ws.chat.items.last(), Some(Item::End { error: Some(e), .. })

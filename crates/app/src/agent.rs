@@ -138,18 +138,28 @@ impl Kind {
         let Some(cmd) = self.command() else {
             return Readiness::Missing;
         };
+        // What it says, on either stream (Codex says its status on stderr), and whether it
+        // ended well.
         let run = |args: &[&str]| {
             Command::new(&cmd)
                 .args(args)
                 .stdin(Stdio::null())
                 .output()
                 .ok()
-                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .map(|o| {
+                    let said = String::from_utf8_lossy(&o.stdout).into_owned()
+                        + &String::from_utf8_lossy(&o.stderr);
+                    (o.status.success(), said)
+                })
         };
         match self {
             Kind::ClaudeCode => {
                 let status: Value = run(&["auth", "status"])
-                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .and_then(|(_, s)| {
+                        // The JSON, whatever else is said around it.
+                        let (a, b) = (s.find('{')?, s.rfind('}')?);
+                        serde_json::from_str(s.get(a..=b)?).ok()
+                    })
                     .unwrap_or_default();
                 match (status["loggedIn"].as_bool(), status["authMethod"].as_str()) {
                     (Some(false), _) => Readiness::SignIn,
@@ -159,12 +169,29 @@ impl Kind {
                 }
             }
             Kind::Codex => match run(&["login", "status"]) {
-                Some(s) if s.contains("Logged in") => {
-                    Readiness::Ready(s.trim().trim_start_matches("Logged in using ").to_string())
-                }
-                _ => Readiness::SignIn,
+                Some((ok, said)) => codex_status(ok, &said),
+                None => Readiness::SignIn,
             },
         }
+    }
+}
+
+/// What `codex login status` said: signed in (and how), or not.
+fn codex_status(ok: bool, said: &str) -> Readiness {
+    let line = said
+        .lines()
+        .map(str::trim)
+        .find(|l| l.contains("Logged in") || l.contains("Not logged in"));
+    match line {
+        Some(l) if l.contains("Not logged in") => Readiness::SignIn,
+        Some(l) => Readiness::Ready(
+            l.split_once("Logged in using ")
+                .map_or("", |(_, how)| how)
+                .to_string(),
+        ),
+        // Said nothing we know: it ending well means it's signed in.
+        None if ok => Readiness::Ready(String::new()),
+        None => Readiness::SignIn,
     }
 }
 
@@ -1113,6 +1140,22 @@ fn trim(x: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_says_its_signed_in_on_either_stream() {
+        let ready = |s: &str| codex_status(true, s);
+        assert_eq!(
+            ready("Logged in using ChatGPT\n"),
+            Readiness::Ready("ChatGPT".into())
+        );
+        assert_eq!(
+            ready("WARNING: something\nLogged in using an API key - sk-…\n"),
+            Readiness::Ready("an API key - sk-…".into())
+        );
+        assert_eq!(codex_status(false, "Not logged in\n"), Readiness::SignIn);
+        assert_eq!(codex_status(true, ""), Readiness::Ready(String::new()));
+        assert_eq!(codex_status(false, "error"), Readiness::SignIn);
+    }
 
     #[test]
     fn models_and_efforts_are_picked_kept_and_passed_on() {

@@ -27,6 +27,38 @@ pub enum Step {
     Failed(String),
 }
 
+/// Asks each agent whether it can work (installed, signed in), in the background as it takes a
+/// moment; then, if a question was waiting on it, asks that. Tests leave the person's agents alone
+/// and keep what they set.
+pub fn check_agents(then: Option<String>, cx: &mut Context<Workspace>) {
+    let check = cx.background_spawn(async {
+        match cfg!(test) {
+            true => None,
+            false => Some(
+                agent::AGENTS
+                    .iter()
+                    .map(|d| (d.kind, d.kind.readiness()))
+                    .collect::<Vec<_>>(),
+            ),
+        }
+    });
+    cx.spawn(async move |this, cx| {
+        let ready = check.await;
+        this.update(cx, |ws, cx| {
+            if let Some(ready) = ready {
+                ws.chat.ready = ready;
+            }
+            if let Some(text) = then {
+                ws.status = None;
+                ws.ask_agent_checked(text, true, cx);
+            }
+            cx.notify();
+        })
+        .ok();
+    })
+    .detach();
+}
+
 /// A line of the conversation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
@@ -102,26 +134,7 @@ impl Chat {
             TextEvent::Cancel => input.update(cx, |i, cx| i.set_text("", cx)),
             _ => {}
         });
-        // Asking each agent whether it's signed in takes a moment: in the background (and not
-        // in tests, which leave the person's agents alone).
-        let check = cx.background_spawn(async {
-            match cfg!(test) {
-                true => Vec::new(),
-                false => agent::AGENTS
-                    .iter()
-                    .map(|d| (d.kind, d.kind.readiness()))
-                    .collect(),
-            }
-        });
-        cx.spawn(async move |this, cx| {
-            let ready = check.await;
-            this.update(cx, |ws, cx| {
-                ws.chat.ready = ready;
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        check_agents(None, cx);
         Chat {
             items: Vec::new(),
             kind: if cfg!(test) {
@@ -272,6 +285,8 @@ impl Workspace {
     pub fn toggle_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_agent = !self.show_agent;
         if self.show_agent {
+            // Signed in or installed since it was last asked: it says so now.
+            check_agents(None, cx);
             self.show_browser = false;
             self.view = crate::workspace::View::Arrange;
             let focus = self.chat.input.read(cx).focus_handle(cx);
@@ -282,6 +297,12 @@ impl Workspace {
 
     /// Asks the agent something, starting it on the song if it isn't running.
     pub fn ask_agent(&mut self, text: String, cx: &mut Context<Self>) {
+        self.ask_agent_checked(text, false, cx);
+    }
+
+    /// Asks, if the agent can work. Not ready when last asked, it's asked again first (it may
+    /// have been installed or signed in since); still not, it says what to do.
+    pub fn ask_agent_checked(&mut self, text: String, checked: bool, cx: &mut Context<Self>) {
         let keep = self.chat.at_end();
         let def = self.chat.kind.def();
         let problem = match self.chat.readiness(self.chat.kind) {
@@ -292,6 +313,12 @@ impl Workspace {
             )),
             _ => None,
         };
+        if problem.is_some() && !checked {
+            self.status = Some(format!("Checking {}…", def.name));
+            check_agents(Some(text), cx);
+            cx.notify();
+            return;
+        }
         if let Some(problem) = problem {
             self.chat.asked(text);
             self.chat.end(0.0, false, Some(problem));
@@ -603,6 +630,7 @@ impl Workspace {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, e: &gpui::MouseDownEvent, _, cx| {
+                            check_agents(None, cx);
                             ws.menu = Some(ws.agent_menu(e.position));
                             cx.notify();
                         }),
