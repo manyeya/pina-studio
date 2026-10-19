@@ -556,6 +556,7 @@ pub fn write_drums(p: &mut Project, w: DrumPart) -> Result<Value, String> {
             pitch,
             cells,
             mute: false,
+            ..Default::default()
         })
         .collect();
     if rows.is_empty() {

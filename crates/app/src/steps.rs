@@ -16,6 +16,7 @@ use gpui::{
 };
 use tempo_engine::{
     drums,
+    modulate::{ModKind, ModTarget, SoundParam},
     music::Key,
     project::{At, Content, Instrument, PPQ, PatternRow, Region, pattern_notes, to_pattern},
 };
@@ -44,7 +45,7 @@ fn scale_notes(key: Option<Key>) -> Vec<u8> {
 
 /// A row's name: a drum on the kit, a sampler's sound on its note, else a note, spelled by the
 /// key.
-fn row_name(instrument: Option<&Instrument>, key: Option<Key>, pitch: u8) -> String {
+pub(crate) fn row_name(instrument: Option<&Instrument>, key: Option<Key>, pitch: u8) -> String {
     match instrument {
         Some(Instrument::Drums) => drums::name(pitch),
         Some(Instrument::Sampler(s)) => match s.zones.iter().find(|z| z.covers(pitch)) {
@@ -119,6 +120,90 @@ pub enum RowOp {
     /// This many hits spread as evenly as they go over its steps, from the first (Euclid's).
     Euclid(usize),
     Remove,
+}
+
+/// What the lane under the picked sound shows and draws, as Logic's step sequencer's edit
+/// modes: each step's velocity, chance, pitch, ratchet, gate or nudge.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum LaneMode {
+    #[default]
+    Velocity,
+    Chance,
+    Pitch,
+    Repeat,
+    Gate,
+    Nudge,
+}
+
+impl LaneMode {
+    pub const ALL: [LaneMode; 6] = [
+        LaneMode::Velocity,
+        LaneMode::Chance,
+        LaneMode::Pitch,
+        LaneMode::Repeat,
+        LaneMode::Gate,
+        LaneMode::Nudge,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            LaneMode::Velocity => "Velocity",
+            LaneMode::Chance => "Chance",
+            LaneMode::Pitch => "Pitch",
+            LaneMode::Repeat => "Repeat",
+            LaneMode::Gate => "Gate",
+            LaneMode::Nudge => "Nudge",
+        }
+    }
+
+    /// What a modulator dropped on the lane moves.
+    pub fn sound_param(self) -> Option<SoundParam> {
+        match self {
+            LaneMode::Velocity => Some(SoundParam::Velocity),
+            LaneMode::Chance => Some(SoundParam::Chance),
+            LaneMode::Pitch => Some(SoundParam::Pitch),
+            _ => None,
+        }
+    }
+
+    /// A step's value in this lane, as a height (0 to 1, or -1 to 1 from the middle), and as
+    /// text when it isn't as usual.
+    fn shown(self, row: &PatternRow, i: usize) -> (f32, bool, Option<String>) {
+        match self {
+            LaneMode::Velocity => {
+                let v = row.cells.get(i).copied().unwrap_or(0);
+                (
+                    v as f32 / 127.0,
+                    false,
+                    (v >= ACCENTED).then(|| "acc".into()),
+                )
+            }
+            LaneMode::Chance => {
+                let c = row.chance_at(i);
+                (c as f32 / 100.0, false, (c < 100).then(|| format!("{c}%")))
+            }
+            LaneMode::Pitch => {
+                let t = row.transpose_at(i);
+                (t as f32 / 12.0, true, (t != 0).then(|| format!("{t:+}")))
+            }
+            LaneMode::Repeat => {
+                let n = row.repeat_at(i);
+                (n as f32 / 4.0, false, (n > 1).then(|| format!("×{n}")))
+            }
+            LaneMode::Gate => {
+                let g = row.gate_at(i);
+                (
+                    g as f32 / 200.0,
+                    false,
+                    (g != tempo_engine::project::GATE).then(|| format!("{g}%")),
+                )
+            }
+            LaneMode::Nudge => {
+                let n = row.nudge_at(i);
+                (n as f32 / 50.0, true, (n != 0).then(|| format!("{n:+}")))
+            }
+        }
+    }
 }
 
 impl Workspace {
@@ -201,6 +286,7 @@ impl Workspace {
                 pitch,
                 cells: vec![0; steps],
                 mute: false,
+                ..Default::default()
             })
             .collect();
         let t = self.track;
@@ -361,12 +447,32 @@ impl Workspace {
     fn draw_step_velocity(&mut self, at: At, step: usize, y: f32, cx: &mut Context<Self>) {
         let b = self.steps_lane.get();
         let (top, h) = (f32::from(b.origin.y) + 4.0, f32::from(b.size.height) - 8.0);
-        let v = (((top + h - y) / h.max(1.0)) * 127.0)
-            .round()
-            .clamp(1.0, 127.0) as u8;
-        let row = self.steps_row;
-        if self.cell(at, row, step).is_some_and(|c| c > 0) {
-            self.set_cell(at, row, step, v);
+        let u = ((top + h - y) / h.max(1.0)).clamp(0.0, 1.0);
+        let (r, mode) = (self.steps_row, self.steps_lane_mode);
+        if mode == LaneMode::Velocity {
+            let v = (u * 127.0).round().clamp(1.0, 127.0) as u8;
+            if self.cell(at, r, step).is_some_and(|c| c > 0) {
+                self.set_cell(at, r, step, v);
+                self.changed(cx);
+            }
+            return;
+        }
+        let snap = |v: f32, by: f32| (v / by).round() * by;
+        if let Content::Pattern { rows, .. } =
+            &mut self.session.project.tracks[at.0].regions[at.1].content
+            && let Some(row) = rows.get_mut(r)
+            && step < row.cells.len()
+        {
+            row.fill_lanes();
+            match mode {
+                LaneMode::Chance => row.chance[step] = snap(u * 100.0, 5.0) as u8,
+                LaneMode::Pitch => row.transpose[step] = ((u * 2.0 - 1.0) * 12.0).round() as i8,
+                LaneMode::Repeat => row.repeat[step] = 1 + (u * 3.999).floor() as u8,
+                LaneMode::Gate => row.gate[step] = snap(5.0 + u * 195.0, 5.0) as u8,
+                LaneMode::Nudge => row.nudge[step] = snap((u * 2.0 - 1.0) * 50.0, 5.0) as i8,
+                LaneMode::Velocity => {}
+            }
+            row.tidy_lanes();
             self.changed(cx);
         }
     }
@@ -379,8 +485,38 @@ impl Workspace {
             if row >= rows.len() {
                 return;
             }
+            // The lanes go where their steps go.
+            if matches!(op, RowOp::Shift(_) | RowOp::Reverse) {
+                rows[row].fill_lanes();
+            }
+            let n = rows[row].cells.len();
+            match op {
+                RowOp::Shift(by) if n > 0 => {
+                    let by = by.rem_euclid(n as i32) as usize;
+                    let r = &mut rows[row];
+                    r.chance.rotate_right(by);
+                    r.transpose.rotate_right(by);
+                    r.repeat.rotate_right(by);
+                    r.gate.rotate_right(by);
+                    r.nudge.rotate_right(by);
+                }
+                RowOp::Reverse => {
+                    let r = &mut rows[row];
+                    r.chance.reverse();
+                    r.transpose.reverse();
+                    r.repeat.reverse();
+                    r.gate.reverse();
+                    r.nudge.reverse();
+                }
+                RowOp::Clear => {
+                    let r = &mut rows[row];
+                    (r.chance, r.transpose, r.repeat, r.gate, r.nudge) =
+                        (vec![], vec![], vec![], vec![], vec![]);
+                }
+                _ => {}
+            }
+            rows[row].tidy_lanes();
             let cells = &mut rows[row].cells;
-            let n = cells.len();
             match op {
                 RowOp::Clear => cells.iter_mut().for_each(|c| *c = 0),
                 RowOp::Fill(every) => {
@@ -822,6 +958,46 @@ impl Workspace {
                                 .bg(rgb(0xffffff)),
                         )
                     })
+                    // Its own settings, marked: a ratchet split, a chance faded, a pitch moved.
+                    .when(v > 0 && inside, |d| {
+                        let i = k % len.max(1);
+                        let (n, chance, t) =
+                            (row.repeat_at(i), row.chance_at(i), row.transpose_at(i));
+                        d.when(chance < 100, |d| {
+                            d.opacity(0.45 + 0.55 * chance as f32 / 100.0)
+                        })
+                        .when(n > 1, |d| {
+                            d.child(div().absolute().inset_0().flex().children((0..n).map(|j| {
+                                div().flex_1().h_full().when(j > 0, |d| {
+                                    d.border_l_1().border_color(alpha(0x000000, 0.55))
+                                })
+                            })))
+                        })
+                        .when(chance < 100 || t != 0, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .bottom(px(1.))
+                                    .left(px(3.))
+                                    .right(px(3.))
+                                    .flex()
+                                    .justify_between()
+                                    .font_family(MONO)
+                                    .text_size(px(8.5))
+                                    .text_color(rgb(0xffffff))
+                                    .child(if chance < 100 {
+                                        format!("{chance}%")
+                                    } else {
+                                        String::new()
+                                    })
+                                    .child(if t != 0 {
+                                        format!("{t:+}")
+                                    } else {
+                                        String::new()
+                                    }),
+                            )
+                        })
+                    })
                     .debug_selector(move || format!("step-{r}-{k}"))
                     .when(inside, |d| {
                         d.cursor_pointer()
@@ -858,33 +1034,119 @@ impl Workspace {
                         .children(cells),
                 );
             if picked {
-                // Its velocities, a bar a step, drawn with the mouse.
+                // Its lane: each step's velocity, chance, pitch, ratchet, gate or nudge, a bar a
+                // step, drawn with the mouse; and where the modulators on the sound move it.
+                let mode = self.steps_lane_mode;
                 let lane_bounds = self.steps_lane.clone();
+                let targets = self.mod_targets.clone();
+                let param = mode.sound_param();
+                let target = param.map(|p| ModTarget::Sound(r, p));
+                let mods = self.session.project.tracks[at.0].modulators.clone();
+                let tempo = self.session.project.tempo;
+                // Each modulator moving this lane: its colour, depth and kind.
+                let moving: Vec<(usize, u32, f32, ModKind)> = mods
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(k, m)| {
+                        m.routes
+                            .iter()
+                            .filter(|route| Some(route.target) == target)
+                            .map(move |route| {
+                                (
+                                    k,
+                                    crate::modulation::MOD_COLORS[k % 8],
+                                    route.depth,
+                                    m.kind.clone(),
+                                )
+                            })
+                    })
+                    .collect();
+                let offering = matches!(self.drag, Some(Drag::Modulator { track, .. }) if track == at.0)
+                    && target.is_some();
                 let bars = (0..steps).map(|k| {
                     let inside = k < len;
-                    let v = row.cells.get(k % len.max(1)).copied().unwrap_or(0);
-                    let bar = div()
+                    let i = k % len.max(1);
+                    let (h, bipolar, text) = mode.shown(row, i);
+                    let on = row.cells.get(i).copied().unwrap_or(0) > 0;
+                    let lit = alpha(
+                        color,
+                        if inside {
+                            if on { 0.9 } else { 0.4 }
+                        } else {
+                            0.25
+                        },
+                    );
+                    let room = 34.0;
+                    let bar = match bipolar {
+                        false => div()
+                            .absolute()
+                            .bottom_0()
+                            .left(gpui::relative(0.2))
+                            .w(gpui::relative(0.6))
+                            .h(px((h * room).max(2.0)))
+                            .rounded_t(px(2.))
+                            .bg(if h > 0.0 { lit } else { rgb(RAISED).into() }),
+                        true => div()
+                            .absolute()
+                            .left(gpui::relative(0.2))
+                            .w(gpui::relative(0.6))
+                            .when(h >= 0.0, |d| d.bottom(px(room / 2.0)))
+                            .when(h < 0.0, |d| d.top(px(room / 2.0 + 2.0)))
+                            .h(px((h.abs() * room / 2.0).max(1.0)))
+                            .rounded(px(1.))
+                            .bg(if h != 0.0 { lit } else { rgb(RAISED).into() }),
+                    };
+                    // Where each modulator has this step, as it falls in the song.
+                    let beats = (region.start + k as u64 * *step) as f64 / PPQ as f64;
+                    let dots: Vec<Div> = moving
+                        .iter()
+                        .filter_map(|(_, c, depth, kind)| {
+                            let v = tempo_engine::modulate::value_at(kind, beats, tempo)?;
+                            let (h0, _, _) = mode.shown(row, i);
+                            let by = depth * v;
+                            let to = match mode {
+                                LaneMode::Velocity => (h0 + by / 127.0).clamp(0.0, 1.0),
+                                LaneMode::Chance => (h0 + by / 100.0).clamp(0.0, 1.0),
+                                _ => (h0 + by / 12.0).clamp(-1.0, 1.0),
+                            };
+                            let y = match bipolar {
+                                false => to * room,
+                                true => room / 2.0 + to * room / 2.0,
+                            };
+                            Some(
+                                div()
+                                    .absolute()
+                                    .left(gpui::relative(0.5))
+                                    .ml(px(-3.))
+                                    .bottom(px(y - 3.0))
+                                    .size(px(6.))
+                                    .rounded(px(3.))
+                                    .bg(rgb(*c))
+                                    .border_1()
+                                    .border_color(rgb(0x0b0b0e)),
+                            )
+                        })
+                        .collect();
+                    let cell = div()
                         .flex_1()
                         .h_full()
-                        .flex()
-                        .items_end()
-                        .justify_center()
+                        .relative()
                         .debug_selector(move || format!("step-velocity-{k}"))
-                        .child(
+                        .child(bar)
+                        .children(dots)
+                        .children(text.filter(|_| inside).map(|t| {
                             div()
-                                .w(gpui::relative(0.6))
-                                .h(px(if v > 0 {
-                                    4.0 + v as f32 / 127.0 * 32.0
-                                } else {
-                                    2.0
-                                }))
-                                .rounded_t(px(2.))
-                                .bg(if v > 0 {
-                                    alpha(color, if inside { 0.9 } else { 0.35 })
-                                } else {
-                                    rgb(RAISED).into()
-                                }),
-                        )
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .right_0()
+                                .flex()
+                                .justify_center()
+                                .font_family(MONO)
+                                .text_size(px(8.5))
+                                .text_color(rgb(TEXT_2))
+                                .child(t)
+                        }))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
@@ -899,42 +1161,149 @@ impl Workspace {
                                 ws.draw_step_velocity(at, k, f32::from(e.position.y), cx);
                             }
                         }));
-                    beat_gap(k, bar)
+                    beat_gap(k, cell)
                 });
-                block = block.child(
-                    div()
-                        .h(px(40.))
-                        .flex()
-                        .gap(px(3.))
-                        .child(
-                            div()
-                                .w(px(LABEL_W))
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .text_size(px(10.5))
-                                .text_color(rgb(TEXT_3))
-                                .child("Velocity · draw it"),
+                let tabs = LaneMode::ALL.map(|m| {
+                    seg(m.name(), m == mode, 20.)
+                        .px(px(7.))
+                        .text_size(px(10.5))
+                        .debug_selector(move || format!("lane-{}", m.name()))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| {
+                                cx.stop_propagation();
+                                ws.steps_lane_mode = m;
+                                cx.notify();
+                            }),
                         )
-                        .child(
-                            div()
-                                .flex_1()
-                                .h_full()
-                                .relative()
-                                .flex()
-                                .gap(px(3.))
-                                .debug_selector(|| "steps-lane".into())
-                                .child(
-                                    gpui::canvas(
-                                        move |b: Bounds<Pixels>, _, _| lane_bounds.set(b),
-                                        |_, _, _, _| {},
+                });
+                let chips: Vec<Div> = moving
+                    .iter()
+                    .map(|(k, c, depth, _)| {
+                        let (k, mt) = (*k, target.unwrap_or(ModTarget::Volume));
+                        div()
+                            .h(px(20.))
+                            .px(px(6.))
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .rounded(px(5.))
+                            .bg(alpha(*c, 0.16))
+                            .border_1()
+                            .border_color(alpha(*c, 0.45))
+                            .text_size(px(10.5))
+                            .child(div().size(px(6.)).rounded(px(3.)).bg(rgb(*c)))
+                            .child(self.mod_name(at.0, k))
+                            .child(
+                                div()
+                                    .font_family(MONO)
+                                    .text_color(rgb(TEXT_2))
+                                    .child(tempo_engine::modulate::depth_text(mt, *depth)),
+                            )
+                            .child(
+                                div()
+                                    .text_color(rgb(TEXT_3))
+                                    .cursor_pointer()
+                                    .hover(|d| d.text_color(rgb(TEXT)))
+                                    .child("✕")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |ws, _, _, cx| {
+                                            cx.stop_propagation();
+                                            ws.unmap(at.0, k, mt, cx);
+                                        }),
+                                    ),
+                            )
+                            .cursor_ew_resize()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener({
+                                    let depth = *depth;
+                                    move |ws, e: &MouseDownEvent, _, cx| {
+                                        let p = crate::workspace::pt(e.position);
+                                        ws.begin_drag(
+                                            Drag::ModDepth {
+                                                track: at.0,
+                                                index: k,
+                                                target: mt,
+                                                x: p.x,
+                                                y: p.y,
+                                                depth,
+                                            },
+                                            cx,
+                                        );
+                                    }
+                                }),
+                            )
+                    })
+                    .collect();
+                let hint = match (param, moving.is_empty()) {
+                    (Some(_), true) => "drag a modulator's ↗ here to move it",
+                    (Some(_), false) => "",
+                    (None, _) => "draw it",
+                };
+                block = block
+                    .child(
+                        div()
+                            .h(px(22.))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .w(px(LABEL_W))
+                                    .flex_none()
+                                    .text_size(px(10.5))
+                                    .text_color(rgb(TEXT_3))
+                                    .child("Each step's"),
+                            )
+                            .child(tray().p(px(2.)).rounded(px(6.)).children(tabs))
+                            .children(chips)
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(rgb(TEXT_4))
+                                    .child(hint),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .h(px(40.))
+                            .flex()
+                            .gap(px(3.))
+                            .child(div().w(px(LABEL_W)).flex_none())
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .h_full()
+                                    .relative()
+                                    .flex()
+                                    .gap(px(3.))
+                                    .rounded(px(5.))
+                                    .when(offering, |d| {
+                                        d.bg(alpha(ACCENT, 0.1))
+                                            .border_1()
+                                            .border_color(alpha(ACCENT, 0.7))
+                                    })
+                                    .debug_selector(|| "steps-lane".into())
+                                    .child(
+                                        gpui::canvas(
+                                            move |b: Bounds<Pixels>, _, _| {
+                                                lane_bounds.set(b);
+                                                if let Some(mt) = target {
+                                                    targets.borrow_mut().push((at.0, mt, b));
+                                                }
+                                            },
+                                            |_, _, _, _| {},
+                                        )
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .size_full(),
                                     )
-                                    .absolute()
-                                    .size_full(),
-                                )
-                                .children(bars),
-                        ),
-                );
+                                    .children(bars),
+                            ),
+                    );
             }
             grid.push(block);
         }
@@ -944,6 +1313,240 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(move |ws, e: &MouseDownEvent, _, cx| ws.add_sound_menu(at, e, cx)),
             );
+        let step_beats = *step as f32 / PPQ as f32;
+        let add_param = button("+ Parameter row", false)
+            .debug_selector(|| "add-param".into())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                    let t = at.0;
+                    let k = ws.session.project.tracks[t].modulators.len();
+                    let kind = ModKind::Steps {
+                        values: vec![0.5; steps],
+                        rate: tempo_engine::modulate::ModRate::Beats(step_beats),
+                        glide: 0.0,
+                    };
+                    ws.add_modulator(t, kind, cx);
+                    if ws.session.project.tracks[t].modulators.len() > k {
+                        ws.menu = Some(Menu {
+                            at: e.position,
+                            items: ws.target_menu(t, k),
+                            ..Default::default()
+                        });
+                        ws.status =
+                            Some("Pick what the row steps through; then paint its steps.".into());
+                    }
+                    cx.notify();
+                }),
+            );
+
+        // The track's modulators, to drag onto a sound's lane (or any knob of the track); and
+        // its parameter rows (steps modulators, as Logic's automation rows), painted in time with
+        // the pattern.
+        let t = at.0;
+        let track_mods = self.session.project.tracks[t].modulators.clone();
+        let mod_chips: Vec<Div> = track_mods
+            .iter()
+            .enumerate()
+            .map(|(k, _)| {
+                let c = crate::modulation::MOD_COLORS[k % 8];
+                div()
+                    .h(px(22.))
+                    .px(px(7.))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .rounded(px(6.))
+                    .bg(alpha(c, 0.14))
+                    .border_1()
+                    .border_color(alpha(c, 0.45))
+                    .text_size(px(11.))
+                    .cursor(gpui::CursorStyle::ClosedHand)
+                    .debug_selector(move || format!("steps-mod-{k}"))
+                    .child(div().size(px(7.)).rounded(px(3.5)).bg(rgb(c)))
+                    .child(self.mod_name(t, k))
+                    .child(div().text_color(rgb(TEXT_2)).child("↗"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            if e.click_count == 2 {
+                                ws.show_bottom(Bottom::Modulation, cx);
+                                return;
+                            }
+                            ws.mod_drag_at = Some(crate::workspace::pt(e.position));
+                            ws.begin_drag(Drag::Modulator { track: t, index: k }, cx);
+                        }),
+                    )
+            })
+            .collect();
+        let quick = |label: &'static str, kind: ModKind, cx: &mut Context<Self>| {
+            button(format!("+ {label}"), false)
+                .debug_selector(move || format!("steps-add-{label}"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| ws.add_modulator(t, kind.clone(), cx)),
+                )
+        };
+        let strip = div()
+            .h(px(30.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(5.))
+            .px(px(6.))
+            .child(
+                div()
+                    .w(px(LABEL_W - 6.0))
+                    .flex_none()
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(TEXT_3))
+                    .child("MODULATE"),
+            )
+            .children(mod_chips)
+            .child(quick("LFO", ModKind::lfo(), cx))
+            .child(quick("Random", ModKind::random(), cx))
+            .child(add_param)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .text_size(px(10.5))
+                    .text_color(rgb(TEXT_4))
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child("drag a modulator's ↗ onto a sound's lane, or any knob of the track"),
+            );
+        let param_rows: Vec<Div> = track_mods
+            .iter()
+            .enumerate()
+            .filter_map(|(k, m)| match &m.kind {
+                ModKind::Steps { values, .. } => Some((k, values.clone(), m.routes.clone())),
+                _ => None,
+            })
+            .map(|(k, values, routes)| {
+                let c = crate::modulation::MOD_COLORS[k % 8];
+                let n = values.len().max(1);
+                let label = match routes.first() {
+                    Some(r) => format!(
+                        "{} {}",
+                        self.target_name(t, r.target),
+                        tempo_engine::modulate::depth_text(r.target, r.depth)
+                    ),
+                    None => "Map to…".to_string(),
+                };
+                let items = self.target_menu(t, k);
+                let id = self.session.project.tracks[t].id;
+                let live = self.mod_values.get(&id).map_or(0.0, |v| v[k]);
+                let now_step = now;
+                let bounds = self.mod_steps.clone();
+                let cells = (0..steps).map(|i| {
+                    let v = values[i % n];
+                    let playing = now_step.is_some_and(|p| p % n == i % n);
+                    let cell = div()
+                        .flex_1()
+                        .h_full()
+                        .relative()
+                        .rounded(px(3.))
+                        .bg(rgb(if (i / 4) % 2 == 0 { 0x17171c } else { 0x1c1c22 }))
+                        .when(playing, |d| d.border_1().border_color(alpha(0xffffff, 0.5)))
+                        .child(
+                            div()
+                                .absolute()
+                                .bottom_0()
+                                .left(gpui::relative(0.15))
+                                .w(gpui::relative(0.7))
+                                .h(gpui::relative(v.clamp(0.0, 1.0)))
+                                .rounded_t(px(2.))
+                                .bg(alpha(c, if i < n { 0.75 } else { 0.3 })),
+                        );
+                    beat_gap(i, cell)
+                });
+                div()
+                    .h(px(36.))
+                    .flex()
+                    .items_center()
+                    .gap(px(3.))
+                    .px(px(6.))
+                    .py(px(3.))
+                    .child(
+                        div()
+                            .w(px(LABEL_W))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .pr(px(6.))
+                            .child(div().size(px(8.)).flex_none().rounded(px(2.)).bg(rgb(c)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .text_size(px(11.))
+                                    .text_color(rgb(if routes.is_empty() { AMBER } else { TEXT_2 }))
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .cursor_pointer()
+                                    .debug_selector(move || format!("param-row-{k}"))
+                                    .child(label)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                            cx.stop_propagation();
+                                            ws.menu = Some(Menu {
+                                                at: e.position,
+                                                items: items.clone(),
+                                                ..Default::default()
+                                            });
+                                            cx.notify();
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .font_family(MONO)
+                                    .text_size(px(9.5))
+                                    .text_color(rgb(TEXT_3))
+                                    .child(format!("{live:.2}")),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .relative()
+                            .flex()
+                            .gap(px(3.))
+                            .cursor_crosshair()
+                            .debug_selector(move || format!("param-cells-{k}"))
+                            .child(
+                                gpui::canvas(
+                                    move |b: Bounds<Pixels>, _, _| {
+                                        bounds.borrow_mut().insert((t, k), b);
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full(),
+                            )
+                            .children(cells)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    ws.begin_drag(Drag::ModSteps { track: t, index: k }, cx);
+                                    ws.paint_mod_step(t, k, crate::workspace::pt(e.position));
+                                    ws.changed(cx);
+                                }),
+                            ),
+                    )
+            })
+            .collect();
 
         // What can be done to the picked row, all in sight.
         let r = picked_row;
@@ -1071,7 +1674,9 @@ impl Workspace {
                         .flex()
                         .flex_col()
                         .gap(px(2.))
+                        .child(strip)
                         .children(grid)
+                        .children(param_rows)
                         .child(div().pt(px(4.)).pl(px(6.)).flex().child(add)),
                 ),
             )

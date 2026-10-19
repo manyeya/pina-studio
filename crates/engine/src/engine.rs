@@ -1067,6 +1067,7 @@ pub fn compile(
                     project,
                     rate,
                     &pass,
+                    &t.modulators,
                     files,
                     (&mut events, &mut controls),
                     &mut clips,
@@ -1089,6 +1090,7 @@ pub fn compile(
                     project,
                     rate,
                     &region,
+                    &t.modulators,
                     files,
                     (&mut events, &mut controls),
                     &mut clips,
@@ -1303,11 +1305,14 @@ fn sidechain_order(hears: &[Vec<Option<usize>>]) -> Vec<usize> {
     order
 }
 
-/// Adds the note events, controller moves and audio clips a region plays, in samples.
+/// Adds the note events, controller moves and audio clips a region plays, in samples; a pattern's
+/// steps as the track's modulators move its sounds.
+#[allow(clippy::too_many_arguments)]
 fn play_region(
     project: &Project,
     rate: f64,
     region: &Region,
+    mods: &[Modulator],
     files: &mut AudioFiles,
     (events, controls): (&mut Vec<Event>, &mut Vec<ControlEvent>),
     clips: &mut Vec<Clip>,
@@ -1318,7 +1323,21 @@ fn play_region(
     let mut emit = |content: &Content, at: i64, from: u64, to: u64| match content {
         // Notes starting in their part of the region play, for their full length.
         Content::Midi { .. } | Content::Pattern { .. } => {
-            let notes = content.notes((to as i64 - at).max(0) as u64).unwrap();
+            let notes = match content {
+                // A pattern as it plays: its lanes, and the modulators on its sounds.
+                Content::Pattern { step, rows, swing } => {
+                    std::borrow::Cow::Owned(crate::project::pattern_played(
+                        *step,
+                        rows,
+                        (to as i64 - at).max(0) as u64,
+                        *swing,
+                        (region.start as i64 + at).max(0) as u64,
+                        mods,
+                        project.tempo,
+                    ))
+                }
+                _ => content.notes((to as i64 - at).max(0) as u64).unwrap(),
+            };
             for n in notes
                 .iter()
                 .map(|n| region.played(n))
@@ -3059,6 +3078,7 @@ mod tests {
             pitch: 36,
             cells: vec![100, 0, 90, 0],
             mute: false,
+            ..Default::default()
         }];
         let region = Region {
             start: 0,

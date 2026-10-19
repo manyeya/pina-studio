@@ -104,6 +104,11 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   to 75) makes every second step late, as an MPC does. A row shorter than the others loops on
   its own length (a polymeter); `"mute": true` silences a row and keeps its steps. On a `"drums"` track:
   36 kick, 38 snare, 37 side stick, 39 clap, 42 closed hat, 46 open hat, 41/45/48 toms, 49 crash.
+  A row's steps can each have their own settings, as lanes as long as `cells` (left out, as
+  usual): `"chance"` (0 to 100 that it plays, rolled afresh each time round), `"transpose"`
+  (semitones), `"repeat"` (a ratchet: 1 to 4 hits in the step), `"gate"` (how long it holds, % of
+  a step; 75 by default) and `"nudge"` (% of a step off the grid, -50 to 50): `{"pitch": 42,
+  "cells": [...], "chance": [100, 60, 100, 40], "repeat": [1, 1, 1, 3]}`.
 - `set_pattern` `{"track": 0, "region": 0, "rows": […], "swing": 62}`: replaces a pattern's
   rows, or its swing.
 - `add_audio_region` `{"track": 2, "file": "/path/take.wav", "start": 0, "offset": 0, "length": 7680}`:
@@ -269,7 +274,10 @@ chord track; parts are written over it, and the critic checks against it.
   `"comp_threshold"`, `"comp_makeup"`, `"sat_drive"` (dB), `"sat_tone"`, `"sat_mix"`,
   `{"sampler": "cutoff"}` (octaves; also `resonance`, `filter_env`, `transpose` in semitones,
   `volume` in dB, `vibrato` in cents, `lfo_filter`, `tremolo`), or `{"plugin": ["instrument", 12]}`
-  (a parameter by id, 0 to 1; `{"insert": 0}` for an effect's). A follower ducking a bass under
+  (a parameter by id, 0 to 1; `{"insert": 0}` for an effect's), or a step pattern's sound by its
+  row: `{"sound": [2, "velocity"]}` (also `"pitch"` in semitones and `"chance"` in %), worked out
+  for each step where it falls in the song (so an LFO, steps, random or a macro, not an envelope
+  or a follower): an LFO on the hats' velocity, random on the snare's pitch. A follower ducking a bass under
   the kick: `{"target": "volume", "depth": -18}` on the bass, its follower's source the kick.
 - `set_reference` `{"reference": {"file": "/path/song.wav", "lufs": -9, "crest_db": 10, "spectrum": [-3, -4, -8, -14, -18, -20], "width_db": -10}}`:
   a finished song the mix aims at instead of the genre's targets; the `reference` tool measures

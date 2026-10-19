@@ -802,6 +802,8 @@ pub struct Workspace {
     /// move the rows under a drag).
     pub steps_row: usize,
     pub steps_pick: Option<usize>,
+    /// What the lane under the picked sound shows.
+    pub steps_lane_mode: crate::steps::LaneMode,
     pub steps_lane: Rc<Cell<Bounds<Pixels>>>,
     /// The Sampler editor: the zone picked and the waveforms read; where its waveform was drawn.
     pub sampler_ui: crate::sampler::SamplerUi,
@@ -970,6 +972,7 @@ impl Workspace {
             sounds: Default::default(),
             steps_row: 0,
             steps_pick: None,
+            steps_lane_mode: Default::default(),
             steps_lane: Rc::new(Cell::new(Bounds::default())),
             sampler_ui: Default::default(),
             sampler_wave_bounds: Rc::new(Cell::new(Bounds::default())),

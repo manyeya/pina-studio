@@ -117,6 +117,18 @@ pub enum ModTarget {
     Sampler(SamplerParam),
     /// A plugin's parameter: 0 to 1.
     Plugin(Which, u32),
+    /// A step pattern's sound (by its row), each step as it falls in the song: its velocity, its
+    /// pitch (semitones), its chance (%). Worked out ahead, so only an LFO, steps, random or a
+    /// macro can move it.
+    Sound(usize, SoundParam),
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum SoundParam {
+    Velocity,
+    Pitch,
+    Chance,
 }
 
 /// The Sampler's voice settings a modulator can move, and their units.
@@ -284,6 +296,49 @@ impl ModRate {
             },
         }
     }
+}
+
+/// A modulator's value at a point in the song (beats), for those that depend only on where the
+/// song is: an LFO, steps, random, a macro. An envelope or a follower depends on what plays.
+pub fn value_at(kind: &ModKind, beats: f64, tempo: f64) -> Option<f32> {
+    let cycles = |rate: ModRate| match rate {
+        ModRate::Beats(b) => beats / b.max(1e-3) as f64,
+        ModRate::Hz(h) => beats * 60.0 / tempo.max(1.0) * h as f64,
+    };
+    match kind {
+        ModKind::Lfo {
+            shape,
+            rate,
+            phase,
+            unipolar,
+        } => {
+            let v = shape.at(cycles(*rate) + *phase as f64);
+            Some(if *unipolar { 0.5 + 0.5 * v } else { v })
+        }
+        ModKind::Steps { values, rate, .. } => match values.len() {
+            0 => Some(0.0),
+            n => Some(values[(cycles(*rate).floor() as i64).rem_euclid(n as i64) as usize]),
+        },
+        ModKind::Random { rate, smooth } => {
+            let c = cycles(*rate);
+            let n = c.floor() as i64;
+            Some(match smooth {
+                false => noise(n),
+                true => {
+                    let t = c.fract() as f32;
+                    let t = t * t * (3.0 - 2.0 * t);
+                    noise(n) + (noise(n + 1) - noise(n)) * t
+                }
+            })
+        }
+        ModKind::Macro { value } => Some(value.clamp(0.0, 1.0)),
+        ModKind::Envelope { .. } | ModKind::Follower { .. } => None,
+    }
+}
+
+/// A step's chance roll on a row, 0 to 100, the same each time the song plays.
+pub fn roll(step: i64, row: usize) -> f32 {
+    (noise(step.wrapping_mul(7919) ^ (row as i64).wrapping_mul(104_729)) + 1.0) * 50.0
 }
 
 /// What a modulator remembers from block to block.
@@ -512,6 +567,8 @@ impl Offsets {
                 self.sampler[p.index()] += amount;
                 self.voice = true;
             }
+            // Worked out with the pattern's notes.
+            ModTarget::Sound(..) => {}
             ModTarget::Plugin(which, id) => {
                 let n = self.plugin_count;
                 let at = self.plugins[..n]
@@ -643,6 +700,9 @@ pub fn default_depth(target: ModTarget) -> f32 {
         ModTarget::Sampler(SamplerParam::FilterEnv | SamplerParam::LfoFilter) => 2.0,
         ModTarget::Sampler(_) => 0.5,
         ModTarget::Plugin(..) => 0.3,
+        ModTarget::Sound(_, SoundParam::Velocity) => -40.0,
+        ModTarget::Sound(_, SoundParam::Pitch) => 12.0,
+        ModTarget::Sound(_, SoundParam::Chance) => -50.0,
     }
 }
 
@@ -660,6 +720,9 @@ pub fn depth_range(target: ModTarget) -> f32 {
         ModTarget::Sampler(SamplerParam::Volume) => 48.0,
         ModTarget::Sampler(SamplerParam::Vibrato) => 1200.0,
         ModTarget::Sampler(_) => 1.0,
+        ModTarget::Sound(_, SoundParam::Velocity) => 127.0,
+        ModTarget::Sound(_, SoundParam::Pitch) => 24.0,
+        ModTarget::Sound(_, SoundParam::Chance) => 100.0,
     }
 }
 
@@ -689,6 +752,9 @@ pub fn depth_text(target: ModTarget, depth: f32) -> String {
         }
         ModTarget::Sampler(SamplerParam::Transpose) => format!("{sign}{d:.1} st"),
         ModTarget::Sampler(SamplerParam::Vibrato) => format!("{sign}{d:.0} ct"),
+        ModTarget::Sound(_, SoundParam::Velocity) => format!("{sign}{d:.0} vel"),
+        ModTarget::Sound(_, SoundParam::Pitch) => format!("{sign}{d:.1} st"),
+        ModTarget::Sound(_, SoundParam::Chance) => format!("{sign}{d:.0}%"),
         _ => format!("{sign}{:.0}%", d * 100.0),
     }
 }

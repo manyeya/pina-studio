@@ -153,6 +153,7 @@ pub fn clip(p: &Project, r: &Region, from: u64, to: u64) -> Option<Region> {
                             pitch: row.pitch,
                             cells,
                             mute: row.mute,
+                            ..Default::default()
                         }
                     })
                     .collect(),

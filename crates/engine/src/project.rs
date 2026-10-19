@@ -1341,6 +1341,74 @@ pub struct PatternRow {
     /// Silent, its steps kept.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mute: bool,
+    /// Each step's own settings, as Logic's step sequencer's edit modes and Elektron's locks: the
+    /// chance it plays (0 to 100), semitones up or down, how many times it hits in its step (a
+    /// ratchet, 1 to 4), how long it holds (% of a step) and how far off the grid it is (% of a
+    /// step, -50 to 50). Missing steps (or an empty lane) are as usual: 100, 0, 1, 75, 0.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chance: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transpose: Vec<i8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repeat: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gate: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nudge: Vec<i8>,
+}
+
+/// A step's lanes, as usual when it has none.
+pub const CHANCE: u8 = 100;
+pub const GATE: u8 = 75;
+
+impl PatternRow {
+    pub fn chance_at(&self, i: usize) -> u8 {
+        self.chance.get(i).copied().unwrap_or(CHANCE).min(100)
+    }
+    pub fn transpose_at(&self, i: usize) -> i8 {
+        self.transpose.get(i).copied().unwrap_or(0)
+    }
+    pub fn repeat_at(&self, i: usize) -> u8 {
+        self.repeat.get(i).copied().unwrap_or(1).clamp(1, 4)
+    }
+    pub fn gate_at(&self, i: usize) -> u8 {
+        self.gate.get(i).copied().unwrap_or(GATE).clamp(5, 200)
+    }
+    pub fn nudge_at(&self, i: usize) -> i8 {
+        self.nudge.get(i).copied().unwrap_or(0).clamp(-50, 50)
+    }
+
+    /// Every lane as long as its steps (filled as usual), to edit together.
+    pub fn fill_lanes(&mut self) {
+        let n = self.cells.len();
+        let fill = |v: &mut Vec<u8>, d: u8| v.resize(n, d);
+        fill(&mut self.chance, CHANCE);
+        fill(&mut self.repeat, 1);
+        fill(&mut self.gate, GATE);
+        self.transpose.resize(n, 0);
+        self.nudge.resize(n, 0);
+    }
+
+    /// Lanes as usual throughout taken away, so the song keeps only what's set.
+    pub fn tidy_lanes(&mut self) {
+        let n = self.cells.len();
+        let all = |v: &[u8], d: u8| v.iter().take(n).all(|&x| x == d);
+        if all(&self.chance, CHANCE) {
+            self.chance.clear();
+        }
+        if all(&self.repeat, 1) {
+            self.repeat.clear();
+        }
+        if all(&self.gate, GATE) {
+            self.gate.clear();
+        }
+        if self.transpose.iter().all(|&x| x == 0) {
+            self.transpose.clear();
+        }
+        if self.nudge.iter().all(|&x| x == 0) {
+            self.nudge.clear();
+        }
+    }
 }
 
 /// A MIDI region's notes as a pattern's rows: a row a pitch (lowest last, as drums read: kick at
@@ -1361,6 +1429,7 @@ pub fn to_pattern(notes: &[Note], step: u64, steps: usize) -> Vec<PatternRow> {
                 pitch,
                 cells,
                 mute: false,
+                ..Default::default()
             }
         })
         .collect()
@@ -1369,27 +1438,81 @@ pub fn to_pattern(notes: &[Note], step: u64, steps: usize) -> Vec<PatternRow> {
 /// The notes a pattern plays over `length` ticks, each row's steps repeating, every second step
 /// late by its swing.
 pub fn pattern_notes(step: u64, rows: &[PatternRow], length: u64, swing: f32) -> Vec<Note> {
+    pattern_played(step, rows, length, swing, 0, &[], 120.0)
+}
+
+/// A pattern's notes as they play from `start` (ticks into the song): each step's lanes (its
+/// chance, transpose, ratchet, gate and nudge), and what the track's modulators do to each sound
+/// (its velocity, pitch, chance), worked out where each step falls in the song. A step's chance
+/// is rolled afresh each time round, the same each time the song plays.
+pub fn pattern_played(
+    step: u64,
+    rows: &[PatternRow],
+    length: u64,
+    swing: f32,
+    start: u64,
+    mods: &[crate::modulate::Modulator],
+    tempo: f64,
+) -> Vec<Note> {
+    use crate::modulate::{ModTarget, SoundParam};
     // Swing is where in a pair of steps the second lands: at 50% exactly between.
     let late = ((swing.clamp(50.0, 75.0) - 50.0) / 50.0 * step as f32) as i64;
     let mut notes = Vec::new();
     if step == 0 {
         return notes;
     }
+    let first = (start / step) as i64;
     for k in 0..length.div_ceil(step) {
-        for row in rows.iter().filter(|r| !r.mute && !r.cells.is_empty()) {
-            let velocity = row.cells[(k % row.cells.len() as u64) as usize];
-            if velocity > 0 {
-                let swung = if k % 2 == 1 { late } else { 0 };
-                let (start, length) = ((k * step) as i64 + swung, (step * 3 / 4).max(1));
+        for (r, row) in rows.iter().enumerate() {
+            if row.mute || row.cells.is_empty() {
+                continue;
+            }
+            let i = (k % row.cells.len() as u64) as usize;
+            let velocity = row.cells[i];
+            if velocity == 0 {
+                continue;
+            }
+            // What the modulators on this sound make of this step.
+            let (mut dv, mut dp, mut dc) = (0f32, 0f32, 0f32);
+            let beats = (start + k * step) as f64 / PPQ as f64;
+            for m in mods {
+                for route in &m.routes {
+                    if let ModTarget::Sound(on, param) = route.target
+                        && on == r
+                        && let Some(v) = crate::modulate::value_at(&m.kind, beats, tempo)
+                    {
+                        let by = route.depth * v;
+                        match param {
+                            SoundParam::Velocity => dv += by,
+                            SoundParam::Pitch => dp += by,
+                            SoundParam::Chance => dc += by,
+                        }
+                    }
+                }
+            }
+            let chance = (row.chance_at(i) as f32 + dc).clamp(0.0, 100.0);
+            if chance < 100.0 && crate::modulate::roll(first + k as i64, r) >= chance {
+                continue;
+            }
+            let velocity = (velocity as f32 + dv).round().clamp(1.0, 127.0) as u8;
+            let pitch = (row.pitch as i32 + row.transpose_at(i) as i32 + dp.round() as i32)
+                .clamp(0, 127) as u8;
+            let repeat = row.repeat_at(i) as u64;
+            let sub = (step / repeat).max(1);
+            let held = ((sub as f32 * row.gate_at(i) as f32 / 100.0).round() as u64).max(1);
+            let swung = if k % 2 == 1 { late } else { 0 };
+            let nudge = (step as f32 * row.nudge_at(i) as f32 / 100.0).round() as i64;
+            for j in 0..repeat {
                 notes.push(Note {
-                    start,
-                    length,
-                    pitch: row.pitch,
-                    velocity: velocity.min(127),
+                    start: (k * step + j * sub) as i64 + swung + nudge,
+                    length: held,
+                    pitch,
+                    velocity,
                 });
             }
         }
     }
+    notes.sort_by_key(|n| n.start);
     notes
 }
 
@@ -2359,6 +2482,54 @@ impl Project {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_patterns_lanes_and_the_modulators_on_its_sounds() {
+        use crate::modulate::{
+            LfoShape, ModKind, ModRate, ModRoute, ModTarget, Modulator, SoundParam,
+        };
+        let step = PPQ / 4;
+        let row = |cells: Vec<u8>| PatternRow {
+            pitch: 36,
+            cells,
+            ..Default::default()
+        };
+        // A ratchet of three, a fifth up, held half its time, a quarter of a step late.
+        let mut r = row(vec![100, 0, 0, 0]);
+        (r.repeat, r.transpose, r.gate, r.nudge) = (vec![3], vec![7], vec![50], vec![25]);
+        let notes = pattern_notes(step, &[r], step * 4, 50.0);
+        let starts: Vec<i64> = notes.iter().map(|n| n.start).collect();
+        let sub = (step / 3) as i64;
+        let late = (step / 4) as i64;
+        assert_eq!(starts, [late, sub + late, 2 * sub + late]);
+        assert!(
+            notes
+                .iter()
+                .all(|n| n.pitch == 43 && n.length == (sub as u64) / 2)
+        );
+        // Half a chance: some steps of a long run play, some don't, the same each time.
+        let mut r = row(vec![100; 64]);
+        r.chance = vec![50; 64];
+        let played = pattern_notes(step, std::slice::from_ref(&r), step * 64, 50.0);
+        assert!((20..44).contains(&played.len()), "{}", played.len());
+        assert_eq!(played, pattern_notes(step, &[r], step * 64, 50.0));
+        // A square LFO a beat long on the sound's velocity: loud for the first half of each beat.
+        let lfo = Modulator {
+            kind: ModKind::Lfo {
+                shape: LfoShape::Square,
+                rate: ModRate::Beats(1.0),
+                phase: 0.0,
+                unipolar: false,
+            },
+            routes: vec![ModRoute {
+                target: ModTarget::Sound(0, SoundParam::Velocity),
+                depth: -40.0,
+            }],
+        };
+        let notes = pattern_played(step, &[row(vec![100; 4])], step * 4, 50.0, 0, &[lfo], 120.0);
+        let v: Vec<u8> = notes.iter().map(|n| n.velocity).collect();
+        assert_eq!(v, [60, 60, 127, 127]);
+    }
+
     fn midi(start: u64, length: u64, notes: &[(i64, u8)]) -> Region {
         let notes = notes
             .iter()
@@ -2921,6 +3092,7 @@ mod tests {
             pitch: 42,
             cells: vec![100; 4],
             mute: false,
+            ..Default::default()
         }];
         let starts = |swing| {
             pattern_notes(PPQ / 4, &rows, PPQ, swing)
@@ -2936,7 +3108,12 @@ mod tests {
     #[test]
     fn rows_loop_on_their_own_lengths_muted_rows_rest_and_midi_becomes_a_pattern() {
         let step = PPQ / 4;
-        let row = |pitch: u8, cells: Vec<u8>, mute: bool| PatternRow { pitch, cells, mute };
+        let row = |pitch: u8, cells: Vec<u8>, mute: bool| PatternRow {
+            pitch,
+            cells,
+            mute,
+            ..Default::default()
+        };
         let rows = vec![
             row(36, vec![100, 0, 0, 0], false),
             row(42, vec![80, 0, 0], false),

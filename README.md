@@ -255,7 +255,15 @@ In the app, mostly as in Logic:
   picked sound's velocities open under its steps, drawn with the mouse. M mutes a sound. Under the
   grid, the picked sound's actions in sight: fill every 1, 2, 4 or 8, shift ← →, reverse,
   randomize, Euclid (so many hits spread evenly), a length of its own (three steps against
-  sixteen: a polymeter, its repeats drawn faint), clear, remove. The editor's bar sets the
+  sixteen: a polymeter, its repeats drawn faint), clear, remove. Each step has its own settings
+  too, as Logic's edit modes: in the lane under the picked sound, Velocity, Chance (it plays that
+  often, rolled afresh each time round), Pitch, Repeat (a ratchet of up to four hits), Gate and
+  Nudge, drawn a bar a step; the grid marks them (a ratchet split, a chance faded, a pitch moved).
+  MODULATE above the grid: the track's modulators, to drag onto a sound's lane (an LFO swaying the
+  hats' velocity, random on the snare's pitch, its dots showing where each step lands) or onto
+  any knob of the track; + LFO, + Random; and + Parameter row: a row under the sounds that steps
+  any setting in time with the pattern (a filter, the volume, a plugin's knob), as Logic's
+  automation rows, picked from a menu and painted. The editor's bar sets the
   pattern's length (8 to 64 steps, repeating the groove as it grows), its rate (1/8, 1/16, 1/32)
   and swing; To MIDI turns it
   into notes for the piano roll, and on a track with MIDI (the drums an agent wrote) the step

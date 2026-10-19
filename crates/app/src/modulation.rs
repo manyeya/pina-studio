@@ -212,6 +212,8 @@ impl Workspace {
             ModTarget::Plugin(which, id) => {
                 (self.player.param_value(track.id, which, id) as f32 + by).clamp(0.0, 1.0)
             }
+            // Drawn in the step sequencer's lane, not on a knob.
+            ModTarget::Sound(..) => 0.0,
         }
     }
 
@@ -374,7 +376,116 @@ impl Workspace {
                         .map(|p| p.name)
                 })
                 .unwrap_or_else(|| format!("Parameter {id}")),
+            ModTarget::Sound(r, param) => {
+                let sound = self
+                    .sound_name(t, r)
+                    .unwrap_or_else(|| format!("Sound {}", r + 1));
+                let what = match param {
+                    tempo_engine::modulate::SoundParam::Velocity => "velocity",
+                    tempo_engine::modulate::SoundParam::Pitch => "pitch",
+                    tempo_engine::modulate::SoundParam::Chance => "chance",
+                };
+                format!("{sound} {what}")
+            }
         }
+    }
+
+    /// A step pattern's sound on a track, by its row: the pattern shown, else the track's first.
+    fn sound_name(&self, t: usize, r: usize) -> Option<String> {
+        let track = self.session.project.tracks.get(t)?;
+        let shown = self.pattern().filter(|at| at.0 == t).map(|at| at.1);
+        let regions = shown.into_iter().chain(0..track.regions.len());
+        let pitch = regions
+            .filter_map(|i| match &track.regions.get(i)?.content {
+                tempo_engine::project::Content::Pattern { rows, .. } => {
+                    rows.get(r).map(|row| row.pitch)
+                }
+                _ => None,
+            })
+            .next()?;
+        Some(crate::steps::row_name(
+            track.instrument.as_ref(),
+            self.session.project.song_key(),
+            pitch,
+        ))
+    }
+
+    /// Everything a modulator on track `t` can move, as a menu (the step pattern's sounds too).
+    pub fn target_menu(&self, t: usize, k: usize) -> Vec<(String, MenuAction)> {
+        let Some(track) = self.session.project.tracks.get(t) else {
+            return Vec::new();
+        };
+        let ahead = !matches!(
+            track.modulators.get(k).map(|m| &m.kind),
+            Some(ModKind::Envelope { .. } | ModKind::Follower { .. })
+        );
+        let mut items: Vec<(String, MenuAction)> = Vec::new();
+        let group =
+            |items: &mut Vec<(String, MenuAction)>, title: &str, targets: Vec<ModTarget>| {
+                if targets.is_empty() {
+                    return;
+                }
+                if !items.is_empty() {
+                    items.push((String::new(), MenuAction::Nothing));
+                }
+                items.push((title.to_string(), MenuAction::Nothing));
+                for mt in targets {
+                    items.push((self.target_name(t, mt), MenuAction::Map(t, k, mt)));
+                }
+            };
+        // The pattern's sounds first: what a step sequencer modulates.
+        let rows = self
+            .pattern()
+            .filter(|at| at.0 == t)
+            .and_then(|at| match &track.regions[at.1].content {
+                tempo_engine::project::Content::Pattern { rows, .. } => Some(rows.len()),
+                _ => None,
+            })
+            .unwrap_or(0);
+        if ahead {
+            use tempo_engine::modulate::SoundParam;
+            let sounds = (0..rows)
+                .flat_map(|r| {
+                    [SoundParam::Velocity, SoundParam::Pitch, SoundParam::Chance]
+                        .map(|p| ModTarget::Sound(r, p))
+                })
+                .collect();
+            group(&mut items, "Its pattern's sounds", sounds);
+        }
+        let mut mix = vec![ModTarget::Volume, ModTarget::Pan];
+        mix.extend((0..track.sends.len()).map(ModTarget::Send));
+        group(&mut items, "Mix", mix);
+        group(
+            &mut items,
+            "Channel EQ, compressor, saturator",
+            vec![
+                ModTarget::LowCut,
+                ModTarget::EqGain(1),
+                ModTarget::EqGain(2),
+                ModTarget::EqGain(3),
+                ModTarget::CompThreshold,
+                ModTarget::CompMakeup,
+                ModTarget::SatDrive,
+                ModTarget::SatTone,
+                ModTarget::SatMix,
+            ],
+        );
+        if matches!(track.instrument, Some(Instrument::Sampler(_))) {
+            group(
+                &mut items,
+                "Sampler",
+                SamplerParam::ALL.map(ModTarget::Sampler).to_vec(),
+            );
+        }
+        let params: Vec<ModTarget> = self
+            .player
+            .params(track.id, Which::Instrument)
+            .into_iter()
+            .take(24)
+            .map(|p| ModTarget::Plugin(Which::Instrument, p.id))
+            .collect();
+        group(&mut items, "Instrument", params);
+        items
     }
 
     /// Edits a track's modulators as one undo step, and the engine hears.
@@ -450,6 +561,16 @@ impl Workspace {
         let Some(track) = self.session.project.tracks.get(t) else {
             return;
         };
+        // A pattern's steps are worked out ahead: an envelope or follower can't be known then.
+        if let (ModTarget::Sound(..), Some(ModKind::Envelope { .. } | ModKind::Follower { .. })) =
+            (mt, track.modulators.get(k).map(|m| &m.kind))
+        {
+            self.status = Some(
+                "A sound's steps are worked out ahead: an LFO, steps, random or a macro can move them, not an envelope or a follower.".into(),
+            );
+            cx.notify();
+            return;
+        }
         if track
             .modulators
             .get(k)
@@ -1324,6 +1445,34 @@ impl Workspace {
                                 }),
                             ),
                     )
+                    // Or pick where from a list.
+                    .child({
+                        let items = self.target_menu(t, k);
+                        div()
+                            .size(px(22.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.))
+                            .text_size(px(11.))
+                            .text_color(rgb(TEXT_3))
+                            .cursor_pointer()
+                            .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+                            .debug_selector(move || format!("mod-{k}-to"))
+                            .child("⋯")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    ws.menu = Some(Menu {
+                                        at: e.position,
+                                        items: items.clone(),
+                                        ..Default::default()
+                                    });
+                                    cx.notify();
+                                }),
+                            )
+                    })
                     .child(
                         div()
                             .size(px(22.))

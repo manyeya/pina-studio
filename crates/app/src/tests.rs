@@ -1409,6 +1409,76 @@ fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
     pick(cx, &ws, "3 hits");
     let hits: Vec<usize> = (0..16).filter(|&k| row(cx, 2)[k] > 0).collect();
     assert_eq!(hits, [0, 6, 11]);
+
+    // Each step's own settings, in the hats' lane: the first step's chance drawn low, its pitch
+    // high.
+    let pattern = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            match &ws.session.project.tracks[track].regions[0].content {
+                Content::Pattern { rows, .. } => rows[2].clone(),
+                _ => panic!("not a pattern"),
+            }
+        })
+    };
+    let draw = |cx: &mut VisualTestContext, lane: &'static str, high: bool| {
+        click_on(cx, lane, Modifiers::none(), MouseButton::Left);
+        let bar = cx.debug_bounds("step-velocity-0").unwrap();
+        let y = if high {
+            bar.top() + px(3.)
+        } else {
+            bar.bottom() - px(3.)
+        };
+        let at = point(bar.center().x, y);
+        drag(cx, at, at);
+    };
+    draw(cx, "lane-Chance", false);
+    draw(cx, "lane-Pitch", true);
+    let hats = pattern(cx);
+    assert!(hats.chance_at(0) <= 10, "{}", hats.chance_at(0));
+    assert!(hats.transpose_at(0) >= 10, "{}", hats.transpose_at(0));
+    assert_eq!(hats.chance_at(6), 100); // the rest as usual
+
+    // An LFO from the strip above the grid, dragged onto the hats' velocity lane.
+    click_on(cx, "lane-Velocity", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "steps-add-LFO", Modifiers::none(), MouseButton::Left);
+    let chip = cx.debug_bounds("steps-mod-0").unwrap().center();
+    let lane = cx.debug_bounds("steps-lane").unwrap().center();
+    drag(cx, chip, lane);
+    let routes = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[track].modulators[0]
+            .routes
+            .iter()
+            .map(|r| r.target)
+            .collect::<Vec<_>>()
+    });
+    use tempo_engine::modulate::{ModKind, ModTarget, SoundParam};
+    assert_eq!(routes, [ModTarget::Sound(2, SoundParam::Velocity)]);
+
+    // A parameter row: mapped to the volume from its menu, its first step painted low.
+    click_on(cx, "add-param", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Volume");
+    let (kind, target) = ws.read_with(cx, |ws, _| {
+        let m = &ws.session.project.tracks[track].modulators[1];
+        (m.kind.clone(), m.routes.first().map(|r| r.target))
+    });
+    assert!(matches!(kind, ModKind::Steps { .. }));
+    assert_eq!(target, Some(ModTarget::Volume));
+    // (A taller editor, so the row's in sight.)
+    ws.update(cx, |ws, cx| {
+        ws.editor_h = 620.0;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let cells = cx.debug_bounds("param-cells-1").unwrap();
+    let low = point(cells.left() + px(4.), cells.bottom() - px(1.));
+    drag(cx, low, low);
+    let first = ws.read_with(cx, |ws, _| {
+        match &ws.session.project.tracks[track].modulators[1].kind {
+            ModKind::Steps { values, .. } => values[0],
+            _ => 1.0,
+        }
+    });
+    assert!(first < 0.1, "{first}");
 }
 
 #[gpui::test]
@@ -3987,7 +4057,7 @@ fn shots() {
                     ws.editor_h = 380.0;
                     ws.show_bottom(Bottom::Steps, cx);
                 }
-                "steps" => {
+                "steps" | "steps-mod" => {
                     ws.session
                         .project
                         .tracks
@@ -4014,6 +4084,52 @@ fn shots() {
                         rows[4].mute = false;
                     }
                     ws.steps_row = 2;
+                    if page == "steps-mod" {
+                        use tempo_engine::modulate::{
+                            LfoShape, ModKind, ModRate, ModRoute, ModTarget, Modulator, SoundParam,
+                        };
+                        if let Content::Pattern { rows, .. } =
+                            &mut ws.session.project.tracks[at.0].regions[at.1].content
+                        {
+                            rows[0].repeat = vec![1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 3, 1];
+                            rows[1].chance = vec![
+                                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
+                                100, 100, 50,
+                            ];
+                            rows[2].transpose =
+                                vec![0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 7, 0];
+                        }
+                        let t = &mut ws.session.project.tracks[at.0];
+                        t.modulators = vec![
+                            Modulator {
+                                kind: ModKind::Lfo {
+                                    shape: LfoShape::Sine,
+                                    rate: ModRate::Beats(2.0),
+                                    phase: 0.0,
+                                    unipolar: false,
+                                },
+                                routes: vec![ModRoute {
+                                    target: ModTarget::Sound(2, SoundParam::Velocity),
+                                    depth: -40.0,
+                                }],
+                            },
+                            Modulator {
+                                kind: ModKind::Steps {
+                                    values: vec![
+                                        1.0, 0.2, 0.6, 0.2, 0.9, 0.2, 0.6, 0.35, 1.0, 0.2, 0.6,
+                                        0.2, 0.9, 0.4, 0.7, 0.3,
+                                    ],
+                                    rate: ModRate::Beats(0.25),
+                                    glide: 0.0,
+                                },
+                                routes: vec![ModRoute {
+                                    target: ModTarget::Volume,
+                                    depth: -12.0,
+                                }],
+                            },
+                        ];
+                        ws.editor_h = 470.0;
+                    }
                 }
                 // The tracks with the sample browser beside them and the piano roll under them,
                 // no inspector: the columns' edges, to line up.
