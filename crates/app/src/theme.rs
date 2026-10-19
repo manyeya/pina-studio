@@ -154,6 +154,13 @@ pub enum Icon {
     Send,
     Check,
     Settings,
+    Text,
+    Glue,
+    Headphones,
+    Mute,
+    Zoom,
+    Fade,
+    Flex,
 }
 
 impl Icon {
@@ -199,6 +206,21 @@ impl Icon {
             Icon::Wave => r##"<path d="M3 12h2M7 8v8M10 5v14M13 9v6M16 7v10M19 11v2"/>"##,
             Icon::Bus => r##"<path d="M4 7h16M4 12h16M4 17h16M8 4v6M16 9v6M11 14v6"/>"##,
             Icon::Output => r##"<path d="M4 12h11M11 7l5 5-5 5M19 5v14"/>"##,
+            Icon::Text => r##"<path d="M5 6V4h14v2M12 4v16M9 20h6"/>"##,
+            Icon::Glue => {
+                r##"<path d="m8 6 4-4 4 4"/><path d="M12 2v10.3a4 4 0 0 1-1.17 2.87L4 22"/><path d="m20 22-5-5"/>"##
+            }
+            Icon::Headphones => {
+                r##"<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>"##
+            }
+            Icon::Mute => {
+                r##"<path d="M11 4.7a.7.7 0 0 0-1.2-.5L6.4 7.6A1.4 1.4 0 0 1 5.4 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.4a1.4 1.4 0 0 1 1 .4l3.4 3.4a.7.7 0 0 0 1.2-.5z"/><path d="m22 9-6 6M16 9l6 6"/>"##
+            }
+            Icon::Zoom => {
+                r##"<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/>"##
+            }
+            Icon::Fade => r##"<path d="M3 20C10 20 14 13 21 4"/><path d="M3 20h18"/>"##,
+            Icon::Flex => r##"<path d="m18 8 4 4-4 4M6 8l-4 4 4 4M2 12h20"/>"##,
             Icon::Settings => {
                 r##"<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>"##
             }

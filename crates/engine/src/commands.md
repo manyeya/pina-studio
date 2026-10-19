@@ -125,7 +125,8 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `set_region` `{"track": 0, "region": 0, "name": "Hook", "loop": true, "transpose": 12, "velocity": -10, "quantize": 240}`:
   any of them. A looped region plays over and over until the next region on its track (or the end
   of the song); `"loop_length"` (ticks from its start, 0 for none) stops its loops sooner, as
-  dragging out its top right corner does. `transpose` (semitones), `velocity` (added) and `quantize` (a grid in ticks; 0 is
+  dragging out its top right corner does. `"fade_in"` and `"fade_out"` (ticks) fade an audio
+  region in and out (an equal-power curve). `transpose` (semitones), `velocity` (added) and `quantize` (a grid in ticks; 0 is
   off) change how a MIDI or pattern region plays, not its notes, as Logic's region inspector does;
   `transpose` moves an audio region's pitch too, keeping its length (a loop into the song's key).
   For audio, `"flex"` is how it's stretched: `"polyphonic"` (the default: Rubber Band's finer

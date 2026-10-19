@@ -245,35 +245,40 @@ impl Workspace {
             .border_b_1()
             .border_r_1()
             .border_color(rgb(LINE))
-            .child(
-                tray()
-                    .p(px(2.))
-                    .rounded(px(8.))
-                    .child(tool(
-                        Icon::Pointer,
-                        Tool::Pointer,
-                        self.tool == Tool::Pointer,
-                        cx,
-                    ))
-                    .child(tool(
-                        Icon::Pencil,
-                        Tool::Pencil,
-                        self.tool == Tool::Pencil,
-                        cx,
-                    ))
-                    .child(tool(
-                        Icon::Scissors,
-                        Tool::Scissors,
-                        self.tool == Tool::Scissors,
-                        cx,
-                    ))
-                    .child(tool(
-                        Icon::Eraser,
-                        Tool::Eraser,
-                        self.tool == Tool::Eraser,
-                        cx,
-                    )),
-            )
+            .child({
+                // The four always to hand, then the one other in hand (or the rest's menu): Text,
+                // Glue, Solo, Mute, Zoom, Fade, Flex, as Logic's Tool menu (T).
+                let mains: Vec<_> = Tool::ALL
+                    .into_iter()
+                    .filter(|t| t.main())
+                    .map(|t| tool(t.icon(), t, self.tool == t, cx))
+                    .collect();
+                let other = (!self.tool.main()).then_some(self.tool);
+                let more = div()
+                    .h(px(24.))
+                    .px(px(4.))
+                    .flex()
+                    .items_center()
+                    .gap(px(1.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .when(other.is_some(), |d| d.bg(rgb(RAISED)))
+                    .when(other.is_none(), |d| d.hover(|d| d.bg(rgb(OFF))))
+                    .debug_selector(|| "tool-more".into())
+                    .child(
+                        icon(other.map_or(Icon::More, |t| t.icon()), 14.)
+                            .text_color(rgb(if other.is_some() { TEXT } else { TEXT_3 })),
+                    )
+                    .child(icon(Icon::Chevron, 10.).text_color(rgb(TEXT_3)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            ws.tool_menu(e.position, cx);
+                        }),
+                    );
+                tray().p(px(2.)).rounded(px(8.)).children(mains).child(more)
+            })
             .child(
                 div()
                     .h(px(28.))
@@ -1475,6 +1480,9 @@ impl Workspace {
                         cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                             ws.select_track(i);
                             ws.region = None;
+                            if ws.tool == Tool::Zoom {
+                                return ws.zoom_press(e, cx);
+                            }
                             // The pencil draws a region; so does a double-click, opening the
                             // piano roll on it to write in.
                             let x = f32::from(e.position.x);
@@ -1580,6 +1588,19 @@ impl Workspace {
             .children(take)
             .children(lines)
             .children(self.agent_marker())
+            // The Zoom tool's drag: the bars it'll fill the window with.
+            .children(self.zoom_shown().map(|(x, w)| {
+                div()
+                    .absolute()
+                    .top_0()
+                    .left(px(x))
+                    .w(px(w))
+                    .h_full()
+                    .bg(alpha(ACCENT, 0.12))
+                    .border_l_1()
+                    .border_r_1()
+                    .border_color(alpha(ACCENT, 0.7))
+            }))
             .children(self.sample_drop_view())
             .children(self.file_drop_view(cx))
             .when(tracks == 0, |d| {
@@ -2002,6 +2023,65 @@ impl Workspace {
                         ),
                 )
             })
+            // Its fades, as Logic draws them: the corners darkened above an equal-power curve.
+            .when(region.fade_in > 0 || region.fade_out > 0, |d| {
+                let (fade_in, fade_out, length) = (region.fade_in, region.fade_out, region.length);
+                d.child(
+                    canvas(
+                        |_, _, _| {},
+                        move |b, _, window, _| {
+                            let (x0, y0) = (f32::from(b.origin.x), f32::from(b.origin.y));
+                            let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
+                            let at = |x: f32, y: f32| point(px(x0 + x), px(y0 + y));
+                            let mut fade = |from: f32, span: f32, rising: bool| {
+                                if span < 1.0 {
+                                    return;
+                                }
+                                let n = 24;
+                                let curve: Vec<(f32, f32)> = (0..=n)
+                                    .map(|i| {
+                                        let u = i as f32 / n as f32;
+                                        let g = match rising {
+                                            true => (u * std::f32::consts::FRAC_PI_2).sin(),
+                                            false => {
+                                                ((1.0 - u) * std::f32::consts::FRAC_PI_2).sin()
+                                            }
+                                        };
+                                        (from + u * span, h * (1.0 - g))
+                                    })
+                                    .collect();
+                                let mut shade = PathBuilder::fill();
+                                shade.move_to(at(from, 0.0));
+                                for &(x, y) in &curve {
+                                    shade.line_to(at(x, y));
+                                }
+                                shade.line_to(at(from + span, 0.0));
+                                shade.close();
+                                if let Ok(p) = shade.build() {
+                                    window.paint_path(p, alpha(0x000000, 0.45));
+                                }
+                                let mut line = PathBuilder::stroke(px(1.5));
+                                for (i, &(x, y)) in curve.iter().enumerate() {
+                                    match i {
+                                        0 => line.move_to(at(x, y)),
+                                        _ => line.line_to(at(x, y)),
+                                    }
+                                }
+                                if let Ok(p) = line.build() {
+                                    window.paint_path(p, alpha(0xffffff, 0.75));
+                                }
+                            };
+                            let k = w / length.max(1) as f32;
+                            fade(0.0, fade_in as f32 * k, true);
+                            fade(w - fade_out as f32 * k, fade_out as f32 * k, false);
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
+            })
             .when(selected, |d| d.child(pill(true)).child(pill(false)))
             .child(handle(Edge::Start, cx))
             .child(handle(Edge::End, cx))
@@ -2011,9 +2091,12 @@ impl Workspace {
             )
             .when(selected, |d| d.children(self.warp_handles(at, cx)))
             .cursor(match self.tool {
-                Tool::Pointer | Tool::Pencil => gpui::CursorStyle::OpenHand,
-                Tool::Scissors => gpui::CursorStyle::IBeam,
+                Tool::Pointer | Tool::Pencil | Tool::Flex => gpui::CursorStyle::OpenHand,
+                Tool::Scissors | Tool::Text => gpui::CursorStyle::IBeam,
                 Tool::Eraser => gpui::CursorStyle::OperationNotAllowed,
+                Tool::Fade => gpui::CursorStyle::ResizeLeftRight,
+                Tool::Zoom => gpui::CursorStyle::Crosshair,
+                Tool::Glue | Tool::Solo | Tool::Mute => gpui::CursorStyle::PointingHand,
             })
             .on_mouse_down(MouseButton::Left, grab(at, Edge::Move, start, end, cx))
             .on_mouse_down(
@@ -2313,7 +2396,22 @@ fn grab(
                 ws.split_at(at, tick, cx);
                 return;
             }
-            Tool::Pointer | Tool::Pencil => {}
+            Tool::Text => return ws.name_region(at, cx),
+            Tool::Glue => return ws.glue(at, cx),
+            Tool::Mute => {
+                ws.edit(cx, |ws| {
+                    let r = &mut ws.session.project.tracks[at.0].regions[at.1];
+                    r.mute ^= true;
+                });
+                return;
+            }
+            Tool::Solo => {
+                let tick = ws.tick_at(f32::from(e.position.x)) as u64;
+                return ws.solo_hold(at, tick, cx);
+            }
+            Tool::Zoom => return ws.zoom_press(e, cx),
+            Tool::Fade => return ws.fade_press(at, e, cx),
+            Tool::Pointer | Tool::Pencil | Tool::Flex => {}
         }
         if ws.region != Some(at) {
             ws.picked.clear();
@@ -2339,7 +2437,7 @@ fn grab(
         let content = &ws.session.project.region(at).content;
         let edge = match (edge, content) {
             (Edge::End, Content::Takes { .. }) => Edge::End,
-            (Edge::End, _) if e.modifiers.alt => Edge::Stretch,
+            (Edge::End, _) if e.modifiers.alt || ws.tool == Tool::Flex => Edge::Stretch,
             _ => edge,
         };
         ws.stretching = match (edge, content) {

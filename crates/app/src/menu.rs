@@ -190,6 +190,8 @@ pub enum MenuAction {
     /// A modulator's setting, from its card (track, modulator); a modulator mapped to a setting.
     Mod(usize, usize, crate::modulation::ModChange),
     Map(usize, usize, tempo_engine::modulate::ModTarget),
+    /// A tool in hand.
+    Tool(crate::workspace::Tool),
     /// The right-click menus of the tracks area (`context.rs`).
     Track(crate::context::TrackOp),
     Region(At, crate::context::RegionOp),
@@ -460,6 +462,7 @@ impl Workspace {
             MenuAction::Track(op) => self.track_op(op, cx),
             MenuAction::Mod(t, k, change) => self.mod_change(t, k, change, cx),
             MenuAction::Map(t, k, target) => self.map_modulator(t, k, target, cx),
+            MenuAction::Tool(t) => self.tool = t,
             MenuAction::Region(at, op) => self.region_op(at, op, cx),
         }
         cx.notify();

@@ -97,6 +97,7 @@ actions!(
         PreviousSample,
         NextSample,
         ShowSettings,
+        ToolMenu,
         CopyRegion,
         CutRegion,
         PasteRegion,
@@ -176,6 +177,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("up", AdderUp, Some("Adder")),
         KeyBinding::new("down", AdderDown, Some("Adder")),
         KeyBinding::new("cmd-,", ShowSettings, None),
+        KeyBinding::new("t", ToolMenu, Some("Arrange && !TextInput")),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-w", Quit, None),
     ]);
@@ -381,6 +383,14 @@ pub enum Drag {
         track: usize,
         index: usize,
     },
+    /// The Zoom tool's drag across bars; the Solo tool held; the Fade tool's drag (`out` at the
+    /// region's end).
+    ZoomSpan,
+    SoloHold,
+    Fade {
+        at: At,
+        out: bool,
+    },
     Raise {
         track: usize,
         y: f32,
@@ -556,6 +566,13 @@ pub enum Tool {
     Pencil,
     Scissors,
     Eraser,
+    Text,
+    Glue,
+    Solo,
+    Mute,
+    Zoom,
+    Fade,
+    Flex,
 }
 
 /// What edits snap to.
@@ -789,6 +806,11 @@ pub struct Workspace {
     pub mod_drag_at: Option<Point<f32>>,
     pub mod_edit: Option<(usize, usize)>,
     pub mod_clock: Instant,
+    /// The Zoom tool's drag, where it began and is now (window x); what the Solo tool's hold
+    /// changed, to put back (pattern mode, its region, playing, the selection).
+    pub zoom_span: Option<(f32, f32)>,
+    #[allow(clippy::type_complexity)]
+    pub solo_restore: Option<(bool, Option<(At, u64, u64)>, bool, Option<At>)>,
     /// The Binaural Panner, open on a track, where; where its view looks from (degrees round
     /// and down); and where the view is on screen.
     pub panner: Option<(usize, Point<Pixels>)>,
@@ -973,6 +995,8 @@ impl Workspace {
             mod_drag_at: None,
             mod_edit: None,
             mod_clock: Instant::now(),
+            zoom_span: None,
+            solo_restore: None,
             orbit: crate::binaural::ORBIT,
             panner_bounds: Default::default(),
             swiped: None,
@@ -1570,6 +1594,8 @@ impl Workspace {
                 | Drag::LaneHeight { .. }
                 | Drag::Orbit { .. }
                 | Drag::Modulator { .. }
+                | Drag::ZoomSpan
+                | Drag::SoloHold
         );
         if edits {
             self.session.checkpoint();
@@ -1788,6 +1814,15 @@ impl Workspace {
                 self.set_mod_field(track, index, field, value + (y - p.y) / 150.0 * fine);
             }
             Some(Drag::ModSteps { track, index }) => self.paint_mod_step(track, index, p),
+            Some(Drag::ZoomSpan) => {
+                if let Some((_, b)) = &mut self.zoom_span {
+                    *b = p.x;
+                }
+                cx.notify();
+                return;
+            }
+            Some(Drag::SoloHold) => return,
+            Some(Drag::Fade { at, out }) => self.drag_fade(at, out, p),
             Some(Drag::Raise { track, y, height }) => {
                 self.raise_source(track, height + (y - p.y) / 80.0)
             }
@@ -1917,6 +1952,11 @@ impl Workspace {
     }
 
     fn end_drag(&mut self, cx: &mut Context<Self>) {
+        match self.drag {
+            Some(Drag::ZoomSpan) => self.zoom_release(cx),
+            Some(Drag::SoloHold) => self.solo_release(cx),
+            _ => {}
+        }
         if let Some(Drag::Modulator { track, index }) = self.drag
             && let Some(at) = self.mod_drag_at.take()
         {
@@ -2789,11 +2829,7 @@ impl Workspace {
             (_, _, None) if self.show_browser => {
                 "Click a sound to hear it · ↑ ↓ for the next · drag it onto a track, or double-click to add it · F hides it"
             }
-            (_, Tool::Pencil, _) => {
-                "Click an empty lane for a new region · in the piano roll, a note"
-            }
-            (_, Tool::Scissors, _) => "Click a region or note to cut it there",
-            (_, Tool::Eraser, _) => "Click a region or note to delete it",
+            (_, t, _) if t != Tool::Pointer => t.hint(),
             (_, _, Some(Bottom::PianoRoll)) => {
                 "Double-click writes · drag a band to pick · ⌥-drag copies · ↑↓ ⇧↑↓ ←→ move · ⌘C ⌘V ⌘D · Q quantize · right-click for more"
             }
@@ -3095,6 +3131,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &EditPlaybooks, _, cx| ws.open_genres(None, cx)))
             .on_action(cx.listener(|ws, _: &StudySong, _, cx| ws.open_study(cx)))
             .on_action(cx.listener(|ws, _: &ShowSettings, _, cx| ws.open_settings(cx)))
+            .on_action(cx.listener(|ws, _: &ToolMenu, _, cx| {
+                // Under the toolbar, as Logic opens it at the pointer.
+                let x = if ws.show_inspector { ws.side_w() } else { 0.0 } + 14.0;
+                ws.tool_menu(gpui::point(px(x), px(CONTROL_BAR_H + TOP_H)), cx);
+            }))
             .on_action(
                 cx.listener(|ws, _: &SelectAllNotes, _, cx| ws.roll_op(RollOp::SelectAll, cx)),
             )

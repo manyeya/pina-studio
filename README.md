@@ -106,7 +106,13 @@ In the app, mostly as in Logic:
   is in the inspector. Enter keeps it, escape doesn't, clicking elsewhere keeps it too.
 - Over the track headers: the tools (pointer; pencil, which draws a region in an empty lane and a
   note in the piano roll; scissors, which cut a region or note where clicked; eraser), and what
-  edits snap to.
+  edits snap to. The fifth button (or T) is Logic's Tool menu, with the rest: Text names a region
+  where it is; Glue joins a region to the next on its track (MIDI always, audio cut from one
+  take); Solo plays a region alone while held, from where it's held; Mute mutes or unmutes one;
+  Zoom zooms in where clicked, out with ⌥, or fills the window with the bars dragged across;
+  Fade drags an audio region's fade in from its start or fade out from its end (equal-power
+  curves, drawn on it); Flex makes dragging a region's end stretch it, as ⌥ does. The status bar
+  says what the tool in hand does.
 - A track's header is a console strip: its colour down its edge, its icon (click for its colour
   and icon), number, name and what it plays; then a raised strip with lit M S R buttons, an LED
   meter (left over right, its peak held), a fader with a scale and a cap like the mixer's, an LCD readout

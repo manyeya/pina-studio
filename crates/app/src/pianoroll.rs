@@ -2319,7 +2319,7 @@ fn grab_note(
                 }
                 return;
             }
-            Tool::Pointer | Tool::Pencil => {}
+            _ => {}
         }
         if e.modifiers.shift {
             match ws.picked.iter().position(|&k| k == i) {

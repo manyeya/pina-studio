@@ -181,6 +181,11 @@ pub enum Command {
         /// Ticks from its start to where its loops stop; 0 runs them to the next region.
         #[serde(default)]
         loop_length: Option<u64>,
+        /// An audio region's fades, in ticks.
+        #[serde(default)]
+        fade_in: Option<u64>,
+        #[serde(default)]
+        fade_out: Option<u64>,
         #[serde(default)]
         transpose: Option<i8>,
         #[serde(default)]
@@ -1132,6 +1137,8 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             name,
             looped,
             loop_length,
+            fade_in,
+            fade_out,
             transpose,
             velocity,
             quantize,
@@ -1170,6 +1177,12 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             if let Some(v) = loop_length {
                 region.loop_length = (v > 0).then_some(v);
                 region.looped |= v > 0;
+            }
+            if let Some(v) = fade_in {
+                region.fade_in = v.min(region.length);
+            }
+            if let Some(v) = fade_out {
+                region.fade_out = v.min(region.length);
             }
             if let Some(v) = transpose {
                 region.transpose = v.clamp(-96, 96);

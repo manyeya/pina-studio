@@ -347,6 +347,22 @@ struct Clip {
     len: u64,
     offset: u64,
     data: Arc<AudioData>,
+    /// Its region's fades: where the region starts and how long it fades in; where it ends and
+    /// how long it fades out (samples).
+    fades: [u64; 4],
+}
+
+/// A clip's level at a sample, under its region's fades: an equal-power curve each end.
+fn faded(c: &Clip, t: u64) -> f32 {
+    let [from, fade_in, to, fade_out] = c.fades;
+    let mut g = 1.0;
+    if fade_in > 0 && t < from + fade_in {
+        g *= ((t.saturating_sub(from) as f32 / fade_in as f32) * std::f32::consts::FRAC_PI_2).sin();
+    }
+    if fade_out > 0 && t + fade_out > to {
+        g *= ((to.saturating_sub(t) as f32 / fade_out as f32) * std::f32::consts::FRAC_PI_2).sin();
+    }
+    g
 }
 
 #[derive(Clone, Copy)]
@@ -575,9 +591,11 @@ fn gather(
         let (a, b) = (from.max(c.start), to.min(c.start + c.len));
         for (ch, dst) in [&mut *l, &mut *r].into_iter().enumerate() {
             let src = &c.data.channels[ch.min(c.data.channels.len() - 1)];
+            let fades = c.fades[1] > 0 || c.fades[3] > 0;
             for t in a..b {
                 let i = (c.offset + t - c.start) as usize;
-                dst[(t - from) as usize + into] += src.get(i).copied().unwrap_or(0.0);
+                let v = src.get(i).copied().unwrap_or(0.0);
+                dst[(t - from) as usize + into] += if fades { v * faded(c, t) } else { v };
             }
         }
     }
@@ -1428,6 +1446,12 @@ fn play_region(
                     len: end - start,
                     offset: offset + skip,
                     data,
+                    fades: [
+                        project.samples(region.start, rate),
+                        project.samples(region.fade_in.min(region.length), rate),
+                        project.samples(region.start + region.length, rate),
+                        project.samples(region.fade_out.min(region.length), rate),
+                    ],
                 }),
                 Err(e) => problems.push(e),
             }
@@ -3036,6 +3060,49 @@ mod tests {
         assert_eq!(&l[start..start + BEAT], &ramp[100..100 + BEAT]);
         assert_eq!(peak(&l[start + BEAT..]), 0.0);
         assert_eq!(l, r);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_audio_regions_fades_bring_it_in_and_take_it_out() {
+        let dir = scratch_dir("fades");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: RATE as u32,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(dir.join("flat.wav"), spec).unwrap();
+        (0..BEAT * 2).for_each(|_| w.write_sample(0.5f32).unwrap());
+        w.finalize().unwrap();
+        // Two beats, faded in over the first half beat and out over the last.
+        let region = Region {
+            start: 0,
+            length: PPQ * 2,
+            fade_in: PPQ / 2,
+            fade_out: PPQ / 2,
+            content: Content::Audio {
+                file: "flat.wav".into(),
+                offset: 0,
+                stretch: 1.0,
+                flex: Flex::default(),
+                follow: false,
+                formants: false,
+                warps: Vec::new(),
+            },
+            ..Default::default()
+        };
+        let track = Track {
+            name: "audio".into(),
+            regions: vec![region],
+            ..Default::default()
+        };
+        let [l, _] = render(&project(vec![track]), &dir, BEAT * 2);
+        let half = BEAT / 2;
+        assert!(l[0].abs() < 1e-3); // silent at the start
+        assert!(l[half / 2] > 0.3 && l[half / 2] < 0.4, "{}", l[half / 2]); // sin 45°: 0.707 of 0.5
+        assert!((l[BEAT] - 0.5).abs() < 1e-6); // full in the middle
+        assert!(l[BEAT * 2 - 1] < 0.01); // gone by the end
         std::fs::remove_dir_all(dir).unwrap();
     }
 

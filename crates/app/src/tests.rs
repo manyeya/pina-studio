@@ -610,6 +610,108 @@ fn settings_change_the_headers_regions_editing_and_stopping(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn the_tool_menu_and_its_tools_text_glue_solo_mute_zoom_fade_flex(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let region = |cx: &VisualTestContext, at: (usize, usize)| {
+        ws.read_with(cx, |ws, _| ws.session.project.region(at).clone())
+    };
+    let use_tool = |cx: &mut VisualTestContext, name: &str| {
+        cx.simulate_keystrokes("t");
+        pick(cx, &ws, name);
+    };
+    // T: the Tool menu; Mute mutes a region with a click.
+    use_tool(cx, "Mute");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.tool), Tool::Mute);
+    click_on(cx, "region-0-0", Modifiers::none(), MouseButton::Left);
+    assert!(region(cx, (0, 0)).mute);
+    click_on(cx, "region-0-0", Modifiers::none(), MouseButton::Left);
+    assert!(!region(cx, (0, 0)).mute);
+    // Text: its name, to type.
+    use_tool(cx, "Text");
+    click_on(cx, "region-0-0", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.naming.is_some()));
+    cx.simulate_keystrokes("escape");
+    // Cut in two, then glued back: one region, every note.
+    let whole = region(cx, (0, 0));
+    let notes =
+        |r: &tempo_engine::project::Region| r.content.notes(r.length).map_or(0, |n| n.len());
+    ws.update(cx, |ws, cx| ws.split_at((0, 0), BAR * 2, cx));
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[0].regions.len()),
+        2
+    );
+    use_tool(cx, "Glue");
+    click_on(cx, "region-0-0", Modifiers::none(), MouseButton::Left);
+    let glued = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].regions.clone());
+    assert_eq!(glued.len(), 1);
+    assert_eq!(
+        (glued[0].start, glued[0].length),
+        (whole.start, whole.length)
+    );
+    assert_eq!(notes(&glued[0]), notes(&whole));
+    // Zoom: a click in, ⌥ out; a drag across two bars fills the window with them.
+    use_tool(cx, "Zoom");
+    let zoom = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.px_per_beat);
+    let before = zoom(cx);
+    let lane = spot(&ws, cx, BAR * 6, 1);
+    drag(cx, lane, lane);
+    assert_eq!(zoom(cx), before * 2.0);
+    cx.simulate_mouse_down(lane, MouseButton::Left, Modifiers::alt());
+    cx.simulate_mouse_up(lane, MouseButton::Left, Modifiers::alt());
+    cx.run_until_parked();
+    assert_eq!(zoom(cx), before);
+    drag(cx, spot(&ws, cx, BAR, 1), spot(&ws, cx, BAR * 3, 1));
+    let (fit, scroll, width) = ws.read_with(cx, |ws, _| {
+        (
+            ws.px_per_beat,
+            ws.scroll_x,
+            f32::from(ws.lanes_bounds.get().size.width),
+        )
+    });
+    assert!((fit * 8.0 - width).abs() < 1.0, "{fit} {width}");
+    assert!((scroll - fit * 4.0).abs() < 1.0);
+    ws.update(cx, |ws, cx| {
+        (ws.px_per_beat, ws.scroll_x) = (before, 0.0);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    // Fade: dragged in from the drums' start, a fade in.
+    use_tool(cx, "Fade");
+    drag(cx, spot(&ws, cx, PPQ / 4, 2), spot(&ws, cx, PPQ, 2));
+
+    let drums = region(cx, (2, 0));
+    assert!(
+        drums.fade_in > PPQ / 2 && drums.fade_out == 0,
+        "{}",
+        drums.fade_in
+    );
+    // Flex: the lead's end dragged a bar on stretches its notes.
+    use_tool(cx, "Flex");
+    let lead = region(cx, (1, 0));
+    let b = cx.debug_bounds("region-1-0").unwrap();
+    let end = point(b.right() - px(2.), b.bottom() - px(6.));
+    drag(
+        cx,
+        end,
+        point(
+            spot(&ws, cx, lead.start + lead.length + BAR, 1).x - px(2.),
+            end.y,
+        ),
+    );
+    assert_eq!(region(cx, (1, 0)).length, lead.length + BAR);
+    assert_ne!(region(cx, (1, 0)).content, lead.content);
+    // Solo: held, the region plays alone (pattern mode); let go, as it was.
+    use_tool(cx, "Solo");
+    let at = spot(&ws, cx, PPQ, 0);
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(ws.read_with(cx, |ws, _| ws.pattern_mode));
+    cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(!ws.read_with(cx, |ws, _| ws.pattern_mode));
+}
+
+#[gpui::test]
 fn regions_copy_paste_mute_and_repeat_from_their_menus_and_keys(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     let count = |cx: &VisualTestContext, t: usize| {
@@ -4310,6 +4412,16 @@ fn shots() {
                 }
                 // The console headers: a stereo pan, a binaural one, a tall track, a muted region;
                 // and each right-click menu.
+                // The Tool menu open on the Fade tool, the drums faded in and out.
+                "tools" => {
+                    let drums = &mut ws.session.project.tracks[2];
+                    drums.height = Some(110.0);
+                    (drums.regions[0].fade_in, drums.regions[0].fade_out) = (PPQ * 2, PPQ / 2);
+                    drums.regions[3].fade_out = PPQ * 3;
+                    ws.tool = Tool::Fade;
+                    ws.status = Some(Tool::Fade.hint().into());
+                    ws.tool_menu(point(px(ws.side_w() + 14.), px(96.)), cx);
+                }
                 "tracks" | "track-menu" | "pan-menu" | "region-menu" | "lane-menu" | "panner" => {
                     use tempo_engine::project::PanMode;
                     let tracks = &mut ws.session.project.tracks;

@@ -1208,6 +1208,11 @@ pub struct Region {
     /// Silent, kept where it is.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mute: bool,
+    /// An audio region's fades, in and out, in ticks from its ends (an equal-power curve).
+    #[serde(default, skip_serializing_if = "is_none_u64")]
+    pub fade_in: u64,
+    #[serde(default, skip_serializing_if = "is_none_u64")]
+    pub fade_out: u64,
     /// Playback settings, as Logic's region inspector has: MIDI plays moved by `transpose`
     /// semitones, `velocity` louder, and started on a `quantize` grid (ticks), its notes kept as
     /// they are. Audio is moved by `transpose` too, its length kept.
@@ -1219,6 +1224,10 @@ pub struct Region {
     pub quantize: Option<u64>,
     #[serde(flatten)]
     pub content: Content,
+}
+
+fn is_none_u64(v: &u64) -> bool {
+    *v == 0
 }
 
 fn is_zero(v: &i8) -> bool {

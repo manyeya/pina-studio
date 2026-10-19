@@ -35,6 +35,7 @@ mod takes;
 mod tests;
 mod text;
 mod theme;
+mod tools;
 mod topbar;
 mod tracks;
 mod workspace;
