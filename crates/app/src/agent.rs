@@ -658,7 +658,8 @@ fn tuning_args(kind: Kind, tuning: &Tuning, resume: Option<&str>) -> Vec<String>
 }
 
 /// `codex exec`, resuming the conversation after its first question: tempo's MCP server in place
-/// of any others, its sandbox read-only, nothing asked about.
+/// of any others (its tools let through without asking, as nothing can be asked), its sandbox
+/// read-only, nothing asked about.
 fn codex_command(
     cmd: &Path,
     project: &Path,
@@ -679,11 +680,7 @@ fn codex_command(
             "-c",
             "approval_policy=\"never\"",
         ])
-        .arg("-c")
-        .arg(format!(
-            "mcp_servers={{tempo={{command={:?},args=[\"mcp\"]}}}}",
-            exe.display().to_string()
-        ));
+        .args(codex_isolation(&exe, &codex_servers()));
     c.args(tuning_args(Kind::Codex, tuning, None));
     if let Some(id) = session {
         c.arg(id);
@@ -695,6 +692,56 @@ fn codex_command(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Couldn't start {}: {e}", cmd.display()))
+}
+
+/// The MCP servers the person's Codex config sets up, by name.
+fn codex_servers() -> Vec<String> {
+    let config = std::fs::read_to_string(codex_home().join("config.toml")).unwrap_or_default();
+    let mut names: Vec<String> = Vec::new();
+    for line in config.lines().map(str::trim) {
+        let Some(rest) = line
+            .strip_prefix("[mcp_servers.")
+            .and_then(|r| r.strip_suffix(']'))
+        else {
+            continue;
+        };
+        // `[mcp_servers.name]`, `[mcp_servers."a name"]`, `[mcp_servers.name.env]`.
+        let name = match rest.strip_prefix('"') {
+            Some(quoted) => quoted.split('"').next().unwrap_or_default(),
+            None => rest.split('.').next().unwrap_or_default(),
+        };
+        if !name.is_empty() && !names.iter().any(|n| n == name) {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+/// What makes tempo's MCP server Codex's only tools: it, its tools approved (Codex asks before
+/// an MCP tool runs, and with no one to ask, refuses), and the person's other servers, plugins,
+/// apps, computer and browser use off. Features are turned off by key, which a Codex without them
+/// ignores (its `--disable` refuses a name it doesn't know).
+fn codex_isolation(exe: &Path, servers: &[String]) -> Vec<String> {
+    let mut a = vec![
+        "-c".into(),
+        format!(
+            "mcp_servers.tempo={{command={:?},args=[\"mcp\"],default_tools_approval_mode=\"approve\"}}",
+            exe.display().to_string()
+        ),
+    ];
+    // By bare name: Codex's `-c` paths don't take quoted ones (a name that needs quotes, rare,
+    // stays as the person set it up).
+    let bare = |n: &&String| {
+        n.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    for name in servers.iter().filter(|n| *n != "tempo").filter(bare) {
+        a.extend(["-c".into(), format!("mcp_servers.{name}.enabled=false")]);
+    }
+    for feature in ["plugins", "apps", "computer_use", "browser_use"] {
+        a.extend(["-c".into(), format!("features.{feature}=false")]);
+    }
+    a
 }
 
 /// `tempo ask`: an agent does what's asked to the song, saying what it's doing as it goes. The app
@@ -1142,6 +1189,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn codex_gets_tempos_tools_approved_and_nothing_else() {
+        let home =
+            std::env::temp_dir().join(format!("tempo-test-codex-mcp-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join("config.toml"),
+            "model = \"x\"\n[mcp_servers.node_repl]\ncommand = \"n\"\n[mcp_servers.node_repl.env]\nA = \"1\"\n[mcp_servers.\"computer-use\"]\ncommand = \"c\"\n[mcp_servers.tempo]\ncommand = \"t\"\n",
+        )
+        .unwrap();
+        // Read where Codex keeps its config: the servers it sets up, once each.
+        let servers = {
+            let _home = CodexHome::set(&home);
+            codex_servers()
+        };
+        assert_eq!(servers, ["node_repl", "computer-use", "tempo"]);
+        let args = codex_isolation(Path::new("/A/tempo"), &servers).join(" ");
+        assert!(args.contains(r#"mcp_servers.tempo={command="/A/tempo",args=["mcp"],default_tools_approval_mode="approve"}"#), "{args}");
+        assert!(args.contains("mcp_servers.node_repl.enabled=false"));
+        assert!(args.contains("mcp_servers.computer-use.enabled=false"));
+        assert!(!args.contains("tempo.enabled"));
+        assert!(
+            args.contains("features.plugins=false") && args.contains("features.computer_use=false")
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// CODEX_HOME pointed somewhere for a test, and back after; one test at a time.
+    struct CodexHome(std::sync::MutexGuard<'static, ()>);
+
+    static CODEX_HOME: Mutex<()> = Mutex::new(());
+
+    impl CodexHome {
+        fn set(dir: &Path) -> CodexHome {
+            let guard = CODEX_HOME.lock().unwrap_or_else(|e| e.into_inner());
+            unsafe { std::env::set_var("CODEX_HOME", dir) };
+            CodexHome(guard)
+        }
+    }
+
+    impl Drop for CodexHome {
+        fn drop(&mut self) {
+            unsafe { std::env::remove_var("CODEX_HOME") };
+        }
+    }
+
+    #[test]
     fn codex_says_its_signed_in_on_either_stream() {
         let ready = |s: &str| codex_status(true, s);
         assert_eq!(
@@ -1203,7 +1296,7 @@ mod tests {
             "model = \"b\"\n[x]\nmodel = \"z\"\n",
         )
         .unwrap();
-        unsafe { std::env::set_var("CODEX_HOME", &home) };
+        let codex_home = CodexHome::set(&home);
         let names: Vec<String> = Kind::Codex.models().into_iter().map(|m| m.name).collect();
         assert_eq!(names, ["A", "B"]);
         assert_eq!(Kind::Codex.default_model().as_deref(), Some("b"));
@@ -1211,7 +1304,7 @@ mod tests {
         assert_eq!(Kind::Codex.efforts(Some("a")), ["medium", "xhigh"]);
         assert_eq!(model_name(Kind::Codex, "a"), "A");
         assert_eq!(effort_name("xhigh"), "Extra high");
-        unsafe { std::env::remove_var("CODEX_HOME") };
+        drop(codex_home);
         let _ = std::fs::remove_dir_all(&home);
 
         // Kept for each agent.
