@@ -2016,8 +2016,9 @@ impl Workspace {
     }
 
     /// The Browser, beside the tracks: everything that goes in a song in one place, under one
-    /// search. All (devices, presets, sounds and songs that match), Instruments, Effects, the
-    /// sample library (Sounds) and favourites (★); the search follows from tab to tab.
+    /// search. All (devices, presets, sounds and songs that match), Instruments, Effects and the
+    /// sample library (Sounds); the search follows from tab to tab. Starred devices lead each
+    /// list of devices.
     pub fn browser_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scope = self.catalog.scope;
         let sounds = scope == Scope::Sounds;
@@ -2097,13 +2098,9 @@ impl Workspace {
                 ),
         };
         let tab = |label: &'static str, s: Scope, cx: &mut Context<Self>| {
-            let star = s == Scope::Favourites;
             seg(label, scope == s, 26.)
-                .when(star, |d| {
-                    d.w(px(34.)).flex_none().px(px(0.)).justify_center()
-                })
-                .when(!star, |d| d.flex_auto().justify_center())
-                .when(star && scope == s, |d| d.text_color(rgb(AMBER)))
+                .flex_auto()
+                .justify_center()
                 .debug_selector(move || format!("scope-{label}"))
                 .on_mouse_down(
                     MouseButton::Left,
@@ -2115,8 +2112,7 @@ impl Workspace {
             .child(tab("All", Scope::All, cx))
             .child(tab("Instruments", Scope::Instruments, cx))
             .child(tab("Effects", Scope::Effects, cx))
-            .child(tab("Sounds", Scope::Sounds, cx))
-            .child(tab("★", Scope::Favourites, cx));
+            .child(tab("Sounds", Scope::Sounds, cx));
         let body = match sounds {
             true => self.sounds_body(cx),
             false => self.device_browser(cx),

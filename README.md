@@ -147,7 +147,7 @@ In the app, mostly as in Logic:
   channel strips.
 - The Browser, right of the tracks (F): one panel and one search for everything that goes in a
   song, its tabs All, Instruments, Effects, Sounds (the sample library: one-shots and loops, what
-  fits the song, its categories) and ★; what's typed follows from tab to tab. tempo's own
+  fits the song, its categories); what's typed follows from tab to tab. tempo's own
   instruments and effects and every plugin installed, each once however many formats it comes in
   (CLAP, VST3, AU, VST2 shown as badges, the best used), in the categories the plugin says it
   belongs to (VST3 subcategories, CLAP features, an Audio Unit's type, VST2's category; its name

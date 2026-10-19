@@ -552,7 +552,6 @@ pub enum Scope {
     Effects,
     /// The sample library.
     Sounds,
-    Favourites,
 }
 
 /// A line of results: a device, one of its presets, a sample, a song.
@@ -736,7 +735,6 @@ impl Workspace {
                 Scope::All | Scope::Sounds => true,
                 Scope::Instruments => d.instrument(),
                 Scope::Effects => !d.instrument(),
-                Scope::Favourites => c.favourites.contains(&d.key),
             }) && c.cat.is_none_or(|cat| d.cat == cat)
         };
         let mut rows = Vec::new();
@@ -798,9 +796,7 @@ impl Workspace {
             }
         };
         if c.cat.is_none() {
-            if c.scope != Scope::Favourites {
-                section(&mut rows, "Favourites", keyed(&c.favourites));
-            }
+            section(&mut rows, "Favourites", keyed(&c.favourites));
             section(&mut rows, "In this song", keyed(&in_song));
             section(
                 &mut rows,
@@ -1263,9 +1259,6 @@ impl Workspace {
                                 .text_size(px(12.))
                                 .text_color(rgb(TEXT_3))
                                 .child(match (scope, query.is_empty()) {
-                                    (Scope::Favourites, true) => {
-                                        "Star a device to keep it here.".to_string()
-                                    }
                                     (_, true) => "Looking for plugins…".to_string(),
                                     _ => format!("Nothing called \u{201c}{query}\u{201d}."),
                                 }),
