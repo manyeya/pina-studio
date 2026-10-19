@@ -1216,7 +1216,9 @@ mod tests {
     }
 
     /// CODEX_HOME pointed somewhere for a test, and back after; one test at a time.
-    struct CodexHome(std::sync::MutexGuard<'static, ()>);
+    struct CodexHome {
+        _held: std::sync::MutexGuard<'static, ()>,
+    }
 
     static CODEX_HOME: Mutex<()> = Mutex::new(());
 
@@ -1224,7 +1226,7 @@ mod tests {
         fn set(dir: &Path) -> CodexHome {
             let guard = CODEX_HOME.lock().unwrap_or_else(|e| e.into_inner());
             unsafe { std::env::set_var("CODEX_HOME", dir) };
-            CodexHome(guard)
+            CodexHome { _held: guard }
         }
     }
 
