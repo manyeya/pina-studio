@@ -283,6 +283,10 @@ In the app, mostly as in Logic:
   for how far (⇧ finer), ✕ to take it off; click a card to pick it, and dragging any knob it moves
   sets its depth instead. Modulation plays in bounces too, and agents use it as well
   (`add_modulator`, `modulate`).
+- Settings (⌘,, the tempo menu, or ⚙ in the top bar): which editor tabs show (Piano Roll, Step
+  Sequencer, Sampler, Modulation, Score, Takes, Live Loops; a hidden one's shortcut still opens
+  it), and whether the tracks follow the playhead while playing. Kept for every song in
+  `~/Library/Application Support/tempo/settings.json`.
 - N shows the score: the selected MIDI region as notation on a grand staff, in time with the
   tracks; click a note to select and hear it, delete to delete it.
 - L shows Live Loops: a grid of loop cells, a row per track and a column per scene. Click an

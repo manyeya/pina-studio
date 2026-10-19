@@ -153,6 +153,7 @@ pub enum Icon {
     PanelRight,
     Send,
     Check,
+    Settings,
 }
 
 impl Icon {
@@ -198,6 +199,9 @@ impl Icon {
             Icon::Wave => r##"<path d="M3 12h2M7 8v8M10 5v14M13 9v6M16 7v10M19 11v2"/>"##,
             Icon::Bus => r##"<path d="M4 7h16M4 12h16M4 17h16M8 4v6M16 9v6M11 14v6"/>"##,
             Icon::Output => r##"<path d="M4 12h11M11 7l5 5-5 5M19 5v14"/>"##,
+            Icon::Settings => {
+                r##"<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>"##
+            }
             Icon::More => {
                 r##"<circle fill="#000" stroke="none" cx="6" cy="12" r="1.6"/><circle fill="#000" stroke="none" cx="12" cy="12" r="1.6"/><circle fill="#000" stroke="none" cx="18" cy="12" r="1.6"/>"##
             }

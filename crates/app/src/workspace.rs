@@ -96,6 +96,7 @@ actions!(
         ToggleSamplesPage,
         PreviousSample,
         NextSample,
+        ShowSettings,
         CopyRegion,
         CutRegion,
         PasteRegion,
@@ -174,6 +175,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", DeselectNotes, Some("Roll")),
         KeyBinding::new("up", AdderUp, Some("Adder")),
         KeyBinding::new("down", AdderDown, Some("Adder")),
+        KeyBinding::new("cmd-,", ShowSettings, None),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-w", Quit, None),
     ]);
@@ -515,6 +517,8 @@ pub enum View {
     Playbooks,
     /// Songs taken apart.
     Study,
+    /// What the window shows (⌘,).
+    Settings,
 }
 
 /// What a name being typed is for.
@@ -802,6 +806,8 @@ pub struct Workspace {
     /// move the rows under a drag).
     pub steps_row: usize,
     pub steps_pick: Option<usize>,
+    /// What the window shows, kept for every song (Settings, ⌘,).
+    pub settings: crate::settings::Settings,
     /// What the lane under the picked sound shows.
     pub steps_lane_mode: crate::steps::LaneMode,
     pub steps_lane: Rc<Cell<Bounds<Pixels>>>,
@@ -973,6 +979,7 @@ impl Workspace {
             steps_row: 0,
             steps_pick: None,
             steps_lane_mode: Default::default(),
+            settings: crate::settings::Settings::load(),
             steps_lane: Rc::new(Cell::new(Bounds::default())),
             sampler_ui: Default::default(),
             sampler_wave_bounds: Rc::new(Cell::new(Bounds::default())),
@@ -2926,7 +2933,7 @@ impl Render for Workspace {
         let armed = self.armed().map(|t| self.session.project.tracks[t].id);
         self.player.arm(armed);
         let playing = self.player.playing();
-        if playing {
+        if playing && self.settings.follow_playhead {
             self.follow_playhead();
         }
         // ponytail: redraws every frame while anything moves; fine until the UI gets heavy.
@@ -3075,6 +3082,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &ShowSongs, _, cx| ws.toggle_songs(cx)))
             .on_action(cx.listener(|ws, _: &EditPlaybooks, _, cx| ws.open_genres(None, cx)))
             .on_action(cx.listener(|ws, _: &StudySong, _, cx| ws.open_study(cx)))
+            .on_action(cx.listener(|ws, _: &ShowSettings, _, cx| ws.open_settings(cx)))
             .on_action(
                 cx.listener(|ws, _: &SelectAllNotes, _, cx| ws.roll_op(RollOp::SelectAll, cx)),
             )
@@ -3128,6 +3136,9 @@ impl Render for Workspace {
                         d.child(self.genres_page(cx))
                     })
                     .when(self.view == View::Study, |d| d.child(self.study_page(cx)))
+                    .when(self.view == View::Settings, |d| {
+                        d.child(self.settings_page(cx))
+                    })
                     .when(self.view == View::Arrange, |d| {
                         d.when(self.show_inspector, |d| d.child(self.inspector(cx)))
                             .child(

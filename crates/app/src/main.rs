@@ -25,6 +25,7 @@ mod sampler;
 mod samples_cli;
 mod score;
 mod server;
+mod settings;
 mod steps;
 mod strip;
 mod study;
@@ -396,7 +397,11 @@ fn open(dir: &Path) -> Result<(), String> {
         }
         bind_keys(cx);
         cx.set_menus([
-            Menu::new("tempo").items([MenuItem::action("Quit tempo", Quit)]),
+            Menu::new("tempo").items([
+                MenuItem::action("Settings…", ShowSettings),
+                MenuItem::separator(),
+                MenuItem::action("Quit tempo", Quit),
+            ]),
             Menu::new("File").items([
                 MenuItem::action("New Song…", NewSong),
                 MenuItem::action("Songs…", ShowSongs),

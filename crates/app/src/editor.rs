@@ -143,13 +143,14 @@ impl Workspace {
                         tray()
                             .p(px(2.))
                             .rounded(px(8.))
-                            .child(tab("Piano Roll", Bottom::PianoRoll, cx))
-                            .child(tab("Step Sequencer", Bottom::Steps, cx))
-                            .child(tab("Sampler", Bottom::Sampler, cx))
-                            .child(tab("Modulation", Bottom::Modulation, cx))
-                            .child(tab("Score", Bottom::Score, cx))
-                            .child(tab("Takes", Bottom::Takes, cx))
-                            .child(tab("Live Loops", Bottom::Loops, cx)),
+                            // Those Settings shows, and the one open.
+                            .children(
+                                Bottom::ALL
+                                    .into_iter()
+                                    .filter(|&b| b == pane || self.settings.shows(b))
+                                    .map(|b| tab(b.name(), b, cx))
+                                    .collect::<Vec<_>>(),
+                            ),
                     )
                     .child(div().flex_1())
                     .children(controls)

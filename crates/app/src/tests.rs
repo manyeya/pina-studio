@@ -509,6 +509,52 @@ fn modulators_are_added_mapped_by_dragging_and_their_depth_set(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn settings_hide_editor_tabs_and_their_shortcuts_still_open_them(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| ws.show_bottom(Bottom::PianoRoll, cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("tab-Score").is_some());
+    // ⌘, : Score and Live Loops switched off.
+    cx.simulate_keystrokes("cmd-,");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Settings);
+    click_on(
+        cx,
+        "setting-tab-score",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(
+        cx,
+        "setting-tab-live_loops",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(cx, "settings-done", Modifiers::none(), MouseButton::Left);
+    assert!(cx.debug_bounds("tab-Score").is_none());
+    assert!(cx.debug_bounds("tab-Loops").is_none());
+    assert!(cx.debug_bounds("tab-Takes").is_some());
+    // N still opens the score, its tab there while it's open.
+    cx.simulate_keystrokes("n");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.bottom), Some(Bottom::Score));
+    assert!(cx.debug_bounds("tab-Score").is_some());
+    // The last tab can't go.
+    ws.update(cx, |ws, _| {
+        ws.settings.hidden = Bottom::ALL[1..]
+            .iter()
+            .map(|b| b.key().to_string())
+            .collect();
+    });
+    cx.simulate_keystrokes("cmd-,");
+    click_on(
+        cx,
+        "setting-tab-piano_roll",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert!(ws.read_with(cx, |ws, _| ws.settings.shows(Bottom::PianoRoll)));
+}
+
+#[gpui::test]
 fn regions_copy_paste_mute_and_repeat_from_their_menus_and_keys(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     let count = |cx: &VisualTestContext, t: usize| {
@@ -4142,6 +4188,10 @@ fn shots() {
                     }
                     ws.track = 1;
                     ws.show_bottom(Bottom::PianoRoll, cx);
+                }
+                "settings" => {
+                    ws.settings.hidden = vec!["score".into(), "takes".into(), "live_loops".into()];
+                    ws.open_settings(cx);
                 }
                 // Modulation: an LFO, steps, an envelope, a follower and random on the keys,
                 // mapped to its pan, volume, low cut and presence; values as if playing.
