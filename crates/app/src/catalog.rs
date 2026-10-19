@@ -1296,6 +1296,7 @@ impl Workspace {
             (None, b) => format!("{} · {}", dev.vendor, b.join(" ")),
         };
         div()
+            .group("device-row")
             .flex()
             .items_center()
             .gap(px(9.))
@@ -1373,6 +1374,7 @@ impl Workspace {
                         ),
                 )
             })
+            .child(self.device_agent_button(d, "device-row", cx))
             .child(
                 div()
                     .size(px(22.))

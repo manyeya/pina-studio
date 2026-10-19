@@ -13,9 +13,9 @@ use crate::{
     plugin::{PluginApi, PluginParam, value_from_text},
     project::{
         AUDIO_DIR, AutoMode, AutoPoint, AutoShape, AuxSend, BEAT_UNITS, Cell, Comp, Content,
-        ControlPoint, Cycle, Eq, Flex, Input, Instrument, Marker, Note, PPQ, PaletteSound, PanLaw,
-        PanMode, Param, PatternRow, Place, PluginRef, Preset, PresetSource, Project, Region,
-        Saturator, Track, Which,
+        ControlPoint, Cycle, Eq, Flex, Input, Instrument, Marker, Note, PPQ, PaletteDevice,
+        PaletteSound, PanLaw, PanMode, Param, PatternRow, Place, PluginRef, Preset, PresetSource,
+        Project, Region, Saturator, Track, Which,
     },
 };
 
@@ -316,6 +316,8 @@ pub enum Command {
     SetPalette {
         #[serde(default)]
         sounds: Option<Vec<PaletteSound>>,
+        #[serde(default)]
+        devices: Option<Vec<PaletteDevice>>,
         #[serde(default)]
         only: Option<bool>,
     },
@@ -1465,7 +1467,11 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             }
             a.tidy();
         }
-        Command::SetPalette { sounds, only } => {
+        Command::SetPalette {
+            sounds,
+            devices,
+            only,
+        } => {
             if let Some(sounds) = sounds {
                 let mut seen = std::collections::HashSet::new();
                 for s in &sounds {
@@ -1474,6 +1480,14 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                     }
                 }
                 p.palette.sounds = sounds;
+            }
+            if let Some(devices) = devices {
+                for (i, d) in devices.iter().enumerate() {
+                    if devices[..i].iter().any(|e| e.same(d)) {
+                        return Err(format!("{} is in the palette twice", d.name));
+                    }
+                }
+                p.palette.devices = devices;
             }
             if let Some(only) = only {
                 p.palette.only = only;
@@ -1959,6 +1973,21 @@ mod tests {
         let twice = run(
             &mut p,
             r#"{"op": "set_palette", "sounds": [{"path": "/s/a.wav"}, {"path": "/s/a.wav"}]}"#,
+        );
+        assert!(twice.unwrap_err().contains("twice"));
+        run(
+            &mut p,
+            r#"{"op": "set_palette", "devices": [{"name": "Sine Synth", "instrument": true,
+                "own": "synth", "role": "pad"}, {"name": "Room", "plugin": {"class": "Room",
+                "path": "/p/Room.vst3"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(p.palette.devices.len(), 2);
+        assert_eq!(p.palette.sounds.len(), 2);
+        assert!(p.palette.has_device(&p.palette.devices[1].clone()));
+        let twice = run(
+            &mut p,
+            r#"{"op": "set_palette", "devices": [{"name": "A", "own": "eq"}, {"name": "B", "own": "eq"}]}"#,
         );
         assert!(twice.unwrap_err().contains("twice"));
         run(

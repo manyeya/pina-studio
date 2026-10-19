@@ -338,8 +338,9 @@ pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Val
     }
 }
 
-/// The sounds the person picked for the song: each as the library knows it (what it is, its note
-/// or key, tempo), what it's for, and whether it's in the song yet.
+/// What the person picked for the song: each sound as the library knows it (what it is, its note
+/// or key, tempo), each instrument and effect with how to put it in; what each is for, and
+/// whether it's in the song yet.
 pub fn palette(dir: &Path) -> Result<Value, String> {
     let p = crate::cli::project(dir)?;
     let lib = Library::load();
@@ -372,21 +373,45 @@ pub fn palette(dir: &Path) -> Result<Value, String> {
             v
         })
         .collect();
-    let how = match (p.palette.sounds.is_empty(), p.palette.only) {
-        (true, _) => "The person hasn't picked any sounds: choose your own.",
+    let devices = |instrument: bool| -> Vec<Value> {
+        p.palette
+            .devices
+            .iter()
+            .filter(|d| d.instrument == instrument)
+            .map(|d| {
+                let mut v = json!(d);
+                let map = v.as_object_mut().unwrap();
+                map.insert("use".into(), json!(crate::palette::how_to_use(d)));
+                map.insert("in_song".into(), json!(p.uses_device(d)));
+                v
+            })
+            .collect()
+    };
+    let how = match (p.palette.none(), p.palette.only) {
+        (true, _) => {
+            "The person hasn't picked anything: choose your own sounds, instruments and effects."
+        }
         (false, true) => {
-            "The person picked these sounds and asked for these only: make the song with them \
-             (samples_put each one, one-shots for the same kit on one sampler track by passing \
-             its `track`), each for its role, and add no other samples or instruments for those \
-             parts. Parts none of them suits: ask, or leave out."
+            "The person picked these and asked for these only: make the song with them, each \
+             for its role (sounds with samples_put, one-shots for the same kit on one sampler \
+             track by passing its `track`; instruments with set_instrument or add_track; effects \
+             with set_insert, or tempo's own with `use`), and add no other sounds, instruments \
+             or effects of a kind they picked. Parts none of them suits: ask, or leave out."
         }
         (false, false) => {
-            "The person picked these sounds: start with them (samples_put each one, one-shots \
-             for the same kit on one sampler track by passing its `track`), each for its role \
-             (none: what it sounds like it's for), then fill what's missing with your own."
+            "The person picked these: start with them, each for its role (none: what it suits; \
+             sounds with samples_put, one-shots for the same kit on one sampler track by passing \
+             its `track`; instruments with set_instrument or add_track; effects with set_insert, \
+             or tempo's own with `use`), then fill what's missing with your own."
         }
     };
-    Ok(json!({ "only": p.palette.only, "sounds": sounds, "how": how }))
+    Ok(json!({
+        "only": p.palette.only,
+        "sounds": sounds,
+        "instruments": devices(true),
+        "effects": devices(false),
+        "how": how,
+    }))
 }
 
 /// `tempo samples …` from the command line.
@@ -472,7 +497,9 @@ mod tests {
         let other = dir.join("loop.wav");
         std::fs::copy(&drums, &other).unwrap();
         let set = format!(
-            r#"{{"op": "set_palette", "sounds": [{{"path": "{}", "role": "drum loop"}}, {{"path": "{}"}}], "only": true}}"#,
+            r#"{{"op": "set_palette", "sounds": [{{"path": "{}", "role": "drum loop"}}, {{"path": "{}"}}],
+                "devices": [{{"name": "Room", "plugin": {{"class": "Room", "path": "/p/Room.vst3"}}, "role": "vocal"}},
+                {{"name": "Drum Kit", "instrument": true, "own": "drums"}}], "only": true}}"#,
             drums.display(),
             other.display()
         );
@@ -485,6 +512,12 @@ mod tests {
         assert_eq!(sounds[0]["in_song"], true); // the demo's drums play it
         assert_eq!(sounds[1]["in_song"], false);
         assert!(sounds[1]["role"].is_null() && sounds[1]["kind"].is_string());
+        // Instruments and effects: how each goes in, and whether it has (the demo has drums).
+        let (inst, fx) = (&v["instruments"][0], &v["effects"][0]);
+        assert_eq!(inst["use"], "tempo's own: \"instrument\": \"drums\"");
+        assert_eq!(fx["role"], "vocal");
+        assert_eq!(fx["in_song"], false);
+        assert!(fx["use"].as_str().unwrap().contains(r#""class":"Room""#));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

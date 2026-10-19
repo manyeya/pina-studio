@@ -1,20 +1,23 @@
-//! The palette: sounds the person picks for the agent to make the song with. Picked with the
-//! button on each sound in the Browser (the Agent panel's "+ Sounds" opens it to pick from), or
-//! dropped in from the Finder onto the Agent panel. They show in the Agent panel's message box,
-//! to hear, give a part, or take out; they're kept in the song, and the agent is told them with
-//! the next message after they change (and can ask for them with its `palette` tool).
+//! The palette: sounds, instruments and effects the person picks for the agent to make the song
+//! with. Picked with the ＋ on each in the Browser (the Agent panel opens it to pick from), or,
+//! for sounds, dropped in from the Finder onto the Agent panel. They show in the Agent panel's
+//! message box, to hear, give a part, or take out; they're kept in the song, and the agent is
+//! told them with the next message after they change (and can ask for them with its `palette`
+//! tool).
 
 use std::path::{Path, PathBuf};
 
-use gpui::{Context, Div, FontWeight, MouseButton, MouseDownEvent, div, prelude::*, px, rgb};
+use gpui::{
+    Context, Div, FontWeight, MouseButton, MouseDownEvent, Stateful, div, prelude::*, px, rgb,
+};
 use tempo_engine::{
-    project::{Palette, PaletteSound},
+    project::{Palette, PaletteDevice, PaletteSound},
     samples::{Category, Kind, Sample, note_name},
 };
 
 use crate::{
     browser::{category_color, wave},
-    catalog::Scope,
+    catalog::{Device, Scope},
     menu::{Menu, MenuAction},
     theme::*,
     workspace::Workspace,
@@ -64,14 +67,66 @@ pub fn role_for(c: Category) -> Option<&'static str> {
     })
 }
 
+/// Something in the palette, by its place in its list.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Item {
+    Sound(usize),
+    Device(usize),
+}
+
 /// What a palette item does.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PaletteOp {
-    /// A sound's part (None: the agent decides).
-    Role(usize, Option<&'static str>),
-    Remove(usize),
+    /// Its part (None: the agent decides).
+    Role(Item, Option<&'static str>),
+    Remove(Item),
     Only,
     Clear,
+    /// More to pick, from the Browser's sounds, instruments or effects.
+    Pick(Scope),
+}
+
+/// A Browser device as the palette keeps it.
+pub fn palette_device(d: &Device) -> PaletteDevice {
+    PaletteDevice {
+        name: d.name.clone(),
+        instrument: d.instrument(),
+        own: d.key.strip_prefix("own:").map(str::to_string),
+        plugin: match d.own {
+            Some(_) => None,
+            None => d.formats.first().map(|p| p.plugin_ref()),
+        },
+        role: None,
+    }
+}
+
+/// How the agent puts a device in: a plugin as its commands take it, tempo's own by its command.
+pub fn how_to_use(d: &PaletteDevice) -> String {
+    if let Some(r) = &d.plugin {
+        return format!(
+            "\"plugin\": {}",
+            serde_json::to_string(r).unwrap_or_default()
+        );
+    }
+    match d.own.as_deref() {
+        Some("synth") => "tempo's own: \"instrument\": \"synth\"",
+        Some("drums") => "tempo's own: \"instrument\": \"drums\"",
+        Some("sampler") => "tempo's own: samples_put puts sounds on it",
+        Some("eq") => "tempo's own: set_eq",
+        Some("comp") => "tempo's own: set_comp",
+        Some("sat") => "tempo's own: set_saturator",
+        _ => "",
+    }
+    .into()
+}
+
+/// A device as the agent is told it: its part, its name, how to put it in.
+fn about_device(d: &PaletteDevice) -> String {
+    let part = d.role.as_deref().unwrap_or(match d.instrument {
+        true => "any part",
+        false => "anywhere",
+    });
+    format!("- {part}: \"{}\" — {}", d.name, how_to_use(d))
 }
 
 /// A sound as the agent is told it: what it is, its note or key and tempo, where it is.
@@ -120,6 +175,47 @@ impl Workspace {
         self.session.project.palette.has(path)
     }
 
+    /// The Browser's device a picked one is, if it's installed.
+    fn catalog_device(&self, pd: &PaletteDevice) -> Option<&Device> {
+        self.catalog
+            .devices
+            .iter()
+            .find(|d| match (&pd.plugin, &pd.own) {
+                (Some(r), _) => d
+                    .formats
+                    .iter()
+                    .any(|f| f.class == r.class && f.path == r.path),
+                (None, Some(own)) => d.key == format!("own:{own}"),
+                _ => false,
+            })
+    }
+
+    fn picked(&self) -> usize {
+        let p = &self.session.project.palette;
+        p.sounds.len() + p.devices.len()
+    }
+
+    /// A Browser device given to the agent, or (given already) taken back.
+    pub fn give_agent_device(&mut self, d: usize, cx: &mut Context<Self>) {
+        let Some(pd) = self.catalog.devices.get(d).map(palette_device) else {
+            return;
+        };
+        let had = self.session.project.palette.has_device(&pd);
+        let name = pd.name.clone();
+        self.edit(cx, |ws| {
+            let devices = &mut ws.session.project.palette.devices;
+            match had {
+                true => devices.retain(|x| !x.same(&pd)),
+                false => devices.push(pd),
+            }
+        });
+        self.status = Some(match had {
+            true => format!("{name} taken out of what the agent uses"),
+            false => format!("{name} is for the agent · {} picked", self.picked()),
+        });
+        cx.notify();
+    }
+
     /// A sound given to the agent, or (given already) taken back.
     pub fn give_agent(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let role = self
@@ -138,10 +234,9 @@ impl Workspace {
                 false => sounds.push(PaletteSound { path, role }),
             }
         });
-        let n = self.session.project.palette.sounds.len();
         self.status = Some(match had {
             true => format!("{name} taken out of the agent's sounds"),
-            false => format!("{name} is for the agent · {n} picked"),
+            false => format!("{name} is for the agent · {} picked", self.picked()),
         });
         cx.notify();
     }
@@ -169,34 +264,64 @@ impl Workspace {
     }
 
     pub fn palette_op(&mut self, op: PaletteOp, cx: &mut Context<Self>) {
+        if let PaletteOp::Pick(scope) = op {
+            return self.pick_for_agent(scope, cx);
+        }
         self.edit(cx, |ws| {
             let palette = &mut ws.session.project.palette;
             match op {
-                PaletteOp::Role(i, role) => {
+                PaletteOp::Role(Item::Sound(i), role) => {
                     if let Some(s) = palette.sounds.get_mut(i) {
                         s.role = role.map(str::to_string);
                     }
                 }
-                PaletteOp::Remove(i) => {
+                PaletteOp::Role(Item::Device(i), role) => {
+                    if let Some(d) = palette.devices.get_mut(i) {
+                        d.role = role.map(str::to_string);
+                    }
+                }
+                PaletteOp::Remove(Item::Sound(i)) => {
                     if i < palette.sounds.len() {
                         palette.sounds.remove(i);
                     }
                 }
+                PaletteOp::Remove(Item::Device(i)) => {
+                    if i < palette.devices.len() {
+                        palette.devices.remove(i);
+                    }
+                }
                 PaletteOp::Only => palette.only ^= true,
                 PaletteOp::Clear => *palette = Palette::default(),
+                PaletteOp::Pick(_) => {}
             }
         });
     }
 
-    /// The Browser's sounds, opened to pick some for the agent; Done goes back.
-    pub fn pick_sounds(&mut self, cx: &mut Context<Self>) {
-        self.picking_sounds = true;
-        self.browse(Scope::Sounds, cx);
+    /// The Browser's sounds, instruments or effects, opened to pick some for the agent; Done
+    /// goes back.
+    pub fn pick_for_agent(&mut self, scope: Scope, cx: &mut Context<Self>) {
+        self.picking = true;
+        self.browse(scope, cx);
+    }
+
+    fn pick_menu(&mut self, at: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let items = [
+            ("Sounds…", Scope::Sounds),
+            ("Instruments…", Scope::Instruments),
+            ("Effects…", Scope::Effects),
+        ]
+        .map(|(label, s)| (label.to_string(), MenuAction::Palette(PaletteOp::Pick(s))))
+        .into();
+        self.menu = Some(Menu {
+            at,
+            items,
+            ..Default::default()
+        });
         cx.notify();
     }
 
     pub fn done_picking(&mut self, cx: &mut Context<Self>) {
-        self.picking_sounds = false;
+        self.picking = false;
         self.show_browser = false;
         self.show_agent = true;
         cx.notify();
@@ -207,28 +332,52 @@ impl Workspace {
     pub fn palette_note(&mut self) -> Option<String> {
         let palette = self.session.project.palette.clone();
         let heard = self.chat.palette_heard.replace(palette.clone());
-        if heard.as_ref() == Some(&palette) || (heard.is_none() && palette.sounds.is_empty()) {
+        if heard.as_ref() == Some(&palette) || (heard.is_none() && palette.none()) {
             return None;
         }
-        if palette.sounds.is_empty() {
+        if palette.none() {
             return Some(
-                "(The person took all the sounds out of their palette: choose your own.)".into(),
+                "(The person took everything out of their palette: choose your own sounds, \
+                 instruments and effects.)"
+                    .into(),
             );
         }
         let only = match palette.only {
-            true => "; make the song with these and no others",
+            true => "; make the song with these, and no others of each kind they picked",
             false => "; start with these, then fill what's missing",
         };
-        let lines: Vec<String> = palette
-            .sounds
-            .iter()
-            .map(|s| about(s, self.library_sound(&s.path).map(|(_, s)| s)))
-            .collect();
-        Some(format!(
-            "(Sounds the person picked for this song{only}. Put each in with samples_put, for its \
-             part; `palette` says which are in the song already.)\n{}",
-            lines.join("\n")
-        ))
+        let mut lines = vec![format!(
+            "(What the person picked for this song{only}. `palette` says which are in the song \
+             already.)"
+        )];
+        if !palette.sounds.is_empty() {
+            lines.push("Sounds, each put in with samples_put for its part:".into());
+            lines.extend(
+                palette
+                    .sounds
+                    .iter()
+                    .map(|s| about(s, self.library_sound(&s.path).map(|(_, s)| s))),
+            );
+        }
+        for (instrument, title) in [
+            (true, "Instruments, for set_instrument or add_track:"),
+            (
+                false,
+                "Effects, for set_insert (tempo's own with their own command):",
+            ),
+        ] {
+            let these: Vec<String> = palette
+                .devices
+                .iter()
+                .filter(|d| d.instrument == instrument)
+                .map(about_device)
+                .collect();
+            if !these.is_empty() {
+                lines.push(title.into());
+                lines.extend(these);
+            }
+        }
+        Some(lines.join("\n"))
     }
 
     fn hear_palette(&mut self, path: &Path, cx: &mut Context<Self>) {
@@ -243,14 +392,12 @@ impl Workspace {
         }
     }
 
-    fn role_menu(&mut self, i: usize, at: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
-        let now = self
-            .session
-            .project
-            .palette
-            .sounds
-            .get(i)
-            .and_then(|s| s.role.clone());
+    fn role_menu(&mut self, i: Item, at: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let palette = &self.session.project.palette;
+        let now = match i {
+            Item::Sound(i) => palette.sounds.get(i).and_then(|s| s.role.clone()),
+            Item::Device(i) => palette.devices.get(i).and_then(|d| d.role.clone()),
+        };
         let tick = |on: bool| if on { "✓ " } else { "" };
         let mut items = vec![(
             format!("{}Any part (the agent decides)", tick(now.is_none())),
@@ -271,14 +418,100 @@ impl Workspace {
         cx.notify();
     }
 
-    /// In the Agent panel's message box: the sounds picked for the agent, each to hear (click),
-    /// give a part (its tag) or take out; "only these", and more to pick.
+    /// A line of the palette's list: what it is, its name, its part (its tag's menu) and its ×.
+    fn palette_row(
+        &self,
+        item: Item,
+        lead: Div,
+        name: String,
+        role: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let (id, tag) = match item {
+            Item::Sound(i) => (i, "palette"),
+            Item::Device(i) => (i, "palette-device"),
+        };
+        div()
+            .id((tag, id))
+            .flex_none()
+            .h(px(26.))
+            .w_full()
+            .pl(px(6.))
+            .pr(px(3.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .rounded(px(8.))
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgb(LINE_STRONG))
+            .child(lead)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .text_size(px(11.5))
+                    .text_color(rgb(TEXT_2))
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(name),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(18.))
+                    .px(px(5.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(5.))
+                    .bg(alpha(AGENT, if role.is_some() { 0.16 } else { 0.06 }))
+                    .text_size(px(10.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(if role.is_some() { AGENT_TEXT } else { TEXT_3 }))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(alpha(AGENT, 0.26)))
+                    .debug_selector(move || format!("{tag}-role-{id}"))
+                    .child(role.as_deref().map_or("any".into(), capital))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            ws.role_menu(item, e.position, cx);
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .size(px(18.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(5.))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(rgb(LINE_STRONG)))
+                    .debug_selector(move || format!("{tag}-remove-{id}"))
+                    .child(icon(Icon::Close, 9.).text_color(rgb(TEXT_3)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| {
+                            cx.stop_propagation();
+                            ws.palette_op(PaletteOp::Remove(item), cx);
+                        }),
+                    ),
+            )
+    }
+
+    /// In the Agent panel's message box: the sounds, instruments and effects picked for the
+    /// agent, each to give a part (its tag) or take out, a sound to hear (click); "only these",
+    /// and more to pick.
     pub fn palette_card(&self, cx: &mut Context<Self>) -> Option<Div> {
         let palette = &self.session.project.palette;
-        if palette.sounds.is_empty() {
+        if palette.none() {
             return None;
         }
-        let chips = palette.sounds.iter().enumerate().map(|(i, sound)| {
+        let sounds = palette.sounds.iter().enumerate().map(|(i, sound)| {
             let found = self.library_sound(&sound.path).map(|(_, s)| s);
             let color = found.map_or(TEXT_3, |s| category_color(s.analysis.category));
             let name = sound
@@ -287,98 +520,56 @@ impl Workspace {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let path = sound.path.clone();
-            let role = sound.role.clone();
-            div()
-                .id(("palette-sound", i))
-                .flex_none()
-                .h(px(26.))
-                .w_full()
-                .pl(px(6.))
-                .pr(px(3.))
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .rounded(px(8.))
-                .bg(rgb(RAISED))
-                .border_1()
-                .border_color(rgb(LINE_STRONG))
+            let lead = match found {
+                Some(s) => div().w(px(24.)).h(px(14.)).flex_none().child(wave(
+                    s.analysis.waveform.clone(),
+                    color,
+                    0.9,
+                )),
+                None => div()
+                    .w(px(24.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon(Icon::Wave, 12.).text_color(rgb(color))),
+            };
+            self.palette_row(Item::Sound(i), lead, name, sound.role.clone(), cx)
                 .cursor_pointer()
                 .hover(|d| d.border_color(rgb(TEXT_4)))
-                .debug_selector(move || format!("palette-sound-{i}"))
-                .child(match found {
-                    Some(s) => div().w(px(24.)).h(px(14.)).flex_none().child(wave(
-                        s.analysis.waveform.clone(),
-                        color,
-                        0.9,
-                    )),
-                    None => div()
-                        .size(px(14.))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(icon(Icon::Wave, 12.).text_color(rgb(color))),
-                })
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .text_size(px(11.5))
-                        .text_color(rgb(TEXT_2))
-                        .whitespace_nowrap()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .child(name),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .h(px(18.))
-                        .px(px(5.))
-                        .flex()
-                        .items_center()
-                        .rounded(px(5.))
-                        .bg(alpha(AGENT, if role.is_some() { 0.16 } else { 0.06 }))
-                        .text_size(px(10.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(if role.is_some() { AGENT_TEXT } else { TEXT_3 }))
-                        .hover(|d| d.bg(alpha(AGENT, 0.26)))
-                        .debug_selector(move || format!("palette-role-{i}"))
-                        .child(role.as_deref().map_or("any".into(), capital))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                ws.role_menu(i, e.position, cx);
-                            }),
-                        ),
-                )
-                .child(
-                    div()
-                        .size(px(18.))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(5.))
-                        .hover(|d| d.bg(rgb(LINE_STRONG)))
-                        .debug_selector(move || format!("palette-remove-{i}"))
-                        .child(icon(Icon::Close, 9.).text_color(rgb(TEXT_3)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |ws, _, _, cx| {
-                                cx.stop_propagation();
-                                ws.palette_op(PaletteOp::Remove(i), cx);
-                            }),
-                        ),
-                )
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |ws, _, _, cx| ws.hear_palette(&path, cx)),
                 )
         });
+        let sounds: Vec<_> = sounds.collect();
+        // Instruments, then effects.
+        let mut order: Vec<usize> = (0..palette.devices.len()).collect();
+        order.sort_by_key(|&i| !palette.devices[i].instrument);
+        let devices: Vec<_> = order
+            .into_iter()
+            .map(|i| {
+                let d = &palette.devices[i];
+                let cat = self.catalog_device(d).map(|d| d.cat);
+                let color = cat.map_or(TEXT_3, |c| c.color());
+                let lead = div()
+                    .w(px(24.))
+                    .h(px(18.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(5.))
+                    .bg(alpha(color, 0.14))
+                    .child(match cat {
+                        Some(c) => c.glyph(12.).text_color(rgb(color)),
+                        None => icon(Icon::Plug, 11.).text_color(rgb(color)),
+                    });
+                self.palette_row(Item::Device(i), lead, d.name.clone(), d.role.clone(), cx)
+            })
+            .collect();
         let only = palette.only;
-        let n = palette.sounds.len();
+        let n = self.picked();
         Some(
             div()
                 .flex()
@@ -394,17 +585,22 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap(px(6.))
-                        .child(icon(Icon::Wave, 12.).text_color(rgb(AGENT)))
+                        .child(icon(Icon::Agent, 12.).text_color(rgb(AGENT)))
                         .child(
                             div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .text_ellipsis()
                                 .text_size(px(11.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(TEXT_2))
-                                .child(format!("Sounds to use · {n}")),
+                                .child(format!("For the agent · {n}")),
                         )
-                        .child(div().flex_1())
                         .child(
                             div()
+                                .flex_none()
                                 .px(px(4.))
                                 .text_size(px(10.5))
                                 .text_color(rgb(TEXT_4))
@@ -419,6 +615,7 @@ impl Workspace {
                         )
                         .child(
                             div()
+                                .flex_none()
                                 .h(px(22.))
                                 .px(px(8.))
                                 .flex()
@@ -450,62 +647,90 @@ impl Workspace {
                         )
                         .child(
                             icon_seg(Icon::Plus, false, 22.)
+                                .flex_none()
                                 .debug_selector(|| "palette-more".into())
                                 .on_mouse_down(
                                     MouseButton::Left,
-                                    cx.listener(|ws, _, _, cx| ws.pick_sounds(cx)),
+                                    cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        ws.pick_menu(e.position, cx)
+                                    }),
                                 ),
                         ),
                 )
                 // A list: five show, the rest scroll.
                 .child(
                     div()
-                        .id("palette-sounds")
+                        .id("palette-list")
                         .max_h(px(5.0 * 30.0))
                         .overflow_y_scroll()
                         .flex()
                         .flex_col()
                         .gap(px(4.))
-                        .children(chips),
+                        .children(sounds)
+                        .children(devices),
                 ),
         )
     }
 
-    /// With nothing picked: a quiet line atop the message box, to start picking.
+    /// With nothing picked: a quiet line atop the message box, to start picking sounds,
+    /// instruments or effects.
     pub fn palette_start(&self, cx: &mut Context<Self>) -> Option<Div> {
-        if !self.session.project.palette.sounds.is_empty() {
+        if !self.session.project.palette.none() {
             return None;
         }
+        let pick = |label: &'static str, scope: Scope, cx: &mut Context<Self>| {
+            div()
+                .h(px(22.))
+                .px(px(5.))
+                .flex()
+                .items_center()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .text_size(px(11.))
+                .text_color(rgb(TEXT_2))
+                .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+                .child(label)
+                .debug_selector(move || format!("palette-start-{label}"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| ws.pick_for_agent(scope, cx)),
+                )
+        };
+        let dot = || div().text_size(px(11.)).text_color(rgb(TEXT_4)).child("·");
         Some(
-            div().flex().px(px(8.)).pt(px(7.)).child(
-                div()
-                    .h(px(22.))
-                    .px(px(6.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .text_size(px(11.))
-                    .text_color(rgb(TEXT_3))
-                    .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT_2)))
-                    .child(icon(Icon::Wave, 11.).text_color(rgb(AGENT)))
-                    .child("Pick sounds for the agent")
-                    .debug_selector(|| "palette-start".into())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| ws.pick_sounds(cx)),
-                    ),
-            ),
+            div()
+                .flex()
+                .items_center()
+                .px(px(8.))
+                .pt(px(7.))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .pl(px(6.))
+                        .pr(px(1.))
+                        .text_size(px(11.))
+                        .text_color(rgb(TEXT_4))
+                        .child(icon(Icon::Agent, 11.).text_color(rgb(AGENT)))
+                        .child("Pick"),
+                )
+                .child(pick("sounds", Scope::Sounds, cx))
+                .child(dot())
+                .child(pick("instruments", Scope::Instruments, cx))
+                .child(dot())
+                .child(pick("effects", Scope::Effects, cx)),
         )
     }
 
     /// Over the Browser while picking for the agent: how many, and back to it.
     pub fn picking_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
-        if !self.picking_sounds {
+        if !self.picking {
             return None;
         }
-        let n = self.session.project.palette.sounds.len();
+        let n = self.picked();
         Some(
             div()
                 .flex_none()
@@ -528,14 +753,17 @@ impl Workspace {
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(AGENT_TEXT))
-                                .child("Picking sounds for the agent"),
+                                .child("Picking for the agent"),
                         )
                         .child(
                             div()
                                 .text_size(px(10.5))
                                 .text_color(rgb(TEXT_3))
                                 .child(match n {
-                                    0 => "＋ on a sound gives it to the agent".to_string(),
+                                    0 => {
+                                        "＋ on a sound, instrument or effect gives it to the agent"
+                                            .to_string()
+                                    }
                                     1 => "1 picked".to_string(),
                                     n => format!("{n} picked"),
                                 }),
@@ -573,6 +801,40 @@ impl Workspace {
             .file_stem()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        self.give_toggle(
+            on,
+            format!("give-agent-{name}"),
+            group,
+            cx,
+            move |ws, cx| ws.give_agent(path.clone(), cx),
+        )
+    }
+
+    /// The same on an instrument or effect in the Browser.
+    pub fn device_agent_button(&self, d: usize, group: &str, cx: &mut Context<Self>) -> Div {
+        let dev = &self.catalog.devices[d];
+        let on = self
+            .session
+            .project
+            .palette
+            .has_device(&palette_device(dev));
+        self.give_toggle(
+            on,
+            format!("give-agent-{}", dev.key),
+            group,
+            cx,
+            move |ws, cx| ws.give_agent_device(d, cx),
+        )
+    }
+
+    fn give_toggle(
+        &self,
+        on: bool,
+        id: String,
+        group: &str,
+        cx: &mut Context<Self>,
+        give: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+    ) -> Div {
         div()
             .size(px(22.))
             .flex_none()
@@ -587,11 +849,11 @@ impl Workspace {
                     .border_color(alpha(AGENT, 0.5))
                     .hover(|d| d.bg(alpha(AGENT, 0.18)))
             })
-            .when(!on && !self.picking_sounds, |d| {
+            .when(!on && !self.picking, |d| {
                 d.opacity(0.0)
                     .group_hover(group.to_string(), |s| s.opacity(1.0))
             })
-            .debug_selector(move || format!("give-agent-{name}"))
+            .debug_selector(move || id.clone())
             .child(
                 icon(if on { Icon::Check } else { Icon::Plus }, 11.).text_color(rgb(if on {
                     BG
@@ -603,7 +865,7 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(move |ws, _, _, cx| {
                     cx.stop_propagation();
-                    ws.give_agent(path.clone(), cx);
+                    give(ws, cx);
                 }),
             )
     }

@@ -29,7 +29,7 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
   `topbar.rs` (transport and display), `inspector.rs` (the Inspector, left of the tracks),
   `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`),
-  `palette.rs` (sounds picked for the agent)
+  `palette.rs` (sounds, instruments and effects picked for the agent)
   and `producer.rs` (its song strip, producer's path, critic, undo for a turn and selection),
   `sampler.rs` (the Sampler editor), `genres.rs` (the Playbooks page, where genres are read and changed), `study.rs` (the Song
   Study page) with `study_cli.rs` (studies kept, and lyrics, year and genre looked up),
@@ -189,14 +189,16 @@ In the app, mostly as in Logic:
   ones are kept for every song and `tempo ask` uses them too; changed mid-conversation, the
   conversation carries on with them from the next question. Edits by any other agent show there
   too.
-- Sounds for the agent: "Pick sounds for the agent" atop the Agent panel's message box (the + by
-  "Only these" once there are some) opens the Browser's sounds to
-  pick from (＋ on each, or "Agent" under the one picked; on the sample page too), and audio files
-  dropped on the Agent panel from the Finder are picked as well. They show in the message box:
-  click one to hear it, its tag to give it a part (kick, snare, hats, 808, bass, chords, pad,
-  lead… or any), × to take it out; "Only these" asks the agent to use these and no others. They're
-  kept with the song, and the agent is told them with the next message after they change (and
-  its `palette` tool lists them with what each is and whether it's in the song yet).
+- Sounds, instruments and effects for the agent: "Pick sounds · instruments · effects" atop the
+  Agent panel's message box (the + by "Only these" once there are some) opens the Browser there
+  to pick from (＋ on each sound, plugin or tempo device, or "Agent" under the sound picked; on
+  the sample page too), and audio files dropped on the Agent panel from the Finder are picked as
+  well. They show in the message box: click a sound to hear it, a tag to give it a part (kick,
+  snare, hats, 808, bass, chords, pad, lead… or any; an effect's is what it goes on), × to take
+  it out; "Only these" asks the agent to use these and no others of each kind picked. They're
+  kept with the song, and the agent is told them with the next message after they change, each
+  instrument and effect with how to put it in (and its `palette` tool lists them with what each
+  is and whether it's in the song yet).
 - Drag audio files (WAV, AIFF, FLAC, MP3) in from the Finder, or sounds from the browser, and
   they land on the timeline where they're let go: on the audio track there, or on a new audio
   track (under an instrument track, or under the tracks); several files, a track each. A sound
@@ -569,8 +571,7 @@ track's `"automation"` has `volume`, `pan`, `mute`, `sends` and `plugins` lanes 
 `"curve"`, `"ease"` or be a `"step"`) and a `mode`. Regions can have a
 `"name"`, a `"link"` (aliases share one), `"loop"`, `"transpose"`, `"velocity"` and `"quantize"`.
 The project can have a `"time_signature"`, `"markers"`, a `"key"`, a `"cycle"` and a `"palette"` of
-sounds picked for an agent (see `tempo
-describe`).
+sounds, instruments and effects picked for an agent (see `tempo describe`).
 
 The engine's tests that need a real plugin are opt-in, each format by its own variable:
 

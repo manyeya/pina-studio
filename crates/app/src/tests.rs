@@ -4133,19 +4133,21 @@ fn sounds_are_picked_for_the_agent_given_parts_and_told_it(cx: &mut TestAppConte
     let palette =
         |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.session.project.palette.clone());
     // Nothing picked: a chip in the message box opens the Browser's sounds to pick from.
-    click_on(cx, "palette-start", Modifiers::none(), MouseButton::Left);
-    let (picking, browser, scope) = ws.read_with(cx, |ws, _| {
-        (ws.picking_sounds, ws.show_browser, ws.catalog.scope)
-    });
+    click_on(
+        cx,
+        "palette-start-sounds",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    let (picking, browser, scope) =
+        ws.read_with(cx, |ws, _| (ws.picking, ws.show_browser, ws.catalog.scope));
     assert!(picking && browser && scope == crate::catalog::Scope::Sounds);
     assert!(cx.debug_bounds("picking-done").is_some());
     // A sound given (the library's ＋ does this), then back to the agent with Done.
     let drums = dir.join("Audio Files/drums.wav");
     ws.update(cx, |ws, cx| ws.give_agent(drums.clone(), cx));
     click_on(cx, "picking-done", Modifiers::none(), MouseButton::Left);
-    assert!(ws.read_with(cx, |ws, _| ws.show_agent
-        && !ws.show_browser
-        && !ws.picking_sounds));
+    assert!(ws.read_with(cx, |ws, _| ws.show_agent && !ws.show_browser && !ws.picking));
     assert_eq!(palette(cx).sounds.len(), 1);
     // In the message box: its part from its tag's menu, "only these".
     click_on(cx, "palette-role-0", Modifiers::none(), MouseButton::Left);
@@ -4179,6 +4181,41 @@ fn sounds_are_picked_for_the_agent_given_parts_and_told_it(cx: &mut TestAppConte
     assert_eq!(palette(cx).sounds.len(), 2);
     ws.update(cx, |ws, cx| ws.give_agent(keys.clone(), cx));
     assert!(!palette(cx).has(&keys));
+    // Instruments and effects too: the Browser's instruments, opened from the ＋'s menu, each
+    // with its own ＋; given a part, and told with how to put it in.
+    click_on(cx, "palette-more", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Instruments…");
+    assert!(ws.read_with(cx, |ws, _| ws.picking
+        && ws.catalog.scope == crate::catalog::Scope::Instruments));
+    click_on(
+        cx,
+        "give-agent-own:synth",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert_eq!(palette(cx).devices.len(), 1);
+    assert!(palette(cx).devices[0].instrument);
+    click_on(cx, "picking-done", Modifiers::none(), MouseButton::Left);
+    click_on(
+        cx,
+        "palette-device-role-0",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    pick(cx, &ws, "Pad");
+    let note = ws.update(cx, |ws, _| ws.palette_note()).unwrap();
+    assert!(
+        note.contains("Instruments")
+            && note.contains(r#"pad: "Sine Synth" — tempo's own: "instrument": "synth""#),
+        "{note}"
+    );
+    click_on(
+        cx,
+        "palette-device-remove-0",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert!(palette(cx).devices.is_empty());
     // Cleared: the agent hears it's on its own again; and it's kept in the song.
     click_on(cx, "palette-clear", Modifiers::none(), MouseButton::Left);
     assert!(palette(cx).is_empty());
@@ -4883,7 +4920,7 @@ fn shots() {
                     cx.notify();
                 }
                 // Sounds picked for the agent: in its message box, and the Browser picking them.
-                "palette" | "palette-pick" => {
+                "palette" | "palette-pick" | "palette-start" => {
                     use tempo_engine::{project::PaletteSound, samples::Category};
                     if ws.browser.library.samples.is_empty() {
                         ws.browser.library = tempo_engine::samples::library::Library::load();
@@ -4907,14 +4944,24 @@ fn shots() {
                             });
                         }
                     }
-                    if let Some(s) = sounds.get_mut(4) {
+                    sounds.truncate(3);
+                    if let Some(s) = sounds.get_mut(2) {
                         s.role = None;
                     }
                     ws.session.project.palette.sounds = sounds;
+                    ws.session.project.palette.devices = ["own:synth", "own:comp"]
+                        .iter()
+                        .filter_map(|k| ws.catalog.device(k))
+                        .map(|d| crate::palette::palette_device(&ws.catalog.devices[d]))
+                        .collect();
+                    ws.session.project.palette.devices[0].role = Some("lead".into());
                     ws.session.project.palette.only = true;
                     ws.show_agent = true;
                     if page == "palette-pick" {
-                        ws.pick_sounds(cx);
+                        ws.pick_for_agent(crate::catalog::Scope::Instruments, cx);
+                    }
+                    if page == "palette-start" {
+                        ws.session.project.palette = Default::default();
                     }
                     cx.notify();
                 }

@@ -18,8 +18,8 @@ finished, work as a producer: `playbook` for the genre, `theory` for chords, wri
 write_* commands (tempo gets the notes right), `sounds` for real instruments, `critique` after \
 every step and fix what it says, `arrange` and `transition` for the song's shape, `mix` and \
 `master` to finish. `critique` is your ears: trust it over your guesses. The person may have \
-picked sounds for the song (`palette`): build with those first, and with only those if they say \
-so.";
+picked sounds, instruments and effects for the song (`palette`): build with those first, and with \
+only those if they say so.";
 
 fn tools() -> Value {
     let project = json!({ "type": "string", "description": "The project folder." });
@@ -286,7 +286,7 @@ fn tools() -> Value {
         },
         {
             "name": "palette",
-            "description": "The sounds the person picked for this song in tempo, for you to make it with: each one's file, what it is (one-shot or loop, its category, note or key, tempo), the part it's for if they said (`role`), and whether it's in the song yet (`in_song`); `only` means they want these and no others. Check it before choosing sounds yourself.",
+            "description": "The sounds, instruments and effects the person picked for this song in tempo, for you to make it with: each sound's file and what it is (one-shot or loop, its category, note or key, tempo); each instrument and effect with how to put it in (`use`: a plugin as set_instrument and set_insert take it, or tempo's own command); the part each is for if they said (`role`), and whether it's in the song yet (`in_song`). `only` means they want these and no others of each kind they picked. Check it before choosing sounds, instruments or effects yourself.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "project": project },

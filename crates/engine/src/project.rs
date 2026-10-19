@@ -74,12 +74,15 @@ pub struct Project {
     pub palette: Palette,
 }
 
-/// Sounds the person picked for an agent to make the song with: audio files, each with the part
-/// it's for if they said; `only` asks for these and no others.
+/// What the person picked for an agent to make the song with: sounds (audio files) and devices
+/// (instruments and effects), each with the part it's for if they said; `only` asks for these
+/// and no others of each kind picked.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Palette {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sounds: Vec<PaletteSound>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<PaletteDevice>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub only: bool,
 }
@@ -92,13 +95,48 @@ pub struct PaletteSound {
     pub role: Option<String>,
 }
 
+/// An instrument or effect picked for the agent: tempo's own (`own`: "synth", "drums",
+/// "sampler", "eq", "comp" or "sat") or a plugin, as `set_instrument` and `set_insert` take it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PaletteDevice {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub instrument: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<PluginRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
+
+impl PaletteDevice {
+    /// The same device: tempo's own by name, a plugin by its class in its bundle.
+    pub fn same(&self, other: &PaletteDevice) -> bool {
+        match (&self.plugin, &other.plugin) {
+            (Some(a), Some(b)) => a.class == b.class && a.path == b.path,
+            (None, None) => self.own == other.own,
+            _ => false,
+        }
+    }
+}
+
 impl Palette {
     pub fn is_empty(&self) -> bool {
-        self.sounds.is_empty() && !self.only
+        self.sounds.is_empty() && self.devices.is_empty() && !self.only
     }
 
     pub fn has(&self, path: &Path) -> bool {
         self.sounds.iter().any(|s| s.path == path)
+    }
+
+    pub fn has_device(&self, d: &PaletteDevice) -> bool {
+        self.devices.iter().any(|x| x.same(d))
+    }
+
+    /// Nothing picked (`only` aside).
+    pub fn none(&self) -> bool {
+        self.sounds.is_empty() && self.devices.is_empty()
     }
 }
 
@@ -2391,6 +2429,29 @@ impl Project {
             let zone = matches!(&t.instrument, Some(Instrument::Sampler(s))
                 if s.zones.iter().any(|z| z.file.file_name() == Some(name)));
             audio || zone
+        })
+    }
+
+    /// Whether a device picked for the agent is on a track (or an aux, or the master) yet.
+    pub fn uses_device(&self, d: &PaletteDevice) -> bool {
+        if let Some(r) = &d.plugin {
+            let same = |x: &PluginRef| x.class == r.class && x.path == r.path;
+            let plays = |t: &Track| matches!(&t.instrument, Some(Instrument::Plugin(x)) if same(x));
+            return self
+                .tracks
+                .iter()
+                .any(|t| plays(t) || t.inserts.iter().any(same))
+                || self.auxes.iter().flat_map(|a| &a.inserts).any(same)
+                || self.master_inserts.iter().any(same);
+        }
+        self.tracks.iter().any(|t| match d.own.as_deref() {
+            Some("synth") => matches!(t.instrument, Some(Instrument::Synth)),
+            Some("drums") => matches!(t.instrument, Some(Instrument::Drums)),
+            Some("sampler") => matches!(t.instrument, Some(Instrument::Sampler(_))),
+            Some("eq") => t.eq.is_some(),
+            Some("comp") => t.comp.is_some(),
+            Some("sat") => t.sat.is_some(),
+            _ => false,
         })
     }
 

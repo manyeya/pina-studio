@@ -1096,7 +1096,7 @@ impl Workspace {
     pub fn toggle_samples(&mut self, cx: &mut Context<Self>) {
         self.show_browser = self.view != View::Arrange || !self.show_browser;
         self.show_agent &= !self.show_browser;
-        self.picking_sounds &= self.show_browser;
+        self.picking &= self.show_browser;
         self.view = View::Arrange;
         self.browser.focus_search = self.show_browser;
         cx.notify();

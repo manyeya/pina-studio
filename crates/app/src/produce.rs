@@ -1065,8 +1065,8 @@ pub const WORKFLOW: &str = "0. Asked for a song like an existing one: study <fil
 and use the playbook it saves as the genre. \
 1. playbook <genre>, then set_genre, set_tempo and set_key from it. \
 2. Chords first: theory for progressions, set_chords. \
-3. A loop of 4-8 bars: tracks for its parts; the person's palette first (palette: the sounds \
-they picked, samples_put each for its role), then sounds <role> for the rest (any installed \
+3. A loop of 4-8 bars: tracks for its parts; the person's palette first (palette: the sounds, \
+instruments and effects they picked, each for its role), then sounds <role> for the rest (any installed \
 instrument's presets, or samples) instead of the sine synth or built-in kit; write_drums, write_bass \
 (style kick for an 808), write_chords, write_melody. \
 4. critique quick: fix every \"fix\"; render a bar range and listen-check with analyze. \
