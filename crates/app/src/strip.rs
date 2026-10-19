@@ -12,7 +12,7 @@ use gpui::{
 use tempo_engine::{
     dsp::{LOW_CUT_OFF, eq_response},
     player::{MASTER_ID, Which},
-    project::{AutoMode, Comp, Eq, Input, Instrument, Param, PluginRef, Saturator, value_at},
+    project::{Comp, Eq, Input, Instrument, Param, PluginRef, Saturator},
 };
 
 use crate::{
@@ -249,15 +249,6 @@ impl Workspace {
             Channel::Aux(i) => p.auxes[i].volume_db,
             Channel::Master => p.master_volume_db,
         }
-    }
-
-    /// A track parameter's value at the playhead, while automation plays it.
-    pub fn automated(&self, track: usize, param: Param) -> Option<f32> {
-        let a = &self.session.project.tracks.get(track)?.automation;
-        if a.mode == AutoMode::Off {
-            return None;
-        }
-        value_at(a.points(param), self.playhead() as f64)
     }
 
     /// A channel's built-in saturator.
@@ -895,8 +886,8 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
     let (pan, mute, solo, id) = match ch {
         Channel::Track(i) => {
             let t = &project.tracks[i];
-            let pan = ws.automated(i, Param::Pan).unwrap_or(t.pan);
-            (Some(pan), Some(t.mute), Some(t.solo), Some(t.id))
+            let pan = ws.now_value(i, Param::Pan);
+            (Some(pan), Some(ws.muted_now(i)), Some(t.solo), Some(t.id))
         }
         Channel::Aux(i) => {
             let a = &project.auxes[i];
@@ -1037,7 +1028,8 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
     if let Channel::Track(track) = ch {
         let list = &project.tracks[track].sends;
         for (index, s) in list.iter().enumerate() {
-            let (level, pre) = (s.level_db, s.pre);
+            let (level, pre) = (ws.now_value(track, Param::Send(s.bus)), s.pre);
+            let send_bus = s.bus;
             let bus = project
                 .auxes
                 .iter()
@@ -1062,7 +1054,8 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                             cx.stop_propagation();
                             if e.modifiers.alt {
                                 ws.edit(cx, |ws| {
-                                    ws.session.project.tracks[track].sends[index].level_db = 0.0
+                                    ws.session.project.tracks[track].sends[index].level_db = 0.0;
+                                    ws.moved_once(track, Param::Send(send_bus), 0.0);
                                 });
                             } else {
                                 let y = f32::from(e.position.y);
@@ -1157,7 +1150,12 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                     cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
                         if e.modifiers.alt {
-                            ws.edit(cx, |ws| ws.set_pan(ch, 0.0));
+                            ws.edit(cx, |ws| {
+                                ws.set_pan(ch, 0.0);
+                                if let Channel::Track(i) = ch {
+                                    ws.moved_once(i, Param::Pan, 0.0);
+                                }
+                            });
                         } else {
                             let y = f32::from(e.position.y);
                             ws.begin_drag(
@@ -1207,7 +1205,13 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
         .flex_none()
         .flex()
         .gap(px(4.))
-        .child(readout(db_text(volume), TEXT_2))
+        .child(readout(
+            db_text(volume),
+            match ch {
+                Channel::Track(i) => ws.auto_mark(i, Param::Volume).unwrap_or(TEXT_2),
+                _ => TEXT_2,
+            },
+        ))
         .child(readout(
             db_text(if peak_db < -100.0 { SILENT } else { peak_db }),
             if peak_db > 0.0 {
@@ -1310,7 +1314,12 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
             cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
                 if e.modifiers.alt {
-                    ws.edit(cx, |ws| ws.set_volume(ch, 0.0));
+                    ws.edit(cx, |ws| {
+                        ws.set_volume(ch, 0.0);
+                        if let Channel::Track(i) = ch {
+                            ws.moved_once(i, Param::Volume, 0.0);
+                        }
+                    });
                 } else {
                     let y = f32::from(e.position.y);
                     ws.begin_drag(
@@ -1341,7 +1350,11 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                         cx.listener(move |ws, _, _, cx| {
                             cx.stop_propagation();
                             ws.edit(cx, |ws| match ch {
-                                Channel::Track(i) => ws.session.project.tracks[i].mute ^= true,
+                                Channel::Track(i) => {
+                                    let m = !ws.muted_now(i);
+                                    ws.session.project.tracks[i].mute = m;
+                                    ws.moved_once(i, Param::Mute, m as u8 as f32);
+                                }
                                 Channel::Aux(i) => ws.session.project.auxes[i].mute ^= true,
                                 Channel::Master => {}
                             });
@@ -1428,6 +1441,46 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                     }),
                 )
         }),
+    };
+
+    // A track's automation mode, as Logic's strips have it: lit in its colour, click for the
+    // others.
+    let auto_button = match ch {
+        Channel::Track(i) => {
+            let mode = project.tracks[i].automation.mode;
+            let c = crate::automation::mode_color(mode);
+            let on = mode != tempo_engine::project::AutoMode::Off;
+            Some(
+                div()
+                    .flex_none()
+                    .h(px(18.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(5.))
+                    .rounded(px(5.))
+                    .bg(alpha(c, if on { 0.12 } else { 0.05 }))
+                    .border_1()
+                    .border_color(alpha(c, if on { 0.35 } else { 0.15 }))
+                    .text_size(px(10.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(c))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(alpha(c, 0.2)))
+                    .debug_selector(move || format!("strip-auto-{i}"))
+                    .child(div().size(px(5.)).rounded(px(3.)).bg(rgb(c)))
+                    .child(mode.name())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            ws.mode_menu(i, e.position, cx);
+                        }),
+                    ),
+            )
+        }
+        // Buses have none; the space keeps their faders level with the tracks'.
+        _ => Some(div().flex_none().h(px(18.))),
     };
 
     let reduction = ws.reductions.get(&id).copied().unwrap_or(0.0);
@@ -1535,6 +1588,7 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
             )
         })
         .when(mixer, |d| d.child(output))
+        .children(auto_button)
         .child(pan_row)
         .child(readouts)
         .child(fader)

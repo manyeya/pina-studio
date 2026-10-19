@@ -32,7 +32,7 @@ use tempo_engine::{
 
 use crate::{
     context::RegionOp,
-    menu::{Menu, MenuAction},
+    menu::Menu,
     pianoroll::RollOp,
     strip::{self, Channel},
     text::{TextEvent, TextInput},
@@ -418,12 +418,46 @@ pub enum Drag {
         last: Option<i64>,
         erase: bool,
     },
-    /// An automation point.
+    /// Automation points, the one held by index (the rest selected with it), from a window
+    /// position.
     Auto {
         track: usize,
         param: Param,
+        k: usize,
         index: usize,
         moved: bool,
+    },
+    /// The line between two points, both ends up or down with it.
+    AutoLine {
+        track: usize,
+        param: Param,
+        k: usize,
+        y: f32,
+        moved: bool,
+    },
+    /// A line's bend, from its middle.
+    AutoBend {
+        track: usize,
+        param: Param,
+        index: usize,
+        y: f32,
+        curve: f32,
+    },
+    /// A marquee over a lane's points (to select, or with the eraser to take out), window
+    /// positions; ⌘ puts a point clicked off the grid.
+    AutoMarquee {
+        track: usize,
+        k: usize,
+        from: (f32, f32),
+        to: (f32, f32),
+        erase: bool,
+        free: bool,
+    },
+    /// The pencil drawing a lane, from its last point.
+    AutoDraw {
+        track: usize,
+        param: Param,
+        last: (u64, f32),
     },
     /// A piano roll key held down, sounding.
     Key {
@@ -848,8 +882,23 @@ pub struct Workspace {
     pub editor_h: f32,
     /// The compact sample browser's width, as dragged.
     pub panel_w: f32,
-    /// Which parameter each track's automation shows, by track id.
-    pub params: HashMap<u64, Param>,
+    /// The parameters each track's automation lanes show, top to bottom, by track id.
+    pub auto_lanes: HashMap<u64, Vec<Param>>,
+    /// Automation points selected, the lane last worked on, points copied, and a lane as it was
+    /// when a drag on it began.
+    pub auto_picked: Option<crate::automation::Picked>,
+    pub auto_focus: Option<(u64, Param)>,
+    pub auto_clip: Option<tempo_engine::project::AutoClip>,
+    pub auto_grab: Vec<tempo_engine::project::AutoPoint>,
+    /// Controls a hand has taken over from their automation, those being trimmed, and those
+    /// recorded this pass (to thin when it ends).
+    pub taken: HashMap<(u64, Param), crate::automation::Live>,
+    pub touches: HashMap<(u64, Param), crate::automation::Touch>,
+    pub written: std::collections::HashSet<(u64, Param)>,
+    /// The lines Touch is recording over, as they were.
+    pub recorded: HashMap<(u64, Param), Vec<tempo_engine::project::AutoPoint>>,
+    /// Whether the song was playing last frame, to tell a pass starting or ending.
+    pub was_playing: bool,
     /// What each group of aliases played after the last edit, to tell which one changed.
     links: HashMap<u64, Content>,
     /// Automation being recorded (Touch or Latch), by track id and parameter: the last tick
@@ -1030,7 +1079,16 @@ impl Workspace {
             show_automation: false,
             editor_h: EDITOR_H,
             panel_w: crate::browser::PANEL_W,
-            params: HashMap::new(),
+            auto_lanes: HashMap::new(),
+            auto_picked: None,
+            auto_focus: None,
+            auto_clip: None,
+            auto_grab: Vec::new(),
+            taken: HashMap::new(),
+            touches: HashMap::new(),
+            written: Default::default(),
+            recorded: HashMap::new(),
+            was_playing: false,
             links,
             writing: HashMap::new(),
             recording: None,
@@ -1120,7 +1178,7 @@ impl Workspace {
 
     /// A track's row: its lane, and its automation lane under it while automation shows.
     pub fn row_h_of(&self, i: usize) -> f32 {
-        self.lane_h(i) + if self.show_automation { AUTO_H } else { 0.0 }
+        self.lane_h(i) + self.autos_h(i)
     }
 
     /// Track `i`'s lane height, as dragged (the usual, past the last track).
@@ -1197,6 +1255,15 @@ impl Workspace {
 
     /// What the engine plays: the project, or in pattern mode just the selected region, looped.
     fn engine_project(&self) -> Cow<'_, Project> {
+        let mut p = self.pattern_project();
+        // Controls a hand has taken over play as it has them.
+        if !self.taken.is_empty() {
+            self.without_live(p.to_mut());
+        }
+        p
+    }
+
+    fn pattern_project(&self) -> Cow<'_, Project> {
         let project = &self.session.project;
         let Some(((t, r), ..)) = self.pattern.filter(|&((t, r), ..)| {
             self.pattern_mode && project.tracks.get(t).is_some_and(|t| r < t.regions.len())
@@ -1252,17 +1319,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The parameter a track's automation lane shows: the one picked, else the first with
-    /// points, else volume.
-    pub fn lane_param(&self, track: usize) -> Param {
-        let t = &self.session.project.tracks[track];
-        self.params
-            .get(&t.id)
-            .copied()
-            .or_else(|| t.automation.params().first().copied())
-            .unwrap_or_default()
-    }
-
     /// The editor's height: as dragged, but never so tall the tracks lose their room, nor so
     /// short its tools don't fit.
     pub fn editor_height(&self) -> f32 {
@@ -1284,6 +1340,11 @@ impl Workspace {
         match param {
             Param::Volume => "Volume".into(),
             Param::Pan => "Pan".into(),
+            Param::Mute => "Mute".into(),
+            Param::Send(bus) => {
+                let aux = self.session.project.auxes.iter().find(|a| a.bus == bus);
+                format!("Send to {}", aux.map_or("a bus", |a| a.name.as_str()))
+            }
             Param::Plugin(which, id) => t
                 .automation
                 .plugins
@@ -1295,105 +1356,6 @@ impl Workspace {
                     params.into_iter().find(|p| p.id == id).map(|p| p.name)
                 })
                 .unwrap_or_else(|| format!("Parameter {id}")),
-        }
-    }
-
-    /// What a track's automation lane can show: volume, pan, and every parameter of its
-    /// plugins, those with automation marked.
-    pub fn auto_params(&self, track: usize) -> Vec<(String, MenuAction)> {
-        let t = &self.session.project.tracks[track];
-        let id = t.id;
-        let mark = |p: Param| match t.automation.points(p).is_empty() {
-            true => "",
-            false => "● ",
-        };
-        let mut items: Vec<(String, MenuAction)> = [Param::Volume, Param::Pan]
-            .into_iter()
-            .map(|p| {
-                let label = format!("{}{}", mark(p), self.param_name(track, p));
-                (label, MenuAction::AutoParam(id, p))
-            })
-            .collect();
-        let plugins = std::iter::once(Which::Instrument)
-            .chain((0..t.inserts.len()).map(Which::Insert))
-            .filter(|&w| t.plugin(w).is_some());
-        for which in plugins {
-            let name = self.plugin_name(track, which);
-            items.push((name.clone(), MenuAction::Nothing));
-            for p in self.player.params(id, which) {
-                let param = Param::Plugin(which, p.id);
-                let label = format!("{}{name}: {}", mark(param), p.name);
-                items.push((label, MenuAction::AutoParam(id, param)));
-            }
-        }
-        items
-    }
-
-    /// While the song plays, a control moved on a track whose automation is in Touch or Latch
-    /// records its value at the playhead.
-    pub fn record_auto(&mut self, track: usize, param: Param, value: f32) {
-        if !self.player.playing() {
-            return;
-        }
-        let name = matches!(param, Param::Plugin(..)).then(|| self.param_name(track, param));
-        let tick = self.playhead();
-        let Some(t) = self.session.project.tracks.get_mut(track) else {
-            return;
-        };
-        if !t.automation.mode.writes() {
-            return;
-        }
-        let key = (t.id, param);
-        let after = self.writing.get(&key).map(|w| w.0);
-        t.automation.write(param, after, tick, value);
-        if let Some(name) = name {
-            t.automation.name(param, &name);
-        }
-        self.writing.insert(key, (tick, value, true));
-        self.params.insert(t.id, param);
-    }
-
-    /// Lets go of a control: Touch stops recording it, Latch carries on with its last value until
-    /// playback stops.
-    pub fn release_auto(&mut self, track: usize, param: Param) {
-        let Some(t) = self.session.project.tracks.get(track) else {
-            return;
-        };
-        let (key, latch) = ((t.id, param), t.automation.mode == AutoMode::Latch);
-        match latch {
-            true => {
-                if let Some(w) = self.writing.get_mut(&key) {
-                    w.2 = false;
-                }
-            }
-            false => drop(self.writing.remove(&key)),
-        }
-    }
-
-    /// Each frame while recording automation, held and latched controls keep writing their
-    /// value as the playhead moves; when playback stops, recording does.
-    fn keep_writing(&mut self, cx: &mut Context<Self>) {
-        if self.writing.is_empty() {
-            return;
-        }
-        if !self.player.playing() {
-            self.writing.clear();
-            return;
-        }
-        let tick = self.playhead();
-        let mut wrote = false;
-        for (&(id, param), w) in self.writing.iter_mut() {
-            let Some(t) = self.session.project.tracks.iter_mut().find(|t| t.id == id) else {
-                continue;
-            };
-            if tick > w.0 {
-                t.automation.write(param, Some(w.0), tick, w.1);
-                w.0 = tick;
-                wrote = true;
-            }
-        }
-        if wrote {
-            self.changed(cx);
         }
     }
 
@@ -1493,12 +1455,14 @@ impl Workspace {
         // A volume or pan typed: set if it reads as one.
         if let (Name::Volume(i) | Name::Pan(i), Some(text)) = (what, &text) {
             match (what, strip::parse_db(text), strip::parse_pan(text)) {
-                (Name::Volume(_), Some(db), _) => {
-                    self.edit(cx, |ws| ws.set_volume(Channel::Track(i), db))
-                }
-                (Name::Pan(_), _, Some(pan)) => {
-                    self.edit(cx, |ws| ws.set_pan(Channel::Track(i), pan))
-                }
+                (Name::Volume(_), Some(db), _) => self.edit(cx, |ws| {
+                    ws.set_volume(Channel::Track(i), db);
+                    ws.moved_once(i, Param::Volume, db);
+                }),
+                (Name::Pan(_), _, Some(pan)) => self.edit(cx, |ws| {
+                    ws.set_pan(Channel::Track(i), pan);
+                    ws.moved_once(i, Param::Pan, pan);
+                }),
                 (Name::Volume(_), ..) => {
                     self.status = Some(format!("{text:?} isn't a level: type dB, as -6 or 0"))
                 }
@@ -1534,13 +1498,15 @@ impl Workspace {
         self.swiped = Some((what, now));
         match what {
             Name::Volume(i) => {
-                let pos = strip::fader_pos(self.session.project.tracks[i].volume_db);
+                let pos = strip::fader_pos(self.now_value(i, Param::Volume));
                 let db = strip::fader_db((pos + dx * 0.002).clamp(0.0, 1.0));
                 self.set_volume(Channel::Track(i), db);
+                self.moved_once(i, Param::Volume, db);
             }
             Name::Pan(i) => {
-                let pan = (self.session.project.tracks[i].pan + dx * 0.004).clamp(-1.0, 1.0);
+                let pan = (self.now_value(i, Param::Pan) + dx * 0.004).clamp(-1.0, 1.0);
                 self.set_pan(Channel::Track(i), pan);
+                self.moved_once(i, Param::Pan, pan);
             }
             _ => return,
         }
@@ -1596,6 +1562,8 @@ impl Workspace {
                 | Drag::Modulator { .. }
                 | Drag::ZoomSpan
                 | Drag::SoloHold
+                | Drag::AutoMarquee { .. }
+                | Drag::AutoDraw { .. }
         );
         if edits {
             self.session.checkpoint();
@@ -1610,6 +1578,7 @@ impl Workspace {
             Drag::Region { moved, .. }
             | Drag::Notes { moved, .. }
             | Drag::Auto { moved, .. }
+            | Drag::AutoLine { moved, .. }
             | Drag::Cycle { moved, .. }
             | Drag::Marker { moved, .. },
         ) = &mut self.drag
@@ -1693,7 +1662,7 @@ impl Workspace {
                 let db = strip::fader_db((pos - (p.y - y) / height).clamp(0.0, 1.0));
                 self.set_volume(channel, db);
                 if let Channel::Track(t) = channel {
-                    self.record_auto(t, Param::Volume, db);
+                    self.moved(t, Param::Volume, db);
                 }
             }
             Some(Drag::Pan { channel, x, y, pan }) => {
@@ -1710,7 +1679,7 @@ impl Workspace {
                 let pan = to;
                 self.set_pan(channel, pan);
                 if let Channel::Track(t) = channel {
-                    self.record_auto(t, Param::Pan, pan);
+                    self.moved(t, Param::Pan, pan);
                 }
             }
             Some(Drag::Send {
@@ -1721,6 +1690,8 @@ impl Workspace {
             }) => {
                 let db = (level - (p.y - y) / 2.0).clamp(strip::SILENT, 6.0);
                 self.session.project.tracks[track].sends[index].level_db = db;
+                let bus = self.session.project.tracks[track].sends[index].bus;
+                self.moved(track, Param::Send(bus), db);
             }
             Some(Drag::Tempo { y, bpm }) => {
                 let to = (bpm + ((y - p.y) / 4.0) as f64).round().clamp(20.0, 400.0);
@@ -1779,7 +1750,7 @@ impl Workspace {
                 }
                 let db = strip::fader_db(pos);
                 self.set_volume(Channel::Track(track), db);
-                self.record_auto(track, Param::Volume, db);
+                self.moved(track, Param::Volume, db);
             }
             Some(Drag::Orbit { x, y, yaw, pitch }) => {
                 self.orbit = (
@@ -1847,15 +1818,28 @@ impl Workspace {
             Some(Drag::Auto {
                 track,
                 param,
+                k,
                 index,
                 ..
-            }) => {
-                let tick = self.snap(self.tick_at(p.x));
-                let value = self.auto_value(track, param, p.y);
-                self.session.project.tracks[track]
-                    .automation
-                    .set(param, index, tick, value);
+            }) => self.drag_points(track, param, k, index, p),
+            Some(Drag::AutoLine {
+                track, param, k, y, ..
+            }) => self.drag_line(track, param, k, y, p),
+            Some(Drag::AutoBend {
+                track,
+                param,
+                index,
+                y,
+                curve,
+            }) => self.drag_bend(track, param, index, y, curve, p),
+            Some(Drag::AutoMarquee { .. }) => {
+                if let Some(Drag::AutoMarquee { to, .. }) = &mut self.drag {
+                    *to = (p.x, p.y);
+                }
+                cx.notify();
+                return;
             }
+            Some(Drag::AutoDraw { track, param, last }) => self.drag_draw(track, param, last, p),
             Some(Drag::Comp { at, .. }) => {
                 let tick = self.region_tick(at, p.x);
                 if let Some(Drag::Comp { to, .. }) = &mut self.drag {
@@ -1888,7 +1872,7 @@ impl Workspace {
                 let v = (value - (p.y - y) / 150.0).clamp(0.0, 1.0);
                 self.set_target(target, v);
                 if let Some((t, param)) = self.target_param(target) {
-                    self.record_auto(t, param, v);
+                    self.moved(t, param, v);
                 }
             }
             Some(Drag::Slider {
@@ -1898,6 +1882,11 @@ impl Workspace {
             }) => {
                 let v = ((p.x - left) / width.max(1.0)).clamp(0.0, 1.0);
                 self.set_slider(slider, v);
+                if let Slider::Send { track, index } = slider {
+                    let s = &self.session.project.tracks[track].sends[index];
+                    let (bus, db) = (s.bus, s.level_db);
+                    self.moved(track, Param::Send(bus), db);
+                }
                 if !matches!(slider, Slider::Send { .. }) {
                     cx.notify();
                     return;
@@ -1952,6 +1941,29 @@ impl Workspace {
     }
 
     fn end_drag(&mut self, cx: &mut Context<Self>) {
+        // With "Automation moves with regions", a region moved takes what's under it along.
+        if self.settings.carry_automation
+            && let Some(Drag::Region {
+                at,
+                edge: Edge::Move,
+                start,
+                end,
+                track,
+                moved: true,
+                copy,
+                ..
+            }) = self.drag
+            && let Some(r) = self
+                .session
+                .project
+                .tracks
+                .get(at.0)
+                .and_then(|t| t.regions.get(at.1))
+        {
+            let to = (at.0, r.start);
+            self.carry_automation((track, start, end), to, copy);
+            self.changed(cx);
+        }
         match self.drag {
             Some(Drag::ZoomSpan) => self.zoom_release(cx),
             Some(Drag::SoloHold) => self.solo_release(cx),
@@ -1993,15 +2005,49 @@ impl Workspace {
                 ..
             }) => Some((t, Param::Pan)),
             Some(Drag::Knob { target, .. }) => self.target_param(target),
+            Some(Drag::Send { track, index, .. })
+            | Some(Drag::Slider {
+                slider: Slider::Send { track, index },
+                ..
+            }) => {
+                let bus = self.session.project.tracks[track].sends[index].bus;
+                Some((track, Param::Send(bus)))
+            }
             _ => None,
         };
+        // A hand on a control lets go with the mouse: the engine hears its automation again.
+        let held = !self.touches.is_empty()
+            || self
+                .taken
+                .values()
+                .any(|l| *l == crate::automation::Live::Held);
         if let Some((t, param)) = released {
-            self.release_auto(t, param);
+            self.let_go(t, param);
+        }
+        if held {
+            self.let_go_all();
+            self.changed(cx);
+        }
+        match self.drag {
+            Some(Drag::AutoMarquee {
+                track,
+                k,
+                from,
+                to,
+                erase,
+                free,
+            }) => self.marquee_done(track, k, from, to, erase, free, cx),
+            Some(Drag::AutoDraw { track, param, .. }) => {
+                self.draw_done(track, param);
+                self.changed(cx);
+            }
+            _ => {}
         }
         if let Some(
             Drag::Region { moved: false, .. }
             | Drag::Notes { moved: false, .. }
             | Drag::Auto { moved: false, .. }
+            | Drag::AutoLine { moved: false, .. }
             | Drag::Marker { moved: false, .. },
         ) = self.drag
         {
@@ -2246,6 +2292,9 @@ impl Workspace {
     }
 
     fn delete(&mut self, cx: &mut Context<Self>) {
+        if self.delete_picked(cx) {
+            return;
+        }
         let notes_shown = matches!(self.bottom, Some(Bottom::PianoRoll | Bottom::Score));
         if let (Some(at), false, true) = (self.region, self.picked.is_empty(), notes_shown) {
             self.delete_notes(at, cx);
@@ -2406,13 +2455,6 @@ impl Workspace {
         }
     }
 
-    /// The parameter value at a window y position in a track's automation lane.
-    pub fn auto_value(&self, track: usize, param: Param, y: f32) -> f32 {
-        let top =
-            f32::from(self.lanes_bounds.get().origin.y) + self.row_top(track) + self.lane_h(track);
-        crate::tracks::auto_from_y(param, y - top)
-    }
-
     /// Moves or resizes a note in the piano roll by `d` pixels from where the drag began.
     fn zoom(&mut self, by: f32, cx: &mut Context<Self>) {
         self.px_per_beat = (self.px_per_beat * by).clamp(4.0, 800.0);
@@ -2515,8 +2557,8 @@ impl Workspace {
             Slider::Swing => (self.roll.swing - 50.0) / 25.0,
             Slider::Zoom => (self.px_per_beat / 4.0).ln() / 200f32.ln(),
             Slider::Send { track, index } => {
-                let db = self.session.project.tracks[track].sends[index].level_db;
-                strip::fader_pos(db)
+                let bus = self.session.project.tracks[track].sends[index].bus;
+                strip::fader_pos(self.now_value(track, Param::Send(bus)))
             }
             Slider::Aspect(i) => *crate::browser::aspect(&mut self.browser.aspects.clone(), i),
             Slider::Azimuth(t) | Slider::Elevation(t) | Slider::Distance(t) => {
@@ -2834,7 +2876,7 @@ impl Workspace {
                 "Double-click writes · drag a band to pick · ⌥-drag copies · ↑↓ ⇧↑↓ ←→ move · ⌘C ⌘V ⌘D · Q quantize · right-click for more"
             }
             _ if self.show_automation => {
-                "Click a lane to add a point · ⌥-click a point to delete it · pick Touch or Latch to record while playing"
+                "Click for a point · drag to select · drag a line or its ◇ to move or bend it · ⌥-click deletes · ⌘C ⌘V · right-click for shapes · the pencil draws"
             }
             _ => {
                 "Drag to move · ⌥-drag to copy · ⌥⇧-drag for an alias · drag an edge to trim · drag the top of its end to loop · ⌥-drag its end to time-stretch"
@@ -2976,7 +3018,7 @@ impl Render for Workspace {
         self.follow_pattern(cx);
         self.read_meters();
         self.capture(cx);
-        self.keep_writing(cx);
+        self.automation_frame(cx);
         self.show_automation_values();
         let armed = self.armed().map(|t| self.session.project.tracks[t].id);
         self.player.arm(armed);
@@ -3097,9 +3139,25 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &Delete, _, cx| ws.delete(cx)))
             .on_action(cx.listener(|ws, _: &DeleteTrack, _, cx| ws.delete_track(cx)))
             .on_action(cx.listener(|ws, _: &Split, _, cx| ws.split(cx)))
-            .on_action(cx.listener(|ws, _: &CopyRegion, _, cx| ws.region_key(RegionOp::Copy, cx)))
-            .on_action(cx.listener(|ws, _: &CutRegion, _, cx| ws.region_key(RegionOp::Cut, cx)))
-            .on_action(cx.listener(|ws, _: &PasteRegion, _, cx| ws.paste_key(cx)))
+            .on_action(cx.listener(|ws, _: &CopyRegion, _, cx| {
+                if !ws.copy_picked(cx) {
+                    ws.auto_clip = None;
+                    ws.region_key(RegionOp::Copy, cx)
+                }
+            }))
+            .on_action(cx.listener(|ws, _: &CutRegion, _, cx| {
+                if ws.copy_picked(cx) {
+                    ws.delete_picked(cx);
+                } else {
+                    ws.auto_clip = None;
+                    ws.region_key(RegionOp::Cut, cx)
+                }
+            }))
+            .on_action(cx.listener(|ws, _: &PasteRegion, _, cx| {
+                if !ws.paste_points(cx) {
+                    ws.paste_key(cx)
+                }
+            }))
             .on_action(
                 cx.listener(|ws, _: &RepeatRegion, _, cx| ws.region_key(RegionOp::Duplicate, cx)),
             )

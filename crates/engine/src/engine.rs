@@ -28,7 +28,7 @@ use crate::{
     peaks::Peaks,
     plugin::{self, Control, ControlKind, Libraries, Note, Plugin, Processor},
     project::{
-        AutoMode, AutoPoint, Comp, Content, Eq, Flex, Instrument, PanLaw, PanMode, Place,
+        AutoMode, AutoPoint, Comp, Content, Eq, Flex, Instrument, PanLaw, PanMode, Param, Place,
         PluginRef, Project, Region, Saturator, Which, chase, comp_segments, value_at,
     },
     sampler::Sampler,
@@ -818,6 +818,10 @@ struct Plan {
     /// Automation, with ticks turned to samples; empty follows the fader.
     volume: Vec<AutoPoint>,
     pans: Vec<AutoPoint>,
+    /// 1 where automation mutes it.
+    mutes: Vec<AutoPoint>,
+    /// Each send's level automation (dB), as `sends`; empty follows its knob.
+    send_levels: Vec<Vec<AutoPoint>>,
     /// Plugin parameters' automation, in samples, 0 to 1.
     params: Vec<(Which, u32, Vec<AutoPoint>)>,
     /// Aux index, level, and whether it's taken before the fader.
@@ -869,6 +873,23 @@ impl Plan {
         value_at(&self.pans, at as f64).unwrap_or(self.pan)
     }
 
+    /// 1 when it sounds, 0 when muted, soloed out or muted by automation.
+    fn audible_at(&self, at: u64) -> f32 {
+        self.audible
+            * (1.0
+                - value_at(&self.mutes, at as f64)
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0))
+    }
+
+    /// A send's level (as gain) at a sample, as automated or set.
+    fn send_at(&self, k: usize, at: u64) -> f32 {
+        match self.send_levels.get(k).and_then(|p| value_at(p, at as f64)) {
+            Some(level) => db(level),
+            None => self.sends[k].1,
+        }
+    }
+
     /// How left and right become the mix's at a sample: the fader, and the pan by its mode;
     /// each moved by its modulators (`by`: dB, pan).
     fn matrix(&self, at: u64, by: (f32, f32)) -> [f32; 4] {
@@ -879,7 +900,7 @@ impl Plan {
             self.pan_law,
             modulate::apply_pan(self.pan_at(at), by.1),
             self.spread,
-            self.audible * db(volume),
+            self.audible_at(at) * db(volume),
         )
     }
 }
@@ -1137,10 +1158,7 @@ pub fn compile(
             let at = |p: &AutoPoint| project.samples(p.tick, rate);
             points
                 .iter()
-                .map(|p| AutoPoint {
-                    tick: at(p),
-                    value: p.value,
-                })
+                .map(|p| AutoPoint { tick: at(p), ..*p })
                 .collect()
         };
         // With its automation off, a track follows its faders and knobs.
@@ -1214,6 +1232,13 @@ pub fn compile(
             },
             volume: auto.map_or_else(Vec::new, |a| in_samples(&a.volume)),
             pans: auto.map_or_else(Vec::new, |a| in_samples(&a.pan)),
+            mutes: auto.map_or_else(Vec::new, |a| in_samples(&a.mute)),
+            send_levels: t
+                .sends
+                .iter()
+                .filter(|s| project.auxes.iter().any(|a| a.bus == s.bus))
+                .map(|s| auto.map_or_else(Vec::new, |a| in_samples(a.points(Param::Send(s.bus)))))
+                .collect(),
             params: auto
                 .map(|a| &a.plugins[..])
                 .unwrap_or_default()
@@ -2139,21 +2164,24 @@ impl Engine {
                 p.process([&mut *l, &mut *r], frames, &[], &[], sc);
             }
             lane.pre.process(l, r, plan.delay);
-            // Pre-fader sends: muting still silences them.
-            for (k, &(aux, level, _)) in plan.sends.iter().enumerate().filter(|s| s.1.2) {
-                let bus = &mut arrangement.buses[aux];
-                let level = level * plan.audible * db(moved.sends.get(k).copied().unwrap_or(0.0));
-                for i in 0..frames {
-                    bus[0][i] += l[i] * level;
-                    bus[1][i] += r[i] * level;
-                }
-            }
             // Gain ramps across the block, so automation moves smoothly.
             let later = if playing {
                 heard + frames as u64
             } else {
                 heard
             };
+            // Pre-fader sends: muting still silences them.
+            for (k, &(aux, _, _)) in plan.sends.iter().enumerate().filter(|s| s.1.2) {
+                let bus = &mut arrangement.buses[aux];
+                let moved = db(moved.sends.get(k).copied().unwrap_or(0.0));
+                let at = |s: u64| plan.send_at(k, s) * plan.audible_at(s) * moved;
+                let (a, step) = (at(heard), (at(later) - at(heard)) / frames as f32);
+                for i in 0..frames {
+                    let level = a + step * i as f32;
+                    bus[0][i] += l[i] * level;
+                    bus[1][i] += r[i] * level;
+                }
+            }
             let now = (moved.volume, moved.pan);
             let (m0, m1) = (plan.matrix(heard, lane.mod_last), plan.matrix(later, now));
             lane.mod_last = now;
@@ -2184,10 +2212,13 @@ impl Engine {
                 sr[..frames].copy_from_slice(r);
             }
             // Post-fader sends.
-            for (k, &(aux, level, _)) in plan.sends.iter().enumerate().filter(|s| !s.1.2) {
-                let level = level * db(moved.sends.get(k).copied().unwrap_or(0.0));
+            for (k, &(aux, _, _)) in plan.sends.iter().enumerate().filter(|s| !s.1.2) {
+                let moved = db(moved.sends.get(k).copied().unwrap_or(0.0));
+                let at = |s: u64| plan.send_at(k, s) * moved;
+                let (a, step) = (at(heard), (at(later) - at(heard)) / frames as f32);
                 let bus = &mut arrangement.buses[aux];
                 for i in 0..frames {
+                    let level = a + step * i as f32;
                     bus[0][i] += l[i] * level;
                     bus[1][i] += r[i] * level;
                 }
@@ -2885,16 +2916,7 @@ mod tests {
         // A held note, faded from 0 dB to silence over the first beat.
         let mut t = synth_track("a", vec![note(0, PPQ * 4, 69)], PPQ * 4);
         t.volume_db = -60.0;
-        t.automation.volume = vec![
-            AutoPoint {
-                tick: 0,
-                value: 0.0,
-            },
-            AutoPoint {
-                tick: PPQ,
-                value: -144.0,
-            },
-        ];
+        t.automation.volume = vec![AutoPoint::new(0, 0.0), AutoPoint::new(PPQ, -144.0)];
         let [l, _] = render(&project(vec![t]), Path::new("."), BEAT * 2);
         // Straight in dB: about -6 dB a 24th of the way in, about -30 dB at a fifth.
         let early = peak(&l[500..1_500]);
@@ -2948,6 +2970,65 @@ mod tests {
         p.auxes[0].mute = false;
         p.tracks[0].volume_db = -144.0; // post-fader: the send goes quiet too
         assert!(peak(&render(&p, Path::new("."), BEAT)[0]) < 1e-6);
+    }
+
+    #[test]
+    fn mute_and_send_automation_play() {
+        // Muted by automation for its second beat: silent there, sounding either side.
+        let track = synth_track("a", vec![note(0, PPQ * 3, 69)], PPQ * 3);
+        let mut p = project(vec![track.clone()]);
+        p.tracks[0].automation.mute = vec![
+            AutoPoint {
+                step: true,
+                ..AutoPoint::new(0, 0.0)
+            },
+            AutoPoint {
+                step: true,
+                ..AutoPoint::new(PPQ, 1.0)
+            },
+            AutoPoint {
+                step: true,
+                ..AutoPoint::new(PPQ * 2, 0.0)
+            },
+        ];
+        let [l, _] = render(&p, Path::new("."), BEAT * 3);
+        assert!(peak(&l[..BEAT - MAX_BLOCK]) > 0.1);
+        assert!(peak(&l[BEAT + MAX_BLOCK..BEAT * 2 - MAX_BLOCK]) < 1e-6);
+        assert!(peak(&l[BEAT * 2 + MAX_BLOCK..]) > 0.1);
+
+        // A send automated from silence up to unity over the first beat: the aux hears nothing,
+        // then all of it.
+        let mut p = project(vec![track]);
+        p.tracks[0].sends = vec![AuxSend {
+            bus: 1,
+            level_db: 0.0,
+            pre: false,
+        }];
+        p.add_aux();
+        p.tracks[0].automation.sends = vec![crate::project::SendAuto {
+            bus: 1,
+            points: vec![
+                AutoPoint::new(0, -144.0),
+                AutoPoint::new(PPQ, -144.0),
+                AutoPoint::new(PPQ + 1, 0.0),
+            ],
+        }];
+        let [l, _] = render(&p, Path::new("."), BEAT * 2);
+        let [alone, _] = render(
+            &project(vec![p.tracks[0].clone()]),
+            Path::new("."),
+            BEAT * 2,
+        );
+        let (a, b) = (
+            peak(&l[..BEAT - MAX_BLOCK]),
+            peak(&alone[..BEAT - MAX_BLOCK]),
+        );
+        assert!((a - b).abs() < 1e-4, "{a} {b}");
+        let (a, b) = (
+            peak(&l[BEAT + MAX_BLOCK..]),
+            peak(&alone[BEAT + MAX_BLOCK..]),
+        );
+        assert!((a - b * 2.0).abs() < 1e-3, "{a} {b}");
     }
 
     #[test]
@@ -4097,10 +4178,7 @@ mod tests {
                 plugin: Which::Instrument,
                 param: volume.id,
                 name: volume.name.clone(),
-                points: vec![AutoPoint {
-                    tick: 0,
-                    value: 0.0,
-                }],
+                points: vec![AutoPoint::new(0, 0.0)],
             });
         let soft = peak(&render(&quiet, Path::new("."), BEAT * 2)[0][BEAT..]);
         assert!(loud > 0.01 && soft < loud / 4.0, "{loud} {soft}");

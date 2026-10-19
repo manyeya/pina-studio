@@ -338,9 +338,11 @@ impl Workspace {
                 self.select_track(t);
                 self.delete_track(cx);
             }
-            TrackOp::Mute(t) if t < n => {
-                self.edit(cx, |ws| ws.session.project.tracks[t].mute ^= true)
-            }
+            TrackOp::Mute(t) if t < n => self.edit(cx, |ws| {
+                let m = !ws.muted_now(t);
+                ws.session.project.tracks[t].mute = m;
+                ws.moved_once(t, tempo_engine::project::Param::Mute, m as u8 as f32);
+            }),
             TrackOp::Solo(t) if t < n => {
                 self.edit(cx, |ws| ws.session.project.tracks[t].solo ^= true)
             }
@@ -364,6 +366,7 @@ impl Workspace {
             TrackOp::PanLaw(law) => self.edit(cx, |ws| ws.session.project.pan_law = law),
             TrackOp::ResetPan(t) if t < n => self.edit(cx, |ws| {
                 ws.session.project.tracks[t].pan = 0.0;
+                ws.moved_once(t, tempo_engine::project::Param::Pan, 0.0);
                 ws.session.project.tracks[t].spread = None;
                 ws.session.project.tracks[t].elevation = None;
                 ws.session.project.tracks[t].distance = None;

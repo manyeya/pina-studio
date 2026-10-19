@@ -68,8 +68,6 @@ pub const TOP_H: f32 = MARKERS_H + RULER_H;
 pub const LANE_H: f32 = 76.0;
 pub const MIN_LANE_H: f32 = 40.0;
 pub const MAX_LANE_H: f32 = 240.0;
-/// An automation lane, under its track.
-pub const AUTO_H: f32 = 44.0;
 pub const EDITOR_H: f32 = 296.0;
 /// The shortest the editor can be dragged.
 pub const EDITOR_MIN_H: f32 = 160.0;

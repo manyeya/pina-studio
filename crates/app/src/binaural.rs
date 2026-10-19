@@ -153,6 +153,8 @@ impl Workspace {
         let distance = (place.distance * 100.0).round() / 100.0;
         track.elevation = Some(elevation).filter(|&e| e != 0.0);
         track.distance = Some(distance).filter(|&d| d != 1.0);
+        let pan = track.pan;
+        self.moved(t, tempo_engine::project::Param::Pan, pan);
     }
 
     /// A drag in the view: the source (⌘ raises it) or, anywhere else, the view round.

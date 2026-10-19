@@ -169,13 +169,24 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   with the others) those tracks play into. Answers with its bus.
 - `set_aux` `{"aux": 0, "name": "Reverb", "volume_db": -3, "pan": 0, "mute": false}`
 - `set_automation` `{"track": 0, "param": "volume", "points": [{"tick": 0, "value": -12}, {"tick": 3840, "value": 0}]}`:
-  `volume` in dB, `pan`, or `plugin` (with `"plugin": "instrument"` or `{"insert": 0}`, and the
-  parameter as `"id"`: its id or its name) from 0 to 1, or as the plugin shows it (a point's
-  `"text"`, like `"2 kHz"`, instead of `"value"`); values change in straight lines between
-  points. No points takes it out.
+  `volume` in dB, `pan`, `mute` (1 muted, 0 not; always steps), `send` (with `"send": i`, which
+  of the track's sends, in dB) or `plugin` (with `"plugin": "instrument"` or `{"insert": 0}`, and
+  the parameter as `"id"`: its id or its name) from 0 to 1, or as the plugin shows it (a point's
+  `"text"`, like `"2 kHz"`, instead of `"value"`). Lines between points are straight unless the
+  point they start from has a `"curve"` (-1 to 1: towards 1 it starts slowly and ends fast,
+  towards -1 the other way round) or `"step": true` (it holds its value, then jumps to the next).
+  No points takes it out.
+- `shape_automation` `{"track": 0, "param": "volume", "shape": "sine", "from": 3840, "to": 7680, "every": 960, "low": -12, "high": 0}`:
+  draws a shape over what was there from `from` to `to`, a cycle every `every` ticks (a beat
+  without it), between `low` and `high`; the line either side stays as it was. Shapes: `sine`,
+  `triangle`, `saw_up`, `saw_down`, `square`, `random` (a new value each cycle), and `ramp_up` and
+  `ramp_down` (once across the whole span, for a fade or a build). Takes the parameter as
+  `set_automation` does (a plugin's by its id).
 - `set_automation_mode` `{"track": 0, "mode": "latch"}`: `read` (the default) plays automation;
   `touch` and `latch` also record what's moved in the app while the song plays, until the control
-  is let go (touch) or playback stops (latch); `off` ignores it.
+  is let go (touch) or playback stops (latch); `trim` records as touch does but moves the line
+  that's there up or down by how far the control is moved, keeping its shape; `write` records
+  every automated control from where playback starts, over what was there; `off` ignores it.
 - `set_eq` `{"channel": {"track": 1}, "eq": {"low_cut": 80, "low_mid": {"freq": 400, "gain_db": -2.5, "q": 1}, "high_mid": {"freq": 2500, "gain_db": 3.5, "q": 1}, "high_shelf": {"freq": 10000, "gain_db": 4}}}`:
   the channel's built-in EQ, before its inserts: a low cut (Hz; 20 or less is off), two bells and
   a high shelf. Leave out what you don't change; `"bypass": true` keeps it but stops it; no `eq`

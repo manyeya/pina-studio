@@ -34,7 +34,8 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   Study page) with `study_cli.rs` (studies kept, and lyrics, year and genre looked up),
   `looks.rs` (track colours and icons, and their picker), `catalog.rs` (the Browser's devices; `browser.rs` the panel itself and its sounds),
   `projects.rs` (songs: the Songs page, the new-song sheet, opening another in the window),
-  `tracks.rs` (tools, markers, ruler, headers, regions, automation), `editor.rs` (the
+  `tracks.rs` (tools, markers, ruler, headers, regions), `automation.rs` (automation: its lanes,
+  and what moving an automated control does), `editor.rs` (the
   editor under the tracks) with `pianoroll.rs`, `steps.rs` (the step sequencer), `score.rs`,
   `takes.rs` (take folders), `liveloops.rs` and `browser.rs` (the sample browser, a page of
   its own (⇧F) and a compact list beside the tracks to drag from (F): search, filters, the sound
@@ -238,12 +239,27 @@ In the app, mostly as in Logic:
   layers, and zones on the same notes take turns (round robins). Mono and Legato play one note at
   a time, gliding. Slice… cuts a loop across the keys from C1 at its hits, or into equal parts.
   Turning a knob while it plays changes what's playing, without a reload.
-- With automation showing, each track has a lane under it: click to add a point, drag points,
-  option-click to delete one. Its menu picks what it shows: volume, pan, or any parameter of the
-  track's plugins (type to search; those with automation are marked). Its mode, as in Logic: Read
-  plays the automation (faders, pan knobs, Smart Controls and plugin editors follow it), Touch and
-  Latch also record what you move while the song plays (until you let go, or until it stops),
-  and Off ignores it.
+- Automation (A shows it): each track has lanes under it, a parameter each: volume, pan, mute,
+  its sends, or any parameter of its plugins (type to search; those with automation are marked).
+  + adds a lane, × takes one away; each shows its value at the playhead and a scale. Click for a
+  point (on the line if near it), drag points (selected ones together, on the grid unless ⌘),
+  drag the line between two points to move both, drag the ◇ halfway along a line to bend it
+  (double-click it straight), drag across a lane to select (⇧ adds), ⌥-click or double-click a
+  point to delete it, Delete takes out the selection, ⌘C ⌘V copy and paste it. The pencil draws
+  a lane freehand; the eraser takes out what it's dragged across. Right-click a point for its
+  line's shape (straight, slow or fast start, a step), or a lane for shapes drawn over the
+  selection, the cycle or that bar, a cycle every grid step (sine, triangle, saws, square, random,
+  ramps), and to thin or clear it. Mute is all steps.
+- Every control shows its automation: the header's fader, pan and readout, the strips' faders,
+  knobs, sends and mute buttons, Smart Controls and plugin editors; an automated readout lights
+  in its mode's colour. The mode is on the lane and on each track's strip, as in Logic: Read plays
+  it, and a control held while it plays takes over until let go; Touch records a control while
+  held, then ramps back to the line; Latch records it until stop; Trim moves the line up or down
+  by as much as the control moves while held, keeping its shape; Write records every automated
+  control from play, over what was there, then turns to Latch; Off ignores it. Moved with the song
+  stopped, an automated control moves its whole line, sets a point at the playhead, or changes it
+  until you play (Settings → Automation, with the lanes' height, snapping, thinning what's
+  recorded, and automation going with regions when they move).
 - Drag faders, pan knobs and the tempo; option-click a fader or knob to reset it. Click or drag
   in the ruler to move the playhead; ⌘-scroll zooms.
 - The "+" over the track headers (or ⌥⌘N) opens the New Track palette: type to search every
@@ -534,7 +550,8 @@ Audio files are WAV, AIFF, FLAC or MP3, at any sample rate. An audio region can 
 `"sends": [{ "bus": 1, "level_db": -6, "pre": false }]`, played by an aux in `"auxes": [{ "bus":
 1, "name": "Reverb", "inserts": […] }]`. Tracks, auxes and the master (`master_eq`,
 `master_comp`, `master_sat`, `master_inserts`) can have an `"eq"`, a `"comp"` and a `"sat"`. A
-track's `"automation"` has `volume`, `pan` and `plugins` lanes and a `mode`. Regions can have a
+track's `"automation"` has `volume`, `pan`, `mute`, `sends` and `plugins` lanes (points can have a
+`"curve"` or be a `"step"`) and a `mode`. Regions can have a
 `"name"`, a `"link"` (aliases share one), `"loop"`, `"transpose"`, `"velocity"` and `"quantize"`.
 The project can have a `"time_signature"`, `"markers"`, a `"key"` and a `"cycle"` (see `tempo
 describe`).

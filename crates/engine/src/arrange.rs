@@ -397,11 +397,8 @@ pub fn arrange(p: &mut Project, a: Arrangement) -> Result<Value, String> {
         let db = [-8.0, -5.0, -3.0, -1.5, 0.0][energy as usize - 1];
         for t in (0..p.tracks.len()).filter(|&t| in_section(s, t) && !pieces[t].is_empty()) {
             let v = p.tracks[t].volume_db + db;
-            levels[t].push(AutoPoint { tick: at, value: v });
-            levels[t].push(AutoPoint {
-                tick: end - 1,
-                value: v,
-            });
+            levels[t].push(AutoPoint::new(at, v));
+            levels[t].push(AutoPoint::new(end - 1, v));
         }
         let mut playing = Vec::new();
         for t in 0..p.tracks.len() {

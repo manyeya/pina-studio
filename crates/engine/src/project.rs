@@ -533,11 +533,24 @@ pub struct Automation {
     /// -1 to 1.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pan: Vec<AutoPoint>,
+    /// 1 muted, 0 not: steps, never slopes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mute: Vec<AutoPoint>,
+    /// Send levels (dB), by the bus sent to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sends: Vec<SendAuto>,
     /// Plugin parameters over time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginAuto>,
     #[serde(default, skip_serializing_if = "AutoMode::is_read")]
     pub mode: AutoMode,
+}
+
+/// A send's level over time.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SendAuto {
+    pub bus: u32,
+    pub points: Vec<AutoPoint>,
 }
 
 /// A plugin parameter's automation.
@@ -563,7 +576,9 @@ pub enum Which {
 
 /// How a track uses its automation, as Logic's modes: Read plays it; Touch and Latch play it and
 /// also record what's moved while the song plays (Touch until the control is let go, Latch until
-/// playback stops); Off ignores it.
+/// playback stops); Trim records as Touch does, but moves the line that's there up or down rather
+/// than drawing a new one; Write records every automated control from where playback starts, over
+/// what was there; Off ignores it.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AutoMode {
@@ -572,14 +587,18 @@ pub enum AutoMode {
     Read,
     Touch,
     Latch,
+    Trim,
+    Write,
 }
 
 impl AutoMode {
-    pub const ALL: [AutoMode; 4] = [
+    pub const ALL: [AutoMode; 6] = [
         AutoMode::Off,
         AutoMode::Read,
         AutoMode::Touch,
         AutoMode::Latch,
+        AutoMode::Trim,
+        AutoMode::Write,
     ];
 
     fn is_read(&self) -> bool {
@@ -592,34 +611,210 @@ impl AutoMode {
             AutoMode::Read => "Read",
             AutoMode::Touch => "Touch",
             AutoMode::Latch => "Latch",
+            AutoMode::Trim => "Trim",
+            AutoMode::Write => "Write",
         }
     }
 
     /// Whether moving a control while playing records it.
     pub fn writes(self) -> bool {
-        matches!(self, AutoMode::Touch | AutoMode::Latch)
+        !matches!(self, AutoMode::Off | AutoMode::Read)
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
 pub struct AutoPoint {
     pub tick: u64,
     pub value: f32,
+    /// How the line bends on to the next point: 0 straight; towards 1 it starts slowly and ends
+    /// fast, towards -1 the other way round.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub curve: f32,
+    /// Holds its value up to the next point, which it jumps to: a step.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub step: bool,
 }
 
-/// An automatable parameter: the fader, the pan knob, or a plugin's parameter by id.
+impl AutoPoint {
+    pub fn new(tick: u64, value: f32) -> Self {
+        AutoPoint {
+            tick,
+            value,
+            ..Default::default()
+        }
+    }
+}
+
+/// An automatable parameter: the fader, the pan knob, the mute button, a send's level (by its
+/// bus), or a plugin's parameter by id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Param {
     #[default]
     Volume,
     Pan,
+    Mute,
+    Send(u32),
     Plugin(Which, u32),
+}
+
+impl Param {
+    /// The values it takes, lowest and highest: dB for the fader and sends.
+    pub fn range(self) -> (f32, f32) {
+        match self {
+            Param::Volume | Param::Send(_) => (SILENT_DB, 6.0),
+            Param::Pan => (-1.0, 1.0),
+            Param::Mute | Param::Plugin(..) => (0.0, 1.0),
+        }
+    }
+
+    /// Whether it only ever jumps from value to value.
+    pub fn steps(self) -> bool {
+        self == Param::Mute
+    }
+}
+
+/// The quietest a fader goes: silence.
+pub const SILENT_DB: f32 = -144.0;
+
+/// A run of automation lifted out of a track, its ticks from where it was taken, to put down again
+/// (copied points, or a region's automation going with it).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct AutoClip {
+    pub length: u64,
+    pub lanes: Vec<(Param, Vec<AutoPoint>)>,
+}
+
+/// A shape drawn into automation, a cycle every so often: as Ableton's and Studio One's.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoShape {
+    Sine,
+    Triangle,
+    SawUp,
+    SawDown,
+    Square,
+    Random,
+    /// Up from low to high across the whole span, as a fade in; `RampDown` the other way.
+    RampUp,
+    RampDown,
+}
+
+impl AutoShape {
+    pub const ALL: [AutoShape; 8] = [
+        AutoShape::Sine,
+        AutoShape::Triangle,
+        AutoShape::SawUp,
+        AutoShape::SawDown,
+        AutoShape::Square,
+        AutoShape::Random,
+        AutoShape::RampUp,
+        AutoShape::RampDown,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            AutoShape::Sine => "Sine",
+            AutoShape::Triangle => "Triangle",
+            AutoShape::SawUp => "Saw up",
+            AutoShape::SawDown => "Saw down",
+            AutoShape::Square => "Square",
+            AutoShape::Random => "Random",
+            AutoShape::RampUp => "Ramp up",
+            AutoShape::RampDown => "Ramp down",
+        }
+    }
+
+    /// Its points from `from` to `to`, a cycle every `every` ticks, between `low` and `high`.
+    pub fn points(self, from: u64, to: u64, every: u64, low: f32, high: f32) -> Vec<AutoPoint> {
+        let mid = (low + high) / 2.0;
+        let every = every.max(1);
+        let at = |tick: u64, value: f32, curve: f32, step: bool| AutoPoint {
+            tick,
+            value,
+            curve,
+            step,
+        };
+        let mut out = Vec::new();
+        match self {
+            AutoShape::RampUp | AutoShape::RampDown => {
+                let (a, b) = match self {
+                    AutoShape::RampUp => (low, high),
+                    _ => (high, low),
+                };
+                out.push(at(from, a, 0.0, false));
+                out.push(at(to, b, 0.0, false));
+                return out;
+            }
+            _ => {}
+        }
+        let mut start = from;
+        let mut n = 0u64;
+        while start < to {
+            let q = |k: u64| (start + every * k / 4).min(to);
+            match self {
+                // A quarter cycle at a time, each bent as a sine's is.
+                AutoShape::Sine => {
+                    for (k, value, curve) in [
+                        (0, mid, -0.3),
+                        (1, high, 0.3),
+                        (2, mid, -0.3),
+                        (3, low, 0.3),
+                    ] {
+                        if q(k) < to || k == 0 {
+                            out.push(at(q(k), value, curve, false));
+                        }
+                    }
+                }
+                AutoShape::Triangle => {
+                    out.push(at(start, low, 0.0, false));
+                    if q(2) < to {
+                        out.push(at(q(2), high, 0.0, false));
+                    }
+                }
+                AutoShape::SawUp | AutoShape::SawDown => {
+                    let (a, b) = match self {
+                        AutoShape::SawUp => (low, high),
+                        _ => (high, low),
+                    };
+                    let end = (start + every).min(to);
+                    out.push(at(start, a, 0.0, false));
+                    out.push(at(end, b, 0.0, false));
+                }
+                AutoShape::Square => {
+                    out.push(at(start, high, 0.0, true));
+                    if q(2) < to {
+                        out.push(at(q(2), low, 0.0, true));
+                    }
+                }
+                AutoShape::Random => {
+                    let r = crate::modulate::roll(n as i64, 7);
+                    out.push(at(start, low + (high - low) * r, 0.0, true));
+                }
+                AutoShape::RampUp | AutoShape::RampDown => unreachable!(),
+            }
+            start += every;
+            n += 1;
+        }
+        // It ends where the next cycle would start.
+        let last = match self {
+            AutoShape::Sine => mid,
+            AutoShape::Triangle => low,
+            AutoShape::SawUp | AutoShape::SawDown => return out,
+            _ => out.last().map_or(mid, |p| p.value),
+        };
+        if out.last().is_some_and(|p| p.tick < to) {
+            out.push(at(to, last, 0.0, false));
+        }
+        out
+    }
 }
 
 impl Automation {
     pub fn is_empty(&self) -> bool {
         self.volume.is_empty()
             && self.pan.is_empty()
+            && self.mute.is_empty()
+            && self.sends.is_empty()
             && self.plugins.is_empty()
             && self.mode == AutoMode::Read
     }
@@ -628,6 +823,12 @@ impl Automation {
         match param {
             Param::Volume => &self.volume,
             Param::Pan => &self.pan,
+            Param::Mute => &self.mute,
+            Param::Send(bus) => self
+                .sends
+                .iter()
+                .find(|a| a.bus == bus)
+                .map_or(&[], |a| &a.points),
             Param::Plugin(which, id) => self
                 .plugins
                 .iter()
@@ -641,6 +842,20 @@ impl Automation {
         match param {
             Param::Volume => &mut self.volume,
             Param::Pan => &mut self.pan,
+            Param::Mute => &mut self.mute,
+            Param::Send(bus) => {
+                let i = match self.sends.iter().position(|a| a.bus == bus) {
+                    Some(i) => i,
+                    None => {
+                        self.sends.push(SendAuto {
+                            bus,
+                            points: Vec::new(),
+                        });
+                        self.sends.len() - 1
+                    }
+                };
+                &mut self.sends[i].points
+            }
             Param::Plugin(plugin, param) => {
                 let i = match self
                     .plugins
@@ -675,9 +890,10 @@ impl Automation {
         }
     }
 
-    /// Drops plugin lanes left without points.
+    /// Drops plugin and send lanes left without points.
     pub fn tidy(&mut self) {
         self.plugins.retain(|a| !a.points.is_empty());
+        self.sends.retain(|a| !a.points.is_empty());
     }
 
     /// Every parameter with points, faders first.
@@ -689,6 +905,15 @@ impl Automation {
         if !self.pan.is_empty() {
             out.push(Param::Pan);
         }
+        if !self.mute.is_empty() {
+            out.push(Param::Mute);
+        }
+        out.extend(
+            self.sends
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| Param::Send(a.bus)),
+        );
         out.extend(
             self.plugins
                 .iter()
@@ -715,8 +940,8 @@ impl Automation {
                     points.insert(
                         i,
                         AutoPoint {
-                            tick: before,
-                            value: old,
+                            step: param.steps(),
+                            ..AutoPoint::new(before, old)
                         },
                     );
                 }
@@ -730,7 +955,13 @@ impl Automation {
         {
             points[n - 1].tick = tick;
         } else {
-            points.insert(n, AutoPoint { tick, value });
+            points.insert(
+                n,
+                AutoPoint {
+                    step: param.steps(),
+                    ..AutoPoint::new(tick, value)
+                },
+            );
         }
     }
 
@@ -767,21 +998,234 @@ impl Automation {
         points[i] = AutoPoint {
             tick: tick.clamp(lo, hi),
             value,
+            ..points[i]
         };
+    }
+
+    /// Puts `new` in place of the line from `from` to `to`, keeping it as it was either side
+    /// (where it had points): it jumps into the new and back out.
+    pub fn replace(&mut self, param: Param, from: u64, to: u64, new: Vec<AutoPoint>) {
+        let points = self.points_mut(param);
+        let had = !points.is_empty();
+        let before = value_at(points, from as f64 - 0.5);
+        let after = value_at(points, to as f64);
+        let stepped = |i: usize, points: &Vec<AutoPoint>| i > 0 && points[i - 1].step;
+        let i = points.partition_point(|p| p.tick < from);
+        let j = points.partition_point(|p| p.tick <= to);
+        // A step that ran into the span still holds up to it.
+        let held = stepped(i, points);
+        let mut put: Vec<AutoPoint> = Vec::new();
+        if had && from > 0 {
+            put.push(AutoPoint {
+                step: held || param.steps(),
+                ..AutoPoint::new(from, before.unwrap_or(0.0))
+            });
+        }
+        put.extend(
+            new.into_iter()
+                .filter(|p| (from..=to).contains(&p.tick))
+                .map(|p| AutoPoint {
+                    step: p.step || param.steps(),
+                    ..p
+                }),
+        );
+        if had && let Some(after) = after {
+            put.push(AutoPoint {
+                step: param.steps() || points.get(j.saturating_sub(1)).is_some_and(|p| p.step),
+                ..AutoPoint::new(to, after)
+            });
+        }
+        points.splice(i..j, put);
+        self.tidy();
+    }
+
+    /// Draws a shape from `from` to `to`, a cycle every `every` ticks, over what was there.
+    #[allow(clippy::too_many_arguments)]
+    pub fn shape(
+        &mut self,
+        param: Param,
+        shape: AutoShape,
+        from: u64,
+        to: u64,
+        every: u64,
+        low: f32,
+        high: f32,
+    ) {
+        let (lo, hi) = param.range();
+        let (low, high) = (low.clamp(lo, hi), high.clamp(lo, hi));
+        self.replace(param, from, to, shape.points(from, to, every, low, high));
+    }
+
+    /// Moves the whole line up or down by `by` (dB for the fader and sends), each point within
+    /// the parameter's range.
+    pub fn offset(&mut self, param: Param, by: f32) {
+        let (lo, hi) = param.range();
+        for p in self.points_mut(param) {
+            p.value = (p.value + by).clamp(lo, hi);
+        }
+    }
+
+    /// Takes out points that change nothing: each within `tolerance` (a share of the
+    /// parameter's range) of the straight line its neighbours would draw without it. Steps and
+    /// curves stay.
+    pub fn thin(&mut self, param: Param, tolerance: f32) {
+        let (lo, hi) = param.range();
+        // The fader's range is mostly silence: judge it by the top 60 dB.
+        let span = match param {
+            Param::Volume | Param::Send(_) => 66.0,
+            _ => hi - lo,
+        };
+        let tol = tolerance * span;
+        let points = self.points_mut(param);
+        let n = points.len();
+        if n < 3 {
+            return;
+        }
+        let mut keep = vec![true; n];
+        // Douglas-Peucker over each run of straight segments.
+        let fixed = |i: usize| {
+            i == 0
+                || i == n - 1
+                || points[i].step
+                || points[i].curve != 0.0
+                || points[i - 1].step
+                || points[i - 1].curve != 0.0
+                || points[i].tick == points[i - 1].tick
+                || points[i + 1].tick == points[i].tick
+        };
+        let mut a = 0;
+        for b in 1..n {
+            if fixed(b) {
+                simplify(points, a, b, tol, &mut keep);
+                a = b;
+            }
+        }
+        let mut k = 0;
+        points.retain(|_| {
+            k += 1;
+            keep[k - 1]
+        });
+    }
+
+    /// Lifts out every lane's points from `from` to `to` (as they sound: with the line's values
+    /// at either end), their ticks from `from`.
+    pub fn take(&self, from: u64, to: u64) -> AutoClip {
+        let mut lanes = Vec::new();
+        for param in self.params() {
+            let points = self.points(param);
+            let mut out: Vec<AutoPoint> = Vec::new();
+            if let Some(v) = value_at(points, from as f64) {
+                out.push(AutoPoint {
+                    step: param.steps()
+                        || points
+                            .iter()
+                            .rev()
+                            .find(|p| p.tick <= from)
+                            .is_some_and(|p| p.step),
+                    ..AutoPoint::new(0, v)
+                });
+            }
+            out.extend(
+                points
+                    .iter()
+                    .filter(|p| p.tick > from && p.tick < to)
+                    .map(|p| AutoPoint {
+                        tick: p.tick - from,
+                        ..*p
+                    }),
+            );
+            if let Some(v) = value_at(points, to as f64 - 0.5) {
+                out.push(AutoPoint::new(to - from, v));
+            }
+            lanes.push((param, out));
+        }
+        AutoClip {
+            length: to.saturating_sub(from),
+            lanes,
+        }
+    }
+
+    /// Puts a lifted run down at `at`, over what was there for its length, lane by lane.
+    pub fn put(&mut self, at: u64, clip: &AutoClip) {
+        for (param, points) in &clip.lanes {
+            let shifted = points
+                .iter()
+                .map(|p| AutoPoint {
+                    tick: p.tick + at,
+                    ..*p
+                })
+                .collect();
+            self.replace(*param, at, at + clip.length, shifted);
+        }
+    }
+
+    /// Takes out every lane's points from `from` to `to`, the line either side kept as it was.
+    pub fn erase(&mut self, from: u64, to: u64) {
+        for param in self.params() {
+            let points = self.points(param);
+            let (a, b) = (
+                value_at(points, from as f64 - 0.5),
+                value_at(points, to as f64),
+            );
+            let mut put = Vec::new();
+            if let Some(a) = a.filter(|_| from > 0) {
+                put.push(AutoPoint::new(from, a));
+            }
+            if let Some(b) = b {
+                put.push(AutoPoint::new(to, b));
+            }
+            let points = self.points_mut(param);
+            points.retain(|p| p.tick < from || p.tick > to);
+            let i = points.partition_point(|p| p.tick < from);
+            points.splice(i..i, put);
+        }
+        self.tidy();
     }
 }
 
-/// A parameter's value at a tick: straight lines between points, level before the first and
-/// after the last. None without points.
+/// Keeps the points between `a` and `b` that bend the line more than `tol` (Douglas-Peucker).
+fn simplify(points: &[AutoPoint], a: usize, b: usize, tol: f32, keep: &mut [bool]) {
+    if b <= a + 1 {
+        return;
+    }
+    let (pa, pb) = (points[a], points[b]);
+    let line = |t: u64| {
+        let f = (t - pa.tick) as f32 / (pb.tick - pa.tick).max(1) as f32;
+        pa.value + (pb.value - pa.value) * f
+    };
+    let (far, off) = (a + 1..b)
+        .map(|i| (i, (points[i].value - line(points[i].tick)).abs()))
+        .fold((a, 0.0), |m, x| if x.1 > m.1 { x } else { m });
+    if off > tol {
+        simplify(points, a, far, tol, keep);
+        simplify(points, far, b, tol, keep);
+    } else {
+        keep[a + 1..b].iter_mut().for_each(|k| *k = false);
+    }
+}
+
+/// How far along a segment's change a bent line is, `t` of the way along it.
+pub fn bend(t: f32, curve: f32) -> f32 {
+    if curve.abs() < 1e-3 {
+        return t;
+    }
+    let k = curve.clamp(-1.0, 1.0) * 6.0;
+    ((k * t).exp() - 1.0) / (k.exp() - 1.0)
+}
+
+/// A parameter's value at a tick: lines (straight, or bent by the point they start from)
+/// between points, steps after a stepped one, level before the first and after the last. None
+/// without points.
 pub fn value_at(points: &[AutoPoint], tick: f64) -> Option<f32> {
     let i = points.partition_point(|p| (p.tick as f64) <= tick);
     match (i.checked_sub(1).map(|i| points[i]), points.get(i)) {
         (None, None) => None,
         (Some(a), None) => Some(a.value),
         (None, Some(b)) => Some(b.value),
+        (Some(a), Some(_)) if a.step => Some(a.value),
         (Some(a), Some(b)) => {
             let t = ((tick - a.tick as f64) / (b.tick - a.tick) as f64) as f32;
-            Some(a.value + (b.value - a.value) * t)
+            Some(a.value + (b.value - a.value) * bend(t, a.curve))
         }
     }
 }
@@ -2759,33 +3203,123 @@ mod tests {
     }
 
     #[test]
+    fn automation_bends_steps_and_takes_shapes() {
+        let p = |tick, value| AutoPoint::new(tick, value);
+        // Straight, bent slow-then-fast, and a step.
+        let line = [p(0, 0.0), p(100, 1.0)];
+        assert_eq!(value_at(&line, 50.0), Some(0.5));
+        let slow = [
+            AutoPoint {
+                curve: 0.8,
+                ..p(0, 0.0)
+            },
+            p(100, 1.0),
+        ];
+        let fast = [
+            AutoPoint {
+                curve: -0.8,
+                ..p(0, 0.0)
+            },
+            p(100, 1.0),
+        ];
+        assert!(value_at(&slow, 50.0).unwrap() < 0.2);
+        assert!(value_at(&fast, 50.0).unwrap() > 0.8);
+        assert_eq!(value_at(&slow, 100.0), Some(1.0));
+        let step = [
+            AutoPoint {
+                step: true,
+                ..p(0, 0.0)
+            },
+            p(100, 1.0),
+        ];
+        assert_eq!(value_at(&step, 99.0), Some(0.0));
+        assert_eq!(value_at(&step, 100.0), Some(1.0));
+
+        // A sine over a bar, a cycle a beat, drawn into a line that was flat at -6 dB: it stays
+        // -6 either side, and swings between -12 and 0 inside.
+        let mut a = Automation {
+            volume: vec![p(0, -6.0), p(PPQ * 8, -6.0)],
+            ..Default::default()
+        };
+        a.shape(
+            Param::Volume,
+            AutoShape::Sine,
+            PPQ * 2,
+            PPQ * 6,
+            PPQ,
+            -12.0,
+            0.0,
+        );
+        let v = |t: u64| value_at(&a.volume, t as f64).unwrap();
+        assert_eq!(v(PPQ), -6.0);
+        assert_eq!(v(PPQ * 7), -6.0);
+        assert!((v(PPQ * 2 + PPQ / 4) - 0.0).abs() < 1e-4);
+        assert!((v(PPQ * 2 + PPQ * 3 / 4) + 12.0).abs() < 1e-4);
+        assert!(
+            (v(PPQ * 2 + PPQ / 8) + 1.8).abs() < 0.8,
+            "{}",
+            v(PPQ * 2 + PPQ / 8)
+        );
+        // A square steps; mute is always steps.
+        a.shape(Param::Mute, AutoShape::Square, 0, PPQ * 2, PPQ, 0.0, 1.0);
+        assert_eq!(value_at(&a.mute, (PPQ / 2 - 1) as f64), Some(1.0));
+        assert_eq!(value_at(&a.mute, (PPQ / 2) as f64), Some(0.0));
+        assert!(a.mute.iter().all(|p| p.step));
+
+        // Thinning takes out what changes nothing, and keeps the shape.
+        let mut a = Automation {
+            pan: (0..=100)
+                .map(|i| p(i * 10, (i as f32 / 100.0).min(0.5)))
+                .collect(),
+            ..Default::default()
+        };
+        a.thin(Param::Pan, 0.002);
+        assert_eq!(a.pan.len(), 3, "{:?}", a.pan);
+        assert_eq!(value_at(&a.pan, 250.0), Some(0.25));
+
+        // Lifted out and put down elsewhere: the same line there.
+        let mut a = Automation {
+            volume: vec![p(0, -20.0), p(PPQ * 4, 0.0)],
+            pan: vec![p(PPQ, -1.0), p(PPQ * 3, 1.0)],
+            ..Default::default()
+        };
+        let clip = a.take(PPQ, PPQ * 3);
+        assert_eq!(clip.length, PPQ * 2);
+        a.put(PPQ * 8, &clip);
+        for t in [0, PPQ / 2, PPQ, PPQ * 3 / 2, PPQ * 2 - 1] {
+            let (was, now) = (PPQ + t, PPQ * 8 + t);
+            assert!(
+                (value_at(&a.volume, was as f64).unwrap()
+                    - value_at(&a.volume, now as f64).unwrap())
+                .abs()
+                    < 0.01
+            );
+            assert!(
+                (value_at(&a.pan, was as f64).unwrap() - value_at(&a.pan, now as f64).unwrap())
+                    .abs()
+                    < 0.01
+            );
+        }
+        // Trimmed: all of it up, never past the top.
+        a.offset(Param::Volume, 10.0);
+        assert_eq!(a.volume[0].value, -10.0);
+        assert!(a.volume.iter().all(|p| p.value <= 6.0));
+        // Erased: the line either side holds.
+        a.erase(PPQ * 8, PPQ * 10);
+        assert!(
+            a.pan
+                .iter()
+                .all(|p| !(PPQ * 8 + 1..PPQ * 10).contains(&p.tick))
+        );
+    }
+
+    #[test]
     fn automation_points_stay_in_order_and_interpolate() {
         let mut a = Automation::default();
         assert_eq!(value_at(a.points(Param::Volume), 0.0), None);
-        a.add(
-            Param::Volume,
-            AutoPoint {
-                tick: 960,
-                value: -12.0,
-            },
-        );
-        a.add(
-            Param::Volume,
-            AutoPoint {
-                tick: 0,
-                value: 0.0,
-            },
-        );
-        assert_eq!(
-            a.add(
-                Param::Volume,
-                AutoPoint {
-                    tick: 480,
-                    value: -6.0
-                }
-            ),
-            1
-        );
+        a.add(Param::Volume, AutoPoint::new(960, -12.0));
+        a.add(Param::Volume, AutoPoint::new(0, 0.0));
+        assert_eq!(a.add(Param::Volume, AutoPoint::new(480, -6.0)), 1);
         let v = a.points(Param::Volume);
         assert_eq!(value_at(v, 240.0), Some(-3.0));
         assert_eq!(value_at(v, 5000.0), Some(-12.0));
@@ -2981,7 +3515,7 @@ mod tests {
     fn recording_automation_replaces_the_line_it_passes() {
         let mut a = Automation::default();
         for tick in [0, 3840] {
-            a.add(Param::Volume, AutoPoint { tick, value: -6.0 });
+            a.add(Param::Volume, AutoPoint::new(tick, -6.0));
         }
         a.write(Param::Volume, None, 960, 0.0);
         a.write(Param::Volume, Some(960), 1440, -3.0);
@@ -3022,10 +3556,7 @@ mod tests {
         for i in 0..2 {
             t.automation.add(
                 Param::Plugin(Which::Insert(i), 1),
-                AutoPoint {
-                    tick: 0,
-                    value: i as f32,
-                },
+                AutoPoint::new(0, i as f32),
             );
         }
         t.set_insert(0, None).unwrap();

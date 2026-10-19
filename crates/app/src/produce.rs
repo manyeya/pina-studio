@@ -888,6 +888,8 @@ pub fn mix_role(
                         tick: x.tick,
                         value: Some(x.value + moved),
                         text: None,
+                        curve: Some(x.curve),
+                        step: Some(x.step),
                     })
                     .collect();
                 cli::edit_with(
@@ -895,6 +897,7 @@ pub fn mix_role(
                     Command::SetAutomation {
                         track: t,
                         param: AutoParam::Volume,
+                        send: None,
                         plugin: None,
                         id: None,
                         name: None,

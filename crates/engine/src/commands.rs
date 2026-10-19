@@ -12,9 +12,10 @@ use crate::{
     music::{Key, NoteEdit},
     plugin::{PluginApi, PluginParam, value_from_text},
     project::{
-        AUDIO_DIR, AutoMode, AutoPoint, AuxSend, BEAT_UNITS, Cell, Comp, Content, ControlPoint,
-        Cycle, Eq, Flex, Input, Instrument, Marker, Note, PPQ, PanLaw, PanMode, Param, PatternRow,
-        Place, PluginRef, Preset, PresetSource, Project, Region, Saturator, Track, Which,
+        AUDIO_DIR, AutoMode, AutoPoint, AutoShape, AuxSend, BEAT_UNITS, Cell, Comp, Content,
+        ControlPoint, Cycle, Eq, Flex, Input, Instrument, Marker, Note, PPQ, PanLaw, PanMode,
+        Param, PatternRow, Place, PluginRef, Preset, PresetSource, Project, Region, Saturator,
+        Track, Which,
     },
 };
 
@@ -293,11 +294,14 @@ pub enum Command {
         #[serde(default)]
         mute: Option<bool>,
     },
-    /// Replaces a track's volume (dB), pan (-1 to 1) or plugin parameter (0 to 1) automation; no
-    /// points takes it out.
+    /// Replaces a track's volume (dB), pan (-1 to 1), mute (1 or 0), send level (dB) or plugin
+    /// parameter (0 to 1) automation; no points takes it out.
     SetAutomation {
         track: usize,
         param: AutoParam,
+        /// For a send: which of the track's sends.
+        #[serde(default)]
+        send: Option<usize>,
         /// For a plugin parameter: which plugin, and the parameter's id.
         #[serde(default)]
         plugin: Option<Which>,
@@ -306,6 +310,25 @@ pub enum Command {
         #[serde(default)]
         name: Option<String>,
         points: Vec<PointIn>,
+    },
+    /// Draws a shape into a track's automation from `from` to `to` (ticks), a cycle every
+    /// `every` ticks, between `low` and `high`, over what was there.
+    ShapeAutomation {
+        track: usize,
+        param: AutoParam,
+        #[serde(default)]
+        send: Option<usize>,
+        #[serde(default)]
+        plugin: Option<Which>,
+        #[serde(default)]
+        id: Option<u32>,
+        shape: AutoShape,
+        from: u64,
+        to: u64,
+        #[serde(default)]
+        every: Option<u64>,
+        low: f32,
+        high: f32,
     },
     /// How a track follows its automation: off, read, touch or latch.
     SetAutomationMode {
@@ -499,6 +522,12 @@ pub struct PointIn {
     pub value: Option<f32>,
     #[serde(default)]
     pub text: Option<String>,
+    /// How the line bends on to the next point, -1 to 1.
+    #[serde(default)]
+    pub curve: Option<f32>,
+    /// Holds its value up to the next point.
+    #[serde(default)]
+    pub step: Option<bool>,
 }
 
 /// A preset, by name or where it comes from.
@@ -553,6 +582,7 @@ pub fn resolve(
         Command::SetAutomation {
             track,
             param,
+            send,
             plugin: Some(which),
             id: Some(id),
             name,
@@ -576,6 +606,7 @@ pub fn resolve(
             Command::SetAutomation {
                 track,
                 param,
+                send,
                 plugin: Some(which),
                 id: Some(ParamRef::Id(info.id)),
                 name: name.or(Some(info.name)),
@@ -696,7 +727,22 @@ pub enum ChannelRef {
 pub enum AutoParam {
     Volume,
     Pan,
+    Mute,
+    Send,
     Plugin,
+}
+
+/// A track's send, as its automation names it: by the bus it sends to.
+fn send_param(p: &mut Project, t: usize, send: Option<usize>) -> Result<Param, String> {
+    let Some(i) = send else {
+        return Err("a send's automation needs `send`: which of the track's sends".into());
+    };
+    let bus = track(p, t)?
+        .sends
+        .get(i)
+        .ok_or_else(|| format!("track {t} has no send {i}"))?
+        .bus;
+    Ok(Param::Send(bus))
 }
 
 /// What a command that names a plugin's parameter, value or preset in words says when it hasn't
@@ -1307,6 +1353,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         Command::SetAutomation {
             track: t,
             param,
+            send,
             plugin,
             id,
             name,
@@ -1316,8 +1363,9 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                 .into_iter()
                 .map(|pt| match (pt.value, &pt.text) {
                     (Some(value), _) => Ok(AutoPoint {
-                        tick: pt.tick,
-                        value,
+                        curve: finite("curve", pt.curve.unwrap_or(0.0))?.clamp(-1.0, 1.0),
+                        step: pt.step.unwrap_or(false),
+                        ..AutoPoint::new(pt.tick, finite("value", value)?)
                     }),
                     (None, Some(t)) => {
                         Err(format!("{t:?} needs the plugin to be read: {UNRESOLVED}"))
@@ -1329,6 +1377,8 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             let param = match param {
                 AutoParam::Volume => Param::Volume,
                 AutoParam::Pan => Param::Pan,
+                AutoParam::Mute => Param::Mute,
+                AutoParam::Send => send_param(p, t, send)?,
                 AutoParam::Plugin => {
                     let (Some(plugin), Some(id)) = (plugin, id) else {
                         return Err("a plugin parameter needs `plugin` and `id`".into());
@@ -1347,12 +1397,54 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                     Param::Plugin(plugin, id)
                 }
             };
+            let (lo, hi) = param.range();
+            for pt in &mut points {
+                pt.value = pt.value.clamp(lo, hi);
+                pt.step |= param.steps();
+            }
             let a = &mut track(p, t)?.automation;
             *a.points_mut(param) = points;
             if let Some(name) = name {
                 a.name(param, &name);
             }
             a.tidy();
+        }
+        Command::ShapeAutomation {
+            track: t,
+            param,
+            send,
+            plugin,
+            id,
+            shape,
+            from,
+            to,
+            every,
+            low,
+            high,
+        } => {
+            let param = match param {
+                AutoParam::Volume => Param::Volume,
+                AutoParam::Pan => Param::Pan,
+                AutoParam::Mute => Param::Mute,
+                AutoParam::Send => send_param(p, t, send)?,
+                AutoParam::Plugin => {
+                    let (Some(plugin), Some(id)) = (plugin, id) else {
+                        return Err("a plugin parameter needs `plugin` and `id`".into());
+                    };
+                    if track(p, t)?.plugin(plugin).is_none() {
+                        return Err(format!("track {t} has no plugin there"));
+                    }
+                    Param::Plugin(plugin, id)
+                }
+            };
+            if to <= from {
+                return Err("`to` must be after `from`".into());
+            }
+            let every = every.unwrap_or(PPQ).max(1);
+            let (low, high) = (finite("low", low)?, finite("high", high)?);
+            track(p, t)?
+                .automation
+                .shape(param, shape, from, to, every, low, high);
         }
         Command::SetAutomationMode { track: t, mode } => track(p, t)?.automation.mode = mode,
         Command::SetPluginParam {
@@ -1726,6 +1818,41 @@ mod tests {
         assert_eq!(p.tracks[0].regions.len(), 2);
         assert_eq!(p.auxes[0].name, "Verb");
         assert_eq!(p.tracks[0].automation.volume[0].tick, 0);
+        // Bent and stepped points; a send's level and the mute, by send and as steps.
+        run(
+            &mut p,
+            r#"{"op": "set_automation", "track": 0, "param": "pan",
+                "points": [{"tick": 0, "value": -1, "curve": 0.5}, {"tick": 960, "value": 1, "step": true}]}"#,
+        )
+        .unwrap();
+        let pan = &p.tracks[0].automation.pan;
+        assert_eq!((pan[0].curve, pan[1].step), (0.5, true));
+        run(
+            &mut p,
+            r#"{"op": "set_automation", "track": 0, "param": "send", "send": 0,
+                "points": [{"tick": 0, "value": -20}]}"#,
+        )
+        .unwrap();
+        assert_eq!(p.tracks[0].automation.sends[0].bus, 1);
+        let no_send = run(
+            &mut p,
+            r#"{"op": "set_automation", "track": 0, "param": "send", "send": 3, "points": []}"#,
+        );
+        assert!(no_send.unwrap_err().contains("no send 3"));
+        run(
+            &mut p,
+            r#"{"op": "shape_automation", "track": 0, "param": "mute", "shape": "square",
+                "from": 0, "to": 3840, "every": 960, "low": 0, "high": 1}"#,
+        )
+        .unwrap();
+        let mute = &p.tracks[0].automation.mute;
+        assert!(mute.len() >= 8 && mute.iter().all(|p| p.step));
+        run(
+            &mut p,
+            r#"{"op": "set_automation_mode", "track": 0, "mode": "trim"}"#,
+        )
+        .unwrap();
+        assert_eq!(p.tracks[0].automation.mode, AutoMode::Trim);
     }
 
     /// A plugin that only shows things: a cutoff from 0 to 1000 Hz, a three-way wave, two
@@ -2111,6 +2238,7 @@ mod tests {
             "remove_send",
             "set_aux",
             "set_automation",
+            "shape_automation",
             "add_marker",
             "set_marker",
             "delete_marker",

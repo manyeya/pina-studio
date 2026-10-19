@@ -3,7 +3,9 @@
 //! as Logic's Track Header Components, and how tall new tracks are), regions and the grid (names,
 //! contents, colour, bar shading, beat lines), editing (the loop zone at a region's end, writing
 //! with a double-click), the transport (following the playhead, going back where play started on
-//! stop), and the editor's tabs (a hidden one's shortcut still opens it).
+//! stop), automation (its lanes' height, what an automated control does moved while stopped,
+//! snapping, thinning, Write turning to Latch, automation going with regions), and the editor's
+//! tabs (a hidden one's shortcut still opens it).
 
 use std::path::PathBuf;
 
@@ -11,6 +13,7 @@ use gpui::{Context, Div, FontWeight, MouseButton, div, prelude::*, px, rgb};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    automation::Stopped,
     theme::*,
     workspace::{Bottom, View, Workspace},
 };
@@ -45,6 +48,15 @@ pub struct Settings {
     /// The top half of a region's end loops it; a double-click in an empty lane writes a region.
     pub loop_zone: bool,
     pub double_click_writes: bool,
+    /// Automation: how tall each lane is; what moving an automated control does while stopped;
+    /// points on the grid; what's recorded thinned of points that change nothing; Write
+    /// turning to Latch after a pass; a region's automation going with it when it moves.
+    pub auto_height: f32,
+    pub stopped: Stopped,
+    pub snap_automation: bool,
+    pub thin_recorded: bool,
+    pub write_to_latch: bool,
+    pub carry_automation: bool,
 }
 
 impl Default for Settings {
@@ -67,6 +79,12 @@ impl Default for Settings {
             beat_lines: true,
             loop_zone: true,
             double_click_writes: true,
+            auto_height: 64.0,
+            stopped: Stopped::Trim,
+            snap_automation: true,
+            thin_recorded: true,
+            write_to_latch: true,
+            carry_automation: false,
         }
     }
 }
@@ -114,15 +132,17 @@ pub enum Section {
     Regions,
     Editing,
     Transport,
+    Automation,
     Tabs,
 }
 
 impl Section {
-    const ALL: [Section; 5] = [
+    const ALL: [Section; 6] = [
         Section::Tracks,
         Section::Regions,
         Section::Editing,
         Section::Transport,
+        Section::Automation,
         Section::Tabs,
     ];
 
@@ -132,6 +152,7 @@ impl Section {
             Section::Regions => "Regions & grid",
             Section::Editing => "Editing",
             Section::Transport => "Transport",
+            Section::Automation => "Automation",
             Section::Tabs => "Editor tabs",
         }
     }
@@ -142,6 +163,7 @@ impl Section {
             Section::Regions => Icon::Grid,
             Section::Editing => Icon::Pointer,
             Section::Transport => Icon::Play,
+            Section::Automation => Icon::Fade,
             Section::Tabs => Icon::PanelBottom,
         }
     }
@@ -154,6 +176,9 @@ impl Section {
             Section::Regions => "How regions and the grid behind them look.",
             Section::Editing => "What the mouse does in the tracks.",
             Section::Transport => "Playing and stopping.",
+            Section::Automation => {
+                "Volume, pan, mute, sends and plugin parameters over time: the lanes under each track (A), and what moving an automated control does."
+            }
             Section::Tabs => {
                 "The tabs under the tracks. A hidden one's shortcut still opens it, its tab showing while it's open."
             }
@@ -212,6 +237,9 @@ impl Bottom {
 
 /// A switch's setting, read and written.
 type Field = fn(&mut Settings) -> &mut bool;
+
+/// Heights an automation lane can be.
+const AUTO_HEIGHTS: [(&str, f32); 3] = [("Small", 44.0), ("Medium", 64.0), ("Large", 96.0)];
 
 /// Heights a track can start at.
 const HEIGHTS: [(&str, f32); 4] = [
@@ -487,6 +515,116 @@ impl Workspace {
                     cx,
                 ),
             ])],
+            Section::Automation => {
+                // A choice of a few, beside its title.
+                let choose = |title: &'static str, what: &'static str, segs: Vec<Div>| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(14.))
+                        .px(px(14.))
+                        .py(px(12.))
+                        .rounded(px(12.))
+                        .bg(rgb(CARD))
+                        .border_1()
+                        .border_color(rgb(LINE))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(title),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .text_color(rgb(TEXT_3))
+                                        .child(what),
+                                ),
+                        )
+                        .child(tray().p(px(2.)).rounded(px(8.)).children(segs))
+                };
+                let height = self.settings.auto_height;
+                let heights = AUTO_HEIGHTS
+                    .map(|(label, h)| {
+                        seg(label, (height - h).abs() < 0.5, 26.)
+                            .debug_selector(move || format!("setting-auto-height-{label}"))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    ws.settings.auto_height = h;
+                                    ws.settings.save();
+                                    cx.notify();
+                                }),
+                            )
+                    })
+                    .into_iter()
+                    .collect();
+                let stopped = self.settings.stopped;
+                let stops = Stopped::ALL
+                    .map(|st| {
+                        seg(st.name(), st == stopped, 26.)
+                            .debug_selector(move || format!("setting-stopped-{}", st.name()))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    ws.settings.stopped = st;
+                                    ws.settings.save();
+                                    cx.notify();
+                                }),
+                            )
+                    })
+                    .into_iter()
+                    .collect();
+                vec![
+                    choose(
+                        "Lane height",
+                        "Each automation lane's, under its track",
+                        heights,
+                    ),
+                    choose(
+                        "Moved while stopped",
+                        "An automated control moved with the song stopped moves its whole line, sets a point at the playhead, or changes it until you play",
+                        stops,
+                    ),
+                    card(vec![
+                        flag(
+                            "Snap points",
+                            "Points drawn or dragged go to the grid (hold ⌘ to place one freely)",
+                            "snap_automation",
+                            |s| &mut s.snap_automation,
+                            cx,
+                        ),
+                        flag(
+                            "Thin what's recorded",
+                            "After a pass, and after the pencil, points that change nothing are taken out",
+                            "thin_recorded",
+                            |s| &mut s.thin_recorded,
+                            cx,
+                        ),
+                        flag(
+                            "Write turns to Latch",
+                            "After a pass in Write, the track goes to Latch, so the next doesn't wipe it",
+                            "write_to_latch",
+                            |s| &mut s.write_to_latch,
+                            cx,
+                        ),
+                        flag(
+                            "Automation moves with regions",
+                            "Moving or copying a region takes the automation under it along",
+                            "carry_automation",
+                            |s| &mut s.carry_automation,
+                            cx,
+                        ),
+                    ]),
+                ]
+            }
             Section::Tabs => vec![card(
                 Bottom::ALL
                     .into_iter()

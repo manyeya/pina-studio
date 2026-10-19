@@ -7,8 +7,8 @@ use gpui::{
 use tempo_engine::{
     commands::{self, ChannelRef, Command, PresetChoice},
     project::{
-        At, AutoMode, AuxSend, Comp, Content, Eq, Input, Instrument, Param, PatternRow, PluginRef,
-        Preset, Saturator, Which,
+        At, AuxSend, Comp, Content, Eq, Input, Instrument, PatternRow, PluginRef, Preset,
+        Saturator, Which,
     },
 };
 
@@ -160,10 +160,8 @@ pub enum MenuAction {
     },
     /// The Sampler's picked zone cut into slices across the keys.
     Slice(crate::sampler::Slicing),
-    /// Which parameter a track's automation lane shows, by track id.
-    AutoParam(u64, Param),
-    /// How a track follows its automation.
-    AutoMode(usize, AutoMode),
+    /// An automation lane's or point's item, on a track by id.
+    Auto(u64, crate::automation::AutoOp),
     /// What an audio track records.
     Input {
         track: usize,
@@ -430,14 +428,7 @@ impl Workspace {
                     *s = swing;
                 }
             }),
-            MenuAction::AutoParam(track, param) => {
-                self.params.insert(track, param);
-                self.show_automation = true;
-            }
-            MenuAction::AutoMode(track, mode) => self.edit(cx, |ws| {
-                ws.session.project.tracks[track].automation.mode = mode;
-                ws.writing.clear();
-            }),
+            MenuAction::Auto(track, op) => self.auto_op(track, op, cx),
             MenuAction::NameMarker(i, name) => self.edit(cx, |ws| {
                 if let Some(m) = ws.session.project.markers.get_mut(i) {
                     m.name = name;
