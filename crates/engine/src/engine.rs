@@ -19,6 +19,9 @@ use std::{
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+use crate::modulate::{
+    self, MAX_MODS, ModInput, ModKind, ModRoute, ModState, ModTarget, Modulator, Offsets,
+};
 use crate::{
     drums::Drums,
     dsp::Strip,
@@ -452,6 +455,11 @@ impl Held {
         Held([0; 128])
     }
 
+    /// Whether any note is held.
+    fn any(&self) -> bool {
+        self.0.iter().any(|&c| c > 0)
+    }
+
     fn apply(&mut self, pitch: u8, on: bool) {
         let count = &mut self.0[pitch as usize];
         *count = if on {
@@ -784,6 +792,11 @@ struct Plan {
     spread: f32,
     /// Binaural: its height and distance (the way round follows the pan).
     place: Place,
+    /// Its modulators (sends by their place in `sends`), the lane each follower hears, and the
+    /// set values of the plugin parameters they move.
+    mods: Vec<Modulator>,
+    follow: [usize; MAX_MODS],
+    param_base: Vec<(Which, u32, f32)>,
     /// Automation, with ticks turned to samples; empty follows the fader.
     volume: Vec<AutoPoint>,
     pans: Vec<AutoPoint>,
@@ -810,11 +823,26 @@ struct Plan {
 }
 
 impl Plan {
-    /// Moves a plugin's automated parameters across a block, `from` to `to` (samples read).
-    fn automate(&self, which: Which, p: &mut Processor, (from, to): (u64, u64)) {
+    /// Moves a plugin's automated parameters across a block, `from` to `to` (samples read), and
+    /// its modulated ones about where they're automated or set.
+    fn automate(&self, which: Which, p: &mut Processor, (from, to): (u64, u64), o: &Offsets) {
         for (_, id, points) in self.params.iter().filter(|a| a.0 == which) {
-            let at = |s: u64| value_at(points, s as f64).unwrap_or(0.0) as f64;
+            let off = o.plugin(which, *id).unwrap_or(0.0);
+            let at =
+                |s: u64| (value_at(points, s as f64).unwrap_or(0.0) + off).clamp(0.0, 1.0) as f64;
             p.automate(*id, at(from), at(to.saturating_sub(1)));
+        }
+        for &(w, id, off) in &o.plugins[..o.plugin_count] {
+            if w != which || self.params.iter().any(|a| a.0 == w && a.1 == id) {
+                continue;
+            }
+            let base = self
+                .param_base
+                .iter()
+                .find(|b| b.0 == w && b.1 == id)
+                .map_or(0.5, |b| b.2);
+            let v = (base + off).clamp(0.0, 1.0) as f64;
+            p.automate(id, v, v);
         }
     }
 
@@ -823,13 +851,15 @@ impl Plan {
         value_at(&self.pans, at as f64).unwrap_or(self.pan)
     }
 
-    /// How left and right become the mix's at a sample: the fader, and the pan by its mode.
-    fn matrix(&self, at: u64) -> [f32; 4] {
+    /// How left and right become the mix's at a sample: the fader, and the pan by its mode;
+    /// each moved by its modulators (`by`: dB, pan).
+    fn matrix(&self, at: u64, by: (f32, f32)) -> [f32; 4] {
         let volume = value_at(&self.volume, at as f64).unwrap_or(self.volume_db);
+        let volume = modulate::apply_volume(volume, by.0);
         pan_matrix(
             self.pan_mode,
             self.pan_law,
-            self.pan_at(at),
+            modulate::apply_pan(self.pan_at(at), by.1),
             self.spread,
             self.audible * db(volume),
         )
@@ -877,6 +907,10 @@ pub struct Lane {
     queued: Option<(Option<usize>, u64)>,
     strip: Box<Strip>,
     binaural: Box<Binaural>,
+    /// Its modulators' memories, and what they moved its volume and pan by last block (to ramp
+    /// from).
+    mods: [ModState; MAX_MODS],
+    mod_last: (f32, f32),
 }
 
 /// One plugin of a project (whose files are in `dir`) loaded on its own, as the project sets
@@ -972,6 +1006,8 @@ pub fn make_lane(
         queued: None,
         strip: Box::new(Strip::new(rate)),
         binaural: Box::default(),
+        mods: [ModState::default(); MAX_MODS],
+        mod_last: (0.0, 0.0),
     };
     Ok((lane, plugins, latency))
 }
@@ -1107,6 +1143,55 @@ pub fn compile(
             pan_law: project.pan_law,
             spread: t.spread.unwrap_or(1.0),
             place: Place::of(t, t.pan),
+            mods: t
+                .modulators
+                .iter()
+                .take(MAX_MODS)
+                .map(|m| Modulator {
+                    kind: m.kind.clone(),
+                    // A send by its place among those that play.
+                    routes: m
+                        .routes
+                        .iter()
+                        .filter_map(|r| match r.target {
+                            ModTarget::Send(j) => {
+                                let playing = |s: &&crate::project::AuxSend| {
+                                    project.auxes.iter().any(|a| a.bus == s.bus)
+                                };
+                                let k = t.sends.iter().take(j).filter(playing).count();
+                                t.sends.get(j).filter(playing).map(|_| ModRoute {
+                                    target: ModTarget::Send(k),
+                                    ..*r
+                                })
+                            }
+                            _ => Some(*r),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            follow: std::array::from_fn(|k| match t.modulators.get(k).map(|m| &m.kind) {
+                Some(ModKind::Follower { source, .. }) => project
+                    .tracks
+                    .iter()
+                    .position(|o| o.id == *source)
+                    .map_or(usize::MAX, |j| tracks[j].0),
+                _ => usize::MAX,
+            }),
+            param_base: {
+                let refs = match &t.instrument {
+                    Some(Instrument::Plugin(r)) => vec![(Which::Instrument, r)],
+                    _ => vec![],
+                };
+                let inserts = t
+                    .inserts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| (Which::Insert(i), r));
+                refs.into_iter()
+                    .chain(inserts)
+                    .flat_map(|(w, r)| r.params.iter().map(move |(&id, &v)| (w, id, v as f32)))
+                    .collect()
+            },
             volume: auto.map_or_else(Vec::new, |a| in_samples(&a.volume)),
             pans: auto.map_or_else(Vec::new, |a| in_samples(&a.pan)),
             params: auto
@@ -1425,6 +1510,8 @@ pub struct Shared {
     buffer: AtomicU32,
     /// Click on every beat while playing.
     metronome: AtomicBool,
+    /// Each lane's modulators' latest values (f32 bits), `MAX_MODS` a lane.
+    mods: Vec<AtomicU32>,
 }
 
 impl Shared {
@@ -1438,6 +1525,7 @@ impl Shared {
             load: AtomicU32::new(0),
             buffer: AtomicU32::new(0),
             metronome: AtomicBool::new(false),
+            mods: (0..SLOTS * MAX_MODS).map(|_| AtomicU32::new(0)).collect(),
         }
     }
 
@@ -1446,6 +1534,21 @@ impl Shared {
         self.meters[slot * 2].fetch_max(peak[0].to_bits(), Ordering::Relaxed);
         self.meters[slot * 2 + 1].fetch_max(peak[1].to_bits(), Ordering::Relaxed);
         self.reduction[slot].fetch_max(reduction.to_bits(), Ordering::Relaxed);
+    }
+
+    fn report_mod(&self, slot: usize, k: usize, value: f32) {
+        if let Some(m) = self.mods.get(slot * MAX_MODS + k) {
+            m.store(value.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    /// A lane's modulators' latest values.
+    pub fn mod_values(&self, slot: usize) -> [f32; MAX_MODS] {
+        std::array::from_fn(|k| {
+            self.mods
+                .get(slot * MAX_MODS + k)
+                .map_or(0.0, |m| f32::from_bits(m.load(Ordering::Relaxed)))
+        })
     }
 
     /// The gain reduction on a lane (or `MASTER`) since the last call, in dB.
@@ -1537,6 +1640,8 @@ pub struct Engine {
     next_read: u64,
     /// A sample being previewed.
     audition: Option<Box<Audition>>,
+    /// Each lane's peak last block, for the modulators that follow it.
+    peaks: Box<[f32]>,
 }
 
 impl Engine {
@@ -1557,6 +1662,7 @@ impl Engine {
             click: (0, 0.0),
             next_read: 0,
             audition: None,
+            peaks: vec![0.0; SLOTS + 1].into_boxed_slice(),
         }
     }
 
@@ -1924,6 +2030,33 @@ impl Engine {
             g.notes[..g.n].sort_by_key(|n| n.offset);
             g.controls[..g.m].sort_by_key(|c| c.offset);
             let (notes, controls) = (&g.notes[..g.n], &g.controls[..g.m]);
+            // Its modulators, this block: in time with the song while it plays, set off by its
+            // notes, hearing the tracks they follow as they were last block.
+            let mut moved = Offsets::default();
+            if !plan.mods.is_empty() {
+                let input = ModInput {
+                    beats: playing.then(|| from as f64 * tempo / (60.0 * self.rate)),
+                    seconds: frames as f64 / self.rate,
+                    tempo,
+                    trigger: notes.iter().any(|n| n.velocity > 0.0),
+                    gate: lane.held.any() || lane.live.any(),
+                    follow: 0.0,
+                };
+                for (k, m) in plan.mods.iter().enumerate().take(MAX_MODS) {
+                    let heard = self.peaks.get(plan.follow[k]).copied().unwrap_or(0.0);
+                    let input = ModInput {
+                        follow: heard,
+                        ..input
+                    };
+                    let v = modulate::step(&m.kind, &mut lane.mods[k], &input);
+                    if let Some(s) = shared {
+                        s.report_mod(plan.slot, k, v);
+                    }
+                    for route in &m.routes {
+                        moved.add(route.target, route.depth * v);
+                    }
+                }
+            }
             match &mut lane.source {
                 Source::Audio => {}
                 Source::Synth(s) => s.process([&mut *l, &mut *r], frames, notes),
@@ -1931,28 +2064,42 @@ impl Engine {
                 Source::Sampler(s) => {
                     if let Some(settings) = &plan.sampler {
                         s.follow(settings, Arc::as_ptr(settings) as usize);
+                        s.modulate(&settings.voice, &moved);
                     }
                     s.process([&mut *l, &mut *r], frames, notes, controls)
                 }
                 Source::Plugin(p) => {
-                    plan.automate(Which::Instrument, p, (from, to));
+                    plan.automate(Which::Instrument, p, (from, to), &moved);
                     p.set_transport(playing, from, tempo);
                     p.process([&mut *l, &mut *r], frames, notes, controls, None);
                 }
             }
-            let reduction = lane.strip.run(&plan.dsp, l, r);
+            let reduction = match moved.strip {
+                false => lane.strip.run(&plan.dsp, l, r),
+                true => {
+                    let mut dsp = StripDsp {
+                        eq: plan.dsp.eq,
+                        comp: plan.dsp.comp,
+                        sat: plan.dsp.sat,
+                    };
+                    dsp.eq.iter_mut().for_each(|e| moved.eq(e));
+                    dsp.comp.iter_mut().for_each(|c| moved.comp(c));
+                    dsp.sat.iter_mut().for_each(|s| moved.sat(s));
+                    lane.strip.run(&dsp, l, r)
+                }
+            };
             let sidechains = &arrangement.sidechains;
             for (i, p) in lane.inserts.iter_mut().enumerate() {
-                plan.automate(Which::Insert(i), p, (from, to));
+                plan.automate(Which::Insert(i), p, (from, to), &moved);
                 p.set_transport(playing, from, tempo);
                 let sc = sidechain(sidechains, plan.sidechains.get(i), frames);
                 p.process([&mut *l, &mut *r], frames, &[], &[], sc);
             }
             lane.pre.process(l, r, plan.delay);
             // Pre-fader sends: muting still silences them.
-            for &(aux, level, _) in plan.sends.iter().filter(|s| s.2) {
+            for (k, &(aux, level, _)) in plan.sends.iter().enumerate().filter(|s| s.1.2) {
                 let bus = &mut arrangement.buses[aux];
-                let level = level * plan.audible;
+                let level = level * plan.audible * db(moved.sends.get(k).copied().unwrap_or(0.0));
                 for i in 0..frames {
                     bus[0][i] += l[i] * level;
                     bus[1][i] += r[i] * level;
@@ -1964,7 +2111,9 @@ impl Engine {
             } else {
                 heard
             };
-            let (m0, m1) = (plan.matrix(heard), plan.matrix(later));
+            let now = (moved.volume, moved.pan);
+            let (m0, m1) = (plan.matrix(heard, lane.mod_last), plan.matrix(later, now));
+            lane.mod_last = now;
             let step: [f32; 4] = std::array::from_fn(|k| (m1[k] - m0[k]) / frames as f32);
             for i in 0..frames {
                 let k = i as f32;
@@ -1975,7 +2124,7 @@ impl Engine {
             }
             if plan.pan_mode == PanMode::Binaural {
                 let place = Place {
-                    azimuth: plan.pan_at(heard).clamp(-1.0, 1.0) * 180.0,
+                    azimuth: modulate::apply_pan(plan.pan_at(heard), moved.pan) * 180.0,
                     ..plan.place
                 };
                 lane.binaural
@@ -1992,7 +2141,8 @@ impl Engine {
                 sr[..frames].copy_from_slice(r);
             }
             // Post-fader sends.
-            for &(aux, level, _) in plan.sends.iter().filter(|s| !s.2) {
+            for (k, &(aux, level, _)) in plan.sends.iter().enumerate().filter(|s| !s.1.2) {
+                let level = level * db(moved.sends.get(k).copied().unwrap_or(0.0));
                 let bus = &mut arrangement.buses[aux];
                 for i in 0..frames {
                     bus[0][i] += l[i] * level;
@@ -2013,6 +2163,9 @@ impl Engine {
             }
             if let Some(s) = shared {
                 s.report(plan.slot, peak, reduction);
+            }
+            if let Some(p) = self.peaks.get_mut(plan.slot) {
+                *p = peak[0].max(peak[1]);
             }
         }
 
@@ -2601,6 +2754,61 @@ mod tests {
         t.regions[0].mute = true;
         let [l, _] = render(&project(vec![t]), Path::new("."), BEAT);
         assert_eq!(peak(&l), 0.0);
+    }
+
+    #[test]
+    fn an_lfo_moves_the_volume_and_a_follower_ducks_one_track_under_another() {
+        use crate::modulate::{LfoShape, ModRate};
+        // A square LFO a beat long, 24 dB down while high: the first half of each beat quiet.
+        let mut pad = synth_track("pad", vec![note(0, PPQ * 4, 60)], PPQ * 4);
+        pad.modulators = vec![Modulator {
+            kind: ModKind::Lfo {
+                shape: LfoShape::Square,
+                rate: ModRate::Beats(1.0),
+                phase: 0.0,
+                unipolar: false,
+            },
+            routes: vec![ModRoute {
+                target: ModTarget::Volume,
+                depth: -24.0,
+            }],
+        }];
+        let [l, _] = render(&project(vec![pad.clone()]), Path::new("."), BEAT * 2);
+        let (low, high) = (
+            peak(&l[BEAT + 3000..BEAT + 9000]),
+            peak(&l[BEAT + 15000..BEAT + 21000]),
+        );
+        assert!(high > low * 10.0, "{low} {high}");
+
+        // The pad follows a kick: ducked just after it hits, back up a beat on.
+        let kick = Track {
+            id: 7,
+            ..synth_track("kick", vec![note(0, PPQ / 8, 36)], PPQ * 4)
+        };
+        let mut pad = Track {
+            id: 8,
+            ..synth_track("pad", vec![note(0, PPQ * 4, 72)], PPQ * 4)
+        };
+        let both = |pad: &Track| {
+            let [l, _] = render(
+                &project(vec![kick.clone(), pad.clone()]),
+                Path::new("."),
+                BEAT * 2,
+            );
+            // After the kick's note and its release: the pad alone.
+            (peak(&l[6_500..8_000]), peak(&l[BEAT + 6_500..BEAT + 8_000]))
+        };
+        let (plain, _) = both(&pad);
+        pad.modulators = vec![Modulator {
+            kind: ModKind::follower(7),
+            routes: vec![ModRoute {
+                target: ModTarget::Volume,
+                depth: -30.0,
+            }],
+        }];
+        let (ducked, later) = both(&pad);
+        assert!(ducked < plain * 0.5, "{ducked} {plain}");
+        assert!(later > ducked * 2.0, "{later} {ducked}");
     }
 
     #[test]

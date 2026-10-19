@@ -252,6 +252,25 @@ chord track; parts are written over it, and the critic checks against it.
   (everything but the FX stops for `length` beats, 1 by default) or `build` (a riser, a fill, a
   beat's gap and an impact). Sounds are made at the song's tempo and go on an `FX` audio track
   (made if there's none).
+- `add_modulator` `{"track": 1, "modulator": {"type": "lfo", "shape": "sine", "rate": {"beats": 0.5}}}`:
+  a modulator on a track, eight at most, that settings follow as routes say (`modulate`). Its
+  `"type"`: `"lfo"` (`"shape"`: sine, triangle, saw_up, saw_down or square; `"rate"`
+  `{"beats": n}` in time with the song, or `{"hz": n}`; `"phase"` 0 to 1; `"unipolar": true` for
+  0 to 1 rather than -1 to 1), `"steps"` (`"values"` 0 to 1, a step each `"rate"`; `"glide"` 0 to
+  1), `"envelope"` (`"attack_ms"`, `"decay_ms"`, `"sustain"`, `"release_ms"`: set off by the
+  track's notes), `"follower"` (`"source"`: another track's id, `"attack_ms"`, `"release_ms"`:
+  its level, for sidechain pumping and ducking), `"random"` (`"rate"`, `"smooth"`) or `"macro"`
+  (`"value"` 0 to 1).
+- `set_modulator` `{"track": 1, "index": 0, "modulator": {"type": "lfo", "shape": "square", "rate": {"beats": 0.25}}}`:
+  one replaced (its routes kept unless it brings its own); `remove_modulator` `{"track": 1, "index": 0}`.
+- `modulate` `{"track": 1, "modulator": 0, "target": "pan", "depth": 0.8}`: a modulator moving a
+  setting by `depth` in its units (0 takes the route off): `"volume"` (dB), `"pan"` (-1 to 1),
+  `{"send": 0}` (dB), `"low_cut"` (octaves), `{"eq_gain": 1}` (2 the high mid, 3 the shelf; dB),
+  `"comp_threshold"`, `"comp_makeup"`, `"sat_drive"` (dB), `"sat_tone"`, `"sat_mix"`,
+  `{"sampler": "cutoff"}` (octaves; also `resonance`, `filter_env`, `transpose` in semitones,
+  `volume` in dB, `vibrato` in cents, `lfo_filter`, `tremolo`), or `{"plugin": ["instrument", 12]}`
+  (a parameter by id, 0 to 1; `{"insert": 0}` for an effect's). A follower ducking a bass under
+  the kick: `{"target": "volume", "depth": -18}` on the bass, its follower's source the kick.
 - `set_reference` `{"reference": {"file": "/path/song.wav", "lufs": -9, "crest_db": 10, "spectrum": [-3, -4, -8, -14, -18, -20], "width_db": -10}}`:
   a finished song the mix aims at instead of the genre's targets; the `reference` tool measures
   one and sets it. Without `reference`, none.

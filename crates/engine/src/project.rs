@@ -374,6 +374,9 @@ pub struct Track {
     pub elevation: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distance: Option<f32>,
+    /// Its modulators, and what each moves (`modulate.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modulators: Vec<crate::modulate::Modulator>,
     #[serde(default)]
     pub mute: bool,
     #[serde(default)]

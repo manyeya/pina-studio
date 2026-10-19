@@ -234,6 +234,8 @@ pub struct Sampler {
     holding: usize,
     /// The settings followed last (by address).
     following: usize,
+    /// Its voice is moved by modulators.
+    modulated: bool,
     tick: usize,
 }
 
@@ -270,6 +272,7 @@ impl Sampler {
             held: [0; 16],
             holding: 0,
             following: 0,
+            modulated: false,
             tick: 0,
         };
         s.shape();
@@ -302,6 +305,19 @@ impl Sampler {
         if s.voice != self.voice {
             self.voice = s.voice;
             self.shape();
+        }
+    }
+
+    /// Its voice as its settings have it moved by modulators, this block; back as they have it
+    /// when nothing moves it. (Envelope times aren't modulated: they'd need reshaping.)
+    pub fn modulate(&mut self, base: &project::SamplerVoice, by: &crate::modulate::Offsets) {
+        if by.voice {
+            let mut v = *base;
+            by.voice(&mut v);
+            self.voice = v;
+            self.modulated = true;
+        } else if std::mem::take(&mut self.modulated) {
+            self.voice = *base;
         }
     }
 

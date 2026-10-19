@@ -10,6 +10,7 @@ pub mod engine;
 mod faust;
 pub mod look;
 pub mod midi;
+pub mod modulate;
 pub mod music;
 pub mod peaks;
 pub mod playbook;

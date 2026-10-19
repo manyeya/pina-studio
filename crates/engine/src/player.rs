@@ -535,6 +535,15 @@ impl Player {
             .map_or([0.0; 2], |s| self.shared.take_meter(s.slot))
     }
 
+    /// A track's modulators' latest values, as the engine last worked them out.
+    pub fn modulators(&self, track: u64) -> [f32; crate::modulate::MAX_MODS] {
+        self.lanes
+            .get(&track)
+            .map_or([0.0; crate::modulate::MAX_MODS], |s| {
+                self.shared.mod_values(s.slot)
+            })
+    }
+
     /// The master's peak level since the last call, left and right.
     pub fn master_meter(&self) -> [f32; 2] {
         self.shared.take_meter(MASTER)

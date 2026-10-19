@@ -435,10 +435,46 @@ pub enum Command {
         #[serde(default)]
         reference: Option<crate::project::Reference>,
     },
+    /// A modulator on a track (eight at most): an LFO, steps, an envelope, a follower, random, a
+    /// macro.
+    AddModulator {
+        track: usize,
+        modulator: crate::modulate::Modulator,
+    },
+    /// A modulator replaced (its routes kept unless given), or taken off.
+    SetModulator {
+        track: usize,
+        index: usize,
+        modulator: crate::modulate::Modulator,
+    },
+    RemoveModulator {
+        track: usize,
+        index: usize,
+    },
+    /// A modulator moving a setting by `depth` in its units; 0 takes the route off.
+    Modulate {
+        track: usize,
+        modulator: usize,
+        target: crate::modulate::ModTarget,
+        depth: f32,
+    },
 }
 
 fn yes() -> bool {
     true
+}
+
+fn modulator_at(
+    p: &mut Project,
+    t: usize,
+    index: usize,
+) -> Result<&mut crate::modulate::Modulator, String> {
+    let track = track(p, t)?;
+    let n = track.modulators.len();
+    track
+        .modulators
+        .get_mut(index)
+        .ok_or_else(|| format!("no modulator {index}: track {t} has {n}"))
 }
 
 /// A plugin parameter, by its id or its name.
@@ -1441,6 +1477,49 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         } => return arrange::copy_bars(p, from, bars, to, tracks),
         Command::Transition(t) => return arrange::transition(p, dir, t),
         Command::SetReference { reference } => p.reference = reference,
+        Command::AddModulator {
+            track: t,
+            modulator,
+        } => {
+            let t = track(p, t)?;
+            if t.modulators.len() >= crate::modulate::MAX_MODS {
+                return Err(format!(
+                    "a track has {} modulators at most",
+                    crate::modulate::MAX_MODS
+                ));
+            }
+            t.modulators.push(modulator);
+        }
+        Command::SetModulator {
+            track: t,
+            index,
+            modulator,
+        } => {
+            let m = modulator_at(p, t, index)?;
+            let routes = std::mem::take(&mut m.routes);
+            *m = modulator;
+            if m.routes.is_empty() {
+                m.routes = routes;
+            }
+        }
+        Command::RemoveModulator { track: t, index } => {
+            modulator_at(p, t, index)?;
+            p.tracks[t].modulators.remove(index);
+        }
+        Command::Modulate {
+            track: t,
+            modulator,
+            target,
+            depth,
+        } => {
+            let range = crate::modulate::depth_range(target);
+            let depth = finite("depth", depth)?.clamp(-range, range);
+            let m = modulator_at(p, t, modulator)?;
+            m.routes.retain(|r| r.target != target);
+            if depth != 0.0 {
+                m.routes.push(crate::modulate::ModRoute { target, depth });
+            }
+        }
         Command::SetGenre { genre } => {
             p.genre = match genre {
                 None => None,
@@ -1914,6 +1993,55 @@ mod tests {
     }
 
     #[test]
+    fn modulators_are_added_routed_and_removed() {
+        use crate::modulate::{ModKind, ModTarget, SamplerParam};
+        let mut p = Project::new(48_000);
+        run(
+            &mut p,
+            r#"{"op": "add_track", "name": "Bass", "instrument": "synth"}"#,
+        )
+        .unwrap();
+        run(
+            &mut p,
+            r#"{"op": "add_modulator", "track": 0, "modulator": {"type": "lfo", "shape": "square", "rate": {"beats": 0.5}}}"#,
+        )
+        .unwrap();
+        run(&mut p, r#"{"op": "modulate", "track": 0, "modulator": 0, "target": {"sampler": "cutoff"}, "depth": 2}"#).unwrap();
+        run(
+            &mut p,
+            r#"{"op": "modulate", "track": 0, "modulator": 0, "target": "pan", "depth": 5}"#,
+        )
+        .unwrap();
+        let m = &p.tracks[0].modulators[0];
+        assert!(matches!(m.kind, ModKind::Lfo { .. }));
+        let routes: Vec<_> = m.routes.iter().map(|r| (r.target, r.depth)).collect();
+        assert_eq!(
+            routes,
+            [
+                (ModTarget::Sampler(SamplerParam::Cutoff), 2.0),
+                (ModTarget::Pan, 2.0)
+            ]
+        );
+        run(
+            &mut p,
+            r#"{"op": "modulate", "track": 0, "modulator": 0, "target": "pan", "depth": 0}"#,
+        )
+        .unwrap();
+        assert_eq!(p.tracks[0].modulators[0].routes.len(), 1);
+        let err = run(
+            &mut p,
+            r#"{"op": "remove_modulator", "track": 0, "index": 3}"#,
+        );
+        assert!(err.unwrap_err().contains("no modulator 3"));
+        run(
+            &mut p,
+            r#"{"op": "remove_modulator", "track": 0, "index": 0}"#,
+        )
+        .unwrap();
+        assert!(p.tracks[0].modulators.is_empty());
+    }
+
+    #[test]
     fn pan_modes_spread_and_the_pan_law() {
         let mut p = Project::new(48_000);
         run(
@@ -1998,6 +2126,10 @@ mod tests {
             "copy_bars",
             "transition",
             "set_reference",
+            "add_modulator",
+            "set_modulator",
+            "remove_modulator",
+            "modulate",
         ];
         for op in samples {
             assert!(
