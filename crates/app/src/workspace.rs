@@ -806,8 +806,11 @@ pub struct Workspace {
     /// move the rows under a drag).
     pub steps_row: usize,
     pub steps_pick: Option<usize>,
-    /// What the window shows, kept for every song (Settings, ⌘,).
+    /// What the window shows, kept for every song (Settings, ⌘,); the page's section shown;
+    /// where play last started (to go back to on stop, if Settings say).
     pub settings: crate::settings::Settings,
+    pub settings_section: crate::settings::Section,
+    pub play_from: u64,
     /// What the lane under the picked sound shows.
     pub steps_lane_mode: crate::steps::LaneMode,
     pub steps_lane: Rc<Cell<Bounds<Pixels>>>,
@@ -980,6 +983,8 @@ impl Workspace {
             steps_pick: None,
             steps_lane_mode: Default::default(),
             settings: crate::settings::Settings::load(),
+            settings_section: Default::default(),
+            play_from: 0,
             steps_lane: Rc::new(Cell::new(Bounds::default())),
             sampler_ui: Default::default(),
             sampler_wave_bounds: Rc::new(Cell::new(Bounds::default())),
@@ -1101,7 +1106,8 @@ impl Workspace {
             .tracks
             .get(i)
             .and_then(|t| t.height)
-            .map_or(LANE_H, |h| h.clamp(MIN_LANE_H, MAX_LANE_H))
+            .unwrap_or(self.settings.track_height)
+            .clamp(MIN_LANE_H, MAX_LANE_H)
     }
 
     /// Where track `i`'s row begins, from the top of the lanes, scrolled.
@@ -2090,7 +2096,13 @@ impl Workspace {
     pub fn play_stop(&mut self, cx: &mut Context<Self>) {
         if self.player.playing() || self.recording.is_some() {
             self.stop(cx);
+            // Back where play started, as Logic's Return to Last Play Position.
+            if self.settings.return_on_stop {
+                let from = self.play_from;
+                self.locate_tick(from, cx);
+            }
         } else {
+            self.play_from = self.playhead();
             self.player.play();
         }
         cx.notify();

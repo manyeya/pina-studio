@@ -771,7 +771,8 @@ impl Workspace {
             None => instrument_name(t.instrument.as_ref()),
         };
         let level = self.levels.get(&Some(t.id)).copied().unwrap_or_default();
-        let roomy = lh >= 64.0;
+        let shown = self.settings.clone();
+        let roomy = lh >= 64.0 && shown.header_strip;
         let pos = strip::fader_pos(volume);
         let pan_text = {
             let side = strip::pan_label;
@@ -860,18 +861,20 @@ impl Workspace {
                         }),
                     ),
             )
-            .child(
-                button("R", armed == Some(i), RECORD, 0xffffff)
-                    .debug_selector(move || format!("arm-{i}"))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            cx.stop_propagation();
-                            ws.toggle_arm(i);
-                            cx.notify();
-                        }),
-                    ),
-            );
+            .when(shown.header_record, |d| {
+                d.child(
+                    button("R", armed == Some(i), RECORD, 0xffffff)
+                        .debug_selector(move || format!("arm-{i}"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| {
+                                cx.stop_propagation();
+                                ws.toggle_arm(i);
+                                cx.notify();
+                            }),
+                        ),
+                )
+            });
         // The level, left over right, as LEDs: green to -7 dB, amber, then red at 0.
         let (now, held) = (level.now, level.held);
         let leds = canvas(
@@ -1133,7 +1136,7 @@ impl Workspace {
                     .items_center()
                     .gap(px(8.))
                     .child(buttons)
-                    .child(leds),
+                    .when(shown.header_meter, |d| d.child(leds)),
             )
             .when(roomy, |d| {
                 d.child(
@@ -1159,32 +1162,34 @@ impl Workspace {
             .pl(px(13.))
             .pr(px(8.))
             .when(mute, |d| d.opacity(0.55))
-            .child(
-                div()
-                    .id(("track-look", i))
-                    .size(px(icon_size))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(icon_size / 4.0))
-                    .bg(alpha(color, 0.14))
-                    .border_1()
-                    .border_color(alpha(color, if picking { 0.8 } else { 0.34 }))
-                    .cursor_pointer()
-                    .hover(|d| d.bg(alpha(color, 0.26)))
-                    .child(crate::looks::glyph(glyph, icon_size * 0.52).text_color(rgb(color)))
-                    .debug_selector(move || format!("track-look-{i}"))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
-                            cx.stop_propagation();
-                            ws.select_track(i);
-                            let at = e.position + gpui::point(gpui::px(24.), gpui::px(-12.));
-                            ws.open_picker(i, at, window, cx);
-                        }),
-                    ),
-            )
+            .when(shown.header_icons, |d| {
+                d.child(
+                    div()
+                        .id(("track-look", i))
+                        .size(px(icon_size))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(icon_size / 4.0))
+                        .bg(alpha(color, 0.14))
+                        .border_1()
+                        .border_color(alpha(color, if picking { 0.8 } else { 0.34 }))
+                        .cursor_pointer()
+                        .hover(|d| d.bg(alpha(color, 0.26)))
+                        .child(crate::looks::glyph(glyph, icon_size * 0.52).text_color(rgb(color)))
+                        .debug_selector(move || format!("track-look-{i}"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                ws.select_track(i);
+                                let at = e.position + gpui::point(gpui::px(24.), gpui::px(-12.));
+                                ws.open_picker(i, at, window, cx);
+                            }),
+                        ),
+                )
+            })
             .child(
                 div()
                     .flex_1()
@@ -1198,14 +1203,16 @@ impl Workspace {
                             .items_baseline()
                             .gap(px(6.))
                             .min_w(px(0.))
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .font_family(MONO)
-                                    .text_size(px(10.))
-                                    .text_color(rgb(if selected { TEXT_3 } else { TEXT_4 }))
-                                    .child(format!("{:02}", i + 1)),
-                            )
+                            .when(shown.header_numbers, |d| {
+                                d.child(
+                                    div()
+                                        .flex_none()
+                                        .font_family(MONO)
+                                        .text_size(px(10.))
+                                        .text_color(rgb(if selected { TEXT_3 } else { TEXT_4 }))
+                                        .child(format!("{:02}", i + 1)),
+                                )
+                            })
                             .child(match self.name_field(Name::Track(i)) {
                                 Some(field) => div().flex_1().child(field),
                                 None => div()
@@ -1232,7 +1239,7 @@ impl Workspace {
                                     ),
                             }),
                     )
-                    .when(lh >= 52.0, |d| {
+                    .when(lh >= 52.0 && shown.header_kind, |d| {
                         d.child(
                             div()
                                 .flex()
@@ -1350,6 +1357,7 @@ impl Workspace {
             .cycle
             .filter(|c| !c.off)
             .map(|c| (c.start as f32 * ppt - sx, c.end as f32 * ppt - sx));
+        let (shading, beat_lines) = (self.settings.bar_shading, self.settings.beat_lines);
         let grid = canvas(
             move |b, _, _| bounds.set(b),
             move |b, _, window, _| {
@@ -1366,7 +1374,7 @@ impl Workspace {
                 // Every other four bars a shade lighter, as FL Studio does.
                 let group = ppt * (bar_ticks * 4) as f32;
                 let mut k = (sx / group).floor() as i64;
-                while (k as f32 * group - sx) < w {
+                while shading && (k as f32 * group - sx) < w {
                     if k % 2 == 1 {
                         quad(
                             window,
@@ -1406,7 +1414,7 @@ impl Workspace {
                 let last = ((sx + w) / beat_px) as u64 + 1;
                 for beat in first..=last {
                     let bar = beat % per_bar == 0;
-                    if !bar && beat_px < 10.0 {
+                    if !bar && (beat_px < 10.0 || !beat_lines) {
                         continue;
                     }
                     let color = if beat % (per_bar * 4) == 0 {
@@ -1445,7 +1453,8 @@ impl Workspace {
                     // An empty instrument track says how to start.
                     .when(
                         self.session.project.tracks[i].instrument.is_some()
-                            && self.session.project.tracks[i].regions.is_empty(),
+                            && self.session.project.tracks[i].regions.is_empty()
+                            && self.settings.double_click_writes,
                         |d| {
                             d.child(
                                 div()
@@ -1471,7 +1480,10 @@ impl Workspace {
                             let x = f32::from(e.position.x);
                             if ws.tool == Tool::Pencil {
                                 ws.draw_region(i, x, cx);
-                            } else if e.click_count == 2 && ws.draw_region(i, x, cx).is_some() {
+                            } else if e.click_count == 2
+                                && ws.settings.double_click_writes
+                                && ws.draw_region(i, x, cx).is_some()
+                            {
                                 ws.show_bottom(Bottom::PianoRoll, cx);
                             }
                             cx.notify();
@@ -1887,11 +1899,16 @@ impl Workspace {
         // Its start trims; its end's bottom half trims (⌥ time-stretches), its top half loops,
         // as Logic's region edges do.
         let half = (lh - 8.0) / 2.0;
+        let zone = self.settings.loop_zone;
         let handle = |edge: Edge, cx: &mut Context<Self>| {
             let h = div().absolute().w(px(6.)).cursor_ew_resize();
+            let h = match (edge, zone) {
+                (Edge::Start, _) | (_, false) => h.top_0().h_full(),
+                _ => h.bottom_0().h(px(half)),
+            };
             let h = match edge {
-                Edge::Start => h.left_0().top_0().h_full(),
-                _ => h.right_0().bottom_0().h(px(half)),
+                Edge::Start => h.left_0(),
+                _ => h.right_0(),
             };
             h.on_mouse_down(MouseButton::Left, grab(at, edge, start, end, cx))
         };
@@ -1919,7 +1936,15 @@ impl Workspace {
             .when(muted, |d| d.opacity(0.38))
             .flex()
             .flex_col()
-            .bg(alpha(color, if selected { 0.25 } else { 0.13 }))
+            .bg(alpha(
+                color,
+                match (selected, self.settings.region_bright) {
+                    (true, true) => 0.45,
+                    (false, true) => 0.33,
+                    (true, false) => 0.25,
+                    (false, false) => 0.13,
+                },
+            ))
             .border_1()
             .border_color(if selected {
                 Hsla::from(rgb(0xffffff))
@@ -1929,50 +1954,61 @@ impl Workspace {
             .when(track.mute, |d| d.opacity(0.4))
             .group(group.clone())
             .debug_selector(move || format!("region-{}-{}", at.0, at.1))
-            .child({
-                let ink = if selected {
-                    0xffffff
-                } else {
-                    tint(color, 0.55)
-                };
-                div()
-                    .h(px(17.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .px(px(7.))
-                    .pt(px(2.))
-                    .text_size(px(10.5))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .whitespace_nowrap()
-                    .overflow_hidden()
-                    .text_color(rgb(ink))
-                    // An alias, as Logic shows one: its name in italics, and a link.
-                    .when(region.link.is_some(), |d| {
-                        d.italic().child(icon(Icon::Link, 11.).text_color(rgb(ink)))
-                    })
-                    .when(region.looped, |d| {
-                        d.child(icon(Icon::Loop, 11.).text_color(rgb(ink)))
-                    })
-                    .child(region_name(&track.name, region))
+            .when(self.settings.region_names, |d| {
+                d.child({
+                    let ink = if selected {
+                        0xffffff
+                    } else {
+                        tint(color, 0.55)
+                    };
+                    div()
+                        .h(px(17.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .px(px(7.))
+                        .pt(px(2.))
+                        .text_size(px(10.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_color(rgb(ink))
+                        // An alias, as Logic shows one: its name in italics, and a link.
+                        .when(region.link.is_some(), |d| {
+                            d.italic().child(icon(Icon::Link, 11.).text_color(rgb(ink)))
+                        })
+                        .when(region.looped, |d| {
+                            d.child(icon(Icon::Loop, 11.).text_color(rgb(ink)))
+                        })
+                        .child(region_name(&track.name, region))
+                })
             })
-            .child(
-                div().flex_1().relative().mx(px(1.)).mb(px(4.)).child(
-                    canvas(
-                        |_, _, _| {},
-                        move |b, _, window, _| paint_inside(&inside, b, ppt, ink, window),
-                    )
-                    .absolute()
-                    .size_full(),
-                ),
-            )
+            .when(self.settings.region_contents, |d| {
+                d.child(
+                    div()
+                        .flex_1()
+                        .relative()
+                        .mx(px(1.))
+                        .mb(px(4.))
+                        .when(!self.settings.region_names, |d| d.mt(px(4.)))
+                        .child(
+                            canvas(
+                                |_, _, _| {},
+                                move |b, _, window, _| paint_inside(&inside, b, ppt, ink, window),
+                            )
+                            .absolute()
+                            .size_full(),
+                        ),
+                )
+            })
             .when(selected, |d| d.child(pill(true)).child(pill(false)))
             .child(handle(Edge::Start, cx))
             .child(handle(Edge::End, cx))
-            .when(!region.looped || project.loop_end(at) <= end, |d| {
-                d.child(loop_tab(at, (start, end), half, color, group.clone(), cx))
-            })
+            .when(
+                self.settings.loop_zone && (!region.looped || project.loop_end(at) <= end),
+                |d| d.child(loop_tab(at, (start, end), half, color, group.clone(), cx)),
+            )
             .when(selected, |d| d.children(self.warp_handles(at, cx)))
             .cursor(match self.tool {
                 Tool::Pointer | Tool::Pencil => gpui::CursorStyle::OpenHand,

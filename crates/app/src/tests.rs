@@ -519,6 +519,12 @@ fn settings_hide_editor_tabs_and_their_shortcuts_still_open_them(cx: &mut TestAp
     assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Settings);
     click_on(
         cx,
+        "settings-Editor tabs",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(
+        cx,
         "setting-tab-score",
         Modifiers::none(),
         MouseButton::Left,
@@ -552,6 +558,55 @@ fn settings_hide_editor_tabs_and_their_shortcuts_still_open_them(cx: &mut TestAp
         MouseButton::Left,
     );
     assert!(ws.read_with(cx, |ws, _| ws.settings.shows(Bottom::PianoRoll)));
+}
+
+#[gpui::test]
+fn settings_change_the_headers_regions_editing_and_stopping(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let flip = |cx: &mut VisualTestContext, section: &'static str, name: &'static str| {
+        cx.simulate_keystrokes("cmd-,");
+        click_on(cx, section, Modifiers::none(), MouseButton::Left);
+        click_on(cx, name, Modifiers::none(), MouseButton::Left);
+        click_on(cx, "settings-done", Modifiers::none(), MouseButton::Left);
+    };
+    // Headers without icons or record buttons; tracks taller.
+    assert!(cx.debug_bounds("track-look-0").is_some() && cx.debug_bounds("arm-0").is_some());
+    flip(cx, "settings-Track headers", "setting-header_icons");
+    flip(cx, "settings-Track headers", "setting-header_record");
+    assert!(cx.debug_bounds("track-look-0").is_none() && cx.debug_bounds("arm-0").is_none());
+    cx.simulate_keystrokes("cmd-,");
+    click_on(
+        cx,
+        "setting-height-Large",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(cx, "settings-done", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.lane_h(0)), 110.0);
+    // No loop zone: the region's end trims, top to bottom.
+    assert!(cx.debug_bounds("loop-tab-0-0").is_some());
+    flip(cx, "settings-Editing", "setting-loop_zone");
+    assert!(cx.debug_bounds("loop-tab-0-0").is_none());
+    // A double-click in an empty lane writes nothing.
+    flip(cx, "settings-Editing", "setting-double_click_writes");
+    let regions = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[1].regions.len())
+    };
+    let before = regions(cx);
+    double_click(cx, spot(&ws, cx, BAR * 6, 1));
+    assert_eq!(regions(cx), before);
+    // Stopping goes back where play started.
+    flip(cx, "settings-Transport", "setting-return_on_stop");
+    // (The engine runs on its own thread: each move waited for.)
+    ws.update(cx, |ws, cx| ws.locate_tick(BAR, cx));
+    until(cx, &ws, |ws| ws.playhead() == BAR);
+    ws.update(cx, |ws, cx| ws.play_stop(cx));
+    until(cx, &ws, |ws| ws.player.playing());
+    assert_eq!(ws.read_with(cx, |ws, _| ws.play_from), BAR);
+    ws.update(cx, |ws, cx| ws.locate_tick(BAR * 3, cx));
+    until(cx, &ws, |ws| ws.playhead() >= BAR * 3);
+    ws.update(cx, |ws, cx| ws.play_stop(cx));
+    until(cx, &ws, |ws| !ws.player.playing() && ws.playhead() == BAR);
 }
 
 #[gpui::test]
