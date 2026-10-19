@@ -1,12 +1,14 @@
-//! The step sequencer, as Logic's and FL Studio's channel rack: a pattern region's rows of steps,
-//! in the pane under the tracks. Click a step on or off and drag across to paint more (or rub
-//! them out); option-click for an accent. Each step's velocity shows as how full it is, and the
-//! picked row's velocities stand in a lane under the grid, drawn with the mouse. A row's name plays
-//! its sound and picks it; M mutes it; right-click (or its ⋯) for fills, shifts, randomizing, its
-//! own length (a polymeter), clearing and removing. The pattern's length (8 to 64 steps), rate and
-//! swing are in the editor's bar, with "To MIDI" to edit it in the piano roll. A MIDI region (the
-//! drums an agent wrote) becomes a pattern in a click; on the drum kit a row is a drum, on any
-//! other instrument a note.
+//! The step sequencer, as Maschine's and Push's: a pattern region's sounds as pads (tap one to
+//! hear it and pick it, right-click for its menu, an empty one adds a sound) beside every sound's
+//! steps, each in its own colour (a kick warm, hats cool). Click a step on or off and drag across
+//! to paint more (or rub them out); option-click for an accent (a white dot). How hard a step hits
+//! shows in how bright it is, and the picked sound's velocities open under its steps, drawn with
+//! the mouse. A sound with its own length (a polymeter) says so, its repeats drawn faint. Under the
+//! grid, what can be done to the picked sound: fill every 1, 2, 4 or 8, shift, reverse, randomize,
+//! Euclid's hits spread evenly, its length, clear, remove. The pattern's length (8 to 64 steps),
+//! rate and swing are in the editor's bar, with "To MIDI" to edit it in the piano roll. A MIDI
+//! region (the drums an agent wrote) becomes a pattern in a click; on the drum kit a row is a
+//! drum, on any other instrument a note.
 
 use gpui::{
     Bounds, Context, Div, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, div,
@@ -26,8 +28,6 @@ use crate::{
 
 const ON: u8 = 100;
 const ACCENTED: u8 = 127;
-const ROW_H: f32 = 28.0;
-const STEP_LANE: f32 = 64.0;
 
 /// The rows a new drum pattern starts with.
 const STARTING_ROWS: [u8; 5] = [36, 38, 42, 46, 39];
@@ -60,6 +60,28 @@ fn row_name(instrument: Option<&Instrument>, key: Option<Key>, pitch: u8) -> Str
 }
 
 /// The sounds a kit has to add rows for: the drum kit's, or a sampler's.
+/// A row's colour, by what it sounds like (a kick warm, hats cool), else the palette in turn.
+fn row_color(name: &str, index: usize) -> u32 {
+    let n = name.to_lowercase();
+    let has = |w: &[&str]| w.iter().any(|w| n.contains(w));
+    match () {
+        _ if has(&["kick", "bd", "808"]) => CORAL,
+        _ if has(&["snare", "sd", "rim"]) => AMBER,
+        _ if has(&["clap", "snap"]) => PINK,
+        _ if has(&["open"]) => SKY,
+        _ if has(&["hat", "hh"]) => TEAL,
+        _ if has(&["tom"]) => VIOLET,
+        _ if has(&["crash", "ride", "cymbal", "splash", "china"]) => SLATE,
+        _ if has(&[
+            "perc", "shaker", "conga", "bongo", "tamb", "cow", "clave", "wood",
+        ]) =>
+        {
+            MINT
+        }
+        _ => [SKY, TEAL, MINT, AMBER, CORAL, PINK, VIOLET, SLATE][index % 8],
+    }
+}
+
 fn kit_sounds(instrument: Option<&Instrument>) -> Option<Vec<(u8, String)>> {
     match instrument {
         Some(Instrument::Drums) => Some(
@@ -94,6 +116,8 @@ pub enum RowOp {
     Randomize,
     /// Its length, in steps (its own, against the others: a polymeter).
     Length(usize),
+    /// This many hits spread as evenly as they go over its steps, from the first (Euclid's).
+    Euclid(usize),
     Remove,
 }
 
@@ -308,7 +332,7 @@ impl Workspace {
             (0, false) => ON,
             _ => 0,
         };
-        self.steps_row = row;
+        self.steps_pick = Some(row);
         self.begin_drag(Drag::Steps { at, paint }, cx);
         self.set_cell(at, row, step, paint);
         if paint > 0
@@ -385,6 +409,11 @@ impl Workspace {
                     }
                 }
                 RowOp::Length(len) => cells.resize(len.max(1), 0),
+                RowOp::Euclid(hits) => {
+                    for (k, c) in cells.iter_mut().enumerate() {
+                        *c = if (k * hits) % n.max(1) < hits { ON } else { 0 };
+                    }
+                }
                 RowOp::Remove => {
                     rows.remove(row);
                 }
@@ -501,6 +530,9 @@ impl Workspace {
         )
     }
 
+    /// The step sequencer, as Maschine's and Push's: the sounds as pads (tap one to hear it and
+    /// pick it), every sound's steps in its own colour, the picked one opened on its velocities,
+    /// and what can be done to it in a bar under them.
     pub fn steps_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(at) = self.pattern() else {
             return self.steps_none(cx).into_any_element();
@@ -515,282 +547,512 @@ impl Workspace {
             .max()
             .unwrap_or(16)
             .max(1);
-        let color = self.color(at.0);
         let instrument = self.session.project.tracks[at.0].instrument.clone();
         let key = self.session.project.song_key();
         let track_id = self.session.project.tracks[at.0].id;
         let picked_row = self.steps_row.min(rows.len().saturating_sub(1));
+        let names: Vec<String> = rows
+            .iter()
+            .map(|r| row_name(instrument.as_ref(), key, r.pitch))
+            .collect();
+        let colors: Vec<u32> = names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| row_color(n, i))
+            .collect();
         // The step under the playhead, while playing in the region (each row on its own loop).
         let tick = self.playhead();
         let now = (self.player.playing()
             && (region.start..region.start + region.length).contains(&tick))
         .then(|| ((tick - region.start) / (*step).max(1)) as usize);
-        // Steps as wide as the room allows, between 16 and 46 pixels.
-        let room = f32::from(self.lanes_bounds.get().size.width).max(400.0) - 24.0;
-        let groups = steps.div_ceil(4) as f32;
-        let cell = ((room - groups * 6.0) / steps as f32 - 2.0).clamp(16.0, 46.0);
-        let mut headers = Vec::new();
-        let mut grid = Vec::new();
-        for (r, row) in rows.iter().enumerate() {
-            let name = row_name(instrument.as_ref(), key, row.pitch);
-            let picked = r == picked_row;
-            let mute = row.mute;
-            let len = row.cells.len();
-            headers.push(
-                div()
-                    .id(("row", r))
-                    .group("row")
-                    .h(px(ROW_H))
+        let hit_now = |r: usize| {
+            let cells = &rows[r].cells;
+            now.is_some_and(|n| !cells.is_empty() && cells[n % cells.len()] > 0)
+        };
+
+        // The pads: a sound each, sixteen to a page; tap to hear it and pick it.
+        let pad_h = 52.0;
+        let pads = (0..16).map(|p| {
+            let Some(row) = rows.get(p) else {
+                return div()
+                    .h(px(pad_h))
                     .flex()
                     .items_center()
-                    .gap(px(6.))
-                    .px(px(8.))
-                    .rounded(px(6.))
+                    .justify_center()
+                    .rounded(px(9.))
+                    .border_1()
+                    .border_dashed()
+                    .border_color(rgb(LINE_STRONG))
+                    .text_color(rgb(TEXT_4))
+                    .text_size(px(16.))
                     .cursor_pointer()
-                    .when(picked, |d| d.bg(rgb(RAISED)))
-                    .when(!picked, |d| d.hover(|d| d.bg(rgb(OFF))))
-                    .child(
+                    .hover(|d| d.text_color(rgb(TEXT_2)).border_color(rgb(TEXT_4)))
+                    .debug_selector(move || format!("pad-{p}"))
+                    .child("+")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            ws.add_sound_menu(at, e, cx)
+                        }),
+                    );
+            };
+            let (color, picked, hit) = (colors[p], p == picked_row, hit_now(p));
+            let pitch = row.pitch;
+            let mute = row.mute;
+            div()
+                .h(px(pad_h))
+                .p(px(7.))
+                .flex()
+                .flex_col()
+                .justify_between()
+                .rounded(px(9.))
+                .border_color(if picked {
+                    rgb(TEXT).into()
+                } else {
+                    alpha(color, 0.45)
+                })
+                .when(picked, |d| d.border_2())
+                .when(!picked, |d| d.border_1())
+                .bg(alpha(
+                    color,
+                    if hit {
+                        0.45
+                    } else if mute {
+                        0.06
+                    } else {
+                        0.16
+                    },
+                ))
+                .when(hit, |d| {
+                    d.shadow(vec![gpui::BoxShadow {
+                        color: alpha(color, 0.5),
+                        offset: gpui::point(px(0.), px(0.)),
+                        blur_radius: px(14.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
+                })
+                .cursor_pointer()
+                .hover(|d| d.bg(alpha(color, 0.26)))
+                .debug_selector(move || format!("pad-{p}"))
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(if mute { TEXT_4 } else { TEXT }))
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(names[p].clone()),
+                )
+                .child(
+                    div()
+                        .font_family(MONO)
+                        .text_size(px(9.5))
+                        .text_color(rgb(TEXT_3))
+                        .child(crate::pianoroll::name_in(None, pitch)),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| {
+                        ws.steps_row = p;
+                        ws.player.preview(track_id, pitch, 100);
+                        ws.begin_drag(
+                            Drag::Key {
+                                track: track_id,
+                                pitch,
+                            },
+                            cx,
+                        );
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| ws.row_menu(at, p, e, cx)),
+                )
+        });
+        let pads = div()
+            .w(px(self.header_w))
+            .flex_none()
+            .h_full()
+            .p(px(10.))
+            .bg(rgb(SURFACE))
+            .border_r_1()
+            .border_color(rgb(LINE))
+            .child(div().grid().grid_cols(4).gap(px(7.)).children(pads));
+
+        // A row's steps, and the picked row's velocities under them, in the same columns.
+        const LABEL_W: f32 = 120.0;
+        let beat_gap = |k: usize, d: Div| d.when(k.is_multiple_of(4) && k > 0, |d| d.ml(px(6.)));
+        let mut grid = Vec::new();
+        for (r, row) in rows.iter().enumerate() {
+            let (color, picked, mute, len) =
+                (colors[r], r == picked_row, row.mute, row.cells.len());
+            let label = div()
+                .w(px(LABEL_W))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .pr(px(6.))
+                .child(
+                    div()
+                        .size(px(8.))
+                        .flex_none()
+                        .rounded(px(2.))
+                        .bg(rgb(color)),
+                )
+                .child(
+                    div()
+                        .id(("row", r))
+                        .flex_1()
+                        .min_w(px(0.))
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(if mute {
+                            TEXT_4
+                        } else if picked {
+                            TEXT
+                        } else {
+                            TEXT_2
+                        }))
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .cursor_pointer()
+                        .debug_selector(move || format!("row-{r}"))
+                        .child(names[r].clone())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| {
+                                ws.steps_row = r;
+                                if let Some(pitch) = ws.row_pitch(at, r) {
+                                    ws.player.preview(track_id, pitch, 100);
+                                    ws.begin_drag(
+                                        Drag::Key {
+                                            track: track_id,
+                                            pitch,
+                                        },
+                                        cx,
+                                    );
+                                }
+                                cx.notify();
+                            }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                ws.row_menu(at, r, e, cx)
+                            }),
+                        ),
+                )
+                .when(len != steps, |d| {
+                    d.child(
                         div()
-                            .size(px(18.))
                             .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(4.))
+                            .px(px(4.))
+                            .rounded(px(3.))
+                            .bg(alpha(AMBER, 0.16))
+                            .font_family(MONO)
                             .text_size(px(9.5))
-                            .font_weight(FontWeight::BOLD)
-                            .bg(if mute { rgb(SOLO) } else { rgb(0x23232a) })
-                            .text_color(rgb(if mute { BG } else { TEXT_3 }))
-                            .debug_selector(move || format!("row-mute-{r}"))
-                            .child("M")
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |ws, _, _, cx| {
-                                    cx.stop_propagation();
-                                    ws.edit_rows(at, cx, |rows| {
-                                        if let Some(row) = rows.get_mut(r) {
-                                            row.mute ^= true;
-                                        }
-                                    });
-                                }),
-                            ),
+                            .text_color(rgb(AMBER))
+                            .child(format!("{len}")),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .text_size(px(12.))
-                            .text_color(rgb(if mute {
-                                TEXT_4
-                            } else if picked {
-                                TEXT
-                            } else {
-                                TEXT_2
-                            }))
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(name),
-                    )
-                    .when(len != steps, |d| {
+                })
+                .child(
+                    div()
+                        .size(px(18.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.))
+                        .text_size(px(9.5))
+                        .font_weight(FontWeight::BOLD)
+                        .cursor_pointer()
+                        .bg(rgb(if mute { ACCENT } else { 0x23232a }))
+                        .text_color(rgb(if mute { 0xffffff } else { TEXT_3 }))
+                        .debug_selector(move || format!("row-mute-{r}"))
+                        .child("M")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| {
+                                cx.stop_propagation();
+                                ws.edit_rows(at, cx, |rows| {
+                                    if let Some(row) = rows.get_mut(r) {
+                                        row.mute ^= true;
+                                    }
+                                });
+                            }),
+                        ),
+                );
+            let cells = (0..steps).map(|k| {
+                let inside = k < len;
+                let v = row.cells.get(k % len.max(1)).copied().unwrap_or(0);
+                let playing = now.is_some_and(|n| n % len.max(1) == k % len.max(1)) && inside;
+                let base = if (k / 4) % 2 == 0 { 0x19191f } else { 0x202027 };
+                let strength = 0.45 + 0.55 * v as f32 / 127.0;
+                let cell = div()
+                    .flex_1()
+                    .h(px(22.))
+                    .relative()
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(if playing {
+                        alpha(0xffffff, 0.6)
+                    } else {
+                        alpha(0xffffff, 0.0)
+                    })
+                    .bg(match (v > 0, inside) {
+                        (false, true) => rgb(base).into(),
+                        (false, false) => rgb(0x141418).into(),
+                        (true, true) if mute => alpha(color, 0.25),
+                        (true, true) => alpha(color, strength),
+                        (true, false) => alpha(color, 0.22),
+                    })
+                    .when(v >= ACCENTED && inside, |d| {
                         d.child(
                             div()
-                                .font_family(MONO)
-                                .text_size(px(10.))
-                                .text_color(rgb(AMBER))
-                                .child(format!("{len}")),
+                                .absolute()
+                                .top(px(3.))
+                                .right(px(3.))
+                                .size(px(5.))
+                                .rounded(px(2.5))
+                                .bg(rgb(0xffffff)),
                         )
                     })
-                    .child(
-                        div()
-                            .invisible()
-                            .group_hover("row", |d| d.visible())
-                            .size(px(18.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(4.))
-                            .hover(|d| d.bg(alpha(0xffffff, 0.08)))
-                            .debug_selector(move || format!("row-more-{r}"))
-                            .child(icon(Icon::More, 12.).text_color(rgb(TEXT_3)))
+                    .debug_selector(move || format!("step-{r}-{k}"))
+                    .when(inside, |d| {
+                        d.cursor_pointer()
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                                     cx.stop_propagation();
-                                    ws.row_menu(at, r, e, cx);
+                                    ws.press_step(at, r, k, e.modifiers.alt, cx);
                                 }),
-                            ),
-                    )
-                    .debug_selector(move || format!("row-{r}"))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            // Picks the row (its velocities in the lane) and plays its sound.
-                            ws.steps_row = r;
-                            if let Some(pitch) = ws.row_pitch(at, r) {
-                                ws.player.preview(track_id, pitch, 100);
-                                ws.begin_drag(
-                                    Drag::Key {
-                                        track: track_id,
-                                        pitch,
-                                    },
-                                    cx,
-                                );
-                            }
-                            cx.notify();
-                        }),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| ws.row_menu(at, r, e, cx)),
-                    ),
-            );
-            let cells = (0..steps).map(|k| {
-                let inside = k < len;
-                let v = row.cells.get(k).copied().unwrap_or(0);
-                let playing = now.is_some_and(|n| inside && n % len.max(1) == k);
-                let off = if (k / 4) % 2 == 0 { 0x1d1d23 } else { 0x16161b };
-                let fill = v as f32 / 127.0;
-                div()
-                    .w(px(cell))
-                    .h(px(ROW_H - 4.))
-                    .flex_none()
-                    .relative()
-                    .rounded(px(4.))
-                    .overflow_hidden()
-                    .when(k % 4 == 0 && k > 0, |d| d.ml(px(6.)))
-                    .bg(rgb(match (inside, playing) {
-                        (false, _) => 0x101013,
-                        (true, true) => RAISED,
-                        _ => off,
-                    }))
-                    .when(v > 0, |d| {
-                        // How hard it hits: how full it is.
-                        d.child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .right_0()
-                                .bottom_0()
-                                .h(gpui::relative(0.35 + 0.65 * fill))
-                                .bg(if mute {
-                                    alpha(color, 0.3)
-                                } else {
-                                    alpha(color, 0.55 + 0.45 * fill)
-                                }),
-                        )
-                    })
-                    .when(v >= ACCENTED, |d| {
-                        d.border_1().border_color(rgb(tint(color, 0.6)))
-                    })
-                    .when(playing, |d| d.border_1().border_color(rgb(TEXT)))
-                    .cursor_pointer()
-                    .debug_selector(move || format!("step-{r}-{k}"))
-                    .when(inside, |d| {
-                        d.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                ws.press_step(at, r, k, e.modifiers.alt, cx);
-                            }),
-                        )
-                        .on_mouse_move(cx.listener(
-                            move |ws, e: &MouseMoveEvent, _, cx| {
+                            )
+                            .on_mouse_move(cx.listener(move |ws, e: &MouseMoveEvent, _, cx| {
                                 if e.pressed_button == Some(MouseButton::Left) {
                                     ws.paint_step(r, k, cx);
                                 }
-                            },
-                        ))
-                    })
+                            }))
+                    });
+                beat_gap(k, cell)
             });
-            grid.push(
-                div()
-                    .h(px(ROW_H))
-                    .flex()
-                    .items_center()
-                    .gap(px(2.))
-                    .children(cells),
-            );
-        }
-        // The picked row's velocities, a bar a step, drawn with the mouse.
-        let lane_row = rows.get(picked_row).cloned();
-        let lane_bounds = self.steps_lane.clone();
-        let bars = (0..steps).map(|k| {
-            let v = lane_row
-                .as_ref()
-                .and_then(|r| r.cells.get(k))
-                .copied()
-                .unwrap_or(0);
-            div()
-                .w(px(cell))
-                .h_full()
-                .flex_none()
+            let mut block = div()
                 .flex()
-                .items_end()
-                .when(k % 4 == 0 && k > 0, |d| d.ml(px(6.)))
-                .debug_selector(move || format!("step-velocity-{k}"))
+                .flex_col()
+                .gap(px(4.))
+                .px(px(6.))
+                .py(px(3.))
+                .rounded(px(8.))
+                .when(picked, |d| d.bg(rgb(0x17171c)))
                 .child(
                     div()
-                        .w_full()
-                        .h(gpui::relative(v as f32 / 127.0))
-                        .rounded_t(px(3.))
-                        .bg(if v > 0 {
-                            alpha(color, 0.35 + 0.65 * v as f32 / 127.0)
-                        } else {
-                            rgb(0x16161b).into()
-                        })
-                        .when(v > 0, |d| {
-                            d.border_t_2().border_color(rgb(tint(color, 0.3)))
-                        }),
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                        ws.begin_drag(Drag::StepVelocity, cx);
-                        ws.draw_step_velocity(at, k, f32::from(e.position.y), cx);
-                    }),
-                )
-                .on_mouse_move(cx.listener(move |ws, e: &MouseMoveEvent, _, cx| {
-                    if e.pressed_button == Some(MouseButton::Left)
-                        && matches!(ws.drag, Some(Drag::StepVelocity))
-                    {
-                        ws.draw_step_velocity(at, k, f32::from(e.position.y), cx);
-                    }
-                }))
-        });
-        let lane_name = lane_row
-            .as_ref()
-            .map(|r| row_name(instrument.as_ref(), key, r.pitch))
-            .unwrap_or_default();
+                        .h(px(24.))
+                        .flex()
+                        .items_center()
+                        .gap(px(3.))
+                        .child(label)
+                        .children(cells),
+                );
+            if picked {
+                // Its velocities, a bar a step, drawn with the mouse.
+                let lane_bounds = self.steps_lane.clone();
+                let bars = (0..steps).map(|k| {
+                    let inside = k < len;
+                    let v = row.cells.get(k % len.max(1)).copied().unwrap_or(0);
+                    let bar = div()
+                        .flex_1()
+                        .h_full()
+                        .flex()
+                        .items_end()
+                        .justify_center()
+                        .debug_selector(move || format!("step-velocity-{k}"))
+                        .child(
+                            div()
+                                .w(gpui::relative(0.6))
+                                .h(px(if v > 0 {
+                                    4.0 + v as f32 / 127.0 * 32.0
+                                } else {
+                                    2.0
+                                }))
+                                .rounded_t(px(2.))
+                                .bg(if v > 0 {
+                                    alpha(color, if inside { 0.9 } else { 0.35 })
+                                } else {
+                                    rgb(RAISED).into()
+                                }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                ws.begin_drag(Drag::StepVelocity, cx);
+                                ws.draw_step_velocity(at, k, f32::from(e.position.y), cx);
+                            }),
+                        )
+                        .on_mouse_move(cx.listener(move |ws, e: &MouseMoveEvent, _, cx| {
+                            if e.pressed_button == Some(MouseButton::Left)
+                                && matches!(ws.drag, Some(Drag::StepVelocity))
+                            {
+                                ws.draw_step_velocity(at, k, f32::from(e.position.y), cx);
+                            }
+                        }));
+                    beat_gap(k, bar)
+                });
+                block = block.child(
+                    div()
+                        .h(px(40.))
+                        .flex()
+                        .gap(px(3.))
+                        .child(
+                            div()
+                                .w(px(LABEL_W))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .text_size(px(10.5))
+                                .text_color(rgb(TEXT_3))
+                                .child("Velocity · draw it"),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .h_full()
+                                .relative()
+                                .flex()
+                                .gap(px(3.))
+                                .debug_selector(|| "steps-lane".into())
+                                .child(
+                                    gpui::canvas(
+                                        move |b: Bounds<Pixels>, _, _| lane_bounds.set(b),
+                                        |_, _, _, _| {},
+                                    )
+                                    .absolute()
+                                    .size_full(),
+                                )
+                                .children(bars),
+                        ),
+                );
+            }
+            grid.push(block);
+        }
         let add = button("+ Sound", false)
             .debug_selector(|| "add-sound".into())
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                    let project = &ws.session.project;
-                    let instrument = project.tracks[at.0].instrument.as_ref();
-                    let items = match kit_sounds(instrument) {
-                        Some(sounds) => sounds
-                            .into_iter()
-                            .map(|(pitch, name)| (name, MenuAction::AddRow { at, pitch }))
-                            .collect(),
-                        None => scale_notes(project.song_key())
-                            .into_iter()
-                            .map(|pitch| {
-                                let key = project.song_key();
-                                let label = crate::pianoroll::name_in(key, pitch);
-                                (label, MenuAction::AddRow { at, pitch })
-                            })
-                            .collect(),
-                    };
-                    ws.menu = Some(Menu {
-                        at: e.position,
-                        items,
-                        ..Default::default()
-                    });
-                    cx.notify();
-                }),
+                cx.listener(move |ws, e: &MouseDownEvent, _, cx| ws.add_sound_menu(at, e, cx)),
             );
+
+        // What can be done to the picked row, all in sight.
+        let r = picked_row;
+        let (pick_name, pick_color, pick_len) = (
+            names.get(r).cloned().unwrap_or_default(),
+            colors.get(r).copied().unwrap_or(TEXT_3),
+            rows.get(r).map_or(steps, |row| row.cells.len()),
+        );
+        let op_button = |label: String, op: RowOp, name: &'static str, cx: &mut Context<Self>| {
+            button(label, false)
+                .debug_selector(move || format!("row-op-{name}"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| ws.row_op(at, r, op, cx)),
+                )
+        };
+        let menu_button = |label: String,
+                           name: &'static str,
+                           items: Vec<(String, MenuAction)>,
+                           cx: &mut Context<Self>| {
+            button(label, false)
+                .debug_selector(move || format!("row-op-{name}"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                        ws.menu = Some(Menu {
+                            at: e.position,
+                            items: items.clone(),
+                            ..Default::default()
+                        });
+                        cx.notify();
+                    }),
+                )
+        };
+        let row_action = |op: RowOp| MenuAction::Row { at, row: r, op };
+        let euclid: Vec<(String, MenuAction)> = (1..=pick_len.min(12))
+            .map(|h| {
+                (
+                    format!("{h} hits over {pick_len}"),
+                    row_action(RowOp::Euclid(h)),
+                )
+            })
+            .collect();
+        let mut lengths: Vec<(String, MenuAction)> = [3usize, 5, 6, 7, 12]
+            .into_iter()
+            .filter(|&l| l < steps)
+            .map(|l| {
+                (
+                    format!("{l} steps (against {steps})"),
+                    row_action(RowOp::Length(l)),
+                )
+            })
+            .collect();
+        lengths.push((format!("{steps} steps"), row_action(RowOp::Length(steps))));
+        let label = |t: &'static str| div().text_size(px(11.)).text_color(rgb(TEXT_3)).child(t);
+        let bar = (!rows.is_empty()).then(|| {
+            div()
+                .h(px(42.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .px(px(12.))
+                .border_t_1()
+                .border_color(rgb(LINE))
+                .bg(rgb(SURFACE))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .size(px(9.))
+                        .flex_none()
+                        .rounded(px(3.))
+                        .bg(rgb(pick_color)),
+                )
+                .child(
+                    div()
+                        .mr(px(8.))
+                        .text_size(px(12.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .whitespace_nowrap()
+                        .child(pick_name),
+                )
+                .child(label("Fill"))
+                .child(op_button("1".into(), RowOp::Fill(1), "fill-1", cx))
+                .child(op_button("2".into(), RowOp::Fill(2), "fill-2", cx))
+                .child(op_button("4".into(), RowOp::Fill(4), "fill-4", cx))
+                .child(op_button("8".into(), RowOp::Fill(8), "fill-8", cx))
+                .child(div().w(px(1.)).h(px(18.)).mx(px(3.)).bg(rgb(LINE)))
+                .child(op_button("←".into(), RowOp::Shift(-1), "earlier", cx))
+                .child(op_button("→".into(), RowOp::Shift(1), "later", cx))
+                .child(op_button("Reverse".into(), RowOp::Reverse, "reverse", cx))
+                .child(op_button(
+                    "Randomize".into(),
+                    RowOp::Randomize,
+                    "randomize",
+                    cx,
+                ))
+                .child(menu_button("Euclid ▾".into(), "euclid", euclid, cx))
+                .child(div().flex_1())
+                .child(menu_button(
+                    format!("Length {pick_len} ▾"),
+                    "length",
+                    lengths,
+                    cx,
+                ))
+                .child(op_button("Clear".into(), RowOp::Clear, "clear", cx))
+                .child(op_button("Remove".into(), RowOp::Remove, "remove", cx))
+        });
+
         div()
             .flex_1()
             .min_h(px(0.))
@@ -798,91 +1060,49 @@ impl Workspace {
             .flex_col()
             .bg(rgb(LANE))
             .child(
-                div()
-                    .id("steps")
-                    .flex_1()
-                    .min_h(px(0.))
-                    .flex()
-                    .items_start()
-                    .overflow_y_scroll()
-                    .child(
-                        div()
-                            .w(px(self.header_w))
-                            .flex_none()
-                            .min_h_full()
-                            .bg(rgb(SURFACE))
-                            .p(px(6.))
-                            .flex()
-                            .flex_col()
-                            .border_r_1()
-                            .border_color(rgb(LINE))
-                            .children(headers)
-                            .child(div().pt(px(6.)).child(add)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .p(px(6.))
-                            .pl(px(12.))
-                            .flex()
-                            .flex_col()
-                            .children(grid),
-                    ),
+                div().flex_1().min_h(px(0.)).flex().child(pads).child(
+                    div()
+                        .id("steps")
+                        .flex_1()
+                        .min_w(px(0.))
+                        .h_full()
+                        .overflow_y_scroll()
+                        .p(px(6.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .children(grid)
+                        .child(div().pt(px(4.)).pl(px(6.)).flex().child(add)),
+                ),
             )
-            .child(
-                div()
-                    .h(px(STEP_LANE))
-                    .flex_none()
-                    .flex()
-                    .border_t_1()
-                    .border_color(rgb(LINE))
-                    .child(
-                        div()
-                            .w(px(self.header_w))
-                            .flex_none()
-                            .h_full()
-                            .px(px(12.))
-                            .flex()
-                            .flex_col()
-                            .justify_center()
-                            .gap(px(2.))
-                            .bg(rgb(SURFACE))
-                            .border_r_1()
-                            .border_color(rgb(LINE))
-                            .child(div().font_weight(FontWeight::MEDIUM).child("Velocity"))
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(TEXT_3))
-                                    .whitespace_nowrap()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(format!("{lane_name} · draw it")),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .relative()
-                            .px(px(6.))
-                            .pl(px(12.))
-                            .py(px(4.))
-                            .bg(rgb(WELL))
-                            .debug_selector(|| "steps-lane".into())
-                            .child(
-                                gpui::canvas(
-                                    move |b: Bounds<Pixels>, _, _| lane_bounds.set(b),
-                                    |_, _, _, _| {},
-                                )
-                                .absolute()
-                                .size_full(),
-                            )
-                            .child(div().h_full().flex().gap(px(2.)).children(bars)),
-                    ),
-            )
+            .children(bar)
             .into_any_element()
+    }
+
+    /// A sound to add as a row: the kit's, or the song's key's notes.
+    fn add_sound_menu(&mut self, at: At, e: &MouseDownEvent, cx: &mut Context<Self>) {
+        let project = &self.session.project;
+        let instrument = project.tracks[at.0].instrument.as_ref();
+        let items = match kit_sounds(instrument) {
+            Some(sounds) => sounds
+                .into_iter()
+                .map(|(pitch, name)| (name, MenuAction::AddRow { at, pitch }))
+                .collect(),
+            None => scale_notes(project.song_key())
+                .into_iter()
+                .map(|pitch| {
+                    let key = project.song_key();
+                    let label = crate::pianoroll::name_in(key, pitch);
+                    (label, MenuAction::AddRow { at, pitch })
+                })
+                .collect(),
+        };
+        self.menu = Some(Menu {
+            at: e.position,
+            items,
+            ..Default::default()
+        });
+        cx.notify();
     }
 
     /// A row's menu: fills, shifts, its own length and the rest.

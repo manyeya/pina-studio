@@ -1318,7 +1318,7 @@ fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
         },
         MouseButton::Left,
     ); // snare accent
-    click_on(cx, "add-sound", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "pad-5", Modifiers::none(), MouseButton::Left); // the first empty pad: + a sound
     click_on(cx, "menu-9", Modifiers::none(), MouseButton::Left); // Crash
     let rows = ws.read_with(cx, |ws, _| {
         match &ws.session.project.tracks[track].regions[0].content {
@@ -1332,6 +1332,25 @@ fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
     );
     assert_eq!((rows[1].pitch, rows[1].cells[4]), (38, 127));
     assert_eq!((rows.len(), rows[5].pitch), (6, 49));
+
+    // A pad picks its sound; the bar under the grid does things to it: every 4, then Euclid's
+    // three hits over sixteen.
+    let row = |cx: &VisualTestContext, r: usize| {
+        ws.read_with(cx, |ws, _| {
+            match &ws.session.project.tracks[track].regions[0].content {
+                Content::Pattern { rows, .. } => rows[r].cells.clone(),
+                _ => panic!("not a pattern"),
+            }
+        })
+    };
+    click_on(cx, "pad-2", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.steps_row), 2);
+    click_on(cx, "row-op-fill-4", Modifiers::none(), MouseButton::Left);
+    assert_eq!(&row(cx, 2)[..8], [100, 0, 0, 0, 100, 0, 0, 0]);
+    click_on(cx, "row-op-euclid", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "3 hits");
+    let hits: Vec<usize> = (0..16).filter(|&k| row(cx, 2)[k] > 0).collect();
+    assert_eq!(hits, [0, 6, 11]);
 }
 
 #[gpui::test]
@@ -2034,7 +2053,7 @@ fn a_pattern_on_a_synth_has_rows_of_notes_in_the_key(cx: &mut TestAppContext) {
     assert_eq!(rows.len(), 4);
     assert!(rows.iter().all(|&p| key.contains(p)), "{rows:?}");
     cx.run_until_parked();
-    click_on(cx, "add-sound", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "pad-4", Modifiers::none(), MouseButton::Left); // the first empty pad
     let first = ws.read_with(cx, |ws, _| ws.menu.as_ref().unwrap().items[0].0.clone());
     assert!(!first.contains("Kick"), "{first}");
 }

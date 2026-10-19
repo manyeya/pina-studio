@@ -248,13 +248,16 @@ In the app, mostly as in Logic:
   the list to theirs; Sampler, Audio and Beat, a kit with a pattern open in the step sequencer, add
   one at once), then what's been used lately and the favourites. ⌥⌘P makes a step pattern region on the
   selected instrument track (at the first free bar from the playhead); double-click one for the
-  step sequencer, as Logic's and FL Studio's channel rack: click a step on or off and drag across
-  to paint more (or rub them out), option-click for an accent (again to take it off); each step
-  shows how hard it hits, and the picked row's velocities stand in a lane under the grid, drawn
-  with the mouse. A row's name plays its sound; M mutes it; its menu (right-click, or ⋯) fills
-  every 2, 4 or 8 steps, shifts, reverses, randomizes, clears, removes it, or gives it a length of
-  its own (three steps against sixteen: a polymeter). The bar sets the pattern's length (8 to 64
-  steps, repeating the groove as it grows), its rate (1/8, 1/16, 1/32) and swing; To MIDI turns it
+  step sequencer, as Maschine's and Push's: the sounds as pads (tap one to hear and pick it,
+  right-click for its menu, an empty pad adds a sound) beside every sound's steps in its own
+  colour. Click a step on or off and drag across to paint more (or rub them out), option-click for
+  an accent (a white dot; again to take it off); a step is as bright as it hits hard, and the
+  picked sound's velocities open under its steps, drawn with the mouse. M mutes a sound. Under the
+  grid, the picked sound's actions in sight: fill every 1, 2, 4 or 8, shift ← →, reverse,
+  randomize, Euclid (so many hits spread evenly), a length of its own (three steps against
+  sixteen: a polymeter, its repeats drawn faint), clear, remove. The editor's bar sets the
+  pattern's length (8 to 64 steps, repeating the groove as it grows), its rate (1/8, 1/16, 1/32)
+  and swing; To MIDI turns it
   into notes for the piano roll, and on a track with MIDI (the drums an agent wrote) the step
   sequencer makes a pattern of it in a click. Patterns loop over their region.
 - N shows the score: the selected MIDI region as notation on a grand staff, in time with the

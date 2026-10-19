@@ -761,8 +761,11 @@ pub struct Workspace {
     /// The New Track palette, when it's open; and the presets it searches.
     pub adder: Option<crate::adder::Adder>,
     pub sounds: crate::adder::Sounds,
-    /// The step sequencer's picked row (its velocities in the lane), and where its lane was drawn.
+    /// The step sequencer's picked row (its velocities in the lane), and where its lane was drawn;
+    /// and a row picked by pressing a step, picked when the mouse comes up (so the lane doesn't
+    /// move the rows under a drag).
     pub steps_row: usize,
+    pub steps_pick: Option<usize>,
     pub steps_lane: Rc<Cell<Bounds<Pixels>>>,
     /// The Sampler editor: the zone picked and the waveforms read; where its waveform was drawn.
     pub sampler_ui: crate::sampler::SamplerUi,
@@ -923,6 +926,7 @@ impl Workspace {
             adder: None,
             sounds: Default::default(),
             steps_row: 0,
+            steps_pick: None,
             steps_lane: Rc::new(Cell::new(Bounds::default())),
             sampler_ui: Default::default(),
             sampler_wave_bounds: Rc::new(Cell::new(Bounds::default())),
@@ -1827,6 +1831,9 @@ impl Workspace {
     }
 
     fn end_drag(&mut self, cx: &mut Context<Self>) {
+        if let Some(r) = self.steps_pick.take() {
+            self.steps_row = r;
+        }
         // A lane made taller is the song's to keep (as Logic keeps it), not an undo step.
         if let Some(Drag::LaneHeight { .. }) = self.drag {
             self.session.edited = true;
