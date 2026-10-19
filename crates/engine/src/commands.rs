@@ -311,6 +311,24 @@ pub enum Command {
         name: Option<String>,
         points: Vec<PointIn>,
     },
+    /// Smooths a track's automation from `from` to `to` (ticks; all of it without), blurred
+    /// over about `width` ticks (an eighth without).
+    SmoothAutomation {
+        track: usize,
+        param: AutoParam,
+        #[serde(default)]
+        send: Option<usize>,
+        #[serde(default)]
+        plugin: Option<Which>,
+        #[serde(default)]
+        id: Option<u32>,
+        #[serde(default)]
+        from: Option<u64>,
+        #[serde(default)]
+        to: Option<u64>,
+        #[serde(default)]
+        width: Option<u64>,
+    },
     /// Draws a shape into a track's automation from `from` to `to` (ticks), a cycle every
     /// `every` ticks, between `low` and `high`, over what was there.
     ShapeAutomation {
@@ -528,6 +546,9 @@ pub struct PointIn {
     /// Holds its value up to the next point.
     #[serde(default)]
     pub step: Option<bool>,
+    /// Eases out and into the next point: an S.
+    #[serde(default)]
+    pub ease: Option<bool>,
 }
 
 /// A preset, by name or where it comes from.
@@ -730,6 +751,32 @@ pub enum AutoParam {
     Mute,
     Send,
     Plugin,
+}
+
+/// The parameter a command's automation is of.
+fn auto_param(
+    p: &mut Project,
+    t: usize,
+    param: AutoParam,
+    send: Option<usize>,
+    plugin: Option<Which>,
+    id: Option<u32>,
+) -> Result<Param, String> {
+    Ok(match param {
+        AutoParam::Volume => Param::Volume,
+        AutoParam::Pan => Param::Pan,
+        AutoParam::Mute => Param::Mute,
+        AutoParam::Send => send_param(p, t, send)?,
+        AutoParam::Plugin => {
+            let (Some(plugin), Some(id)) = (plugin, id) else {
+                return Err("a plugin parameter needs `plugin` and `id`".into());
+            };
+            if track(p, t)?.plugin(plugin).is_none() {
+                return Err(format!("track {t} has no plugin there"));
+            }
+            Param::Plugin(plugin, id)
+        }
+    })
 }
 
 /// A track's send, as its automation names it: by the bus it sends to.
@@ -1365,6 +1412,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                     (Some(value), _) => Ok(AutoPoint {
                         curve: finite("curve", pt.curve.unwrap_or(0.0))?.clamp(-1.0, 1.0),
                         step: pt.step.unwrap_or(false),
+                        ease: pt.ease.unwrap_or(false),
                         ..AutoPoint::new(pt.tick, finite("value", value)?)
                     }),
                     (None, Some(t)) => {
@@ -1409,6 +1457,28 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             }
             a.tidy();
         }
+        Command::SmoothAutomation {
+            track: t,
+            param,
+            send,
+            plugin,
+            id,
+            from,
+            to,
+            width,
+        } => {
+            let param = auto_param(p, t, param, send, plugin, id)?;
+            let a = &mut track(p, t)?.automation;
+            let points = a.points(param);
+            let (Some(first), Some(last)) = (points.first(), points.last()) else {
+                return Err(format!("track {t} has no automation there to smooth"));
+            };
+            let (from, to) = (from.unwrap_or(first.tick), to.unwrap_or(last.tick));
+            if to <= from {
+                return Err("`to` must be after `from`".into());
+            }
+            a.smooth(param, from, to, width.unwrap_or(PPQ / 2));
+        }
         Command::ShapeAutomation {
             track: t,
             param,
@@ -1422,21 +1492,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             low,
             high,
         } => {
-            let param = match param {
-                AutoParam::Volume => Param::Volume,
-                AutoParam::Pan => Param::Pan,
-                AutoParam::Mute => Param::Mute,
-                AutoParam::Send => send_param(p, t, send)?,
-                AutoParam::Plugin => {
-                    let (Some(plugin), Some(id)) = (plugin, id) else {
-                        return Err("a plugin parameter needs `plugin` and `id`".into());
-                    };
-                    if track(p, t)?.plugin(plugin).is_none() {
-                        return Err(format!("track {t} has no plugin there"));
-                    }
-                    Param::Plugin(plugin, id)
-                }
-            };
+            let param = auto_param(p, t, param, send, plugin, id)?;
             if to <= from {
                 return Err("`to` must be after `from`".into());
             }
@@ -1847,6 +1903,25 @@ mod tests {
         .unwrap();
         let mute = &p.tracks[0].automation.mute;
         assert!(mute.len() >= 8 && mute.iter().all(|p| p.step));
+        // An S, then smoothed: a gentle hill made of more points.
+        run(
+            &mut p,
+            r#"{"op": "set_automation", "track": 0, "param": "volume",
+                "points": [{"tick": 0, "value": -40, "ease": true}, {"tick": 1920, "value": 0}, {"tick": 3840, "value": -40}]}"#,
+        )
+        .unwrap();
+        assert!(p.tracks[0].automation.volume[0].ease);
+        run(
+            &mut p,
+            r#"{"op": "smooth_automation", "track": 0, "param": "volume", "width": 960}"#,
+        )
+        .unwrap();
+        assert!(p.tracks[0].automation.volume.len() > 3);
+        let backwards = run(
+            &mut p,
+            r#"{"op": "smooth_automation", "track": 0, "param": "volume", "from": 9, "to": 3}"#,
+        );
+        assert!(backwards.unwrap_err().contains("after"));
         run(
             &mut p,
             r#"{"op": "set_automation_mode", "track": 0, "mode": "trim"}"#,
@@ -2239,6 +2314,7 @@ mod tests {
             "set_aux",
             "set_automation",
             "shape_automation",
+            "smooth_automation",
             "add_marker",
             "set_marker",
             "delete_marker",

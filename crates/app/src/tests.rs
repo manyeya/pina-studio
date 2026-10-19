@@ -2544,6 +2544,69 @@ fn automation_lanes_draw_select_copy_bend_and_take_shapes(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn automation_smooths_from_its_menus_and_takes_s_curves(cx: &mut TestAppContext) {
+    use tempo_engine::project::{AutoPoint, Param, value_at};
+    let (ws, cx) = open(cx);
+    cx.simulate_keystrokes("a");
+    // The keys' pan, recorded with a wobble every sixteenth through bar 2.
+    ws.update(cx, |ws, cx| {
+        let id = ws.session.project.tracks[0].id;
+        ws.auto_lanes.insert(id, vec![Param::Pan]);
+        let wobble = (0..=16)
+            .map(|i| AutoPoint::new(BAR + i * PPQ / 4, if i % 2 == 0 { -0.3 } else { 0.3 }));
+        ws.session.project.tracks[0].automation.pan = std::iter::once(AutoPoint::new(0, -0.3))
+            .chain(wobble)
+            .chain([AutoPoint::new(BAR * 4, -0.3)])
+            .collect();
+        ws.changed(cx);
+    });
+    let pan = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            ws.session.project.tracks[0].automation.pan.clone()
+        })
+    };
+    let swing = |line: &[AutoPoint]| {
+        (BAR + PPQ..BAR * 2 - PPQ)
+            .step_by(20)
+            .map(|t| value_at(line, t as f64).unwrap())
+            .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)))
+    };
+    let (lo, hi) = swing(&pan(cx));
+    assert!(hi - lo > 0.5);
+    // Right-click the lane: Smooth Lane.
+    let at = lane_spot(&ws, cx, BAR * 3, 0, 0, 0.9);
+    cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    pick(cx, &ws, "Smooth Lane");
+    let smooth = pan(cx);
+    let (lo, hi) = swing(&smooth);
+    assert!(hi - lo < 0.1, "{lo} {hi}");
+    assert_eq!(smooth.first().unwrap().value, -0.3);
+    assert_eq!(smooth.last().unwrap(), &AutoPoint::new(BAR * 4, -0.3));
+    // One undo puts it back.
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(pan(cx).len(), 19);
+    // A point's line as an S, from its menu.
+    ws.update(cx, |ws, cx| {
+        ws.session.project.tracks[0].automation.pan =
+            vec![AutoPoint::new(0, -1.0), AutoPoint::new(BAR, 1.0)];
+        ws.changed(cx);
+    });
+    click_on(
+        cx,
+        "auto-point-0-0-0",
+        Modifiers::none(),
+        MouseButton::Right,
+    );
+    pick(cx, &ws, "S-Curve");
+    let s = pan(cx);
+    assert!(s[0].ease);
+    assert!(value_at(&s, (BAR / 8) as f64).unwrap() < -0.85);
+    assert_eq!(value_at(&s, (BAR / 2) as f64), Some(0.0));
+}
+
+#[gpui::test]
 fn automation_moves_with_regions_when_set(cx: &mut TestAppContext) {
     use tempo_engine::project::{AutoPoint, value_at};
     let (ws, cx) = open(cx);
@@ -4819,9 +4882,22 @@ fn shots() {
                             curve: 0.5,
                             ..AutoPoint::new(0, -30.0)
                         },
-                        AutoPoint::new(BAR * 2, -3.0),
-                        AutoPoint::new(BAR * 4, -8.0),
+                        AutoPoint {
+                            ease: true,
+                            ..AutoPoint::new(BAR * 2, -3.0)
+                        },
+                        AutoPoint::new(BAR * 4, -20.0),
                     ];
+                    // A wobbly pan, as recorded, its second half smoothed.
+                    let a = &mut ws.session.project.tracks[0].automation;
+                    a.pan = (0..=64)
+                        .map(|i| {
+                            let wob = ((i * 7919) % 13) as f32 / 13.0 - 0.5;
+                            let v = i as f32 / 40.0 - 0.6 + wob * 0.5;
+                            AutoPoint::new(i * PPQ / 4, v.clamp(-1.0, 1.0))
+                        })
+                        .collect();
+                    a.smooth(Param::Pan, BAR * 2, BAR * 4, PPQ / 2);
                     ws.auto_lanes.insert(id, vec![Param::Volume, Param::Pan]);
                     ws.show_automation = true;
                     let at = point(px(900.), px(240.));

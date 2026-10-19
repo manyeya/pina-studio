@@ -247,9 +247,11 @@ In the app, mostly as in Logic:
   (double-click it straight), drag across a lane to select (⇧ adds), ⌥-click or double-click a
   point to delete it, Delete takes out the selection, ⌘C ⌘V copy and paste it. The pencil draws
   a lane freehand; the eraser takes out what it's dragged across. Right-click a point for its
-  line's shape (straight, slow or fast start, a step), or a lane for shapes drawn over the
-  selection, the cycle or that bar, a cycle every grid step (sine, triangle, saws, square, random,
-  ramps), and to thin or clear it. Mute is all steps.
+  line's shape (straight, an S that eases out and in, slow or fast start, a step), or a lane for
+  shapes drawn over the selection, the cycle or that bar, a cycle every grid step (sine,
+  triangle, saws, square, random, ramps), and to thin or clear it. Smooth (on either menu, Smooth
+  More for more) rounds off the selection's corners and wobbles, or the whole lane's, its ends
+  staying where they were; it stays selected to smooth again. Mute is all steps.
 - Every control shows its automation: the header's fader, pan and readout, the strips' faders,
   knobs, sends and mute buttons, Smart Controls and plugin editors; an automated readout lights
   in its mode's colour. The mode is on the lane and on each track's strip, as in Logic: Read plays
@@ -551,7 +553,7 @@ Audio files are WAV, AIFF, FLAC or MP3, at any sample rate. An audio region can 
 1, "name": "Reverb", "inserts": […] }]`. Tracks, auxes and the master (`master_eq`,
 `master_comp`, `master_sat`, `master_inserts`) can have an `"eq"`, a `"comp"` and a `"sat"`. A
 track's `"automation"` has `volume`, `pan`, `mute`, `sends` and `plugins` lanes (points can have a
-`"curve"` or be a `"step"`) and a `mode`. Regions can have a
+`"curve"`, `"ease"` or be a `"step"`) and a `mode`. Regions can have a
 `"name"`, a `"link"` (aliases share one), `"loop"`, `"transpose"`, `"velocity"` and `"quantize"`.
 The project can have a `"time_signature"`, `"markers"`, a `"key"` and a `"cycle"` (see `tempo
 describe`).

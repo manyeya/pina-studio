@@ -9,7 +9,7 @@ use gpui::{
     canvas, div, fill, linear_color_stop, linear_gradient, point, prelude::*, px, rgb, size,
 };
 use tempo_engine::project::{
-    AutoClip, AutoMode, AutoPoint, AutoShape, Param, Project, SILENT_DB, Which, value_at,
+    AutoClip, AutoMode, AutoPoint, AutoShape, PPQ, Param, Project, SILENT_DB, Which, value_at,
 };
 
 use crate::{
@@ -171,7 +171,11 @@ pub enum AutoOp {
     Straight,
     SlowStart,
     FastStart,
+    /// An S: eased out of the point and into the next.
+    SCurve,
     Step,
+    /// The selection's line (or the lane's) smoothed, over about so many ticks.
+    Smooth(u64),
     Delete,
     Copy,
     /// Points copied, at a tick.
@@ -537,6 +541,7 @@ impl Workspace {
                         value: shifted(param, v, by_at(t)),
                         curve: shape.map_or(0.0, |j| snap[j].curve),
                         step: shape.is_some_and(|j| snap[j].step),
+                        ease: shape.is_some_and(|j| snap[j].ease),
                     });
                 }
                 // Let go, it ramps back to the line as it was.
@@ -1045,6 +1050,7 @@ impl Workspace {
         let (ya, yb) = (to_y(param, a.value, h), to_y(param, b.value, h));
         let way = if ya > yb { 1.0 } else { -1.0 };
         points[index].curve = (curve + (p.y - y) / 50.0 * way).clamp(-1.0, 1.0);
+        points[index].ease = false;
     }
 
     /// The pencil drawn from its last point to here: what was between goes.
@@ -1326,16 +1332,69 @@ impl Workspace {
                 ws.recorded.retain(|k, _| k.0 != id);
                 ws.taken.retain(|k, _| k.0 != id);
             }),
-            AutoOp::Straight => {
-                self.edit(cx, |ws| reshape(ws, &|q| (q.curve, q.step) = (0.0, false)))
+            AutoOp::Straight => self.edit(cx, |ws| {
+                reshape(ws, &|q| (q.curve, q.step, q.ease) = (0.0, false, false))
+            }),
+            AutoOp::SlowStart => self.edit(cx, |ws| {
+                reshape(ws, &|q| (q.curve, q.step, q.ease) = (0.6, false, false))
+            }),
+            AutoOp::FastStart => self.edit(cx, |ws| {
+                reshape(ws, &|q| (q.curve, q.step, q.ease) = (-0.6, false, false))
+            }),
+            AutoOp::SCurve => self.edit(cx, |ws| {
+                reshape(ws, &|q| (q.curve, q.step, q.ease) = (0.0, false, true))
+            }),
+            AutoOp::Step => self.edit(cx, |ws| reshape(ws, &|q| (q.step, q.ease) = (true, false))),
+            AutoOp::Smooth(width) => {
+                // The selection's span; one point, from the one before it to the one after; or
+                // all of it.
+                let points = self.session.project.tracks[track].automation.points(param);
+                let ticks: Vec<u64> = picked
+                    .iter()
+                    .filter_map(|&i| points.get(i).map(|q| q.tick))
+                    .collect();
+                let (from, to) = match (ticks.iter().min(), ticks.iter().max()) {
+                    (Some(&a), Some(&b)) if b > a => (a, b),
+                    (Some(_), _) => {
+                        let i = picked[0];
+                        let last = points.len().saturating_sub(1);
+                        (
+                            points[i.saturating_sub(1)].tick,
+                            points[(i + 1).min(last)].tick,
+                        )
+                    }
+                    _ => match (points.first(), points.last()) {
+                        (Some(a), Some(b)) => (a.tick, b.tick),
+                        _ => (0, 0),
+                    },
+                };
+                if param.steps() || to <= from {
+                    self.status = Some(match param.steps() {
+                        true => "Mute is all steps: nothing to smooth.".into(),
+                        false => "Nothing there to smooth.".into(),
+                    });
+                } else {
+                    self.edit(cx, |ws| {
+                        let a = &mut ws.session.project.tracks[track].automation;
+                        a.smooth(param, from, to, width);
+                        let n = a.points(param).len();
+                        ws.status = Some(format!("Smoothed: {n} points"));
+                        // What was smoothed stays selected, to smooth again.
+                        let picked = a
+                            .points(param)
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, q)| q.tick >= from && q.tick <= to)
+                            .map(|(i, _)| i)
+                            .collect();
+                        ws.auto_picked = Some(Picked {
+                            track: id,
+                            param,
+                            points: picked,
+                        });
+                    });
+                }
             }
-            AutoOp::SlowStart => {
-                self.edit(cx, |ws| reshape(ws, &|q| (q.curve, q.step) = (0.6, false)))
-            }
-            AutoOp::FastStart => {
-                self.edit(cx, |ws| reshape(ws, &|q| (q.curve, q.step) = (-0.6, false)))
-            }
-            AutoOp::Step => self.edit(cx, |ws| reshape(ws, &|q| q.step = true)),
             AutoOp::Delete => self.delete_points(track, param, picked, cx),
             AutoOp::Copy => drop(self.copy_picked(cx)),
             AutoOp::Paste(tick) => drop(self.paste_points_at(tick, cx)),
@@ -1465,6 +1524,20 @@ impl Workspace {
                 MenuAction::Auto(id, AutoOp::Paste(snapped)),
             ));
         }
+        if !param.steps() {
+            let what = match picked.len() > 1 {
+                true => "Selection",
+                false => "Lane",
+            };
+            items.push((
+                format!("Smooth {what}"),
+                MenuAction::Auto(id, AutoOp::Smooth(PPQ / 2)),
+            ));
+            items.push((
+                format!("Smooth {what} More"),
+                MenuAction::Auto(id, AutoOp::Smooth(PPQ * 2)),
+            ));
+        }
         items.push(("Select All".into(), MenuAction::Auto(id, AutoOp::SelectAll)));
         items.push(("Thin Points".into(), MenuAction::Auto(id, AutoOp::Thin)));
         items.push(("Clear Lane".into(), MenuAction::Auto(id, AutoOp::Clear)));
@@ -1498,20 +1571,39 @@ impl Workspace {
         if !param.steps() {
             items.extend([
                 (
-                    format!("{}Straight", tick(!q.step && q.curve == 0.0)),
+                    format!("{}Straight", tick(!q.shaped())),
                     MenuAction::Auto(id, AutoOp::Straight),
                 ),
                 (
-                    format!("{}Curve: Slow Start", tick(!q.step && q.curve > 0.0)),
+                    format!("{}S-Curve", tick(!q.step && q.ease)),
+                    MenuAction::Auto(id, AutoOp::SCurve),
+                ),
+                (
+                    format!(
+                        "{}Curve: Slow Start",
+                        tick(!q.step && !q.ease && q.curve > 0.0)
+                    ),
                     MenuAction::Auto(id, AutoOp::SlowStart),
                 ),
                 (
-                    format!("{}Curve: Fast Start", tick(!q.step && q.curve < 0.0)),
+                    format!(
+                        "{}Curve: Fast Start",
+                        tick(!q.step && !q.ease && q.curve < 0.0)
+                    ),
                     MenuAction::Auto(id, AutoOp::FastStart),
                 ),
                 (
                     format!("{}Step", tick(q.step)),
                     MenuAction::Auto(id, AutoOp::Step),
+                ),
+                (String::new(), MenuAction::Nothing),
+                (
+                    "Smooth".into(),
+                    MenuAction::Auto(id, AutoOp::Smooth(PPQ / 2)),
+                ),
+                (
+                    "Smooth More".into(),
+                    MenuAction::Auto(id, AutoOp::Smooth(PPQ * 2)),
                 ),
                 (String::new(), MenuAction::Nothing),
             ]);
@@ -1879,14 +1971,12 @@ impl Workspace {
                                         let Some(q) = shown.get(n + 1) else { continue };
                                         if p.step {
                                             line.push(point(x(q.tick), y(p.value)));
-                                        } else if p.curve != 0.0 {
+                                        } else if p.curve != 0.0 || p.ease {
                                             let w = f32::from(x(q.tick) - x(p.tick));
                                             let steps = (w / 3.0).clamp(6.0, 64.0) as usize;
                                             for s in 1..steps {
                                                 let f = s as f32 / steps as f32;
-                                                let v = p.value
-                                                    + (q.value - p.value)
-                                                        * tempo_engine::project::bend(f, p.curve);
+                                                let v = p.value + (q.value - p.value) * p.along(f);
                                                 let tx =
                                                     p.tick as f32 + (q.tick - p.tick) as f32 * f;
                                                 line.push(point(
@@ -1987,10 +2077,9 @@ impl Workspace {
                     {
                         continue;
                     }
-                    let mid =
-                        a.value + (b.value - a.value) * tempo_engine::project::bend(0.5, a.curve);
+                    let mid = a.value + (b.value - a.value) * a.along(0.5);
                     let (cx_, cy) = ((xa + xb) / 2.0, top + to_y(param, mid, h));
-                    let bent = a.curve != 0.0;
+                    let bent = a.curve != 0.0 || a.ease;
                     let curve = a.curve;
                     out.push(
                         div()

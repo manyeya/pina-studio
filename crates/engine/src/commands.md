@@ -174,7 +174,8 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   the parameter as `"id"`: its id or its name) from 0 to 1, or as the plugin shows it (a point's
   `"text"`, like `"2 kHz"`, instead of `"value"`). Lines between points are straight unless the
   point they start from has a `"curve"` (-1 to 1: towards 1 it starts slowly and ends fast,
-  towards -1 the other way round) or `"step": true` (it holds its value, then jumps to the next).
+  towards -1 the other way round), `"ease": true` (an S: slow out of it and slow into the next)
+  or `"step": true` (it holds its value, then jumps to the next).
   No points takes it out.
 - `shape_automation` `{"track": 0, "param": "volume", "shape": "sine", "from": 3840, "to": 7680, "every": 960, "low": -12, "high": 0}`:
   draws a shape over what was there from `from` to `to`, a cycle every `every` ticks (a beat
@@ -182,6 +183,10 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   `triangle`, `saw_up`, `saw_down`, `square`, `random` (a new value each cycle), and `ramp_up` and
   `ramp_down` (once across the whole span, for a fade or a build). Takes the parameter as
   `set_automation` does (a plugin's by its id).
+- `smooth_automation` `{"track": 0, "param": "volume", "from": 0, "to": 7680, "width": 480}`:
+  smooths the line from `from` to `to` (all of it without them): its corners and wobbles
+  rounded off over about `width` ticks (an eighth without; more is smoother), its ends where
+  they were. Takes the parameter as `shape_automation` does. Mute, all steps, can't be smoothed.
 - `set_automation_mode` `{"track": 0, "mode": "latch"}`: `read` (the default) plays automation;
   `touch` and `latch` also record what's moved in the app while the song plays, until the control
   is let go (touch) or playback stops (latch); `trim` records as touch does but moves the line

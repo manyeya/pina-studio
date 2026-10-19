@@ -890,6 +890,7 @@ pub fn mix_role(
                         text: None,
                         curve: Some(x.curve),
                         step: Some(x.step),
+                        ease: Some(x.ease),
                     })
                     .collect();
                 cli::edit_with(

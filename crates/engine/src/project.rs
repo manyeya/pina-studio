@@ -633,6 +633,9 @@ pub struct AutoPoint {
     /// Holds its value up to the next point, which it jumps to: a step.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub step: bool,
+    /// Eases out of its value and into the next: an S, slow at both ends (`curve` aside).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ease: bool,
 }
 
 impl AutoPoint {
@@ -642,6 +645,19 @@ impl AutoPoint {
             value,
             ..Default::default()
         }
+    }
+
+    /// How far along its change the line on to the next point is, `t` of the way there.
+    pub fn along(&self, t: f32) -> f32 {
+        match self.ease {
+            true => t * t * (3.0 - 2.0 * t),
+            false => bend(t, self.curve),
+        }
+    }
+
+    /// Whether the line on from it is anything but straight.
+    pub fn shaped(&self) -> bool {
+        self.step || self.ease || self.curve != 0.0
     }
 }
 
@@ -670,6 +686,25 @@ impl Param {
     /// Whether it only ever jumps from value to value.
     pub fn steps(self) -> bool {
         self == Param::Mute
+    }
+
+    /// A value as a share of its range, levels as their faders show them (so silence isn't
+    /// a hundred dB away from quiet).
+    pub fn to_unit(self, v: f32) -> f32 {
+        let (lo, hi) = self.range();
+        match self {
+            Param::Volume | Param::Send(_) => 10f32.powf((v - 6.0) / 40.0).clamp(0.0, 1.0),
+            _ => ((v - lo) / (hi - lo)).clamp(0.0, 1.0),
+        }
+    }
+
+    pub fn from_unit(self, u: f32) -> f32 {
+        let (lo, hi) = self.range();
+        match self {
+            Param::Volume | Param::Send(_) if u <= 1e-4 => SILENT_DB,
+            Param::Volume | Param::Send(_) => (40.0 * u.log10() + 6.0).max(SILENT_DB),
+            _ => lo + u.clamp(0.0, 1.0) * (hi - lo),
+        }
     }
 }
 
@@ -733,6 +768,7 @@ impl AutoShape {
             value,
             curve,
             step,
+            ease: false,
         };
         let mut out = Vec::new();
         match self {
@@ -1086,10 +1122,8 @@ impl Automation {
         let fixed = |i: usize| {
             i == 0
                 || i == n - 1
-                || points[i].step
-                || points[i].curve != 0.0
-                || points[i - 1].step
-                || points[i - 1].curve != 0.0
+                || points[i].shaped()
+                || points[i - 1].shaped()
                 || points[i].tick == points[i - 1].tick
                 || points[i + 1].tick == points[i].tick
         };
@@ -1159,6 +1193,70 @@ impl Automation {
         }
     }
 
+    /// Smooths the line from `from` to `to`: blurred over about `width` ticks either side (on
+    /// the fader's scale for levels), its ends left where they were so it joins the line either
+    /// side, then as few points as keep its shape. Steps and bends inside go smooth too; mute,
+    /// all steps, stays as it is.
+    pub fn smooth(&mut self, param: Param, from: u64, to: u64, width: u64) {
+        let points = self.points(param);
+        if param.steps() || to <= from || points.len() < 2 {
+            return;
+        }
+        let width = width.max(1) as f64;
+        let n = (((to - from) as f64 / (width / 4.0).clamp(10.0, PPQ as f64 / 16.0)).ceil()
+            as usize)
+            .max(2);
+        let step = (to - from) as f64 / n as f64;
+        let reach = (3.0 * width / step).ceil() as i64;
+        // The line as it is, sampled out past both ends, as a share of its range.
+        let line: Vec<f32> = (-reach..=n as i64 + reach)
+            .map(|k| {
+                let t = (from as f64 + k as f64 * step).max(0.0);
+                param.to_unit(value_at(points, t).unwrap_or(0.0))
+            })
+            .collect();
+        let kernel: Vec<f32> = (-reach..=reach)
+            .map(|j| (-(j as f64 * step / width).powi(2) / 2.0).exp() as f32)
+            .collect();
+        let total: f32 = kernel.iter().sum();
+        let mut blurred: Vec<f32> = (0..=n)
+            .map(|k| {
+                let around = &line[k..k + kernel.len()];
+                around.iter().zip(&kernel).map(|(v, g)| v * g).sum::<f32>() / total
+            })
+            .collect();
+        // Its ends pinned where they were.
+        let r = reach as usize;
+        let (d0, d1) = (line[r] - blurred[0], line[r + n] - blurred[n]);
+        for (k, v) in blurred.iter_mut().enumerate() {
+            let u = k as f32 / n as f32;
+            *v = (*v + d0 * (1.0 - u) + d1 * u).clamp(0.0, 1.0);
+        }
+        let sampled: Vec<AutoPoint> = blurred
+            .iter()
+            .enumerate()
+            .map(|(k, &u)| AutoPoint::new(from + (k as f64 * step).round() as u64, u))
+            .collect();
+        let mut keep = vec![true; sampled.len()];
+        simplify(&sampled, 0, sampled.len() - 1, 0.004, &mut keep);
+        let ends = (value_at(points, from as f64), value_at(points, to as f64));
+        let mut smooth: Vec<AutoPoint> = sampled
+            .iter()
+            .zip(&keep)
+            .filter(|(_, k)| **k)
+            .map(|(p, _)| AutoPoint::new(p.tick, param.from_unit(p.value)))
+            .collect();
+        // Exactly where they were, not as near as a round trip through the fader's scale.
+        if let (Some(a), Some(b)) = ends {
+            let last = smooth.len() - 1;
+            (smooth[0].value, smooth[last].value) = (a, b);
+        }
+        let points = self.points_mut(param);
+        let i = points.partition_point(|p| p.tick < from);
+        let j = points.partition_point(|p| p.tick <= to);
+        points.splice(i..j, smooth);
+    }
+
     /// Takes out every lane's points from `from` to `to`, the line either side kept as it was.
     pub fn erase(&mut self, from: u64, to: u64) {
         for param in self.params() {
@@ -1213,7 +1311,7 @@ pub fn bend(t: f32, curve: f32) -> f32 {
     ((k * t).exp() - 1.0) / (k.exp() - 1.0)
 }
 
-/// A parameter's value at a tick: lines (straight, or bent by the point they start from)
+/// A parameter's value at a tick: lines (straight, bent or eased by the point they start from)
 /// between points, steps after a stepped one, level before the first and after the last. None
 /// without points.
 pub fn value_at(points: &[AutoPoint], tick: f64) -> Option<f32> {
@@ -1225,7 +1323,7 @@ pub fn value_at(points: &[AutoPoint], tick: f64) -> Option<f32> {
         (Some(a), Some(_)) if a.step => Some(a.value),
         (Some(a), Some(b)) => {
             let t = ((tick - a.tick as f64) / (b.tick - a.tick) as f64) as f32;
-            Some(a.value + (b.value - a.value) * bend(t, a.curve))
+            Some(a.value + (b.value - a.value) * a.along(t))
         }
     }
 }
@@ -3311,6 +3409,84 @@ mod tests {
                 .iter()
                 .all(|p| !(PPQ * 8 + 1..PPQ * 10).contains(&p.tick))
         );
+    }
+
+    #[test]
+    fn smoothing_rounds_corners_and_wobbles_off_and_leaves_its_ends() {
+        let p = |tick, value| AutoPoint::new(tick, value);
+        // An S eases out and in: slow at both ends, halfway at the middle.
+        let s = [
+            AutoPoint {
+                ease: true,
+                ..p(0, 0.0)
+            },
+            p(100, 1.0),
+        ];
+        assert!(value_at(&s, 10.0).unwrap() < 0.05);
+        assert_eq!(value_at(&s, 50.0), Some(0.5));
+        assert!(value_at(&s, 90.0).unwrap() > 0.95);
+
+        // A pan recorded with a wobble every sixteenth over two bars, flat either side.
+        let wobble: Vec<AutoPoint> = (0..=32)
+            .map(|i| p(PPQ * 2 + i * PPQ / 4, if i % 2 == 0 { -0.2 } else { 0.2 }))
+            .collect();
+        let mut a = Automation {
+            pan: [vec![p(0, -0.2)], wobble, vec![p(PPQ * 16, -0.2)]].concat(),
+            ..Default::default()
+        };
+        let before = a.pan.clone();
+        a.smooth(Param::Pan, PPQ * 2, PPQ * 10, PPQ / 2);
+        let v = |a: &Automation, t: u64| value_at(&a.pan, t as f64).unwrap();
+        // The wobble's gone (it swung 0.4), the ends are where they were, outside untouched.
+        let swing = (PPQ * 3..PPQ * 9)
+            .step_by(30)
+            .map(|t| v(&a, t))
+            .fold((f32::MAX, f32::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
+        assert!(swing.1 - swing.0 < 0.05, "{swing:?}");
+        assert_eq!(v(&a, PPQ * 2), -0.2);
+        assert!((v(&a, PPQ * 10) - value_at(&before, (PPQ * 10) as f64).unwrap()).abs() < 1e-3);
+        assert_eq!(
+            v(&a, PPQ * 12),
+            v(
+                &Automation {
+                    pan: before.clone(),
+                    ..Default::default()
+                },
+                PPQ * 12
+            )
+        );
+        assert!(a.pan.len() < before.len(), "{}", a.pan.len());
+
+        // A sharp peak in the volume, rounded off: lower at the top, still rising to it; the
+        // silence at its ends stays silence.
+        let mut a = Automation {
+            volume: vec![p(0, -144.0), p(PPQ * 4, 0.0), p(PPQ * 8, -144.0)],
+            ..Default::default()
+        };
+        a.smooth(Param::Volume, 0, PPQ * 8, PPQ);
+        let peak = value_at(&a.volume, (PPQ * 4) as f64).unwrap();
+        assert!(peak < -0.5 && peak > -30.0, "{peak}");
+        let rise = |t: u64| value_at(&a.volume, t as f64).unwrap();
+        assert!(rise(PPQ * 2) < rise(PPQ * 3) && rise(PPQ * 3) < rise(PPQ * 4));
+        assert_eq!(value_at(&a.volume, 0.0), Some(-144.0));
+        assert_eq!(value_at(&a.volume, (PPQ * 8) as f64), Some(-144.0));
+        // Mute's steps stay steps.
+        let mut a = Automation {
+            mute: vec![
+                AutoPoint {
+                    step: true,
+                    ..p(0, 0.0)
+                },
+                AutoPoint {
+                    step: true,
+                    ..p(PPQ, 1.0)
+                },
+            ],
+            ..Default::default()
+        };
+        let was = a.mute.clone();
+        a.smooth(Param::Mute, 0, PPQ, PPQ);
+        assert_eq!(a.mute, was);
     }
 
     #[test]
