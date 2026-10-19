@@ -183,9 +183,14 @@ In the app, mostly as in Logic:
   anything and watch it work. Its thinking, each step (reading the song, finding samples, every
   edit, listening) and what it says show as they happen, and each edit lands in the tracks as
   it's made, outlined, undoable on its own. The agent's name at the top picks another (Claude
-  Code or Codex, with their logos, each saying whether it's signed in and on what). Edits by any
-  other agent show there too.
-- Sounds for the agent: "Sounds" in the Agent panel's message box opens the Browser's sounds to
+  Code or Codex, with their logos, each saying whether it's signed in and on what), and beside it
+  its model and effort: Claude Code's Fable, Opus, Sonnet or Haiku and effort from Low to Max;
+  Codex's models as Codex lists them, each with the efforts it takes; or its own settings. Picked
+  ones are kept for every song and `tempo ask` uses them too; changed mid-conversation, the
+  conversation carries on with them from the next question. Edits by any other agent show there
+  too.
+- Sounds for the agent: "Pick sounds for the agent" atop the Agent panel's message box (the + by
+  "Only these" once there are some) opens the Browser's sounds to
   pick from (＋ on each, or "Agent" under the one picked; on the sample page too), and audio files
   dropped on the Agent panel from the Finder are picked as well. They show in the message box:
   click one to hear it, its tag to give it a part (kick, snare, hats, 808, bass, chords, pad,

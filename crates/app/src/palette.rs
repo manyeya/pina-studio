@@ -471,34 +471,32 @@ impl Workspace {
         )
     }
 
-    /// With nothing picked: a chip in the message box's row to start picking.
+    /// With nothing picked: a quiet line atop the message box, to start picking.
     pub fn palette_start(&self, cx: &mut Context<Self>) -> Option<Div> {
         if !self.session.project.palette.sounds.is_empty() {
             return None;
         }
         Some(
-            div()
-                .flex_none()
-                .h(px(26.))
-                .px(px(9.))
-                .flex()
-                .items_center()
-                .gap(px(5.))
-                .rounded(px(8.))
-                .border_1()
-                .border_dashed()
-                .border_color(rgb(LINE_STRONG))
-                .cursor_pointer()
-                .text_size(px(11.5))
-                .text_color(rgb(TEXT_3))
-                .hover(|d| d.text_color(rgb(TEXT_2)).border_color(rgb(TEXT_4)))
-                .child(icon(Icon::Wave, 11.).text_color(rgb(TEXT_3)))
-                .child("Sounds")
-                .debug_selector(|| "palette-start".into())
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|ws, _, _, cx| ws.pick_sounds(cx)),
-                ),
+            div().flex().px(px(8.)).pt(px(7.)).child(
+                div()
+                    .h(px(22.))
+                    .px(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .text_size(px(11.))
+                    .text_color(rgb(TEXT_3))
+                    .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT_2)))
+                    .child(icon(Icon::Wave, 11.).text_color(rgb(AGENT)))
+                    .child("Pick sounds for the agent")
+                    .debug_selector(|| "palette-start".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, _, _, cx| ws.pick_sounds(cx)),
+                    ),
+            ),
         )
     }
 

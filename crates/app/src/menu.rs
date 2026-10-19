@@ -89,6 +89,9 @@ pub enum MenuAction {
     NewSongKey(Option<String>),
     /// Works with this agent in the Agent panel.
     Agent(crate::agent::Kind),
+    /// The agent's model, or effort (None: its own setting).
+    AgentModel(Option<String>),
+    AgentEffort(Option<String>),
     /// The song's genre, by its playbook's id; None for none.
     Genre(Option<String>),
     /// The Playbooks page, on a genre.
@@ -252,6 +255,8 @@ impl Workspace {
             | MenuAction::RevealSong(_)
             | MenuAction::TrashSong(_)) => self.song_pending = Some(a),
             MenuAction::Agent(kind) => self.pick_agent(kind, cx),
+            MenuAction::AgentModel(model) => self.pick_model(model, cx),
+            MenuAction::AgentEffort(effort) => self.pick_effort(effort, cx),
             MenuAction::SampleKey(key) => self.set_sample_key(key, cx),
             MenuAction::SampleCompatible(at) => {
                 self.browser.compatible = !self.browser.compatible;

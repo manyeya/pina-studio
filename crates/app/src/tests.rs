@@ -4070,6 +4070,53 @@ fn playbook_parts_are_added_edited_and_removed(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_agents_model_and_effort_are_picked_in_its_panel(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    ws.update(cx, |ws, cx| {
+        ws.chat.kind = crate::agent::Kind::ClaudeCode;
+        ws.chat.tuning = Default::default();
+        ws.show_agent = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let tuning = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.chat.tuning.clone());
+    // By Send: its own model and effort until one's picked.
+    assert_eq!(ws.read_with(cx, |ws, _| ws.tuning_label()), "Default model");
+    click_on(cx, "agent-tuning", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Opus");
+    click_on(cx, "agent-tuning", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Extra high");
+    let t = tuning(cx);
+    assert_eq!(
+        (t.model.as_deref(), t.effort.as_deref()),
+        (Some("opus"), Some("xhigh"))
+    );
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.tuning_label()),
+        "Opus · Extra high"
+    );
+    // Kept for the next song: what the agent starts with.
+    assert_eq!(crate::agent::tuning(crate::agent::Kind::ClaudeCode), t);
+    // Back to its own.
+    click_on(cx, "agent-tuning", Modifiers::none(), MouseButton::Left);
+    let own = ws.read_with(cx, |ws, _| {
+        let m = ws.menu.as_ref().unwrap();
+        m.items
+            .iter()
+            .rposition(|(l, _)| l.contains("Its own"))
+            .unwrap()
+    });
+    click_on(
+        cx,
+        Box::leak(format!("menu-{own}").into_boxed_str()),
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert_eq!(tuning(cx).effort, None);
+}
+
+#[gpui::test]
 fn sounds_are_picked_for_the_agent_given_parts_and_told_it(cx: &mut TestAppContext) {
     let dir = demo_copy("palette");
     let (ws, cx) = open_at(cx, &dir);
@@ -4115,7 +4162,9 @@ fn sounds_are_picked_for_the_agent_given_parts_and_told_it(cx: &mut TestAppConte
     let keys = dir.join("Audio Files/keys.wav");
     std::fs::copy(&drums, &keys).unwrap();
     let at = ws.read_with(cx, |ws, _| point(ws.viewport_w - 40.0, 400.0));
-    ws.update(cx, |ws, cx| ws.drop_files(std::slice::from_ref(&keys), at, cx));
+    ws.update(cx, |ws, cx| {
+        ws.drop_files(std::slice::from_ref(&keys), at, cx)
+    });
     assert_eq!(palette(cx).sounds.len(), 2);
     let note = ws.update(cx, |ws, _| ws.palette_note()).unwrap();
     assert!(note.contains("any part: \"keys\""), "{note}");
@@ -4816,6 +4865,18 @@ fn shots() {
                     }
                     ws.track = 1;
                     ws.show_bottom(Bottom::PianoRoll, cx);
+                }
+                // The agent's model and effort, picked by Send.
+                "agent-tuning" => {
+                    ws.chat.kind = crate::agent::Kind::ClaudeCode;
+                    ws.chat.tuning = crate::agent::Tuning {
+                        model: Some("opus".into()),
+                        effort: Some("high".into()),
+                    };
+                    ws.show_agent = true;
+                    let at = point(px(1440. - 200.), px(62.));
+                    ws.menu = Some(ws.tuning_menu(at));
+                    cx.notify();
                 }
                 // Sounds picked for the agent: in its message box, and the Browser picking them.
                 "palette" | "palette-pick" => {

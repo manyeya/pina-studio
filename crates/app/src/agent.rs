@@ -178,6 +178,180 @@ pub enum Readiness {
 }
 
 /// The agent chosen last, in `~/Library/Application Support/tempo/agent`; Claude Code at first.
+/// How an agent runs: the model it uses and how hard it thinks (its effort). None leaves either
+/// to the agent's own settings.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct Tuning {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+/// A model to pick: its id as the agent takes it, its name, and the effort levels it takes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Model {
+    pub id: String,
+    pub name: String,
+    pub efforts: Vec<String>,
+}
+
+/// Claude Code's effort levels (its `--effort`).
+const CLAUDE_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+impl Kind {
+    /// The models it offers: Claude Code's by their aliases (each the latest of its line), Codex's
+    /// as its own model list has them (the ones it lists, in its order).
+    pub fn models(self) -> Vec<Model> {
+        match self {
+            Kind::ClaudeCode => [
+                ("fable", "Fable"),
+                ("opus", "Opus"),
+                ("sonnet", "Sonnet"),
+                ("haiku", "Haiku"),
+            ]
+            .into_iter()
+            .map(|(id, name)| Model {
+                id: id.into(),
+                name: name.into(),
+                efforts: CLAUDE_EFFORTS.map(String::from).to_vec(),
+            })
+            .collect(),
+            Kind::Codex => codex_models(),
+        }
+    }
+
+    /// The effort levels it takes with a model (or, with none picked, its default's).
+    pub fn efforts(self, model: Option<&str>) -> Vec<String> {
+        let models = self.models();
+        let id = model.map(str::to_string).or_else(|| self.default_model());
+        match id.and_then(|id| models.into_iter().find(|m| m.id == id)) {
+            Some(m) => m.efforts,
+            None => match self {
+                Kind::ClaudeCode => CLAUDE_EFFORTS.map(String::from).to_vec(),
+                Kind::Codex => ["low", "medium", "high"].map(String::from).to_vec(),
+            },
+        }
+    }
+
+    /// The model it uses when none is picked, if its settings say (Codex's config does).
+    pub fn default_model(self) -> Option<String> {
+        match self {
+            Kind::ClaudeCode => None,
+            Kind::Codex => {
+                let config = std::fs::read_to_string(codex_home().join("config.toml")).ok()?;
+                // The top level's `model = "…"`, before any [table].
+                config
+                    .lines()
+                    .take_while(|l| !l.trim_start().starts_with('['))
+                    .find_map(|l| {
+                        let (k, v) = l.split_once('=')?;
+                        (k.trim() == "model").then(|| v.trim().trim_matches('"').to_string())
+                    })
+            }
+        }
+    }
+}
+
+/// A model's name for people: its own, or (not one listed) its id.
+pub fn model_name(kind: Kind, id: &str) -> String {
+    kind.models()
+        .into_iter()
+        .find(|m| m.id == id)
+        .map_or_else(|| id.to_string(), |m| m.name)
+}
+
+/// An effort level's name for people.
+pub fn effort_name(effort: &str) -> String {
+    match effort {
+        "xhigh" => "Extra high".into(),
+        "max" => "Max".into(),
+        e => {
+            let mut c = e.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
+        }
+    }
+}
+
+fn codex_home() -> PathBuf {
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".codex")
+        })
+}
+
+/// Codex's models, from the list it keeps (`models_cache.json`): those it shows, in its order.
+fn codex_models() -> Vec<Model> {
+    let Ok(text) = std::fs::read_to_string(codex_home().join("models_cache.json")) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&text) else {
+        return Vec::new();
+    };
+    let mut models: Vec<(i64, Model)> = v["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|m| m["visibility"] == "list")
+        .filter_map(|m| {
+            let id = m["slug"].as_str()?.to_string();
+            let efforts = m["supported_reasoning_levels"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|l| l["effort"].as_str().map(String::from))
+                .collect();
+            Some((
+                m["priority"].as_i64().unwrap_or(i64::MAX),
+                Model {
+                    name: m["display_name"].as_str().unwrap_or(&id).to_string(),
+                    id,
+                    efforts,
+                },
+            ))
+        })
+        .collect();
+    models.sort_by_key(|m| m.0);
+    models.into_iter().map(|m| m.1).collect()
+}
+
+/// The model and effort last picked for an agent, kept for every song.
+pub fn tuning(kind: Kind) -> Tuning {
+    let all: serde_json::Map<String, Value> = std::fs::read_to_string(tuning_file())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    all.get(kind.def().id)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default()
+}
+
+pub fn tune(kind: Kind, tuning: &Tuning) {
+    let file = tuning_file();
+    let mut all: serde_json::Map<String, Value> = std::fs::read_to_string(&file)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    all.insert(kind.def().id.into(), json!(tuning));
+    let _ = std::fs::create_dir_all(file.parent().unwrap());
+    let _ = std::fs::write(file, Value::Object(all).to_string());
+}
+
+fn tuning_file() -> PathBuf {
+    match cfg!(test) {
+        // Tests never touch the person's.
+        true => std::env::temp_dir().join(format!(
+            "tempo-test-tuning-{}-{:?}.json",
+            std::process::id(),
+            thread::current().id()
+        )),
+        false => choice_file().with_file_name("agent-tuning.json"),
+    }
+}
+
 pub fn chosen() -> Kind {
     std::fs::read_to_string(choice_file())
         .ok()
@@ -223,11 +397,18 @@ pub struct Agent {
     tx: UnboundedSender<Event>,
     run: Run,
     asks: u32,
+    /// The model and effort it runs with.
+    pub tuning: Tuning,
 }
 
 enum Run {
-    /// Claude Code: one process for the whole conversation, asked on its stdin.
-    Claude { child: Child, stdin: ChildStdin },
+    /// Claude Code: one process for the whole conversation, asked on its stdin; its
+    /// conversation's id, to carry it on in another (another model, say).
+    Claude {
+        child: Child,
+        stdin: ChildStdin,
+        session: Arc<Mutex<Option<String>>>,
+    },
     /// Codex: a process for each question, the conversation carried on by its id.
     Turns {
         child: Option<Child>,
@@ -240,24 +421,42 @@ enum Run {
 type Parse = fn(&Value) -> (Vec<Event>, Option<String>);
 
 impl Agent {
-    /// Starts `kind` on `project`; its events come on the receiver.
-    pub fn start(kind: Kind, project: &Path) -> Result<(Agent, UnboundedReceiver<Event>), String> {
+    /// Starts `kind` on `project` with a model and effort, carrying on conversation `resume` if
+    /// given; its events come on the receiver.
+    pub fn start(
+        kind: Kind,
+        project: &Path,
+        tuning: Tuning,
+        resume: Option<String>,
+    ) -> Result<(Agent, UnboundedReceiver<Event>), String> {
         let def = kind.def();
         let cmd = kind.command().ok_or(format!(
             "{} isn't installed. Install it, sign in ({}), then try again.",
             def.name, def.sign_in
         ))?;
         let (tx, rx) = unbounded();
+        let carried = resume.is_some();
         let run = match kind {
             Kind::ClaudeCode => {
-                let mut child = claude_command(&cmd, project)?;
+                let mut child = claude_command(&cmd, project, &tuning, resume.as_deref())?;
                 let stdin = child.stdin.take().unwrap();
-                read(&mut child, tx.clone(), claude_events, None, None);
-                Run::Claude { child, stdin }
+                let session = Arc::new(Mutex::new(resume));
+                read(
+                    &mut child,
+                    tx.clone(),
+                    claude_events,
+                    Some(session.clone()),
+                    None,
+                );
+                Run::Claude {
+                    child,
+                    stdin,
+                    session,
+                }
             }
             _ => Run::Turns {
                 child: None,
-                session: Arc::default(),
+                session: Arc::new(Mutex::new(resume)),
                 stopping: Arc::default(),
             },
         };
@@ -266,9 +465,20 @@ impl Agent {
             project: project.to_path_buf(),
             tx,
             run,
-            asks: 0,
+            // A conversation carried on has had tempo's instructions.
+            asks: carried as u32,
+            tuning,
         };
         Ok((agent, rx))
+    }
+
+    /// The conversation's id, once the agent has said it.
+    pub fn session(&self) -> Option<String> {
+        match &self.run {
+            Run::Claude { session, .. } | Run::Turns { session, .. } => {
+                session.lock().unwrap().clone()
+            }
+        }
     }
 
     /// Asks it something: a first request, or more about the last.
@@ -300,7 +510,7 @@ impl Agent {
                 };
                 let cmd = self.kind.command().ok_or("It's no longer installed.")?;
                 let id = session.lock().unwrap().clone();
-                let mut c = codex_command(&cmd, &self.project, id.as_deref(), &text)?;
+                let mut c = codex_command(&cmd, &self.project, &self.tuning, id.as_deref(), &text)?;
                 stopping.store(false, Ordering::Relaxed);
                 read(
                     &mut c,
@@ -363,10 +573,16 @@ fn workdir(project: &Path) -> PathBuf {
 
 /// Claude Code with tempo's tools and nothing else: no shell, no files, no one else's MCP servers
 /// or hooks; anything else asked for is refused, not asked about.
-fn claude_command(cmd: &Path, project: &Path) -> Result<Child, String> {
+fn claude_command(
+    cmd: &Path,
+    project: &Path,
+    tuning: &Tuning,
+    resume: Option<&str>,
+) -> Result<Child, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mcp = json!({ "mcpServers": { "tempo": { "command": exe, "args": ["mcp"] } } });
     Command::new(cmd)
+        .args(tuning_args(Kind::ClaudeCode, tuning, resume))
         .args(["-p", "--verbose", "--include-partial-messages"])
         .args([
             "--input-format",
@@ -387,11 +603,39 @@ fn claude_command(cmd: &Path, project: &Path) -> Result<Child, String> {
         .map_err(|e| format!("Couldn't start {}: {e}", cmd.display()))
 }
 
+/// The flags that pick an agent's model and effort, and (Claude Code's) carry on a conversation.
+fn tuning_args(kind: Kind, tuning: &Tuning, resume: Option<&str>) -> Vec<String> {
+    let mut a: Vec<String> = Vec::new();
+    match kind {
+        Kind::ClaudeCode => {
+            if let Some(m) = &tuning.model {
+                a.extend(["--model".into(), m.clone()]);
+            }
+            if let Some(e) = &tuning.effort {
+                a.extend(["--effort".into(), e.clone()]);
+            }
+            if let Some(id) = resume {
+                a.extend(["--resume".into(), id.into()]);
+            }
+        }
+        Kind::Codex => {
+            if let Some(m) = &tuning.model {
+                a.extend(["-m".into(), m.clone()]);
+            }
+            if let Some(e) = &tuning.effort {
+                a.extend(["-c".into(), format!("model_reasoning_effort={e:?}")]);
+            }
+        }
+    }
+    a
+}
+
 /// `codex exec`, resuming the conversation after its first question: tempo's MCP server in place
 /// of any others, its sandbox read-only, nothing asked about.
 fn codex_command(
     cmd: &Path,
     project: &Path,
+    tuning: &Tuning,
     session: Option<&str>,
     text: &str,
 ) -> Result<Child, String> {
@@ -413,6 +657,7 @@ fn codex_command(
             "mcp_servers={{tempo={{command={:?},args=[\"mcp\"]}}}}",
             exe.display().to_string()
         ));
+    c.args(tuning_args(Kind::Codex, tuning, None));
     if let Some(id) = session {
         c.arg(id);
     }
@@ -442,7 +687,7 @@ pub fn ask(kind: Kind, dir: &Path, words: &str) -> Result<(), String> {
         }
         Readiness::Ready(_) => {}
     }
-    let (mut agent, events) = Agent::start(kind, &dir)?;
+    let (mut agent, events) = Agent::start(kind, &dir, tuning(kind), None)?;
     let mut app = crate::server::Link::to(&dir);
     let mut tell = |e: &Event| {
         if let Some(link) = app.as_mut()
@@ -559,8 +804,10 @@ fn read(
             }
         }
         let said = errors.join().unwrap_or_default();
+        // Codex's runs (a process a question) can be stopped; Claude's lasts the conversation.
+        let turns = stopping.is_some();
         let stopped = stopping.is_some_and(|s| s.load(Ordering::Relaxed));
-        let error = match session.is_some() {
+        let error = match turns {
             // A process for each question ends when it's answered, or stopped.
             true if done => return,
             true => None,
@@ -585,7 +832,10 @@ fn read(
 
 /// The events in one line of Claude Code's stream-json output.
 fn claude_events(v: &Value) -> (Vec<Event>, Option<String>) {
-    (claude_line(v), None)
+    let id = (v["type"] == "system" && v["subtype"] == "init")
+        .then(|| v["session_id"].as_str().map(String::from))
+        .flatten();
+    (claude_line(v), id)
 }
 
 pub fn claude_line(v: &Value) -> Vec<Event> {
@@ -863,6 +1113,70 @@ fn trim(x: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn models_and_efforts_are_picked_kept_and_passed_on() {
+        // The flags: Claude Code's model, effort and the conversation carried on; Codex's.
+        let t = Tuning {
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+        };
+        let args = tuning_args(Kind::ClaudeCode, &t, Some("s-1"));
+        assert_eq!(
+            args,
+            ["--model", "opus", "--effort", "high", "--resume", "s-1"]
+        );
+        let args = tuning_args(Kind::Codex, &t, None);
+        assert_eq!(
+            args,
+            ["-m", "opus", "-c", "model_reasoning_effort=\"high\""]
+        );
+        assert!(tuning_args(Kind::ClaudeCode, &Tuning::default(), None).is_empty());
+        // Claude's first line names its conversation, to carry it on in another model.
+        let init = json!({"type": "system", "subtype": "init", "model": "m", "session_id": "s-1"});
+        assert_eq!(claude_events(&init).1.as_deref(), Some("s-1"));
+        assert_eq!(Kind::ClaudeCode.models()[1].id, "opus");
+        assert!(
+            Kind::ClaudeCode
+                .efforts(Some("opus"))
+                .contains(&"max".to_string())
+        );
+
+        // Codex's from its own list: those it shows, in its order, each with its efforts; its
+        // default from its config.
+        let home = std::env::temp_dir().join(format!("tempo-test-codex-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        let list = json!({"models": [
+            {"slug": "b", "display_name": "B", "visibility": "list", "priority": 9,
+             "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}]},
+            {"slug": "hidden", "display_name": "H", "visibility": "hide", "priority": 1,
+             "supported_reasoning_levels": []},
+            {"slug": "a", "display_name": "A", "visibility": "list", "priority": 2,
+             "supported_reasoning_levels": [{"effort": "medium"}, {"effort": "xhigh"}]}
+        ]});
+        std::fs::write(home.join("models_cache.json"), list.to_string()).unwrap();
+        std::fs::write(
+            home.join("config.toml"),
+            "model = \"b\"\n[x]\nmodel = \"z\"\n",
+        )
+        .unwrap();
+        unsafe { std::env::set_var("CODEX_HOME", &home) };
+        let names: Vec<String> = Kind::Codex.models().into_iter().map(|m| m.name).collect();
+        assert_eq!(names, ["A", "B"]);
+        assert_eq!(Kind::Codex.default_model().as_deref(), Some("b"));
+        assert_eq!(Kind::Codex.efforts(None), ["low", "high"]);
+        assert_eq!(Kind::Codex.efforts(Some("a")), ["medium", "xhigh"]);
+        assert_eq!(model_name(Kind::Codex, "a"), "A");
+        assert_eq!(effort_name("xhigh"), "Extra high");
+        unsafe { std::env::remove_var("CODEX_HOME") };
+        let _ = std::fs::remove_dir_all(&home);
+
+        // Kept for each agent.
+        tune(Kind::Codex, &t);
+        assert_eq!(tuning(Kind::Codex), t);
+        assert_eq!(tuning(Kind::ClaudeCode), Tuning::default());
+        let _ = std::fs::remove_file(tuning_file());
+    }
 
     #[test]
     fn claudes_stream_becomes_events() {

@@ -76,6 +76,8 @@ pub struct Chat {
     pub before: Option<tempo_engine::project::Project>,
     /// Whether what's selected goes along with what's asked.
     pub use_selection: bool,
+    /// The model and effort it runs with, as last picked for it.
+    pub tuning: agent::Tuning,
     /// The palette as the agent was last told it, so it's told again only when it changes.
     pub palette_heard: Option<tempo_engine::project::Palette>,
     _sent: Subscription,
@@ -140,6 +142,7 @@ impl Chat {
             before: None,
             use_selection: true,
             palette_heard: None,
+            tuning: agent::tuning(agent::chosen()),
             _sent: sent,
         }
     }
@@ -295,10 +298,27 @@ impl Workspace {
             cx.notify();
             return;
         }
+        // Another model or effort picked since it started: Claude Code starts again on them,
+        // carrying on the conversation; Codex takes them with its next question.
+        let mut resume = None;
+        if let Some(a) = &mut self.chat.agent
+            && a.tuning != self.chat.tuning
+        {
+            match self.chat.kind {
+                agent::Kind::ClaudeCode => {
+                    resume = a.session();
+                    self.chat.agent = None;
+                }
+                _ => a.tuning = self.chat.tuning.clone(),
+            }
+        }
         if self.chat.agent.is_none() {
             // A new conversation hears the palette afresh.
-            self.chat.palette_heard = None;
-            match Agent::start(self.chat.kind, &self.session.dir) {
+            if resume.is_none() {
+                self.chat.palette_heard = None;
+            }
+            let tuning = self.chat.tuning.clone();
+            match Agent::start(self.chat.kind, &self.session.dir, tuning, resume) {
                 Ok((agent, mut events)) => {
                     self.chat.run += 1;
                     let run = self.chat.run;
@@ -393,10 +413,107 @@ impl Workspace {
         if kind != self.chat.kind {
             self.chat.kind = kind;
             self.chat.model = None;
+            self.chat.tuning = agent::tuning(kind);
             agent::choose(kind);
             self.new_chat(cx);
         }
         cx.notify();
+    }
+
+    /// A model picked for the agent, from the next question on; an effort the new model doesn't
+    /// take goes back to its own.
+    pub fn pick_model(&mut self, model: Option<String>, cx: &mut Context<Self>) {
+        let kind = self.chat.kind;
+        let t = &mut self.chat.tuning;
+        t.model = model;
+        if t.effort
+            .as_ref()
+            .is_some_and(|e| !kind.efforts(t.model.as_deref()).contains(e))
+        {
+            t.effort = None;
+        }
+        agent::tune(kind, t);
+        self.status = Some(format!("{} from the next question on", self.tuning_label()));
+        cx.notify();
+    }
+
+    pub fn pick_effort(&mut self, effort: Option<String>, cx: &mut Context<Self>) {
+        self.chat.tuning.effort = effort;
+        agent::tune(self.chat.kind, &self.chat.tuning);
+        self.status = Some(format!("{} from the next question on", self.tuning_label()));
+        cx.notify();
+    }
+
+    /// The model and effort, as the chip says them: those picked, else the model it last ran
+    /// as (its own), and "Default" before it has.
+    pub fn tuning_label(&self) -> String {
+        let (kind, t) = (self.chat.kind, &self.chat.tuning);
+        let model = match &t.model {
+            Some(m) => agent::model_name(kind, m),
+            None => kind
+                .default_model()
+                .map(|m| agent::model_name(kind, &m))
+                .or_else(|| {
+                    self.chat
+                        .model
+                        .as_deref()
+                        .filter(|m| !m.is_empty())
+                        .map(model_name)
+                })
+                .unwrap_or_else(|| "Default model".into()),
+        };
+        match &t.effort {
+            Some(e) => format!("{model} · {}", agent::effort_name(e)),
+            None => model,
+        }
+    }
+
+    /// The models to pick from, and the efforts the picked one takes.
+    pub fn tuning_menu(&self, at: gpui::Point<gpui::Pixels>) -> Menu {
+        let (kind, t) = (self.chat.kind, &self.chat.tuning);
+        let tick = |on: bool| if on { "✓ " } else { "" };
+        let own = match kind.default_model() {
+            Some(m) => format!("Its own ({})", agent::model_name(kind, &m)),
+            None => "Its own".into(),
+        };
+        let mut items = vec![
+            ("Model".to_string(), MenuAction::Nothing),
+            (
+                format!("{}{own}", tick(t.model.is_none())),
+                MenuAction::AgentModel(None),
+            ),
+        ];
+        items.extend(kind.models().into_iter().map(|m| {
+            (
+                format!(
+                    "{}{}",
+                    tick(t.model.as_deref() == Some(m.id.as_str())),
+                    m.name
+                ),
+                MenuAction::AgentModel(Some(m.id)),
+            )
+        }));
+        items.push((String::new(), MenuAction::Nothing));
+        items.push(("Effort".to_string(), MenuAction::Nothing));
+        items.push((
+            format!("{}Its own", tick(t.effort.is_none())),
+            MenuAction::AgentEffort(None),
+        ));
+        items.extend(kind.efforts(t.model.as_deref()).into_iter().map(|e| {
+            (
+                format!(
+                    "{}{}",
+                    tick(t.effort.as_deref() == Some(e.as_str())),
+                    agent::effort_name(&e)
+                ),
+                MenuAction::AgentEffort(Some(e)),
+            )
+        }));
+        Menu {
+            at,
+            items,
+            ..Default::default()
+        }
     }
 
     /// The agents to choose from: each one's name, and what it needs if it can't work yet.
@@ -442,6 +559,7 @@ impl Workspace {
     }
 
     pub fn agent_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let tuning = self.tuning_label();
         let c = &self.chat;
         let def = c.kind.def();
         let status = match (c.busy, c.since, c.remote) {
@@ -490,18 +608,56 @@ impl Workspace {
                         }),
                     ),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .font_family(MONO)
-                    .text_size(px(11.))
-                    .text_color(rgb(if c.busy { AGENT_TEXT } else { TEXT_3 }))
-                    .whitespace_nowrap()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(status),
-            )
+            // Working: for how long; else its model and effort, to pick another.
+            .when(c.busy, |d| {
+                d.child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .font_family(MONO)
+                        .text_size(px(11.))
+                        .text_color(rgb(AGENT_TEXT))
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(status),
+                )
+            })
+            .when(!c.busy, |d| {
+                d.child(
+                    div().flex_1().min_w(px(0.)).flex().child(
+                        div()
+                            .min_w(px(0.))
+                            .h(px(24.))
+                            .px(px(6.))
+                            .flex()
+                            .items_center()
+                            .gap(px(3.))
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .text_size(px(11.5))
+                            .text_color(rgb(TEXT_3))
+                            .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT_2)))
+                            .debug_selector(|| "agent-tuning".into())
+                            .child(
+                                div()
+                                    .min_w(px(0.))
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(tuning),
+                            )
+                            .child(icon(Icon::Chevron, 11.).text_color(rgb(TEXT_4)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|ws, e: &gpui::MouseDownEvent, _, cx| {
+                                    ws.menu = Some(ws.tuning_menu(e.position));
+                                    cx.notify();
+                                }),
+                            ),
+                    ),
+                )
+            })
             .child(
                 icon_seg(Icon::Plus, false, 26.)
                     .debug_selector(|| "new-chat".into())
@@ -680,6 +836,7 @@ impl Workspace {
             });
         let critic = self.critic_chip(cx);
         let (palette, start) = (self.palette_card(cx), self.palette_start(cx));
+
         let c = &self.chat;
         // One card: what's typed, and under it what goes with it and the button that sends it.
         let composer = div().flex_none().px(px(10.)).pb(px(10.)).pt(px(4.)).child(
@@ -692,6 +849,7 @@ impl Workspace {
                 .border_color(rgb(LINE_STRONG))
                 .shadow_lg()
                 .children(palette)
+                .children(start)
                 .child(
                     div()
                         .px(px(13.))
@@ -710,7 +868,6 @@ impl Workspace {
                         .pt(px(4.))
                         .pb(px(7.))
                         .children(selection)
-                        .children(start)
                         .child(critic)
                         .child(div().flex_1())
                         .child(send),
