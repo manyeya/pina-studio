@@ -256,7 +256,7 @@ impl Workspace {
     fn ask_about_study(&mut self, cx: &mut Context<Self>) {
         let Some(s) = self.opened_study() else { return };
         self.view = View::Arrange;
-        self.show_samples = false;
+        self.show_browser = false;
         self.show_agent = true;
         self.ask_agent(
             format!(

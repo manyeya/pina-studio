@@ -27,12 +27,12 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   syllables and hooks (`words.rs`); `examples/study_eval.rs` measures its tempo and key against
   labelled loops.
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
-  `topbar.rs` (transport and display), `inspector.rs` (the side panel: inspector and browser),
+  `topbar.rs` (transport and display), `inspector.rs` (the Inspector, left of the tracks),
   `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`)
   and `producer.rs` (its song strip, producer's path, critic, undo for a turn and selection),
   `sampler.rs` (the Sampler editor), `genres.rs` (the Playbooks page, where genres are read and changed), `study.rs` (the Song
   Study page) with `study_cli.rs` (studies kept, and lyrics, year and genre looked up),
-  `looks.rs` (track colours and icons, and their picker), `catalog.rs` (the Browser),
+  `looks.rs` (track colours and icons, and their picker), `catalog.rs` (the Browser's devices; `browser.rs` the panel itself and its sounds),
   `projects.rs` (songs: the Songs page, the new-song sheet, opening another in the window),
   `tracks.rs` (tools, markers, ruler, headers, regions, automation), `editor.rs` (the
   editor under the tracks) with `pianoroll.rs`, `steps.rs` (the step sequencer), `score.rs`,
@@ -134,18 +134,20 @@ In the app, mostly as in Logic:
   regions (at the playhead, on the selected track), ⌘R repeats one after itself and ⌃M mutes it,
   ⌘Z and ⇧⌘Z undo and redo, ⌥⌘N adds a track and ⌘⌫ deletes the selected one, ⌘S saves.
 - X shows the mixer, P the piano roll (or double-click a MIDI region), A automation lanes, I the
-  side panel, F the sample browser beside the tracks (click a sound to hear it, ↑ ↓ for the next,
-  drag it onto a track or double-click it to add it, More Like It for what sounds like it) and ⇧F
-  its page (filters, the sound map, kits, the details; drag a sound out of it and the tracks come
+  Inspector, F the Browser beside the tracks (on Sounds: click a sound to hear it, ↑ ↓ for the
+  next, drag it onto a track or double-click it to add it, More Like It for what sounds like it)
+  and ⇧F the sample library's page (filters, the sound map, kits, the details; drag a sound out of it and the tracks come
   back to drop it on); ⌘K turns on musical typing (A to K play a C major scale from C3, W E T Y U the
   sharps, Z and X change octave). ⌘B exports the song to `Bounces/` in the project.
-- The side panel's Inspector shows the selected region with its playback settings, as Logic's:
+- The Inspector, left of the tracks, shows the selected region with its playback settings, as Logic's:
   Loop (it plays over and over until the next region on its track, its repeats drawn after it),
   and for MIDI and patterns Quantize, Transpose and Velocity, which change what plays but not
   the notes ("Apply to notes" writes them in). Then Smart Controls (a plugin instrument's filter
   and envelope, else the channel's EQ and compressor; turning them is an undoable edit) and the
   channel strips.
-- Browser, beside it: one search for everything that goes on a track, and more. tempo's own
+- The Browser, right of the tracks (F): one panel and one search for everything that goes in a
+  song, its tabs All, Instruments, Effects, Sounds (the sample library: one-shots and loops, what
+  fits the song, its categories) and ★; what's typed follows from tab to tab. tempo's own
   instruments and effects and every plugin installed, each once however many formats it comes in
   (CLAP, VST3, AU, VST2 shown as badges, the best used), in the categories the plugin says it
   belongs to (VST3 subcategories, CLAP features, an Audio Unit's type, VST2's category; its name

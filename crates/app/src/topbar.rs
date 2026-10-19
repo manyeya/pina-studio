@@ -399,12 +399,17 @@ impl Workspace {
                         ),
                     )
                     .child(
-                        icon_seg(Icon::Samples, self.browser_open(), 30.)
-                            .debug_selector(|| "samples".into())
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|ws, _, _, cx| ws.toggle_samples(cx)),
-                            ),
+                        icon_seg(
+                            Icon::Samples,
+                            self.view == View::Samples
+                                || (self.view == View::Arrange && self.show_browser),
+                            30.,
+                        )
+                        .debug_selector(|| "samples".into())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, _, _, cx| ws.toggle_samples(cx)),
+                        ),
                     ),
             )
             .child(self.presence(cx))
@@ -445,7 +450,7 @@ impl Workspace {
     /// working on the song, raised while its panel is open; clicking it opens the panel.
     fn presence(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.chat.busy || self.agent_presence().is_some();
-        let open = self.show_agent && !self.show_samples && self.view == View::Arrange;
+        let open = self.show_agent && !self.show_browser && self.view == View::Arrange;
         div()
             .size(px(30.))
             .flex_none()

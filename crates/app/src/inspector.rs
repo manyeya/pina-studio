@@ -1,6 +1,6 @@
-//! The side panel, left of the tracks. Inspector: the selected region's settings, Smart
-//! Controls for its track, and the track's and the master's channel strips. Browser: instruments
-//! and effects to drop on the selected track. Agent: how to connect one, and what it did.
+//! The Inspector, left of the tracks: the selected region's settings, Smart Controls for its
+//! track, and the track's and the master's channel strips. (The Browser, of instruments,
+//! effects, sounds and songs, is on the right: `browser.rs`.)
 
 use gpui::{
     Context, Div, FontWeight, MouseButton, MouseDownEvent, SharedString, div, prelude::*, px, rgb,
@@ -16,7 +16,7 @@ use crate::{
     menu::{Menu, MenuAction},
     strip::{self, Channel, Layout},
     theme::*,
-    workspace::{Bottom, CompField, Drag, Name, Side, Target, Workspace, pt},
+    workspace::{Bottom, CompField, Drag, Name, Target, Workspace, pt},
 };
 
 /// "17 1 1 1": a position as bars, beats, sixteenths and ticks, from 1.
@@ -93,36 +93,7 @@ pub fn smart_params(params: &[PluginParam]) -> Vec<(u32, String)> {
 
 impl Workspace {
     pub fn inspector(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let tab = |label: &'static str, side: Side, on: bool, cx: &mut Context<Self>| {
-            seg(label, on, 26.)
-                .flex_1()
-                .debug_selector(move || format!("side-{label}"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        ws.side = side;
-                        cx.notify();
-                    }),
-                )
-        };
-        let tabs = tray()
-            .rounded(px(9.))
-            .child(tab(
-                "Inspector",
-                Side::Inspector,
-                self.side == Side::Inspector,
-                cx,
-            ))
-            .child(tab(
-                "Browser",
-                Side::Browser,
-                self.side == Side::Browser,
-                cx,
-            ));
-        let body = match self.side {
-            Side::Inspector => self.inspector_tab(cx).into_any_element(),
-            Side::Browser => self.device_browser(cx).into_any_element(),
-        };
+        let body = self.inspector_tab(cx);
         div()
             .w(px(self.side_w()))
             .flex_none()
@@ -138,11 +109,12 @@ impl Workspace {
                     .h(px(TOP_H))
                     .px(px(12.))
                     .flex()
-                    .flex_col()
-                    .justify_center()
+                    .items_center()
                     .border_b_1()
                     .border_color(rgb(LINE))
-                    .child(tabs),
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Inspector"),
             )
             .child(
                 div()
@@ -177,10 +149,7 @@ impl Workspace {
                         cx.listener(|ws, e: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
                             if e.click_count == 2 {
-                                match ws.side {
-                                    Side::Browser => ws.browser_w = INSPECTOR_W + 52.0,
-                                    _ => ws.inspector_w = INSPECTOR_W,
-                                }
+                                ws.inspector_w = INSPECTOR_W;
                                 cx.notify();
                                 return;
                             }

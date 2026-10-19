@@ -550,6 +550,8 @@ pub enum Scope {
     All,
     Instruments,
     Effects,
+    /// The sample library.
+    Sounds,
     Favourites,
 }
 
@@ -731,7 +733,7 @@ impl Workspace {
         let c = &self.catalog;
         let fits = |d: &Device| {
             (match c.scope {
-                Scope::All => true,
+                Scope::All | Scope::Sounds => true,
                 Scope::Instruments => d.instrument(),
                 Scope::Effects => !d.instrument(),
                 Scope::Favourites => c.favourites.contains(&d.key),
@@ -761,7 +763,7 @@ impl Workspace {
             if matches!(c.scope, Scope::All) && c.cat.is_none() {
                 let sounds = self.catalog_samples(&query, 5);
                 if !sounds.is_empty() {
-                    rows.push(Row::Heading("Sounds · in the Samples browser".into()));
+                    rows.push(Row::Heading("Sounds".into()));
                     rows.extend(sounds.into_iter().map(Row::Sample));
                 }
                 let songs: Vec<crate::projects::Song> = self
@@ -1126,7 +1128,8 @@ impl Workspace {
         )
     }
 
-    /// The Browser, in the side panel.
+    /// The Browser's devices, presets, sounds and songs: under its search and tabs, in the
+    /// right panel (`browser.rs`).
     pub fn device_browser(&mut self, cx: &mut Context<Self>) -> Div {
         let rows = self.catalog_rows(cx);
         let query = self.catalog_query(cx);
@@ -1140,49 +1143,6 @@ impl Workspace {
             .map_or("No track: a device makes one".to_string(), |t| {
                 format!("Adds to {}", t.name)
             });
-        let scope_seg = |label: &'static str, s: Scope, cx: &mut Context<Self>| {
-            let on = scope == s;
-            // Each as wide as its word and the rest shared, so none is cramped; the star small.
-            let star = s == Scope::Favourites;
-            div()
-                .id(label)
-                .when(star, |d| d.w(px(34.)).flex_none())
-                .when(!star, |d| d.flex_auto().px(px(10.)))
-                .h(px(26.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(7.))
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
-                .whitespace_nowrap()
-                .cursor_pointer()
-                .when(on, |d| {
-                    d.bg(rgb(RAISED))
-                        .border_1()
-                        .border_color(rgb(LINE_STRONG))
-                        .text_color(rgb(if star { AMBER } else { TEXT }))
-                })
-                .when(!on, |d| {
-                    d.text_color(rgb(TEXT_3))
-                        .hover(|d| d.text_color(rgb(TEXT_2)))
-                })
-                .child(label)
-                .debug_selector(move || format!("scope-{label}"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        ws.catalog.scope = s;
-                        ws.catalog.cat = ws.catalog.cat.filter(|c| match s {
-                            Scope::Instruments => c.instrument(),
-                            Scope::Effects => !c.instrument(),
-                            _ => true,
-                        });
-                        ws.catalog.picked = None;
-                        cx.notify();
-                    }),
-                )
-        };
         let chips: Vec<Cat> = match scope {
             Scope::Instruments => INSTRUMENT_CATS.to_vec(),
             Scope::Effects => EFFECT_CATS.to_vec(),
@@ -1279,46 +1239,13 @@ impl Workspace {
         let empty = list.is_empty();
         div()
             .key_context("DeviceBrowser")
+            .flex_1()
+            .min_h(px(0.))
             .flex()
             .flex_col()
             .gap(px(8.))
-            .h_full()
-            .min_h(px(0.))
-            .child(
-                div()
-                    .h(px(32.))
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .rounded(px(8.))
-                    .bg(rgb(FIELD))
-                    .border_1()
-                    .border_color(rgb(LINE))
-                    .text_size(px(12.5))
-                    .child(icon(Icon::Search, 13.).text_color(rgb(TEXT_3)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .debug_selector(|| "browser-search".into())
-                            .child(self.catalog.search.clone()),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(2.))
-                    .p(px(3.))
-                    .rounded(px(9.))
-                    .bg(rgb(WELL))
-                    .border_1()
-                    .border_color(rgb(LINE_SOFT))
-                    .child(scope_seg("All", Scope::All, cx))
-                    .child(scope_seg("Instruments", Scope::Instruments, cx))
-                    .child(scope_seg("Effects", Scope::Effects, cx))
-                    .child(scope_seg("★", Scope::Favourites, cx)),
-            )
+            .px(px(10.))
+            .pb(px(10.))
             .when(query.is_empty() || cat.is_some(), |d| d.child(chip_row))
             .child(
                 div()

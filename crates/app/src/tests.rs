@@ -2549,7 +2549,7 @@ fn a_kit_becomes_a_sampler_track_and_samples_drag_onto_tracks(cx: &mut TestAppCo
     cx.run_until_parked();
     cx.simulate_mouse_move(row + point(px(0.), px(80.)), MouseButton::Left, none);
     cx.run_until_parked();
-    let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_samples));
+    let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_browser));
     assert_eq!(shown, (View::Arrange, true));
     let to = spot(&ws, cx, BAR + 30, drums);
     cx.simulate_mouse_move(to, MouseButton::Left, none);
@@ -2574,10 +2574,11 @@ fn the_compact_browser_hears_finds_alike_and_drags_onto_tracks(cx: &mut TestAppC
     let library = little_library(&dir.join("Library"));
     let (ws, cx) = open_at(cx, &dir);
     ws.update(cx, |ws, cx| ws.set_library(library, cx));
-    // F: beside the tracks, with the search field ready to type in.
+    // F: the Browser beside the tracks; its Sounds, with the search field ready to type in.
     cx.simulate_keystrokes("f");
-    let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_samples));
+    let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_browser));
     assert_eq!(shown, (View::Arrange, true));
+    click_on(cx, "scope-Sounds", Modifiers::none(), MouseButton::Left);
     cx.simulate_input("kick");
     assert_eq!(found(&ws, cx), ["Kick_01", "Kick_02"]);
     cx.simulate_keystrokes("escape");
@@ -2641,14 +2642,14 @@ fn the_compact_browser_hears_finds_alike_and_drags_onto_tracks(cx: &mut TestAppC
     cx.simulate_keystrokes("shift-f");
     assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Samples);
     click_on(cx, "samples-compact", Modifiers::none(), MouseButton::Left);
-    let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_samples));
+    let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_browser));
     assert_eq!(shown, (View::Arrange, true));
     cx.simulate_keystrokes("escape");
     // Escape hands the keyboard back to the window, the frame after.
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
     cx.simulate_keystrokes("f");
-    assert!(!ws.read_with(cx, |ws, _| ws.show_samples));
+    assert!(!ws.read_with(cx, |ws, _| ws.show_browser));
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -2856,7 +2857,7 @@ fn a_tracks_icon_opens_a_picker_for_its_colour_and_icon(cx: &mut TestAppContext)
 fn the_browser_finds_by_words_and_puts_devices_on_tracks(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
-        ws.side = Side::Browser;
+        ws.show_browser = true;
         ws.plugins = Some(vec![PluginInfo {
             format: tempo_engine::project::Format::Au,
             path: "".into(),
@@ -2897,6 +2898,22 @@ fn the_browser_finds_by_words_and_puts_devices_on_tracks(cx: &mut TestAppContext
     // Both are remembered as used lately.
     let recent = ws.read_with(cx, |ws, _| ws.catalog.recent.clone());
     assert_eq!(recent, ["plugin:apple/audelay", "own:comp"]);
+    // Sounds, in the same panel: the search comes along, and back again.
+    click_on(cx, "scope-Sounds", Modifiers::none(), MouseButton::Left);
+    let sounds = ws.read_with(cx, |ws, cx| ws.browser.search.read(cx).text().to_string());
+    assert_eq!(sounds, "echo");
+    assert!(ws.read_with(cx, |ws, _| ws.browser_open()));
+    let field = ws.read_with(cx, |ws, _| ws.browser.search.clone());
+    field.update(cx, |i, cx| i.set_text("pad", cx));
+    click_on(
+        cx,
+        "scope-Instruments",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    let devices = ws.read_with(cx, |ws, cx| ws.catalog.search.read(cx).text().to_string());
+    assert_eq!(devices, "pad");
+    assert!(!ws.read_with(cx, |ws, _| ws.browser_open()));
 }
 
 #[gpui::test]
@@ -3923,10 +3940,13 @@ fn shots() {
                 }
                 // The tracks with the sample browser beside them and the piano roll under them,
                 // no inspector: the columns' edges, to line up.
-                "beside" | "beside-agent" => {
-                    ws.show_inspector = page == "beside-agent";
-                    ws.show_samples = page == "beside";
+                "beside" | "beside-agent" | "beside-sounds" => {
+                    ws.show_inspector = page != "beside";
+                    ws.show_browser = page != "beside-agent";
                     ws.show_agent = page == "beside-agent";
+                    if page == "beside-sounds" {
+                        ws.catalog.scope = crate::catalog::Scope::Sounds;
+                    }
                     ws.track = 1;
                     ws.show_bottom(Bottom::PianoRoll, cx);
                 }

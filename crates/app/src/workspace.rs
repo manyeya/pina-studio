@@ -563,13 +563,6 @@ impl Snap {
     }
 }
 
-/// The side panel's tabs.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Side {
-    Inspector,
-    Browser,
-}
-
 /// Which channels the mixer shows.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Channels {
@@ -687,7 +680,7 @@ pub struct Workspace {
     pub bottom: Option<Bottom>,
     pub show_inspector: bool,
     /// The compact sample browser, beside the tracks.
-    pub show_samples: bool,
+    pub show_browser: bool,
     /// The Agent panel shows beside the tracks, where the Samples panel would.
     pub show_agent: bool,
     /// The conversation with Claude in it.
@@ -718,7 +711,6 @@ pub struct Workspace {
     pub picker: Option<crate::looks::Picker>,
     /// A colour or icon being tried on a track, under the pointer in the picker.
     pub trying: Option<(usize, crate::looks::Trying)>,
-    pub side: Side,
     pub tool: Tool,
     pub snap: Snap,
     /// Playing the selected region alone, looped, as FL Studio's pattern mode; and the region it
@@ -748,11 +740,9 @@ pub struct Workspace {
     pub lane_bounds: Rc<Cell<Bounds<Pixels>>>,
     /// The Bounce sheet, when it's open (and what it's bouncing).
     pub export: Option<crate::export::Export>,
-    /// The track headers' column, and the side panel (the inspector's, the browser's), as wide
-    /// as they've been dragged.
+    /// The track headers' column and the inspector, as wide as they've been dragged.
     pub header_w: f32,
     pub inspector_w: f32,
-    pub browser_w: f32,
     /// Regions copied (⌘C on the tracks), to paste at the playhead.
     pub region_clip: Option<tempo_engine::project::Region>,
     /// A MIDI or pattern region's contents as they were when its time-stretch drag began.
@@ -902,9 +892,8 @@ impl Workspace {
             view,
             bottom: None,
             show_inspector: true,
-            show_samples: false,
+            show_browser: false,
             show_agent: false,
-            side: Side::Inspector,
             tool: Tool::Pointer,
             snap: Snap::Smart,
             pattern_mode: false,
@@ -923,7 +912,6 @@ impl Workspace {
             export: None,
             header_w: HEADER_W,
             inspector_w: INSPECTOR_W,
-            browser_w: INSPECTOR_W + 52.0,
             region_clip: None,
             stretching: None,
             fine: false,
@@ -1024,12 +1012,9 @@ impl Workspace {
         ws
     }
 
-    /// The side panel's width: wider for the Browser, whose names are long.
+    /// The inspector's width.
     pub fn side_w(&self) -> f32 {
-        match self.side {
-            Side::Browser => self.browser_w,
-            _ => self.inspector_w,
-        }
+        self.inspector_w
     }
 
     /// The aliases' shared contents, from the song as it is.
@@ -1675,10 +1660,9 @@ impl Workspace {
             Some(Drag::Mark { .. }) => self.drag_mark(p),
             Some(Drag::Width { side, x, width }) => {
                 let w = width + (p.x - x);
-                match (side, self.side) {
-                    (true, Side::Browser) => self.browser_w = w.clamp(260.0, 560.0),
-                    (true, _) => self.inspector_w = w.clamp(220.0, 520.0),
-                    (false, _) => self.header_w = w.clamp(280.0, 520.0),
+                match side {
+                    true => self.inspector_w = w.clamp(220.0, 520.0),
+                    false => self.header_w = w.clamp(280.0, 520.0),
                 }
                 cx.notify();
                 return;
@@ -2697,7 +2681,7 @@ impl Workspace {
             (View::Samples, ..) => {
                 "Click a sound to hear it · ↑ ↓ for the next · drag one out to put it on a track · F for the compact browser"
             }
-            (_, _, None) if self.show_samples => {
+            (_, _, None) if self.show_browser => {
                 "Click a sound to hear it · ↑ ↓ for the next · drag it onto a track, or double-click to add it · F hides it"
             }
             (_, Tool::Pencil, _) => {
@@ -3062,8 +3046,8 @@ impl Render for Workspace {
                                         d.child(self.editor(pane, cx))
                                     }),
                             )
-                            .when(self.show_samples, |d| d.child(self.samples_panel(cx)))
-                            .when(self.show_agent && !self.show_samples, |d| {
+                            .when(self.show_browser, |d| d.child(self.browser_panel(cx)))
+                            .when(self.show_agent && !self.show_browser, |d| {
                                 d.child(self.agent_panel(cx))
                             })
                     }),

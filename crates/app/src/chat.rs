@@ -266,7 +266,7 @@ impl Workspace {
     pub fn toggle_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_agent = !self.show_agent;
         if self.show_agent {
-            self.show_samples = false;
+            self.show_browser = false;
             self.view = crate::workspace::View::Arrange;
             let focus = self.chat.input.read(cx).focus_handle(cx);
             focus.focus(window, cx);
@@ -367,7 +367,7 @@ impl Workspace {
         if let Event::Asked { .. } = e {
             self.chat.remote = true;
             self.show_agent = true;
-            self.show_samples = false;
+            self.show_browser = false;
         }
         self.heard_claude(e, cx);
     }

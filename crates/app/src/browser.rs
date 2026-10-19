@@ -46,6 +46,7 @@ use tempo_engine::{
 };
 
 use crate::{
+    catalog::Scope,
     menu::{Menu, MenuAction},
     text::{TextEvent, TextInput},
     theme::*,
@@ -1082,17 +1083,21 @@ impl Workspace {
     }
 
     /// The browser shows: as its page, or beside the tracks.
+    /// The sample library showing: its page, or the Browser on Sounds.
     pub fn browser_open(&self) -> bool {
-        self.view == View::Samples || (self.view == View::Arrange && self.show_samples)
+        self.view == View::Samples
+            || (self.view == View::Arrange
+                && self.show_browser
+                && self.catalog.scope == Scope::Sounds)
     }
 
     /// F: the compact browser beside the tracks, or not; from the page or the mixer, the
     /// tracks with it beside them. It opens with the search field ready to type in.
     pub fn toggle_samples(&mut self, cx: &mut Context<Self>) {
-        self.show_samples = self.view != View::Arrange || !self.show_samples;
-        self.show_agent &= !self.show_samples;
+        self.show_browser = self.view != View::Arrange || !self.show_browser;
+        self.show_agent &= !self.show_browser;
         self.view = View::Arrange;
-        self.browser.focus_search = self.show_samples;
+        self.browser.focus_search = self.show_browser;
         cx.notify();
     }
 
@@ -1191,8 +1196,13 @@ impl Workspace {
     pub fn browser_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let open = self.browser_open();
         let focus = self.browser.search.focus_handle(cx);
-        if std::mem::take(&mut self.browser.focus_search) && open {
-            window.focus(&focus, cx);
+        if std::mem::take(&mut self.browser.focus_search) {
+            if open {
+                window.focus(&focus, cx);
+            } else if self.view == View::Arrange && self.show_browser {
+                let devices = self.catalog.search.focus_handle(cx);
+                window.focus(&devices, cx);
+            }
         }
         let focused = focus.is_focused(window);
         // The field went with the pane: the keyboard comes back.
@@ -1523,7 +1533,7 @@ impl Workspace {
         // beside them.
         if out && self.view == View::Samples {
             self.view = View::Arrange;
-            self.show_samples = true;
+            self.show_browser = true;
         }
         cx.notify();
     }
@@ -1904,7 +1914,7 @@ impl Workspace {
         tray()
             .p(px(2.))
             .rounded(px(8.))
-            .child(kind("All", None, b.kind.is_none(), cx))
+            .child(kind("Any", None, b.kind.is_none(), cx))
             .child(kind(
                 "One-shots",
                 Some(Kind::OneShot),
@@ -2005,18 +2015,16 @@ impl Workspace {
             .child(self.samples_body(cx))
     }
 
-    /// The compact browser, beside the tracks: a search, what kind, the song's fit and what
-    /// sounds; a list to hear and drag onto the tracks; and the picked sound. Its page has the
-    /// rest.
-    pub fn samples_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let b = &self.browser;
-        let p = &self.session.project;
-        let song = match p.song_key() {
-            Some(k) => format!("Fits {} · {:.0}", k.short(), p.tempo),
-            None => format!("Fits {:.0} BPM", p.tempo),
+    /// The Browser, beside the tracks: everything that goes in a song in one place, under one
+    /// search. All (devices, presets, sounds and songs that match), Instruments, Effects, the
+    /// sample library (Sounds) and favourites (★); the search follows from tab to tab.
+    pub fn browser_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let scope = self.catalog.scope;
+        let sounds = scope == Scope::Sounds;
+        let detail = match sounds {
+            true => self.samples_detail(),
+            false => format!("{} devices", self.catalog.devices.len()),
         };
-        let fits = self.fits_song();
-        let in_key = b.play_in_key;
         let header = div()
             .h(px(TOP_H))
             .flex_none()
@@ -2031,7 +2039,7 @@ impl Workspace {
                 div()
                     .text_size(px(13.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Samples"),
+                    .child("Browser"),
             )
             .child(
                 div()
@@ -2041,27 +2049,141 @@ impl Workspace {
                     .text_size(px(11.))
                     .text_color(rgb(TEXT_3))
                     .whitespace_nowrap()
-                    .child(self.samples_detail()),
+                    .overflow_hidden()
+                    .child(detail),
             )
-            .child(
-                icon_seg(Icon::Expand, false, 26.)
-                    .debug_selector(|| "samples-page".into())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| ws.toggle_samples_page(cx)),
-                    ),
-            )
+            // The sample library has a page of its own, with its map and kits.
+            .when(sounds, |d| {
+                d.child(
+                    icon_seg(Icon::Expand, false, 26.)
+                        .debug_selector(|| "samples-page".into())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, _, _, cx| ws.toggle_samples_page(cx)),
+                        ),
+                )
+            })
             .child(
                 icon_seg(Icon::Close, false, 26.)
                     .debug_selector(|| "close-samples".into())
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, _, _, cx| {
-                            ws.show_samples = false;
+                            ws.show_browser = false;
                             cx.notify();
                         }),
                     ),
             );
+        let search = match sounds {
+            true => self.search_field(cx),
+            false => div()
+                .h(px(32.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .rounded(px(8.))
+                .bg(rgb(WELL))
+                .border_1()
+                .border_color(rgb(LINE))
+                .cursor_text()
+                .child(icon(Icon::Search, 14.).text_color(rgb(TEXT_3)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .debug_selector(|| "browser-search".into())
+                        .child(self.catalog.search.clone()),
+                ),
+        };
+        let tab = |label: &'static str, s: Scope, cx: &mut Context<Self>| {
+            let star = s == Scope::Favourites;
+            seg(label, scope == s, 26.)
+                .when(star, |d| {
+                    d.w(px(34.)).flex_none().px(px(0.)).justify_center()
+                })
+                .when(!star, |d| d.flex_auto().justify_center())
+                .when(star && scope == s, |d| d.text_color(rgb(AMBER)))
+                .debug_selector(move || format!("scope-{label}"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| ws.browse(s, cx)),
+                )
+        };
+        let tabs = tray()
+            .rounded(px(9.))
+            .child(tab("All", Scope::All, cx))
+            .child(tab("Instruments", Scope::Instruments, cx))
+            .child(tab("Effects", Scope::Effects, cx))
+            .child(tab("Sounds", Scope::Sounds, cx))
+            .child(tab("★", Scope::Favourites, cx));
+        let body = match sounds {
+            true => self.sounds_body(cx),
+            false => self.device_browser(cx),
+        };
+        div()
+            .w(px(self.panel_width()))
+            .flex_none()
+            .h_full()
+            .relative()
+            .flex()
+            .flex_col()
+            .bg(rgb(SURFACE))
+            .border_l_1()
+            .border_color(rgb(LINE))
+            .child(header)
+            .child(
+                div()
+                    .flex_none()
+                    .p(px(10.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(search)
+                    .child(tabs),
+            )
+            .child(body)
+            .child(self.panel_edge(cx))
+    }
+
+    /// A Browser tab: its search carried over between the devices' field and the sounds', and
+    /// the field ready to type in.
+    pub fn browse(&mut self, scope: Scope, cx: &mut Context<Self>) {
+        let (was, now) = (self.catalog.scope == Scope::Sounds, scope == Scope::Sounds);
+        if was != now {
+            let (from, to) = match now {
+                true => (self.catalog.search.clone(), self.browser.search.clone()),
+                false => (self.browser.search.clone(), self.catalog.search.clone()),
+            };
+            let text = from.read(cx).text().to_string();
+            to.update(cx, |i, cx| i.set_text(&text, cx));
+        }
+        self.catalog.scope = scope;
+        self.catalog.cat = self.catalog.cat.filter(|c| match scope {
+            Scope::Instruments => c.instrument(),
+            Scope::Effects => !c.instrument(),
+            _ => true,
+        });
+        self.catalog.picked = None;
+        self.show_browser = true;
+        self.browser.focus_search = true;
+        cx.notify();
+    }
+
+    /// The compact browser, beside the tracks: a search, what kind, the song's fit and what
+    /// sounds; a list to hear and drag onto the tracks; and the picked sound. Its page has the
+    /// rest.
+    /// The Browser's Sounds: the sample library's kinds, the song's fit, its categories, the list
+    /// and the picked sound.
+    fn sounds_body(&mut self, cx: &mut Context<Self>) -> Div {
+        let b = &self.browser;
+        let p = &self.session.project;
+        let song = match p.song_key() {
+            Some(k) => format!("Fits {} · {:.0}", k.short(), p.tempo),
+            None => format!("Fits {:.0} BPM", p.tempo),
+        };
+        let fits = self.fits_song();
+        let in_key = b.play_in_key;
         let toggles = div()
             .flex()
             .gap(px(6.))
@@ -2148,26 +2270,19 @@ impl Workspace {
             .flex_1()
             .into_any_element(),
         };
-        let width = self.panel_width();
         div()
-            .w(px(width))
-            .flex_none()
-            .h_full()
-            .relative()
+            .flex_1()
+            .min_h(px(0.))
             .flex()
             .flex_col()
-            .bg(rgb(SURFACE))
-            .border_l_1()
-            .border_color(rgb(LINE))
-            .child(header)
             .child(
                 div()
                     .flex_none()
-                    .p(px(10.))
+                    .px(px(10.))
+                    .pb(px(10.))
                     .flex()
                     .flex_col()
                     .gap(px(8.))
-                    .child(self.search_field(cx))
                     .child(self.kind_tray(cx))
                     .child(toggles)
                     .when(!chips.is_empty(), |d| {
@@ -2192,7 +2307,6 @@ impl Workspace {
                     .child(list),
             )
             .children(self.panel_footer(cx))
-            .child(self.panel_edge(cx))
     }
 
     /// Rows of the compact list, as the list draws them.
