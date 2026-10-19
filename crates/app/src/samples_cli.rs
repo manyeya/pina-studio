@@ -338,6 +338,57 @@ pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Val
     }
 }
 
+/// The sounds the person picked for the song: each as the library knows it (what it is, its note
+/// or key, tempo), what it's for, and whether it's in the song yet.
+pub fn palette(dir: &Path) -> Result<Value, String> {
+    let p = crate::cli::project(dir)?;
+    let lib = Library::load();
+    let sounds: Vec<Value> = p
+        .palette
+        .sounds
+        .iter()
+        .map(|ps| {
+            let found = lib.get(&ps.path).cloned().map(Ok).unwrap_or_else(|| {
+                tempo_engine::samples::analyze::analyze_file(&ps.path).map(|analysis| Sample {
+                    path: ps.path.clone(),
+                    name: ps
+                        .path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    folder: String::new(),
+                    modified: 0,
+                    size: 0,
+                    analysis,
+                })
+            });
+            let mut v = match found {
+                Ok(s) => sample_json(&s),
+                Err(e) => json!({ "path": ps.path, "error": e }),
+            };
+            let map = v.as_object_mut().unwrap();
+            map.insert("role".into(), json!(ps.role));
+            map.insert("in_song".into(), json!(p.uses(&ps.path)));
+            v
+        })
+        .collect();
+    let how = match (p.palette.sounds.is_empty(), p.palette.only) {
+        (true, _) => "The person hasn't picked any sounds: choose your own.",
+        (false, true) => {
+            "The person picked these sounds and asked for these only: make the song with them \
+             (samples_put each one, one-shots for the same kit on one sampler track by passing \
+             its `track`), each for its role, and add no other samples or instruments for those \
+             parts. Parts none of them suits: ask, or leave out."
+        }
+        (false, false) => {
+            "The person picked these sounds: start with them (samples_put each one, one-shots \
+             for the same kit on one sampler track by passing its `track`), each for its role \
+             (none: what it sounds like it's for), then fill what's missing with your own."
+        }
+    };
+    Ok(json!({ "only": p.palette.only, "sounds": sounds, "how": how }))
+}
+
 /// `tempo samples …` from the command line.
 pub fn command(args: &[&str]) -> Result<Value, String> {
     // Options anywhere: --for <project>, --limit <n>, --track <n>, --at <tick>.
@@ -400,5 +451,40 @@ pub fn command(args: &[&str]) -> Result<Value, String> {
             kit(seed, project)
         }
         _ => Err(crate::USAGE.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_palette_says_what_each_sound_is_its_part_and_whether_its_in() {
+        let demo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/demo");
+        let dir =
+            std::env::temp_dir().join(format!("tempo-test-palette-tool-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Audio Files")).unwrap();
+        for f in ["project.json", "Audio Files/drums.wav"] {
+            std::fs::copy(demo.join(f), dir.join(f)).unwrap();
+        }
+        let drums = dir.join("Audio Files/drums.wav");
+        let other = dir.join("loop.wav");
+        std::fs::copy(&drums, &other).unwrap();
+        let set = format!(
+            r#"{{"op": "set_palette", "sounds": [{{"path": "{}", "role": "drum loop"}}, {{"path": "{}"}}], "only": true}}"#,
+            drums.display(),
+            other.display()
+        );
+        crate::cli::edit_with(&dir, serde_json::from_str(&set).unwrap()).unwrap();
+        let v = palette(&dir).unwrap();
+        assert_eq!(v["only"], true);
+        assert!(v["how"].as_str().unwrap().contains("no other"));
+        let sounds = v["sounds"].as_array().unwrap();
+        assert_eq!(sounds[0]["role"], "drum loop");
+        assert_eq!(sounds[0]["in_song"], true); // the demo's drums play it
+        assert_eq!(sounds[1]["in_song"], false);
+        assert!(sounds[1]["role"].is_null() && sounds[1]["kind"].is_string());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

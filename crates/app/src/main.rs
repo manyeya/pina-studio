@@ -17,6 +17,7 @@ mod mcp;
 mod menu;
 mod mixer;
 mod modulation;
+mod palette;
 mod pianoroll;
 mod produce;
 mod producer;

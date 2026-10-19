@@ -28,7 +28,8 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   labelled loops.
 - `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
   `topbar.rs` (transport and display), `inspector.rs` (the Inspector, left of the tracks),
-  `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`)
+  `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`),
+  `palette.rs` (sounds picked for the agent)
   and `producer.rs` (its song strip, producer's path, critic, undo for a turn and selection),
   `sampler.rs` (the Sampler editor), `genres.rs` (the Playbooks page, where genres are read and changed), `study.rs` (the Song
   Study page) with `study_cli.rs` (studies kept, and lyrics, year and genre looked up),
@@ -184,6 +185,13 @@ In the app, mostly as in Logic:
   it's made, outlined, undoable on its own. The agent's name at the top picks another (Claude
   Code or Codex, with their logos, each saying whether it's signed in and on what). Edits by any
   other agent show there too.
+- Sounds for the agent: "Sounds" in the Agent panel's message box opens the Browser's sounds to
+  pick from (＋ on each, or "Agent" under the one picked; on the sample page too), and audio files
+  dropped on the Agent panel from the Finder are picked as well. They show in the message box:
+  click one to hear it, its tag to give it a part (kick, snare, hats, 808, bass, chords, pad,
+  lead… or any), × to take it out; "Only these" asks the agent to use these and no others. They're
+  kept with the song, and the agent is told them with the next message after they change (and
+  its `palette` tool lists them with what each is and whether it's in the song yet).
 - Drag audio files (WAV, AIFF, FLAC, MP3) in from the Finder, or sounds from the browser, and
   they land on the timeline where they're let go: on the audio track there, or on a new audio
   track (under an instrument track, or under the tracks); several files, a track each. A sound
@@ -507,8 +515,8 @@ pack's names (held out from the fit) and, with `--fit`, fits the models again.
 claude.ai and the like): its tools list themselves with typed inputs, and a user can allow them
 without allowing a shell. Its tools are `describe`, `show`, `edit`, `analyze`, `render`,
 `critique`, `playbook`, `theory`, `reference`, `sounds`, `mix`, `master`, `transport`,
-`plugins`, `params`, `presets`, `samples_find`, `samples_similar`, `samples_kit`, `samples_put`
-and `samples_library`. For Claude Code:
+`plugins`, `params`, `presets`, `samples_find`, `samples_similar`, `samples_kit`, `samples_put`,
+`palette` and `samples_library`. For Claude Code:
 
     claude mcp add tempo -- /path/to/tempo mcp
 
@@ -555,7 +563,8 @@ Audio files are WAV, AIFF, FLAC or MP3, at any sample rate. An audio region can 
 track's `"automation"` has `volume`, `pan`, `mute`, `sends` and `plugins` lanes (points can have a
 `"curve"`, `"ease"` or be a `"step"`) and a `mode`. Regions can have a
 `"name"`, a `"link"` (aliases share one), `"loop"`, `"transpose"`, `"velocity"` and `"quantize"`.
-The project can have a `"time_signature"`, `"markers"`, a `"key"` and a `"cycle"` (see `tempo
+The project can have a `"time_signature"`, `"markers"`, a `"key"`, a `"cycle"` and a `"palette"` of
+sounds picked for an agent (see `tempo
 describe`).
 
 The engine's tests that need a real plugin are opt-in, each format by its own variable:

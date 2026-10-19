@@ -763,6 +763,8 @@ pub struct Workspace {
     pub show_browser: bool,
     /// The Agent panel shows beside the tracks, where the Samples panel would.
     pub show_agent: bool,
+    /// The Browser is open to pick sounds for the agent.
+    pub picking_sounds: bool,
     /// The conversation with Claude in it.
     pub chat: crate::chat::Chat,
     /// The Browser: devices, presets, sounds and songs.
@@ -1015,6 +1017,7 @@ impl Workspace {
             show_inspector: true,
             show_browser: false,
             show_agent: false,
+            picking_sounds: false,
             tool: Tool::Pointer,
             snap: Snap::Smart,
             pattern_mode: false,

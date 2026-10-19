@@ -205,7 +205,9 @@ your words short: a sentence before a group of steps saying what you're doing, a
 at the end saying what changed. Use tempo's tools, passing \"{p}\" as the project: `describe` \
 before your first edit (the commands, and how ticks, levels and notes work), `show` to read the \
 song, `edit` to change it, `samples_find`, `samples_kit` and `samples_put` for sounds that fit, \
-`analyze` to check levels. You can't hear the song: `critique` is your ears (quick after each \
+`analyze` to check levels. The person can pick sounds for the song themselves (`palette`, and \
+listed in their message when they change): build with those before choosing your own, each for \
+the part they gave it, and with no others when they ask for only these. You can't hear the song: `critique` is your ears (quick after each \
 edit, with a render after mixing), trust it and the samples' analysis, and say what you couldn't \
 check.\n\nWrite music with tempo's write commands, not note by note: set_chords, then \
 write_chords, write_bass, write_melody and write_drums put parts on the chords that are in key, \

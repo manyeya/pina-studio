@@ -424,7 +424,7 @@ fn paint_bars(
 }
 
 /// A row's waveform, in its category's color.
-fn wave(points: Vec<u8>, color: u32, strength: f32) -> impl IntoElement {
+pub fn wave(points: Vec<u8>, color: u32, strength: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |b, _, window, _| paint_wave(&points, b, alpha(color, strength), window),
@@ -803,7 +803,7 @@ impl Workspace {
     }
 
     /// A filter changed: find again, and keep the list at the top.
-    fn refilter(&mut self, cx: &mut Context<Self>) {
+    pub fn refilter(&mut self, cx: &mut Context<Self>) {
         self.browser.like = None;
         self.find_samples();
         self.browser.list.scroll_to_item(0, ScrollStrategy::Top);
@@ -1096,6 +1096,7 @@ impl Workspace {
     pub fn toggle_samples(&mut self, cx: &mut Context<Self>) {
         self.show_browser = self.view != View::Arrange || !self.show_browser;
         self.show_agent &= !self.show_browser;
+        self.picking_sounds &= self.show_browser;
         self.view = View::Arrange;
         self.browser.focus_search = self.show_browser;
         cx.notify();
@@ -1371,6 +1372,14 @@ impl Workspace {
         if audio.is_empty() {
             self.status = Some("tempo takes WAV, AIFF, FLAC and MP3 files.".into());
             cx.notify();
+            return;
+        }
+        // On the Agent panel, sounds dropped on it are for the agent to use.
+        let agent_left = self.viewport_w - self.panel_width();
+        if self.view == View::Arrange && self.show_agent && !self.show_browser && at.x >= agent_left
+        {
+            let files: Vec<PathBuf> = audio.iter().map(|p| p.to_path_buf()).collect();
+            self.give_agent_files(&files, cx);
             return;
         }
         // On the Sampler, with its editor open, samples dropped on it go into it.
@@ -2128,6 +2137,7 @@ impl Workspace {
             .border_l_1()
             .border_color(rgb(LINE))
             .child(header)
+            .children(self.picking_bar(cx))
             .child(
                 div()
                     .flex_none()
@@ -2362,8 +2372,11 @@ impl Workspace {
                 format!("{} {mode}", NOTES[k.tonic as usize % 12])
             })
             .or_else(|| a.pitch.map(|p| note_name(p.note)));
+        let group = format!("panel-row-{pos}");
+        let give = self.agent_button(&s.path, &group, cx);
         div()
             .id(("panel-row", pos))
+            .group(group)
             .w_full()
             .h(px(PANEL_ROW_H))
             .px(px(10.))
@@ -2490,6 +2503,7 @@ impl Workspace {
                             }),
                     ),
             )
+            .child(give)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
@@ -2603,7 +2617,8 @@ impl Workspace {
                                     MouseButton::Left,
                                     cx.listener(move |ws, _, _, cx| ws.like_sample(index, cx)),
                                 ),
-                        ),
+                        )
+                        .child(self.give_button(s.path.clone(), 30., cx)),
                 ),
         )
     }
@@ -3031,6 +3046,8 @@ impl Workspace {
                     .child(col("BPM", BPM_W))
                     .child(col("Length", LENGTH_W))
                     .child(col("Fit", FIT_W))
+                    // Over the agent's buttons.
+                    .child(col("", 22.))
             })
     }
 
@@ -3262,6 +3279,7 @@ impl Workspace {
         };
         let tone = tone_text(a);
         let has_tone = tone.is_some();
+        let give = self.agent_button(&s.path, "sample-row", cx);
         div()
             .id(("sample-row", pos))
             .group("sample-row")
@@ -3398,6 +3416,7 @@ impl Workspace {
                             .bg(alpha(ACCENT, 0.2 + 0.8 * hit.score.clamp(0.0, 1.0))),
                     ),
             )
+            .child(give)
             .on_hover(cx.listener(move |ws, over: &bool, _, cx| {
                 let now = if *over { Some(index) } else { None };
                 if ws.browser.hovered != now && (*over || ws.browser.hovered == Some(index)) {
@@ -4330,6 +4349,11 @@ impl Workspace {
                                     MouseButton::Left,
                                     cx.listener(move |ws, _, _, cx| ws.add_sample(index, cx)),
                                 ),
+                        )
+                        .child(
+                            self.give_button(s.path.clone(), 30., cx)
+                                .w_full()
+                                .justify_center(),
                         )
                         .child(
                             div()

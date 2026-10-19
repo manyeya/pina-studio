@@ -13,9 +13,9 @@ use crate::{
     plugin::{PluginApi, PluginParam, value_from_text},
     project::{
         AUDIO_DIR, AutoMode, AutoPoint, AutoShape, AuxSend, BEAT_UNITS, Cell, Comp, Content,
-        ControlPoint, Cycle, Eq, Flex, Input, Instrument, Marker, Note, PPQ, PanLaw, PanMode,
-        Param, PatternRow, Place, PluginRef, Preset, PresetSource, Project, Region, Saturator,
-        Track, Which,
+        ControlPoint, Cycle, Eq, Flex, Input, Instrument, Marker, Note, PPQ, PaletteSound, PanLaw,
+        PanMode, Param, PatternRow, Place, PluginRef, Preset, PresetSource, Project, Region,
+        Saturator, Track, Which,
     },
 };
 
@@ -310,6 +310,14 @@ pub enum Command {
         #[serde(default)]
         name: Option<String>,
         points: Vec<PointIn>,
+    },
+    /// The sounds the person picked for the song (each file with what it's for), and whether
+    /// it's those and no others. Leave out what you don't change; `sounds` replaces them all.
+    SetPalette {
+        #[serde(default)]
+        sounds: Option<Vec<PaletteSound>>,
+        #[serde(default)]
+        only: Option<bool>,
     },
     /// Smooths a track's automation from `from` to `to` (ticks; all of it without), blurred
     /// over about `width` ticks (an eighth without).
@@ -1457,6 +1465,20 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             }
             a.tidy();
         }
+        Command::SetPalette { sounds, only } => {
+            if let Some(sounds) = sounds {
+                let mut seen = std::collections::HashSet::new();
+                for s in &sounds {
+                    if !seen.insert(&s.path) {
+                        return Err(format!("{} is in the palette twice", s.path.display()));
+                    }
+                }
+                p.palette.sounds = sounds;
+            }
+            if let Some(only) = only {
+                p.palette.only = only;
+            }
+        }
         Command::SmoothAutomation {
             track: t,
             param,
@@ -1922,6 +1944,23 @@ mod tests {
             r#"{"op": "smooth_automation", "track": 0, "param": "volume", "from": 9, "to": 3}"#,
         );
         assert!(backwards.unwrap_err().contains("after"));
+        // The person's palette: sounds with what they're for, these only; then only changed.
+        run(
+            &mut p,
+            r#"{"op": "set_palette", "sounds": [{"path": "/s/kick.wav", "role": "kick"},
+                {"path": "/s/keys.wav"}], "only": true}"#,
+        )
+        .unwrap();
+        assert_eq!(p.palette.sounds.len(), 2);
+        assert_eq!(p.palette.sounds[0].role.as_deref(), Some("kick"));
+        assert!(p.palette.only && p.palette.has(Path::new("/s/keys.wav")));
+        run(&mut p, r#"{"op": "set_palette", "only": false}"#).unwrap();
+        assert_eq!((p.palette.sounds.len(), p.palette.only), (2, false));
+        let twice = run(
+            &mut p,
+            r#"{"op": "set_palette", "sounds": [{"path": "/s/a.wav"}, {"path": "/s/a.wav"}]}"#,
+        );
+        assert!(twice.unwrap_err().contains("twice"));
         run(
             &mut p,
             r#"{"op": "set_automation_mode", "track": 0, "mode": "trim"}"#,
@@ -2315,6 +2354,7 @@ mod tests {
             "set_automation",
             "shape_automation",
             "smooth_automation",
+            "set_palette",
             "add_marker",
             "set_marker",
             "delete_marker",

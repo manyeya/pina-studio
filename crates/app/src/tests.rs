@@ -4070,6 +4070,75 @@ fn playbook_parts_are_added_edited_and_removed(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn sounds_are_picked_for_the_agent_given_parts_and_told_it(cx: &mut TestAppContext) {
+    let dir = demo_copy("palette");
+    let (ws, cx) = open_at(cx, &dir);
+    cx.simulate_resize(gpui::size(px(1600.), px(1100.)));
+    ws.update(cx, |ws, cx| {
+        ws.show_agent = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let palette =
+        |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.session.project.palette.clone());
+    // Nothing picked: a chip in the message box opens the Browser's sounds to pick from.
+    click_on(cx, "palette-start", Modifiers::none(), MouseButton::Left);
+    let (picking, browser, scope) = ws.read_with(cx, |ws, _| {
+        (ws.picking_sounds, ws.show_browser, ws.catalog.scope)
+    });
+    assert!(picking && browser && scope == crate::catalog::Scope::Sounds);
+    assert!(cx.debug_bounds("picking-done").is_some());
+    // A sound given (the library's ＋ does this), then back to the agent with Done.
+    let drums = dir.join("Audio Files/drums.wav");
+    ws.update(cx, |ws, cx| ws.give_agent(drums.clone(), cx));
+    click_on(cx, "picking-done", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.show_agent
+        && !ws.show_browser
+        && !ws.picking_sounds));
+    assert_eq!(palette(cx).sounds.len(), 1);
+    // In the message box: its part from its tag's menu, "only these".
+    click_on(cx, "palette-role-0", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Drum loop");
+    assert_eq!(palette(cx).sounds[0].role.as_deref(), Some("drum loop"));
+    click_on(cx, "palette-only", Modifiers::none(), MouseButton::Left);
+    assert!(palette(cx).only);
+    // What the agent is told with the next message: these, for their parts, and only these;
+    // then nothing more until they change.
+    let note = ws.update(cx, |ws, _| ws.palette_note()).unwrap();
+    assert!(
+        note.contains("no others") && note.contains("drum loop: \"drums\""),
+        "{note}"
+    );
+    assert!(note.contains(&drums.display().to_string()));
+    assert_eq!(ws.update(cx, |ws, _| ws.palette_note()), None);
+    // Files dropped from the Finder on the Agent panel are for the agent too.
+    let keys = dir.join("Audio Files/keys.wav");
+    std::fs::copy(&drums, &keys).unwrap();
+    let at = ws.read_with(cx, |ws, _| point(ws.viewport_w - 40.0, 400.0));
+    ws.update(cx, |ws, cx| ws.drop_files(std::slice::from_ref(&keys), at, cx));
+    assert_eq!(palette(cx).sounds.len(), 2);
+    let note = ws.update(cx, |ws, _| ws.palette_note()).unwrap();
+    assert!(note.contains("any part: \"keys\""), "{note}");
+    // Taken out with its ×; undone, back; given again, taken back.
+    click_on(cx, "palette-remove-1", Modifiers::none(), MouseButton::Left);
+    assert_eq!(palette(cx).sounds.len(), 1);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(palette(cx).sounds.len(), 2);
+    ws.update(cx, |ws, cx| ws.give_agent(keys.clone(), cx));
+    assert!(!palette(cx).has(&keys));
+    // Cleared: the agent hears it's on its own again; and it's kept in the song.
+    click_on(cx, "palette-clear", Modifiers::none(), MouseButton::Left);
+    assert!(palette(cx).is_empty());
+    let note = ws.update(cx, |ws, _| ws.palette_note()).unwrap();
+    assert!(note.contains("choose your own"));
+    cx.simulate_keystrokes("cmd-z");
+    ws.update(cx, |ws, cx| ws.save(cx));
+    let saved = tempo_engine::project::Project::load(&dir).unwrap();
+    assert_eq!(saved.palette.sounds.len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui::test]
 fn the_agent_panel_knows_the_song_and_its_critic(cx: &mut TestAppContext) {
     use crate::{chat::Item, producer::Stage};
     let dir = demo_copy("agent-producer");
@@ -4747,6 +4816,42 @@ fn shots() {
                     }
                     ws.track = 1;
                     ws.show_bottom(Bottom::PianoRoll, cx);
+                }
+                // Sounds picked for the agent: in its message box, and the Browser picking them.
+                "palette" | "palette-pick" => {
+                    use tempo_engine::{project::PaletteSound, samples::Category};
+                    if ws.browser.library.samples.is_empty() {
+                        ws.browser.library = tempo_engine::samples::library::Library::load();
+                        ws.browser.loaded = true;
+                        ws.refilter(cx);
+                    }
+                    let lib = &ws.browser.library.samples;
+                    let mut sounds = Vec::new();
+                    for want in [
+                        Category::Kick,
+                        Category::Snare,
+                        Category::HatClosed,
+                        Category::Bass808,
+                        Category::Keys,
+                        Category::Pad,
+                    ] {
+                        if let Some(s) = lib.iter().find(|s| s.analysis.category == want) {
+                            sounds.push(PaletteSound {
+                                path: s.path.clone(),
+                                role: crate::palette::role_for(want).map(str::to_string),
+                            });
+                        }
+                    }
+                    if let Some(s) = sounds.get_mut(4) {
+                        s.role = None;
+                    }
+                    ws.session.project.palette.sounds = sounds;
+                    ws.session.project.palette.only = true;
+                    ws.show_agent = true;
+                    if page == "palette-pick" {
+                        ws.pick_sounds(cx);
+                    }
+                    cx.notify();
                 }
                 "settings-auto" => {
                     ws.settings_section = crate::settings::Section::Automation;

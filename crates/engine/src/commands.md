@@ -187,6 +187,11 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   smooths the line from `from` to `to` (all of it without them): its corners and wobbles
   rounded off over about `width` ticks (an eighth without; more is smoother), its ends where
   they were. Takes the parameter as `shape_automation` does. Mute, all steps, can't be smoothed.
+- `set_palette` `{"sounds": [{"path": "/Samples/Kick 01.wav", "role": "kick"}, {"path": "/Samples/Dusty Keys.wav"}], "only": true}`:
+  the sounds the person picked for the song, for an agent to make it with (each audio file, and
+  what it's for if they said: kick, snare, hats, bass, pad, lead…); `"only": true` asks for these
+  and no others. `sounds` replaces the list; leave it out to change only `only`. The `palette`
+  tool (in `tempo mcp`) lists them with what each is and whether it's in the song yet.
 - `set_automation_mode` `{"track": 0, "mode": "latch"}`: `read` (the default) plays automation;
   `touch` and `latch` also record what's moved in the app while the song plays, until the control
   is let go (touch) or playback stops (latch); `trim` records as touch does but moves the line

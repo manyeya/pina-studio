@@ -76,6 +76,8 @@ pub struct Chat {
     pub before: Option<tempo_engine::project::Project>,
     /// Whether what's selected goes along with what's asked.
     pub use_selection: bool,
+    /// The palette as the agent was last told it, so it's told again only when it changes.
+    pub palette_heard: Option<tempo_engine::project::Palette>,
     _sent: Subscription,
 }
 
@@ -137,6 +139,7 @@ impl Chat {
             critic: Default::default(),
             before: None,
             use_selection: true,
+            palette_heard: None,
             _sent: sent,
         }
     }
@@ -293,6 +296,8 @@ impl Workspace {
             return;
         }
         if self.chat.agent.is_none() {
+            // A new conversation hears the palette afresh.
+            self.chat.palette_heard = None;
             match Agent::start(self.chat.kind, &self.session.dir) {
                 Ok((agent, mut events)) => {
                     self.chat.run += 1;
@@ -332,11 +337,15 @@ impl Workspace {
                 }
             }
         }
-        // What's selected goes along, so "make this hit harder" knows what this is.
-        let full = match self.selection_note().filter(|_| self.chat.use_selection) {
+        // What's selected goes along, so "make this hit harder" knows what this is; and the
+        // sounds picked for it, when they've changed.
+        let mut full = match self.selection_note().filter(|_| self.chat.use_selection) {
             Some((_, said)) => format!("(Selected in tempo: {said}.)\n\n{text}"),
             None => text.clone(),
         };
+        if let Some(sounds) = self.palette_note() {
+            full = format!("{sounds}\n\n{full}");
+        }
         if !self.chat.busy {
             self.chat.before = Some(self.session.project.clone());
         }
@@ -424,6 +433,7 @@ impl Workspace {
     fn new_chat(&mut self, cx: &mut Context<Self>) {
         self.chat.run += 1;
         self.chat.agent = None;
+        self.chat.palette_heard = None;
         self.chat.items.clear();
         self.chat.busy = false;
         self.chat.remote = false;
@@ -669,6 +679,7 @@ impl Workspace {
                     )
             });
         let critic = self.critic_chip(cx);
+        let (palette, start) = (self.palette_card(cx), self.palette_start(cx));
         let c = &self.chat;
         // One card: what's typed, and under it what goes with it and the button that sends it.
         let composer = div().flex_none().px(px(10.)).pb(px(10.)).pt(px(4.)).child(
@@ -680,6 +691,7 @@ impl Workspace {
                 .border_1()
                 .border_color(rgb(LINE_STRONG))
                 .shadow_lg()
+                .children(palette)
                 .child(
                     div()
                         .px(px(13.))
@@ -698,6 +710,7 @@ impl Workspace {
                         .pt(px(4.))
                         .pb(px(7.))
                         .children(selection)
+                        .children(start)
                         .child(critic)
                         .child(div().flex_1())
                         .child(send),

@@ -17,7 +17,9 @@ a time, and `analyze` to hear it as numbers (loudness, peaks, balance). To make 
 finished, work as a producer: `playbook` for the genre, `theory` for chords, write parts with the \
 write_* commands (tempo gets the notes right), `sounds` for real instruments, `critique` after \
 every step and fix what it says, `arrange` and `transition` for the song's shape, `mix` and \
-`master` to finish. `critique` is your ears: trust it over your guesses.";
+`master` to finish. `critique` is your ears: trust it over your guesses. The person may have \
+picked sounds for the song (`palette`): build with those first, and with only those if they say \
+so.";
 
 fn tools() -> Value {
     let project = json!({ "type": "string", "description": "The project folder." });
@@ -283,6 +285,15 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "palette",
+            "description": "The sounds the person picked for this song in tempo, for you to make it with: each one's file, what it is (one-shot or loop, its category, note or key, tempo), the part it's for if they said (`role`), and whether it's in the song yet (`in_song`); `only` means they want these and no others. Check it before choosing sounds yourself.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "project": project },
+                "required": ["project"]
+            }
+        },
+        {
             "name": "samples_library",
             "description": "The sample library: `status` (its folders and what's in them), `scan` (analyse what's new or changed), `add` or `remove` a folder (`path`), or `info` on a sample (`path`).",
             "inputSchema": {
@@ -477,6 +488,7 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
                 .map(|t| t as usize),
             args.get("at").and_then(Value::as_u64).unwrap_or(0),
         ),
+        "palette" => crate::samples_cli::palette(&path(args, "project")?),
         "samples_library" => match args.get("action").and_then(Value::as_str) {
             Some("status") => crate::samples_cli::status(),
             Some("scan") => crate::samples_cli::scan(),
@@ -600,6 +612,7 @@ mod tests {
                 "samples_similar",
                 "samples_kit",
                 "samples_put",
+                "palette",
                 "samples_library"
             ]
         );

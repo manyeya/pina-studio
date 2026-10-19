@@ -162,6 +162,8 @@ pub enum MenuAction {
     Slice(crate::sampler::Slicing),
     /// An automation lane's or point's item, on a track by id.
     Auto(u64, crate::automation::AutoOp),
+    /// A sound picked for the agent: its part, out, or all of them.
+    Palette(crate::palette::PaletteOp),
     /// What an audio track records.
     Input {
         track: usize,
@@ -429,6 +431,7 @@ impl Workspace {
                 }
             }),
             MenuAction::Auto(track, op) => self.auto_op(track, op, cx),
+            MenuAction::Palette(op) => self.palette_op(op, cx),
             MenuAction::NameMarker(i, name) => self.edit(cx, |ws| {
                 if let Some(m) = ws.session.project.markers.get_mut(i) {
                     m.name = name;

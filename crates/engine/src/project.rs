@@ -69,6 +69,37 @@ pub struct Project {
     /// A finished song it's measured against: its mix targets, over the genre's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<Reference>,
+    /// Sounds the person picked for an agent to build the song with.
+    #[serde(default, skip_serializing_if = "Palette::is_empty")]
+    pub palette: Palette,
+}
+
+/// Sounds the person picked for an agent to make the song with: audio files, each with the part
+/// it's for if they said; `only` asks for these and no others.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Palette {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sounds: Vec<PaletteSound>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub only: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PaletteSound {
+    pub path: PathBuf,
+    /// What it's for, as the person said ("kick", "bass", "pad"); without, the agent decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
+
+impl Palette {
+    pub fn is_empty(&self) -> bool {
+        self.sounds.is_empty() && !self.only
+    }
+
+    pub fn has(&self, path: &Path) -> bool {
+        self.sounds.iter().any(|s| s.path == path)
+    }
 }
 
 /// What a reference song measures, for the mix to aim at.
@@ -2343,7 +2374,24 @@ impl Project {
             chords: Vec::new(),
             genre: None,
             reference: None,
+            palette: Palette::default(),
         }
+    }
+
+    /// Whether a sound is in the song yet: as an audio region's file or a sampler zone's, by
+    /// its file name (a sound put in is copied into the song's folder).
+    pub fn uses(&self, path: &Path) -> bool {
+        let Some(name) = path.file_name() else {
+            return false;
+        };
+        self.tracks.iter().any(|t| {
+            let audio = t.regions.iter().any(|r| {
+                matches!(&r.content, Content::Audio { file, .. } if file.file_name() == Some(name))
+            });
+            let zone = matches!(&t.instrument, Some(Instrument::Sampler(s))
+                if s.zones.iter().any(|z| z.file.file_name() == Some(name)));
+            audio || zone
+        })
     }
 
     pub fn load(dir: &Path) -> Result<Project, String> {
