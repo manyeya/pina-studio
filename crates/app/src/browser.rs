@@ -31,7 +31,7 @@ use gpui::{
     ScrollWheelEvent, SharedString, Subscription, UniformListScrollHandle, Window, canvas, div,
     fill, point, prelude::*, px, relative, rgb, size, uniform_list,
 };
-use tempo_engine::{
+use pina_engine::{
     commands::{self, Command},
     music::Key,
     project::{At, Content, Instrument, PPQ, Sampler},
@@ -180,7 +180,7 @@ pub struct Browser {
     /// Samples read for previews, by path, and as heard (at the song's tempo, in its key), by
     /// path, stretch and semitones, so going back to one is instant; and the one asked for last,
     /// so a slow read that's overtaken doesn't play.
-    heard: HashMap<(PathBuf, u64, u32), Arc<tempo_engine::engine::AudioData>>,
+    heard: HashMap<(PathBuf, u64, u32), Arc<pina_engine::engine::AudioData>>,
     /// The preview is a loop playing in time with the song, over and over while it plays.
     pub looping: bool,
     wanted: Option<usize>,
@@ -959,7 +959,7 @@ impl Workspace {
             async move {
                 let raw = match raw {
                     Some(raw) => raw,
-                    None => Arc::new(tempo_engine::engine::load_audio(&path, rate)?),
+                    None => Arc::new(pina_engine::engine::load_audio(&path, rate)?),
                 };
                 let heard = match ratio == 1.0 && semis == 0.0 {
                     true => raw.clone(),
@@ -1006,7 +1006,7 @@ impl Workspace {
     fn play_heard(
         &mut self,
         index: usize,
-        data: Arc<tempo_engine::engine::AudioData>,
+        data: Arc<pina_engine::engine::AudioData>,
         synced: bool,
         gain: f32,
         seconds: f32,
@@ -1343,7 +1343,7 @@ impl Workspace {
                 p.flex(at, length)?;
             }
         }
-        // Looping, as `tempo samples put` leaves one, till the next region or the end; a
+        // Looping, as `pina samples put` leaves one, till the next region or the end; a
         // loop following the song's tempo.
         let r = &mut p.tracks[t].regions[at.1];
         r.transpose = semis;
@@ -1370,7 +1370,7 @@ impl Workspace {
             })
             .collect();
         if audio.is_empty() {
-            self.status = Some("tempo takes WAV, AIFF, FLAC and MP3 files.".into());
+            self.status = Some("Pina Studio takes WAV, AIFF, FLAC and MP3 files.".into());
             cx.notify();
             return;
         }

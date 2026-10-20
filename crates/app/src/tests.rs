@@ -11,7 +11,7 @@ use gpui::{
     Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Point, TestAppContext,
     VisualTestContext, point, px,
 };
-use tempo_engine::{
+use pina_engine::{
     player::Player,
     project::{AuxSend, Content, PPQ, Shape},
     scan::PluginInfo,
@@ -41,8 +41,8 @@ fn open_at<'a>(
 ) -> (Entity<Workspace>, &'a mut VisualTestContext) {
     cx.update(bind_keys);
     // Playbooks of the tests' own: never the person's.
-    let books = std::env::temp_dir().join(format!("tempo-test-books-{}", std::process::id()));
-    unsafe { std::env::set_var("TEMPO_PLAYBOOKS", &books) };
+    let books = std::env::temp_dir().join(format!("pina-test-books-{}", std::process::id()));
+    unsafe { std::env::set_var("PINA_PLAYBOOKS", &books) };
     let session = Session::open(dir).unwrap();
     let player = Player::silent(&session.project, &session.dir);
     let (ws, cx) = cx.add_window_view(|window, cx| Workspace::new(session, player, window, cx));
@@ -243,7 +243,7 @@ fn pick(cx: &mut VisualTestContext, ws: &Entity<Workspace>, label: &str) {
 
 #[gpui::test]
 fn a_tracks_menu_its_pan_modes_its_height_and_the_columns_widths(cx: &mut TestAppContext) {
-    use tempo_engine::project::{PanLaw, PanMode};
+    use pina_engine::project::{PanLaw, PanMode};
     let (ws, cx) = open(cx);
     // The pan knob's menu: Stereo Pan, then the song's pan law.
     click_on(cx, "track-pan-1", Modifiers::none(), MouseButton::Right);
@@ -378,7 +378,7 @@ fn a_headers_fader_and_pan_drag_finely_type_and_reset(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_binaural_panner_places_a_sound_round_the_head(cx: &mut TestAppContext) {
     use crate::binaural::Camera;
-    use tempo_engine::project::{PanMode, Place};
+    use pina_engine::project::{PanMode, Place};
     let (ws, cx) = open(cx);
     // Binaural, from the pan knob's menu: the panner opens.
     click_on(cx, "track-pan-1", Modifiers::none(), MouseButton::Right);
@@ -452,7 +452,7 @@ fn the_binaural_panner_places_a_sound_round_the_head(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn modulators_are_added_mapped_by_dragging_and_their_depth_set(cx: &mut TestAppContext) {
-    use tempo_engine::modulate::{ModKind, ModTarget};
+    use pina_engine::modulate::{ModKind, ModTarget};
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
         ws.select_track(0);
@@ -633,8 +633,7 @@ fn the_tool_menu_and_its_tools_text_glue_solo_mute_zoom_fade_flex(cx: &mut TestA
     cx.simulate_keystrokes("escape");
     // Cut in two, then glued back: one region, every note.
     let whole = region(cx, (0, 0));
-    let notes =
-        |r: &tempo_engine::project::Region| r.content.notes(r.length).map_or(0, |n| n.len());
+    let notes = |r: &pina_engine::project::Region| r.content.notes(r.length).map_or(0, |n| n.len());
     ws.update(cx, |ws, cx| ws.split_at((0, 0), BAR * 2, cx));
     assert_eq!(
         ws.read_with(cx, |ws, _| ws.session.project.tracks[0].regions.len()),
@@ -754,7 +753,7 @@ fn regions_copy_paste_mute_and_repeat_from_their_menus_and_keys(cx: &mut TestApp
 
 #[gpui::test]
 fn a_regions_end_loops_from_its_top_and_time_stretches_with_option(cx: &mut TestAppContext) {
-    use tempo_engine::project::Content;
+    use pina_engine::project::Content;
     let (ws, cx) = open(cx);
     let region = |cx: &VisualTestContext, at: (usize, usize)| {
         ws.read_with(cx, |ws, _| ws.session.project.region(at).clone())
@@ -840,7 +839,7 @@ fn mute_solo_and_arm_from_the_track_header(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_new_track_palette_adds_beats_samplers_and_instruments(cx: &mut TestAppContext) {
-    use tempo_engine::project::Instrument;
+    use pina_engine::project::Instrument;
     let (ws, cx) = open(cx);
     let last = |cx: &VisualTestContext| {
         ws.read_with(cx, |ws, _| {
@@ -861,7 +860,7 @@ fn the_new_track_palette_adds_beats_samplers_and_instruments(cx: &mut TestAppCon
     click_on(cx, "adder-Sampler", Modifiers::none(), MouseButton::Left);
     let (instrument, _, bottom) = last(cx);
     assert!(matches!(instrument, Some(Instrument::Sampler(_))) && bottom == Some(Bottom::Sampler));
-    // Instrument narrows the list to instruments; tempo's synth is first.
+    // Instrument narrows the list to instruments; Pina Studio's synth is first.
     click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
     click_on(cx, "adder-Instrument", Modifiers::none(), MouseButton::Left);
     assert!(ws.read_with(cx, |ws, _| ws.adder.is_some()));
@@ -1101,7 +1100,7 @@ fn the_pencil_writes_chords_in_key_paints_on_and_the_lane_draws(cx: &mut TestApp
                 .filter(|c| {
                     matches!(
                         c.kind,
-                        tempo_engine::project::ControlValue::Cc { number: 1, .. }
+                        pina_engine::project::ControlValue::Cc { number: 1, .. }
                     )
                 })
                 .count(),
@@ -1139,7 +1138,7 @@ fn automation_points_are_added_dragged_and_deleted(cx: &mut TestAppContext) {
     let at = point(
         top.x,
         px(lane_top
-            + crate::automation::to_y(tempo_engine::project::Param::Volume, points[0].value, 64.0)),
+            + crate::automation::to_y(pina_engine::project::Param::Volume, points[0].value, 64.0)),
     );
     drag(cx, at, at + point(px(0.), px(30.)));
     let moved = volume(cx)[0];
@@ -1150,7 +1149,7 @@ fn automation_points_are_added_dragged_and_deleted(cx: &mut TestAppContext) {
     let at = point(
         top.x,
         px(lane_top
-            + crate::automation::to_y(tempo_engine::project::Param::Volume, moved.value, 64.0)),
+            + crate::automation::to_y(pina_engine::project::Param::Volume, moved.value, 64.0)),
     );
     cx.simulate_click(
         at,
@@ -1285,7 +1284,7 @@ fn a_plugin_that_wont_load_is_reported_and_removable(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn unsaved_edits_are_kept_and_offered_back(cx: &mut TestAppContext) {
-    let dir = std::env::temp_dir().join(format!("tempo-test-kept-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pina-test-kept-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("Audio Files")).unwrap();
     for f in ["project.json", "Audio Files/drums.wav"] {
         std::fs::copy(demo().join(f), dir.join(f)).unwrap();
@@ -1293,7 +1292,7 @@ fn unsaved_edits_are_kept_and_offered_back(cx: &mut TestAppContext) {
     let (ws, cx) = open_at(cx, &dir);
     let saved = ws.read_with(cx, |ws, _| ws.session.project.tempo);
     let kept = dir.join(".recovery/project.json");
-    // Edits, kept; then tempo stops, and the project opens again and asks.
+    // Edits, kept; then Pina Studio stops, and the project opens again and asks.
     let edit_and_reopen = |cx: &mut VisualTestContext| {
         ws.update(cx, |ws, cx| {
             ws.keep_edits(); // nothing to keep yet
@@ -1333,8 +1332,8 @@ fn unsaved_edits_are_kept_and_offered_back(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn agents_edit_the_open_project_through_its_socket(cx: &mut TestAppContext) {
-    // A copy of the demo, so a tempo that has the real one open isn't disturbed.
-    let dir = std::env::temp_dir().join(format!("tempo-test-socket-{}", std::process::id()));
+    // A copy of the demo, so a Pina Studio that has the real one open isn't disturbed.
+    let dir = std::env::temp_dir().join(format!("pina-test-socket-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("Audio Files")).unwrap();
     for f in ["project.json", "Audio Files/drums.wav"] {
         std::fs::copy(demo().join(f), dir.join(f)).unwrap();
@@ -1344,7 +1343,7 @@ fn agents_edit_the_open_project_through_its_socket(cx: &mut TestAppContext) {
     let weak = ws.downgrade();
     cx.update(|_, cx| crate::server::serve(weak, &dir, cx));
 
-    // Ask from another thread, as `tempo do` would from another process.
+    // Ask from another thread, as `pina do` would from another process.
     let ask = |cx: &mut VisualTestContext, command: &'static str| {
         let d = dir.clone();
         let asker = thread::spawn(move || crate::cli::edit(&d, command));
@@ -1365,7 +1364,7 @@ fn agents_edit_the_open_project_through_its_socket(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-z");
     assert_eq!(ws.read_with(cx, |ws, _| ws.session.project.tempo), 100.0);
     assert_eq!(
-        tempo_engine::project::Project::load(&dir).unwrap().tempo,
+        pina_engine::project::Project::load(&dir).unwrap().tempo,
         100.0
     );
     // The window shows where the agent was working.
@@ -1452,7 +1451,7 @@ fn the_step_sequencer_paints_accents_mutes_fills_and_converts(cx: &mut TestAppCo
     let (ws, cx) = open(cx);
     click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
     click_on(cx, "adder-Drums", Modifiers::none(), MouseButton::Left);
-    click_on(cx, "adder-row-0", Modifiers::none(), MouseButton::Left); // tempo's Drum Kit
+    click_on(cx, "adder-row-0", Modifiers::none(), MouseButton::Left); // Pina Studio's Drum Kit
     let track = ws.read_with(cx, |ws, _| ws.track);
     // Two patterns from the same playhead: the second goes after the first, not on it.
     cx.simulate_keystrokes("cmd-alt-p");
@@ -1559,14 +1558,14 @@ fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
     click_on(cx, "adder-Drums", Modifiers::none(), MouseButton::Left);
-    click_on(cx, "adder-row-0", Modifiers::none(), MouseButton::Left); // tempo's Drum Kit
+    click_on(cx, "adder-row-0", Modifiers::none(), MouseButton::Left); // Pina Studio's Drum Kit
     let (track, instrument) = ws.read_with(cx, |ws, _| {
         (
             ws.track,
             ws.session.project.tracks[ws.track].instrument.clone(),
         )
     });
-    assert_eq!(instrument, Some(tempo_engine::project::Instrument::Drums));
+    assert_eq!(instrument, Some(pina_engine::project::Instrument::Drums));
 
     cx.simulate_keystrokes("cmd-alt-p");
     assert_eq!(ws.read_with(cx, |ws, _| ws.bottom), Some(Bottom::Steps));
@@ -1656,7 +1655,7 @@ fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
             .map(|r| r.target)
             .collect::<Vec<_>>()
     });
-    use tempo_engine::modulate::{ModKind, ModTarget, SoundParam};
+    use pina_engine::modulate::{ModKind, ModTarget, SoundParam};
     assert_eq!(routes, [ModTarget::Sound(2, SoundParam::Velocity)]);
 
     // A parameter row: mapped to the volume from its menu, its first step painted low.
@@ -1884,7 +1883,7 @@ fn snap_follows_the_menu(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_eq_window_sets_dynamics_character_output_and_records_automation(cx: &mut TestAppContext) {
-    use tempo_engine::project::{
+    use pina_engine::project::{
         AutoMode, Bands, Character, Eq, EqBand, EqField, Param, Processing,
     };
     let (ws, cx) = open(cx);
@@ -2006,7 +2005,7 @@ fn the_eq_window_sets_dynamics_character_output_and_records_automation(cx: &mut 
 
 #[gpui::test]
 fn the_instance_list_edits_every_eq_in_the_song(cx: &mut TestAppContext) {
-    use tempo_engine::project::{Bands, Eq, EqBand};
+    use pina_engine::project::{Bands, Eq, EqBand};
     let (ws, cx) = open(cx);
     cx.simulate_resize(gpui::size(px(1500.), px(1000.)));
     ws.update(cx, |ws, cx| {
@@ -2170,7 +2169,7 @@ fn smart_controls_turn_the_channel_eq_on_a_built_in_instrument(cx: &mut TestAppC
 
 #[gpui::test]
 fn the_band_panel_never_hides_the_band_it_is_for(cx: &mut TestAppContext) {
-    use tempo_engine::project::{Bands, Eq, EqBand};
+    use pina_engine::project::{Bands, Eq, EqBand};
     let (ws, cx) = open(cx);
     cx.simulate_resize(gpui::size(px(1500.), px(1000.)));
     // A band high up: the panel at the bottom, under it. Low down, where the panel would
@@ -2197,7 +2196,7 @@ fn the_band_panel_never_hides_the_band_it_is_for(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_eq_window_adds_shapes_moves_and_takes_out_bands(cx: &mut TestAppContext) {
-    use tempo_engine::project::Placement;
+    use pina_engine::project::Placement;
     let (ws, cx) = open(cx);
     cx.simulate_resize(gpui::size(px(1500.), px(1000.)));
     ws.update(cx, |ws, cx| ws.open_eq(Channel::Track(0), cx));
@@ -2378,7 +2377,7 @@ fn the_eq_window_adds_shapes_moves_and_takes_out_bands(cx: &mut TestAppContext) 
     assert!(eq(cx).bands.is_empty());
     click_on(cx, "eq-a", Modifiers::none(), MouseButton::Left);
     assert_eq!(eq(cx).bands.len(), a.bands.len());
-    // A preset of tempo's.
+    // A preset of Pina Studio's.
     click_on(cx, "eq-presets", Modifiers::none(), MouseButton::Left);
     pick(cx, &ws, "Telephone");
     assert_eq!(eq(cx).bands.len(), 3);
@@ -2632,7 +2631,7 @@ fn latch_records_the_fader_while_playing_until_stop(cx: &mut TestAppContext) {
     click_on(cx, "auto-mode-0", Modifiers::none(), MouseButton::Left);
     click_on(cx, "menu-3", Modifiers::none(), MouseButton::Left);
     let mode = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].automation.mode);
-    assert_eq!(mode, tempo_engine::project::AutoMode::Latch);
+    assert_eq!(mode, pina_engine::project::AutoMode::Latch);
 
     ws.update(cx, |ws, _| ws.player.play());
     until(cx, &ws, |ws| ws.playhead() > PPQ / 4);
@@ -2689,7 +2688,7 @@ fn the_automation_menu_narrows_down_as_you_type(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     let id = ws.read_with(cx, |ws, _| ws.session.project.tracks[1].id);
     let param = ws.read_with(cx, |ws, _| ws.auto_lanes.get(&id).map(|l| l[0]));
-    assert_eq!(param, Some(tempo_engine::project::Param::Pan));
+    assert_eq!(param, Some(pina_engine::project::Param::Pan));
     // Typing didn't reach the shortcuts ("a" hides automation).
     assert!(ws.read_with(cx, |ws, _| ws.show_automation && ws.menu.is_none()));
 }
@@ -2716,7 +2715,7 @@ fn lane_spot(
 #[gpui::test]
 fn controls_show_their_automation_and_moved_while_stopped_move_its_line(cx: &mut TestAppContext) {
     use crate::{automation::Stopped, strip::Channel};
-    use tempo_engine::project::{AutoPoint, Param, value_at};
+    use pina_engine::project::{AutoPoint, Param, value_at};
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
         ws.session.project.tracks[0].automation.volume =
@@ -2795,7 +2794,7 @@ fn controls_show_their_automation_and_moved_while_stopped_move_its_line(cx: &mut
 
 #[gpui::test]
 fn read_hands_over_while_held_and_trim_moves_the_line_while_playing(cx: &mut TestAppContext) {
-    use tempo_engine::project::{AutoMode, AutoPoint, Param, value_at};
+    use pina_engine::project::{AutoMode, AutoPoint, Param, value_at};
     let (ws, cx) = open(cx);
     let id = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].id);
     ws.update(cx, |ws, cx| {
@@ -2893,7 +2892,7 @@ fn read_hands_over_while_held_and_trim_moves_the_line_while_playing(cx: &mut Tes
 
 #[gpui::test]
 fn write_records_every_automated_control_from_play_then_turns_to_latch(cx: &mut TestAppContext) {
-    use tempo_engine::project::{AutoMode, AutoPoint, value_at};
+    use pina_engine::project::{AutoMode, AutoPoint, value_at};
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
         let a = &mut ws.session.project.tracks[0].automation;
@@ -2918,7 +2917,7 @@ fn write_records_every_automated_control_from_play_then_turns_to_latch(cx: &mut 
 
 #[gpui::test]
 fn automation_lanes_draw_select_copy_bend_and_take_shapes(cx: &mut TestAppContext) {
-    use tempo_engine::project::{Param, value_at};
+    use pina_engine::project::{Param, value_at};
     let (ws, cx) = open(cx);
     cx.simulate_keystrokes("a");
     let points = |cx: &VisualTestContext, param: Param| {
@@ -2991,7 +2990,7 @@ fn automation_lanes_draw_select_copy_bend_and_take_shapes(cx: &mut TestAppContex
     ws.update(cx, |ws, _| ws.tool = Tool::Pointer);
     // The line between its two ends dragged down: both ends with it.
     ws.update(cx, |ws, cx| {
-        use tempo_engine::project::AutoPoint;
+        use pina_engine::project::AutoPoint;
         *ws.session.project.tracks[0]
             .automation
             .points_mut(Param::Pan) = vec![AutoPoint::new(0, -0.5), AutoPoint::new(BAR, 0.5)];
@@ -3013,7 +3012,7 @@ fn automation_lanes_draw_select_copy_bend_and_take_shapes(cx: &mut TestAppContex
 
 #[gpui::test]
 fn automation_smooths_from_its_menus_and_takes_s_curves(cx: &mut TestAppContext) {
-    use tempo_engine::project::{AutoPoint, Param, value_at};
+    use pina_engine::project::{AutoPoint, Param, value_at};
     let (ws, cx) = open(cx);
     cx.simulate_keystrokes("a");
     // The keys' pan, recorded with a wobble every sixteenth through bar 2.
@@ -3076,7 +3075,7 @@ fn automation_smooths_from_its_menus_and_takes_s_curves(cx: &mut TestAppContext)
 
 #[gpui::test]
 fn automation_moves_with_regions_when_set(cx: &mut TestAppContext) {
-    use tempo_engine::project::{AutoPoint, value_at};
+    use pina_engine::project::{AutoPoint, value_at};
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
         ws.settings.carry_automation = true;
@@ -3108,7 +3107,7 @@ fn the_saturator_goes_on_from_the_browser_and_turns_in_the_mixer(cx: &mut TestAp
     };
     ws.update(cx, |ws, cx| ws.choose(add.clone(), cx));
     let sat = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.session.project.tracks[0].sat);
-    assert_eq!(sat(cx), Some(tempo_engine::project::Saturator::default()));
+    assert_eq!(sat(cx), Some(pina_engine::project::Saturator::default()));
     // Asking again shows it, in the mixer, without another edit.
     let edits = ws.read_with(cx, |ws, _| ws.session.project.clone());
     ws.update(cx, |ws, cx| ws.choose(add, cx));
@@ -3196,7 +3195,7 @@ fn sends_switch_between_pre_and_post_fader(cx: &mut TestAppContext) {
 fn the_master_takes_plugins_and_audio_tracks_pick_an_input(cx: &mut TestAppContext) {
     use crate::{menu::MenuAction, strip::Channel};
     let (ws, cx) = open(cx);
-    let plugin = tempo_engine::project::PluginRef {
+    let plugin = pina_engine::project::PluginRef {
         path: "/nonexistent/Missing.vst3".into(),
         class: "Missing".into(),
         ..Default::default()
@@ -3218,7 +3217,7 @@ fn the_master_takes_plugins_and_audio_tracks_pick_an_input(cx: &mut TestAppConte
     cx.run_until_parked();
     click_on(cx, "input-2", Modifiers::none(), MouseButton::Left);
     assert!(ws.read_with(cx, |ws, _| ws.menu.is_some()));
-    let input = tempo_engine::project::Input {
+    let input = pina_engine::project::Input {
         channel: 1,
         stereo: false,
     };
@@ -3336,7 +3335,7 @@ fn the_compact_browser_is_resized_by_its_left_edge(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn an_audio_regions_flex_and_tempo_following_are_set_in_its_inspector(cx: &mut TestAppContext) {
-    use tempo_engine::project::Flex;
+    use pina_engine::project::Flex;
     let (ws, cx) = open(cx);
     let drums = ws.read_with(cx, |ws, _| {
         let p = &ws.session.project;
@@ -3422,7 +3421,7 @@ fn a_hit_dragged_in_an_audio_region_makes_a_warp_marker(cx: &mut TestAppContext)
 
 /// A copy of the demo in a folder of its own, so what's added to it lands there.
 fn demo_copy(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("tempo-test-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pina-test-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("Audio Files")).unwrap();
     for f in ["project.json", "Audio Files/drums.wav"] {
@@ -3457,8 +3456,8 @@ fn tone(path: &Path, seconds: f32, hz: f32) {
 
 /// A little library: its samples' files, and what they are (set here rather than analysed, so
 /// these tests are about the browser).
-fn little_library(dir: &Path) -> tempo_engine::samples::library::Library {
-    use tempo_engine::samples::{
+fn little_library(dir: &Path) -> pina_engine::samples::library::Library {
+    use pina_engine::samples::{
         Analysis, Category as C, KeyGuess, Kind, Pitch, Sample, library::Library,
     };
     std::fs::create_dir_all(dir).unwrap();
@@ -3591,7 +3590,7 @@ fn the_sample_browser_searches_filters_and_hears(cx: &mut TestAppContext) {
     // way, and in tune.
     ws.update(cx, |ws, cx| {
         ws.set_sample_key(
-            crate::browser::KeyFilter::Key(tempo_engine::music::Key {
+            crate::browser::KeyFilter::Key(pina_engine::music::Key {
                 root: 0,
                 minor: true,
             }),
@@ -3632,7 +3631,7 @@ fn a_loop_is_previewed_at_the_songs_tempo(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn add_to_song_puts_loops_on_audio_tracks_and_one_shots_on_samplers(cx: &mut TestAppContext) {
-    use tempo_engine::project::Instrument;
+    use pina_engine::project::Instrument;
     let (ws, cx, dir) = open_browser(cx, "browser-add");
     let pick = |ws: &Entity<Workspace>, cx: &mut VisualTestContext, name: &str| {
         let i = ws.read_with(cx, |ws, _| {
@@ -3715,7 +3714,7 @@ fn add_to_song_puts_loops_on_audio_tracks_and_one_shots_on_samplers(cx: &mut Tes
 
 #[gpui::test]
 fn a_kit_becomes_a_sampler_track_and_samples_drag_onto_tracks(cx: &mut TestAppContext) {
-    use tempo_engine::project::Instrument;
+    use pina_engine::project::Instrument;
     let (ws, cx, dir) = open_browser(cx, "browser-kit");
     cx.simulate_keystrokes("escape");
     click_on(cx, "results-Kit", Modifiers::none(), MouseButton::Left);
@@ -3789,7 +3788,7 @@ fn a_kit_becomes_a_sampler_track_and_samples_drag_onto_tracks(cx: &mut TestAppCo
 
 #[gpui::test]
 fn the_compact_browser_hears_finds_alike_and_drags_onto_tracks(cx: &mut TestAppContext) {
-    use tempo_engine::project::Instrument;
+    use pina_engine::project::Instrument;
     let dir = demo_copy("browser-compact");
     let library = little_library(&dir.join("Library"));
     let (ws, cx) = open_at(cx, &dir);
@@ -3881,9 +3880,9 @@ fn the_library_loads_and_scans_in_the_background(cx: &mut TestAppContext) {
     std::fs::create_dir_all(samples.join("Pack")).unwrap();
     tone(&samples.join("Pack/Kick_01.wav"), 0.2, 60.0);
     tone(&samples.join("Pack/Snare_01.wav"), 0.2, 200.0);
-    // SAFETY: no other test reads TEMPO_LIBRARY.
-    unsafe { std::env::set_var("TEMPO_LIBRARY", dir.join("config")) };
-    tempo_engine::samples::library::Library {
+    // SAFETY: no other test reads PINA_LIBRARY.
+    unsafe { std::env::set_var("PINA_LIBRARY", dir.join("config")) };
+    pina_engine::samples::library::Library {
         folders: vec![samples.canonicalize().unwrap()],
         samples: Vec::new(),
     }
@@ -3944,7 +3943,7 @@ fn the_agent_panel_shows_claude_working_as_it_goes(cx: &mut TestAppContext) {
     use crate::chat::{Item, Step};
     // A stand-in for Claude Code: it takes the question and answers as Claude does, an edit and
     // a sentence, then waits to be let go.
-    let dir = std::env::temp_dir().join(format!("tempo-test-claude-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pina-test-claude-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let claude = dir.join("claude");
     std::fs::write(
@@ -3954,8 +3953,8 @@ read question
 cat <<'OUT'
 {"type":"system","subtype":"init","model":"claude-test-1"}
 {"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}}
-{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"mcp__tempo__edit","input":{}}}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__tempo__edit","input":{"project":"p","command":{"op":"set_tempo","bpm":101}}}]}}
+{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"mcp__pina__edit","input":{}}}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__pina__edit","input":{"project":"p","command":{"op":"set_tempo","bpm":101}}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"{}"}]}]}}
 {"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"Set the tempo "}}}
 {"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"to 101."}}}
@@ -3967,8 +3966,8 @@ cat > /dev/null
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // SAFETY: no other test reads TEMPO_CLAUDE.
-    unsafe { std::env::set_var("TEMPO_CLAUDE", &claude) };
+    // SAFETY: no other test reads PINA_CLAUDE.
+    unsafe { std::env::set_var("PINA_CLAUDE", &claude) };
     cx.executor().allow_parking();
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| ws.ask_agent("Make it 101".into(), cx));
@@ -4058,7 +4057,7 @@ fn a_tracks_icon_opens_a_picker_for_its_colour_and_icon(cx: &mut TestAppContext)
     assert!(ws.read_with(cx, |ws, _| ws.picker.as_ref().is_some_and(|p| p.track == 2)));
     // The demo's Drums track is drums, by its name.
     let before = ws.read_with(cx, |ws, _| ws.shown(2));
-    assert_eq!(before.look.family, tempo_engine::look::Family::Drums);
+    assert_eq!(before.look.family, pina_engine::look::Family::Drums);
     // A swatch colours it, an icon marks it: each one edit, undone in turn.
     let swatch = cx.debug_bounds("swatch-1-9").unwrap().center();
     cx.simulate_click(swatch, Modifiers::none());
@@ -4070,7 +4069,7 @@ fn a_tracks_icon_opens_a_picker_for_its_colour_and_icon(cx: &mut TestAppContext)
     assert_eq!(t.icon.as_deref(), Some("808"));
     assert_eq!(
         ws.read_with(cx, |ws, _| ws.shown(2).look.family),
-        tempo_engine::look::Family::Bass
+        pina_engine::look::Family::Bass
     );
     cx.simulate_keystrokes("cmd-z cmd-z");
     cx.run_until_parked();
@@ -4083,7 +4082,7 @@ fn the_browser_finds_by_words_and_puts_devices_on_tracks(cx: &mut TestAppContext
     ws.update(cx, |ws, cx| {
         ws.show_browser = true;
         ws.plugins = Some(vec![PluginInfo {
-            format: tempo_engine::project::Format::Au,
+            format: pina_engine::project::Format::Au,
             path: "".into(),
             class: "AUDelay".into(),
             uid: Some("aufx dely appl".into()),
@@ -4142,14 +4141,14 @@ fn the_browser_finds_by_words_and_puts_devices_on_tracks(cx: &mut TestAppContext
 
 #[gpui::test]
 fn songs_start_from_the_songs_page_open_here_and_go_to_the_trash(cx: &mut TestAppContext) {
-    let root = std::env::temp_dir().join(format!("tempo-test-window-songs-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("pina-test-window-songs-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let other = crate::projects::create(
         &root,
         "Other",
         96.0,
-        tempo_engine::music::Key::parse("D minor"),
+        pina_engine::music::Key::parse("D minor"),
         [3, 4],
         crate::projects::Template::Band,
     )
@@ -4172,8 +4171,8 @@ fn songs_start_from_the_songs_page_open_here_and_go_to_the_trash(cx: &mut TestAp
     });
     // ⌘N: the Songs page, a new song's name ready to type. A name, then a template's click:
     // the song is made where songs are kept (here a scratch folder) and opens.
-    // SAFETY: no other test reads TEMPO_SONGS.
-    unsafe { std::env::set_var("TEMPO_SONGS", &root) };
+    // SAFETY: no other test reads PINA_SONGS.
+    unsafe { std::env::set_var("PINA_SONGS", &root) };
     cx.simulate_keystrokes("cmd-n");
     cx.run_until_parked();
     assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Songs);
@@ -4235,9 +4234,9 @@ fn songs_start_from_the_songs_page_open_here_and_go_to_the_trash(cx: &mut TestAp
 
 #[gpui::test]
 fn with_no_song_open_tempo_starts_on_the_songs_page(cx: &mut TestAppContext) {
-    // A song not made yet, as tempo opens with none named: the Songs page is the whole window,
+    // A song not made yet, as Pina Studio opens with none named: the Songs page is the whole window,
     // a template a click away. Close Song from a song comes back here.
-    let scratch = std::env::temp_dir().join(format!("tempo-test-scratch-{}", std::process::id()));
+    let scratch = std::env::temp_dir().join(format!("pina-test-scratch-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&scratch);
     let (ws, cx) = open_at(cx, &scratch.join("Untitled"));
     assert!(ws.read_with(cx, |ws, _| ws.home_alone()));
@@ -4323,7 +4322,7 @@ fn audio_dragged_in_from_the_finder_lands_on_the_timeline(cx: &mut TestAppContex
 
 #[gpui::test]
 fn the_inspectors_strips_line_up_row_for_row(cx: &mut TestAppContext) {
-    use tempo_engine::project::Eq;
+    use pina_engine::project::Eq;
     let dir = demo_copy("strips-line-up");
     let (ws, cx) = open_at(cx, &dir);
     let lined_up = |cx: &mut VisualTestContext, t: usize| {
@@ -4369,7 +4368,7 @@ fn the_inspectors_strips_line_up_row_for_row(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn writing_notes_starts_with_a_double_click_anywhere(cx: &mut TestAppContext) {
-    use tempo_engine::project::Instrument;
+    use pina_engine::project::Instrument;
     let dir = demo_copy("write-notes");
     let (ws, cx) = open_at(cx, &dir);
     // A new instrument track, empty: it says how to start.
@@ -4435,7 +4434,7 @@ fn writing_notes_starts_with_a_double_click_anywhere(cx: &mut TestAppContext) {
 
     // Inside a cycle that's on, a new region takes the cycle's stretch.
     ws.update(cx, |ws, cx| {
-        ws.session.project.cycle = Some(tempo_engine::project::Cycle {
+        ws.session.project.cycle = Some(pina_engine::project::Cycle {
             start: 0,
             end: BAR,
             off: false,
@@ -4535,7 +4534,7 @@ fn the_browser_names_new_tracks_and_puts_effects_on_them(cx: &mut TestAppContext
 #[gpui::test]
 fn playbook_parts_are_added_edited_and_removed(cx: &mut TestAppContext) {
     // `open_at` gives the tests a playbooks folder of their own.
-    let books = std::env::temp_dir().join(format!("tempo-test-books-{}", std::process::id()));
+    let books = std::env::temp_dir().join(format!("pina-test-books-{}", std::process::id()));
     let dir = demo_copy("playbook-parts");
     let (ws, cx) = open_at(cx, &dir);
     // Tall enough to show the whole page.
@@ -4547,7 +4546,7 @@ fn playbook_parts_are_added_edited_and_removed(cx: &mut TestAppContext) {
     };
     let saved = || {
         let json = std::fs::read_to_string(books.join("lofi.json")).unwrap();
-        serde_json::from_str::<tempo_engine::playbook::Playbook>(&json).unwrap()
+        serde_json::from_str::<pina_engine::playbook::Playbook>(&json).unwrap()
     };
     let before = parts(cx).len();
 
@@ -4585,10 +4584,10 @@ fn playbook_parts_are_added_edited_and_removed(cx: &mut TestAppContext) {
             .iter()
             .all(|s| !s.parts.contains(&"perc".to_string()))
     );
-    // tempo's again: the same as it ships.
+    // Pina Studio's again: the same as it ships.
     assert_eq!(
-        tempo_engine::playbook::origin(&book),
-        tempo_engine::playbook::Origin::Tempo
+        pina_engine::playbook::origin(&book),
+        pina_engine::playbook::Origin::Pina
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -4726,7 +4725,7 @@ fn sounds_are_picked_for_the_agent_given_parts_and_told_it(cx: &mut TestAppConte
     let note = ws.update(cx, |ws, _| ws.palette_note()).unwrap();
     assert!(
         note.contains("Instruments")
-            && note.contains(r#"pad: "Sine Synth" — tempo's own: "instrument": "synth""#),
+            && note.contains(r#"pad: "Sine Synth" — Pina Studio's own: "instrument": "synth""#),
         "{note}"
     );
     click_on(
@@ -4743,7 +4742,7 @@ fn sounds_are_picked_for_the_agent_given_parts_and_told_it(cx: &mut TestAppConte
     assert!(note.contains("choose your own"));
     cx.simulate_keystrokes("cmd-z");
     ws.update(cx, |ws, cx| ws.save(cx));
-    let saved = tempo_engine::project::Project::load(&dir).unwrap();
+    let saved = pina_engine::project::Project::load(&dir).unwrap();
     assert_eq!(saved.palette.sounds.len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -4845,7 +4844,7 @@ fn the_agent_panel_knows_the_song_and_its_critic(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_song_map_toggles_parts_and_genres_duplicate_and_go(cx: &mut TestAppContext) {
-    use tempo_engine::playbook::{self, Origin};
+    use pina_engine::playbook::{self, Origin};
     let dir = demo_copy("playbook-map");
     let (ws, cx) = open_at(cx, &dir);
     cx.simulate_resize(gpui::size(px(1600.), px(3400.)));
@@ -4858,7 +4857,7 @@ fn the_song_map_toggles_parts_and_genres_duplicate_and_go(cx: &mut TestAppContex
     assert!(draft(cx).sections[0].parts.contains(&"bass".to_string()));
     assert_eq!(playbook::origin(&draft(cx)), Origin::Edited);
     click_on(cx, "cell-bass-0", Modifiers::none(), MouseButton::Left);
-    assert_eq!(playbook::origin(&draft(cx)), Origin::Tempo);
+    assert_eq!(playbook::origin(&draft(cx)), Origin::Pina);
 
     // A section picked: its energy and length change; a new one comes and goes.
     click_on(cx, "section-0", Modifiers::none(), MouseButton::Left);
@@ -4882,10 +4881,10 @@ fn the_song_map_toggles_parts_and_genres_duplicate_and_go(cx: &mut TestAppContex
     click_on(cx, "genre-reset", Modifiers::none(), MouseButton::Left);
     let gone = ws.read_with(cx, |ws, _| !ws.genres.list.iter().any(|p| p.id == copy.id));
     assert!(gone);
-    // Reset to tempo's: house as it ships.
+    // Reset to Pina Studio's: house as it ships.
     ws.update(cx, |ws, cx| ws.open_genres(Some("house"), cx));
     click_on(cx, "genre-reset", Modifiers::none(), MouseButton::Left);
-    assert_eq!(playbook::origin(&draft(cx)), Origin::Tempo);
+    assert_eq!(playbook::origin(&draft(cx)), Origin::Pina);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -4931,10 +4930,10 @@ fn the_composer_wraps_and_grows_as_its_written_in(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_song_studied_shows_its_form_and_becomes_the_mix_reference(cx: &mut TestAppContext) {
     // Studies of the test's own, never the person's.
-    let dir = std::env::temp_dir().join(format!("tempo-test-studies-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pina-test-studies-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    unsafe { std::env::set_var("TEMPO_STUDIES", &dir) };
+    unsafe { std::env::set_var("PINA_STUDIES", &dir) };
     // Ten seconds at 120 BPM: a kick on every beat over an A minor chord.
     let rate = 44_100u32;
     let l: Vec<f32> = (0..rate as usize * 10)
@@ -4949,7 +4948,7 @@ fn a_song_studied_shows_its_form_and_becomes_the_mix_reference(cx: &mut TestAppC
         })
         .collect();
     let song = dir.join("Someone - A Test.wav");
-    tempo_engine::analysis::write_wav(&song, &l, &l, rate).unwrap();
+    pina_engine::analysis::write_wav(&song, &l, &l, rate).unwrap();
     let studied = crate::study_cli::study(&song, false).unwrap();
     assert_eq!(studied.identity.title, "A Test");
     let (ws, cx) = open(cx);
@@ -4974,9 +4973,9 @@ fn a_song_studied_shows_its_form_and_becomes_the_mix_reference(cx: &mut TestAppC
 
 #[gpui::test]
 fn the_sampler_takes_samples_slices_them_and_its_knobs_and_marks_turn(cx: &mut TestAppContext) {
-    use tempo_engine::project::{FilterMode, Instrument, LoopMode};
+    use pina_engine::project::{FilterMode, Instrument, LoopMode};
     // A song of the test's own, so samples are copied into it, not the demo.
-    let dir = std::env::temp_dir().join(format!("tempo-test-sampler-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pina-test-sampler-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let loop_file = dir.join("Loop.wav");
@@ -4987,7 +4986,7 @@ fn the_sampler_takes_samples_slices_them_and_its_knobs_and_marks_turn(cx: &mut T
             (k as f32 * 0.7).sin() * (-(k as f32) / 300.0).exp()
         })
         .collect();
-    tempo_engine::analysis::write_wav(&loop_file, &hits, &hits, rate).unwrap();
+    pina_engine::analysis::write_wav(&loop_file, &hits, &hits, rate).unwrap();
     let song = dir.join("Song");
     let (ws, cx) = open_at(cx, &song);
     let sampler = |cx: &VisualTestContext| {
@@ -5128,7 +5127,7 @@ fn the_bounce_sheet_writes_stems_in_several_formats(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn bounce_in_place_puts_a_track_on_audio_and_mutes_it(cx: &mut TestAppContext) {
-    use tempo_engine::project::Content;
+    use pina_engine::project::Content;
     let song = demo_copy("in-place");
     let (ws, cx) = open_at(cx, &song);
     let before = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
@@ -5159,17 +5158,16 @@ fn bounce_in_place_puts_a_track_on_audio_and_mutes_it(cx: &mut TestAppContext) {
 }
 
 /// Pages drawn to PNGs, to look at without a window on screen:
-/// `TEMPO_SHOT=<dir> TEMPO_SHOT_PAGE=study cargo test -p tempo shots -- --ignored`. The Song
+/// `PINA_SHOT=<dir> PINA_SHOT_PAGE=study cargo test -p pina shots -- --ignored`. The Song
 /// Study page shows the studies kept on this Mac, the first or the one whose file name has
-/// `TEMPO_SHOT_SONG` in it.
+/// `PINA_SHOT_SONG` in it.
 #[test]
 #[ignore]
 fn shots() {
-    let out =
-        PathBuf::from(std::env::var("TEMPO_SHOT").expect("TEMPO_SHOT: a folder for the PNGs"));
+    let out = PathBuf::from(std::env::var("PINA_SHOT").expect("PINA_SHOT: a folder for the PNGs"));
     std::fs::create_dir_all(&out).unwrap();
-    let page = std::env::var("TEMPO_SHOT_PAGE").unwrap_or_else(|_| "study".into());
-    let tall: f32 = std::env::var("TEMPO_SHOT_H")
+    let page = std::env::var("PINA_SHOT_PAGE").unwrap_or_else(|_| "study".into());
+    let tall: f32 = std::env::var("PINA_SHOT_H")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(900.0);
@@ -5194,7 +5192,7 @@ fn shots() {
         })
         .unwrap();
     cx.run_until_parked();
-    let song = std::env::var("TEMPO_SHOT_SONG").ok();
+    let song = std::env::var("PINA_SHOT_SONG").ok();
     cx.update(|cx| {
         window
             .update(cx, |ws, window, cx| match page.as_str() {
@@ -5237,16 +5235,16 @@ fn shots() {
                     }
                 }
                 "sampler" => {
-                    use tempo_engine::project::{
+                    use pina_engine::project::{
                         FilterMode, Instrument, Sampler, SamplerVoice, Track,
                     };
                     let file = PathBuf::from(
-                        std::env::var("TEMPO_SHOT_SAMPLE").expect("TEMPO_SHOT_SAMPLE: a loop"),
+                        std::env::var("PINA_SHOT_SAMPLE").expect("PINA_SHOT_SAMPLE: a loop"),
                     );
-                    let (sides, rate) = tempo_engine::engine::read_audio(&file).unwrap();
-                    let found = tempo_engine::sampler::onsets(&sides[0], rate as f32);
-                    let cut = tempo_engine::sampler::cuts(&found, 8);
-                    let zones = tempo_engine::sampler::slices(&file, &cut, 36);
+                    let (sides, rate) = pina_engine::engine::read_audio(&file).unwrap();
+                    let found = pina_engine::sampler::onsets(&sides[0], rate as f32);
+                    let cut = pina_engine::sampler::cuts(&found, 8);
+                    let zones = pina_engine::sampler::slices(&file, &cut, 36);
                     let voice = SamplerVoice {
                         filter: FilterMode::LowPass,
                         cutoff_hz: 6000.0,
@@ -5270,7 +5268,7 @@ fn shots() {
                 }
                 p if p.starts_with("adder") => {
                     // The plugins as last scanned, their presets as last read, the library.
-                    let cached: serde_json::Value = std::fs::read(tempo_engine::scan::cache_file())
+                    let cached: serde_json::Value = std::fs::read(pina_engine::scan::cache_file())
                         .ok()
                         .and_then(|b| serde_json::from_slice(&b).ok())
                         .unwrap_or_default();
@@ -5289,7 +5287,7 @@ fn shots() {
                     ws.catalog_plugins();
                     ws.presets_now();
                     // Read, not rescanned: the person's library is only looked at.
-                    ws.set_library(tempo_engine::samples::library::Library::load(), cx);
+                    ws.set_library(pina_engine::samples::library::Library::load(), cx);
                     ws.open_adder(gpui::point(px(250.), px(110.)), window, cx);
                     if let Some(q) = p.strip_prefix("adder-") {
                         ws.adder
@@ -5309,11 +5307,11 @@ fn shots() {
                     if let Some(e) = ws.export.as_mut() {
                         e.tracks = vec![true; e.tracks.len()];
                         e.formats = vec![
-                            tempo_engine::bounce::Format::Wav,
-                            tempo_engine::bounce::Format::Mp3 { kbps: 320 },
-                            tempo_engine::bounce::Format::Flac,
+                            pina_engine::bounce::Format::Wav,
+                            pina_engine::bounce::Format::Mp3 { kbps: 320 },
+                            pina_engine::bounce::Format::Flac,
                         ];
-                        e.level = tempo_engine::bounce::Level::Loudness {
+                        e.level = pina_engine::bounce::Level::Loudness {
                             lufs: -14.0,
                             ceiling: -1.0,
                         };
@@ -5324,10 +5322,10 @@ fn shots() {
                     if let Some(e) = ws.export.as_mut() {
                         e.tracks = vec![true; e.tracks.len()];
                         e.formats = vec![
-                            tempo_engine::bounce::Format::Wav,
-                            tempo_engine::bounce::Format::Mp3 { kbps: 320 },
+                            pina_engine::bounce::Format::Wav,
+                            pina_engine::bounce::Format::Mp3 { kbps: 320 },
                         ];
-                        e.level = tempo_engine::bounce::Level::Loudness {
+                        e.level = pina_engine::bounce::Level::Loudness {
                             lufs: -14.0,
                             ceiling: -1.0,
                         };
@@ -5342,14 +5340,11 @@ fn shots() {
                     ws.show_bottom(Bottom::Steps, cx);
                 }
                 "steps" | "steps-mod" => {
-                    ws.session
-                        .project
-                        .tracks
-                        .push(tempo_engine::project::Track {
-                            name: "Kit".into(),
-                            instrument: Some(tempo_engine::project::Instrument::Drums),
-                            ..Default::default()
-                        });
+                    ws.session.project.tracks.push(pina_engine::project::Track {
+                        name: "Kit".into(),
+                        instrument: Some(pina_engine::project::Instrument::Drums),
+                        ..Default::default()
+                    });
                     ws.session.project.assign_ids();
                     ws.track = ws.session.project.tracks.len() - 1;
                     ws.editor_h = 380.0;
@@ -5369,7 +5364,7 @@ fn shots() {
                     }
                     ws.steps_row = 2;
                     if page == "steps-mod" {
-                        use tempo_engine::modulate::{
+                        use pina_engine::modulate::{
                             LfoShape, ModKind, ModRate, ModRoute, ModTarget, Modulator, SoundParam,
                         };
                         if let Content::Pattern { rows, .. } =
@@ -5441,9 +5436,9 @@ fn shots() {
                 }
                 // Sounds picked for the agent: in its message box, and the Browser picking them.
                 "palette" | "palette-pick" | "palette-start" => {
-                    use tempo_engine::{project::PaletteSound, samples::Category};
+                    use pina_engine::{project::PaletteSound, samples::Category};
                     if ws.browser.library.samples.is_empty() {
-                        ws.browser.library = tempo_engine::samples::library::Library::load();
+                        ws.browser.library = pina_engine::samples::library::Library::load();
                         ws.browser.loaded = true;
                         ws.refilter(cx);
                     }
@@ -5496,7 +5491,7 @@ fn shots() {
                 // Modulation: an LFO, steps, an envelope, a follower and random on the keys,
                 // mapped to its pan, volume, low cut and presence; values as if playing.
                 "modulation" => {
-                    use tempo_engine::modulate::{
+                    use pina_engine::modulate::{
                         LfoShape, ModKind, ModRate, ModRoute, ModTarget, Modulator,
                     };
                     let drums = ws.session.project.tracks[2].id;
@@ -5557,7 +5552,7 @@ fn shots() {
                 // and each right-click menu.
                 // Automation: the keys' volume rising, the lead's pan swinging, in Read and Latch.
                 "automation" => {
-                    use tempo_engine::project::{AutoMode, AutoPoint, Param};
+                    use pina_engine::project::{AutoMode, AutoPoint, Param};
                     let pt = |tick, value| AutoPoint::new(tick, value);
                     let bent = |tick, value, curve| AutoPoint {
                         curve,
@@ -5612,7 +5607,7 @@ fn shots() {
                 }
                 // The automation lanes' menus: a mode's, the shapes', a point's.
                 "auto-modes" | "auto-shapes" | "auto-point" => {
-                    use tempo_engine::project::{AutoPoint, Param};
+                    use pina_engine::project::{AutoPoint, Param};
                     let id = ws.session.project.tracks[0].id;
                     ws.session.project.tracks[0].automation.volume = vec![
                         AutoPoint {
@@ -5644,7 +5639,7 @@ fn shots() {
                         _ => ws.point_menu(0, 0, 1, at, cx),
                     }
                 }
-                // The Songs page: as tempo opens with no song ("home"), or with one open.
+                // The Songs page: as Pina Studio opens with no song ("home"), or with one open.
                 "home" | "songs" => {
                     let demo = crate::projects::summary(&demo()).unwrap();
                     let names = [
@@ -5685,7 +5680,7 @@ fn shots() {
                 | "eq-piano" | "eq-analyzer" | "eq-empty" | "eq-dynamics" | "eq-output"
                 | "eq-list" | "eq-match" | "eq-sketch" | "eq-grab" | "eq-compare"
                 | "eq-spectral" | "eq-modes" | "eq-slopes" | "eq-instances" => {
-                    use tempo_engine::project::{Bands, Dynamic, Eq, EqBand, Placement, Shape};
+                    use pina_engine::project::{Bands, Dynamic, Eq, EqBand, Placement, Shape};
                     let mut cut = EqBand::new(Shape::LowCut, 32.0, 0.0);
                     cut.slope = 24.0;
                     let mut side = EqBand::new(Shape::LowCut, 160.0, 0.0);
@@ -5712,7 +5707,7 @@ fn shots() {
                         eq.bands[4].gain_db = 6.0;
                     }
                     if page == "eq-spectral" {
-                        use tempo_engine::project::Processing;
+                        use pina_engine::project::Processing;
                         (eq.processing, eq.resolution) = (Processing::Linear, 2);
                         let d = eq.bands[4].dynamic.as_mut().unwrap();
                         (d.spectral, d.density) = (true, 0.7);
@@ -5809,7 +5804,7 @@ fn shots() {
                     cx.notify();
                 }
                 "tracks" | "track-menu" | "pan-menu" | "region-menu" | "lane-menu" | "panner" => {
-                    use tempo_engine::project::PanMode;
+                    use pina_engine::project::PanMode;
                     let tracks = &mut ws.session.project.tracks;
                     tracks[0].pan = -0.3;
                     tracks[1].mute = page == "tracks";

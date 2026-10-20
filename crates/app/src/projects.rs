@@ -1,7 +1,7 @@
-//! Songs: every project in `~/Music/tempo` (and those opened from elsewhere), each with a cover
+//! Songs: every project in `~/Music/Pina Studio` (and those opened from elsewhere), each with a cover
 //! drawn from its arrangement; to open in this window, start from a template, duplicate, rename,
 //! show in the Finder, or move to the Trash (several at once, or the one open). With no song
-//! open the Songs page is the whole window: where tempo starts. `tempo new` and `tempo projects`
+//! open the Songs page is the whole window: where Pina Studio starts. `pina new` and `pina projects`
 //! do the same from a terminal.
 
 use std::{
@@ -13,13 +13,13 @@ use gpui::{
     Context, Div, Entity, FontWeight, MouseButton, MouseDownEvent, Subscription, Window, div,
     prelude::*, px, rgb,
 };
-use serde::Serialize;
-use tempo_engine::{
+use pina_engine::{
     look::{self, Family},
     music::Key,
     project::{FILE, Instrument, Project, Track},
     session::Session,
 };
+use serde::Serialize;
 
 use crate::{
     looks::{family_shade, glyph},
@@ -46,17 +46,13 @@ pub struct Song {
     pub lanes: Vec<(u32, Vec<(f32, f32)>)>,
 }
 
-/// Where songs are kept: `TEMPO_SONGS`, else `~/Music/tempo`.
+/// Where songs are kept: `PINA_SONGS`, else `~/Music/Pina Studio`.
 pub fn root() -> PathBuf {
-    match std::env::var_os("TEMPO_SONGS") {
-        Some(d) => d.into(),
-        None => PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("Music/tempo"),
-    }
+    pina_engine::paths::songs()
 }
 
 fn recent_file() -> PathBuf {
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-        .join("Library/Application Support/tempo/recent.json")
+    pina_engine::paths::support().join("recent.json")
 }
 
 /// The songs opened lately, newest first.
@@ -131,7 +127,7 @@ pub fn summary(dir: &Path) -> Option<Song> {
         key: p.key.clone(),
         signature: p.time_signature,
         tracks: p.tracks.len(),
-        seconds: p.end() as f64 / tempo_engine::project::PPQ as f64 * 60.0 / p.tempo,
+        seconds: p.end() as f64 / pina_engine::project::PPQ as f64 * 60.0 / p.tempo,
         lanes,
     })
 }
@@ -296,7 +292,7 @@ pub fn duplicate(dir: &Path) -> Result<PathBuf, String> {
         .status()
         .map_err(|e| e.to_string())?;
     // Unsaved edits kept from the original stay with it.
-    let _ = std::fs::remove_dir_all(to.join(tempo_engine::project::RECOVERY_DIR));
+    let _ = std::fs::remove_dir_all(to.join(pina_engine::project::RECOVERY_DIR));
     match status.success() {
         true => Ok(to),
         false => Err(format!("couldn't copy {}", dir.display())),
@@ -425,7 +421,7 @@ pub struct Renaming {
 impl Workspace {
     /// Looks for songs again, in the background.
     pub fn refresh_songs(&mut self, cx: &mut Context<Self>) {
-        if cfg!(test) && std::env::var_os("TEMPO_TEST_SONGS").is_none() {
+        if cfg!(test) && std::env::var_os("PINA_TEST_SONGS").is_none() {
             return;
         }
         let elsewhere = recent();
@@ -522,8 +518,8 @@ impl Workspace {
             }
         };
         let player = match cfg!(test) {
-            true => tempo_engine::player::Player::silent(&session.project, &dir),
-            false => match tempo_engine::player::Player::start(&session.project, &dir) {
+            true => pina_engine::player::Player::silent(&session.project, &dir),
+            false => match pina_engine::player::Player::start(&session.project, &dir) {
                 Ok(p) => p,
                 Err(e) => {
                     self.status = Some(e);
@@ -665,7 +661,7 @@ impl Workspace {
                 match dir.join(FILE).is_file() {
                     true => ws.ask_to_open(dir, cx),
                     false => {
-                        ws.status = Some(format!("No tempo song in {}", dir.display()));
+                        ws.status = Some(format!("No Pina Studio song in {}", dir.display()));
                         cx.notify();
                     }
                 }
@@ -1152,7 +1148,7 @@ impl Workspace {
                         div()
                             .text_size(px(24.))
                             .font_weight(FontWeight::BOLD)
-                            .child("tempo"),
+                            .child("Pina Studio"),
                     )
                     .children(open.map(|name| {
                         button(format!("Back to {name}"), false)
@@ -1530,7 +1526,7 @@ mod tests {
 
     #[test]
     fn songs_are_made_listed_copied_renamed_and_trashed() {
-        let root = std::env::temp_dir().join(format!("tempo-test-songs-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("pina-test-songs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let a = create(

@@ -1,21 +1,21 @@
-//! `tempo mcp`: an MCP server on stdin and stdout, so agents that speak MCP can make music with
-//! tempo. Its tools are the command line's, and edits reach the app when it has the project open.
+//! `pina mcp`: an MCP server on stdin and stdout, so agents that speak MCP can make music with
+//! Pina Studio. Its tools are the command line's, and edits reach the app when it has the project open.
 
 use std::{
     io::{BufRead, Write},
     path::{Path, PathBuf},
 };
 
+use pina_engine::commands::{Command, DESCRIBE};
 use serde_json::{Value, json};
-use tempo_engine::commands::{Command, DESCRIBE};
 
 use crate::{cli, produce, server::Request};
 
-const INSTRUCTIONS: &str = "tempo is a DAW. A project is a folder; call `describe` first for the \
+const INSTRUCTIONS: &str = "Pina Studio is a DAW. A project is a folder; call `describe` first for the \
 commands and how time and levels work, `show` to see a project, `edit` to change it one command at \
 a time, and `analyze` to hear it as numbers (loudness, peaks, balance). To make a song that sounds \
 finished, work as a producer: `playbook` for the genre, `theory` for chords, write parts with the \
-write_* commands (tempo gets the notes right), `sounds` for real instruments, `critique` after \
+write_* commands (Pina Studio gets the notes right), `sounds` for real instruments, `critique` after \
 every step and fix what it says, `arrange` and `transition` for the song's shape, `mix` and \
 `master` to finish. `critique` is your ears: trust it over your guesses. The person may have \
 picked sounds, instruments and effects for the song (`palette`): build with those first, and with \
@@ -115,7 +115,7 @@ fn tools() -> Value {
         },
         {
             "name": "study",
-            "description": "Studies an existing song from its audio file (WAV, AIFF, FLAC, MP3): who it is (tags; online, its year and genre), its tempo and bars, key (and changes), chords beat by beat with numerals, its form (intro, verse, pre-chorus, chorus, bridge, outro, each with its bars, energy, loudness and the chord loop it goes round), its groove (kick, snare and hats on a 16-step grid, swing, syncopation, nearest tempo groove), what plays in it (with confidence), its mix and dynamics overall and by section, the playbook genres it's nearest, and (online, from LRCLIB) its lyrics: each line in its section, rhyme schemes, syllables, hooks, point of view and recurring words. Interpret its theme, story and imagery from the lyrics yourself. `playbook: true` also saves a playbook made from it, to write songs like it.",
+            "description": "Studies an existing song from its audio file (WAV, AIFF, FLAC, MP3): who it is (tags; online, its year and genre), its tempo and bars, key (and changes), chords beat by beat with numerals, its form (intro, verse, pre-chorus, chorus, bridge, outro, each with its bars, energy, loudness and the chord loop it goes round), its groove (kick, snare and hats on a 16-step grid, swing, syncopation, nearest Pina Studio groove), what plays in it (with confidence), its mix and dynamics overall and by section, the playbook genres it's nearest, and (online, from LRCLIB) its lyrics: each line in its section, rhyme schemes, syllables, hooks, point of view and recurring words. Interpret its theme, story and imagery from the lyrics yourself. `playbook: true` also saves a playbook made from it, to write songs like it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -286,7 +286,7 @@ fn tools() -> Value {
         },
         {
             "name": "palette",
-            "description": "The sounds, instruments and effects the person picked for this song in tempo, for you to make it with: each sound's file and what it is (one-shot or loop, its category, note or key, tempo); each instrument and effect with how to put it in (`use`: a plugin as set_instrument and set_insert take it, or tempo's own command); the part each is for if they said (`role`), and whether it's in the song yet (`in_song`). `only` means they want these and no others of each kind they picked. Check it before choosing sounds, instruments or effects yourself.",
+            "description": "The sounds, instruments and effects the person picked for this song in Pina Studio, for you to make it with: each sound's file and what it is (one-shot or loop, its category, note or key, Pina Studio); each instrument and effect with how to put it in (`use`: a plugin as set_instrument and set_insert take it, or Pina Studio's own command); the part each is for if they said (`role`), and whether it's in the song yet (`in_song`). `only` means they want these and no others of each kind they picked. Check it before choosing sounds, instruments or effects yourself.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "project": project },
@@ -363,8 +363,8 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
-                let book = tempo_engine::study::to_playbook(&s, &tempo_engine::playbook::ids());
-                let file = tempo_engine::playbook::save(&book)?;
+                let book = pina_engine::study::to_playbook(&s, &pina_engine::playbook::ids());
+                let file = pina_engine::playbook::save(&book)?;
                 out["playbook"] = json!({ "id": book.id, "name": book.name, "file": file });
             }
             Ok(out)
@@ -440,7 +440,7 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
         }
         "samples_find" => {
             let q = match args.get("query") {
-                Some(Value::String(words)) => tempo_engine::samples::search::Query {
+                Some(Value::String(words)) => pina_engine::samples::search::Query {
                     text: words.clone(),
                     ..Default::default()
                 },
@@ -467,7 +467,7 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
         }
         "samples_kit" => {
             let seed = match args.get("seed") {
-                Some(Value::String(words)) => tempo_engine::samples::search::KitSeed {
+                Some(Value::String(words)) => pina_engine::samples::search::KitSeed {
                     text: words.clone(),
                     ..Default::default()
                 },
@@ -521,7 +521,7 @@ pub fn answer(msg: &Value) -> Option<Value> {
         "initialize" => json!({
             "protocolVersion": params.get("protocolVersion").cloned().unwrap_or("2025-06-18".into()),
             "capabilities": { "tools": {} },
-            "serverInfo": { "name": "tempo", "version": env!("CARGO_PKG_VERSION") },
+            "serverInfo": { "name": "pina", "version": env!("CARGO_PKG_VERSION") },
             "instructions": INSTRUCTIONS,
         }),
         "ping" => json!({}),
@@ -574,7 +574,7 @@ mod tests {
         let init = answer(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": "2025-06-18"}}))
         .unwrap();
-        assert_eq!(init["result"]["serverInfo"]["name"], "tempo");
+        assert_eq!(init["result"]["serverInfo"]["name"], "pina");
         assert_eq!(
             answer(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"})),
             None
@@ -618,7 +618,7 @@ mod tests {
         );
 
         // Build a little project on disk through the tools, then measure it.
-        let dir = std::env::temp_dir().join(format!("tempo-test-mcp-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-test-mcp-{}", std::process::id()));
         let tool = |id: u64, name: &str, args: Value| {
             let r = answer(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
                 "params": {"name": name, "arguments": args}}))

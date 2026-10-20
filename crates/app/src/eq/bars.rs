@@ -5,7 +5,7 @@
 use gpui::{
     Context, Div, FontWeight, MouseButton, MouseDownEvent, Stateful, div, prelude::*, px, rgb,
 };
-use tempo_engine::project::{Eq, Processing, RESOLUTIONS};
+use pina_engine::project::{Eq, Processing, RESOLUTIONS};
 
 use super::{EqKnob, EqOp, FOOT_H, HEAD_H, Popup, factory, saved_presets};
 use crate::{
@@ -297,7 +297,7 @@ impl Workspace {
     }
 
     fn eq_presets_menu(&mut self, at: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
-        let mut items = vec![("tempo's".to_string(), MenuAction::Nothing)];
+        let mut items = vec![("Pina Studio's".to_string(), MenuAction::Nothing)];
         items.extend(
             factory()
                 .into_iter()
@@ -371,7 +371,7 @@ impl Workspace {
             }
             p => p.name().to_string(),
         };
-        let latency = tempo_engine::eq::latency(eq) as f32;
+        let latency = pina_engine::eq::latency(eq) as f32;
         let latency_ms = latency / self.session.project.sample_rate.max(1) as f32 * 1_000.0;
         let tool =
             |label: &'static str, on: bool, sel: &'static str, op: EqOp, cx: &mut Context<Self>| {
@@ -441,7 +441,7 @@ impl Workspace {
                 el.child(
                     bar_button(
                         format!("Character · {}", eq.character.name()),
-                        eq.character != tempo_engine::project::Character::Clean,
+                        eq.character != pina_engine::project::Character::Clean,
                         AMBER,
                     )
                     .debug_selector(|| "eq-character".into())
@@ -450,7 +450,7 @@ impl Workspace {
                         cx.listener(|ws, e: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
                             let now = ws.shown_eq().map(|(_, e)| e.character);
-                            let items = tempo_engine::project::Character::ALL
+                            let items = pina_engine::project::Character::ALL
                                 .iter()
                                 .map(|&c| {
                                     (

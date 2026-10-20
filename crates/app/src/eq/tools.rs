@@ -8,7 +8,7 @@ use gpui::{
     Context, Div, FontWeight, MouseButton, MouseDownEvent, PathPromptOptions, div, prelude::*, px,
     rgb,
 };
-use tempo_engine::{
+use pina_engine::{
     eq::{average_spectrum, fit_bands, smooth_third, spectrum_db},
     project::{EqBand, Shape},
 };
@@ -93,7 +93,7 @@ impl Match {
 
     /// A song's file as the reference: its average spectrum.
     pub fn reference_file(&mut self, path: PathBuf) -> Result<(), String> {
-        let (channels, rate) = tempo_engine::engine::read_audio(&path)?;
+        let (channels, rate) = pina_engine::engine::read_audio(&path)?;
         let n = channels.first().map_or(0, |c| c.len());
         let mono: Vec<f32> = (0..n)
             .map(|i| channels.iter().map(|c| c[i]).sum::<f32>() / channels.len() as f32)

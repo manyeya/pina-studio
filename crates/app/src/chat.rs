@@ -1,6 +1,6 @@
 //! The Agent panel, beside the tracks: a conversation with Claude about the song. What it's
 //! thinking, saying and doing shows as it happens and its edits land in the song as it makes
-//! them; a `tempo ask` from a terminal shows here too, and so does any other agent's editing.
+//! them; a `pina ask` from a terminal shows here too, and so does any other agent's editing.
 
 use std::time::{Duration, Instant};
 
@@ -98,20 +98,20 @@ pub struct Chat {
     pub busy: bool,
     since: Option<Instant>,
     pub model: Option<String>,
-    /// A `tempo ask` in a terminal is the one asking.
+    /// A `pina ask` in a terminal is the one asking.
     pub remote: bool,
     pub input: Entity<TextInput>,
     pub scroll: ScrollHandle,
-    /// tempo's critic's notes on the song.
+    /// Pina Studio's critic's notes on the song.
     pub critic: crate::producer::Critic,
     /// The song as it was when the agent was last asked: Undo this turn puts it back.
-    pub before: Option<tempo_engine::project::Project>,
+    pub before: Option<pina_engine::project::Project>,
     /// Whether what's selected goes along with what's asked.
     pub use_selection: bool,
     /// The model and effort it runs with, as last picked for it.
     pub tuning: agent::Tuning,
     /// The palette as the agent was last told it, so it's told again only when it changes.
-    pub palette_heard: Option<tempo_engine::project::Palette>,
+    pub palette_heard: Option<pina_engine::project::Palette>,
     _sent: Subscription,
 }
 
@@ -418,7 +418,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// An event from a `tempo ask` in a terminal: the panel opens to show it.
+    /// An event from a `pina ask` in a terminal: the panel opens to show it.
     pub fn heard_agent(&mut self, e: Event, cx: &mut Context<Self>) {
         if let Event::Asked { .. } = e {
             self.chat.remote = true;
@@ -1021,8 +1021,8 @@ impl Workspace {
                     .line_height(px(16.))
                     .text_color(rgb(TEXT_4))
                     .child(
-                        "Or from a terminal: tempo ask <song> \"…\" shows here too. Any agent \
-                         can drive tempo with tempo mcp.",
+                        "Or from a terminal: pina ask <song> \"…\" shows here too. Any agent \
+                         can drive Pina Studio with pina mcp.",
                     ),
             )
     }
@@ -1297,7 +1297,7 @@ fn step_row(i: Icon, what: String, detail: String, step: &Step, n: usize) -> Div
 }
 
 fn tool_icon(name: &str) -> Icon {
-    match name.strip_prefix("mcp__tempo__").unwrap_or(name) {
+    match name.strip_prefix("mcp__pina__").unwrap_or(name) {
         "edit" => Icon::Pencil,
         "analyze" => Icon::Wave,
         "render" => Icon::Export,

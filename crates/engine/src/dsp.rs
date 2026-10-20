@@ -343,7 +343,7 @@ mod cost {
     use super::*;
 
     /// How long a channel strip takes, all three effects on, as a share of real time: run with
-    /// `cargo test --release -p tempo-engine strip_cost -- --ignored --nocapture`.
+    /// `cargo test --release -p pina-engine strip_cost -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn strip_cost() {

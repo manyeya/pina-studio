@@ -1,5 +1,5 @@
 /* ------------------------------------------------------------
-name: "tempo Saturator"
+name: "Pina Studio Saturator"
 Code generated with Faust 2.88.0 (https://faust.grame.fr)
 Compilation options: -lang rust -fpga-mem-th 4 -ct 1 -cn SatDsp -es 1 -mcd 16 -mdd 1024 -mdy 33 -single -ftz 2
 ------------------------------------------------------------ */
@@ -219,7 +219,7 @@ impl SatDsp {
 		m.declare("maths.lib/license", r"LicenseRef-LGPL-2.1-or-later-with-Faust-exception");
 		m.declare("maths.lib/name", r"Faust Math Library");
 		m.declare("maths.lib/version", r"2.9.0");
-		m.declare("name", r"tempo Saturator");
+		m.declare("name", r"Pina Studio Saturator");
 		m.declare("platform.lib/name", r"Generic Platform Library");
 		m.declare("platform.lib/version", r"1.3.0");
 		m.declare("signals.lib/name", r"Faust Routing Library");
@@ -470,7 +470,7 @@ impl SatDsp {
 	}
 	
 	pub fn build_user_interface_static(ui_interface: &mut dyn UI<FaustFloat>) {
-		ui_interface.open_vertical_box("tempo Saturator");
+		ui_interface.open_vertical_box("Pina Studio Saturator");
 		ui_interface.add_horizontal_slider("drive", ParamIndex(0), 6.0, 0.0, 24.0, 0.01);
 		ui_interface.add_horizontal_slider("mix", ParamIndex(1), 1.0, 0.0, 1.0, 0.01);
 		ui_interface.add_horizontal_slider("output", ParamIndex(2), 0.0, -24.0, 24.0, 0.01);

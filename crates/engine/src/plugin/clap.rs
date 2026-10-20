@@ -3,7 +3,7 @@
 //!
 //! A plugin is shared by its two halves (and an open editor): whichever goes last shuts it down.
 //! Edits from the main thread reach it through its processor while that runs; when nothing is
-//! running it (a render that hasn't started, `tempo params`) they're flushed to it at once.
+//! running it (a render that hasn't started, `pina params`) they're flushed to it at once.
 
 use std::{
     cell::{Cell, RefCell},
@@ -55,7 +55,7 @@ use crate::{
     scan::PluginInfo,
 };
 
-/// What tempo's own preset files for a CLAP plugin end in: its settings, as `state` gives them.
+/// What Pina Studio's own preset files for a CLAP plugin end in: its settings, as `state` gives them.
 const EXTENSION: &str = "clap-preset";
 
 /// Room for a block's notes and controls (as many as VST3's event list holds), its automation
@@ -354,7 +354,7 @@ const IDLE: u8 = 0;
 const PROCESSING: u8 = 1;
 const FLUSHING: u8 = 2;
 
-/// One plugin and the host tempo is to it: what its halves (and its editor) share, the last of
+/// One plugin and the host Pina Studio is to it: what its halves (and its editor) share, the last of
 /// them to go shutting it down. `host` comes first, so the `clap_host` the plugin calls back
 /// with points at the whole.
 #[repr(C)]
@@ -402,8 +402,8 @@ impl Instance {
             host: clap_host {
                 clap_version: CLAP_VERSION,
                 host_data: ptr::null_mut(),
-                name: c"tempo".as_ptr(),
-                vendor: c"tempo".as_ptr(),
+                name: c"Pina Studio".as_ptr(),
+                vendor: c"Pina Studio".as_ptr(),
                 url: c"".as_ptr(),
                 version: VERSION.as_ptr(),
                 get_extension: Some(host_extension),
@@ -1568,7 +1568,7 @@ unsafe fn features<'a>(mut list: *const *const c_char) -> Vec<&'a CStr> {
     out
 }
 
-// The host's side: what a plugin can ask of tempo.
+// The host's side: what a plugin can ask of Pina Studio.
 
 unsafe fn instance<'a>(host: *const clap_host) -> &'a Instance {
     unsafe { &*host.cast::<Instance>() }
@@ -1642,7 +1642,7 @@ unsafe extern "C" fn request_restart(_host: *const clap_host) {
 }
 
 unsafe extern "C" fn request_process(_host: *const clap_host) {
-    // tempo runs every plugin all the time.
+    // Pina Studio runs every plugin all the time.
 }
 
 unsafe extern "C" fn request_callback(host: *const clap_host) {
@@ -1776,7 +1776,7 @@ unsafe extern "C" fn preset_loaded(
 ) {
 }
 
-// Preset discovery: what tempo hands a bundle's preset providers.
+// Preset discovery: what Pina Studio hands a bundle's preset providers.
 
 /// A preset a plugin's providers found: its name, and where and how it's loaded.
 struct Found {
@@ -1841,8 +1841,8 @@ impl Indexer {
         Box::new(Indexer {
             clap: clap_preset_discovery_indexer {
                 clap_version: CLAP_VERSION,
-                name: c"tempo".as_ptr(),
-                vendor: c"tempo".as_ptr(),
+                name: c"Pina Studio".as_ptr(),
+                vendor: c"Pina Studio".as_ptr(),
                 url: c"".as_ptr(),
                 version: VERSION.as_ptr(),
                 indexer_data: ptr::null_mut(),
@@ -2000,7 +2000,7 @@ mod tests {
         Expression(u32, i32, i16, f64),
     }
 
-    /// A plugin of tempo's own for the tests: an instrument playing its Level (parameter 1, 0
+    /// A plugin of Pina Studio's own for the tests: an instrument playing its Level (parameter 1, 0
     /// to 2), or an effect playing its input at its Level plus its sidechain. It keeps what it
     /// hears, and checks it's started and shut down in order.
     #[repr(C)]
@@ -2023,8 +2023,8 @@ mod tests {
     static INSTRUMENT: Shared<[*const c_char; 2]> = Shared([c"instrument".as_ptr(), ptr::null()]);
     static EFFECT: Shared<[*const c_char; 2]> = Shared([c"audio-effect".as_ptr(), ptr::null()]);
     static DESCRIPTORS: [clap_plugin_descriptor; 2] = [
-        descriptor(c"tempo.test-synth", c"Test Synth", &INSTRUMENT.0),
-        descriptor(c"tempo.test-fx", c"Test Effect", &EFFECT.0),
+        descriptor(c"pina.test-synth", c"Test Synth", &INSTRUMENT.0),
+        descriptor(c"pina.test-fx", c"Test Effect", &EFFECT.0),
     ];
     static FACTORY: clap_plugin_factory = clap_plugin_factory {
         get_plugin_count: Some(fake_count),
@@ -2041,7 +2041,7 @@ mod tests {
             clap_version: CLAP_VERSION,
             id: id.as_ptr(),
             name: name.as_ptr(),
-            vendor: c"tempo".as_ptr(),
+            vendor: c"Pina Studio".as_ptr(),
             url: ptr::null(),
             manual_url: ptr::null(),
             support_url: ptr::null(),
@@ -2067,7 +2067,7 @@ mod tests {
         _: *const clap_host,
         id: *const c_char,
     ) -> *const clap_plugin {
-        let effect = unsafe { CStr::from_ptr(id) } == c"tempo.test-fx";
+        let effect = unsafe { CStr::from_ptr(id) } == c"pina.test-fx";
         let fake = Box::new(Fake {
             clap: clap_plugin {
                 desc: &DESCRIPTORS[effect as usize],
@@ -2379,7 +2379,7 @@ mod tests {
     #[test]
     fn notes_controls_and_automation_arrive_in_time_order() {
         use ControlKind::*;
-        let (_plugin, mut processor) = load(c"tempo.test-synth", None);
+        let (_plugin, mut processor) = load(c"pina.test-synth", None);
         // A second in, at 120 BPM: two beats.
         processor.set_transport(true, 48_000, 120.0);
         processor.automate(2, 0.0, 1.0);
@@ -2499,7 +2499,7 @@ mod tests {
 
     #[test]
     fn parameters_are_read_turned_and_typed_as_the_plugin_says() {
-        let (plugin, processor) = load(c"tempo.test-synth", None);
+        let (plugin, processor) = load(c"pina.test-synth", None);
         let params = plugin.params();
         let shown: Vec<_> = params
             .iter()
@@ -2519,7 +2519,7 @@ mod tests {
 
     #[test]
     fn edits_go_through_a_running_processor() {
-        let (plugin, mut processor) = load(c"tempo.test-synth", None);
+        let (plugin, mut processor) = load(c"pina.test-synth", None);
         let (mut l, mut r) = (vec![0f32; 64], vec![0f32; 64]);
         processor.process([&mut l, &mut r], 64, &[], &[], None);
         // Just now, however slow the machine running the test.
@@ -2540,7 +2540,7 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let synth = c"tempo.test-synth";
+        let synth = c"pina.test-synth";
         let (plugin, _processor) = load(synth, None);
         plugin.set_param(1, 0.25);
         plugin.set_param(2, 1.0);
@@ -2555,9 +2555,9 @@ mod tests {
 
     #[test]
     fn an_effect_hears_its_input_and_sidechain() {
-        let (plugin, mut fx) = load(c"tempo.test-fx", None);
+        let (plugin, mut fx) = load(c"pina.test-fx", None);
         assert!(plugin.sidechain() && fx.sidechain());
-        assert!(!load(c"tempo.test-synth", None).0.sidechain());
+        assert!(!load(c"pina.test-synth", None).0.sidechain());
         let (mut l, mut r) = (vec![1f32; 64], vec![0.5f32; 64]);
         let side = vec![0.25f32; 64];
         fx.process([&mut l, &mut r], 64, &[], &[], Some([&side, &side]));
@@ -2594,13 +2594,13 @@ mod tests {
     }
 
     /// With a real instrument, which CI doesn't have:
-    /// `TEMPO_TEST_CLAP="/path/Surge XT.clap" cargo test -p tempo-engine clap -- --ignored`
+    /// `PINA_TEST_CLAP="/path/Surge XT.clap" cargo test -p pina-engine clap -- --ignored`
     /// (skipped without it, so the other formats' real-plugin tests run alone).
     #[test]
     #[ignore]
     fn a_real_instrument_plays_saves_restores_and_shuts_down() {
-        let Ok(path) = std::env::var("TEMPO_TEST_CLAP") else {
-            return eprintln!("skipped: set TEMPO_TEST_CLAP to a .clap instrument");
+        let Ok(path) = std::env::var("PINA_TEST_CLAP") else {
+            return eprintln!("skipped: set PINA_TEST_CLAP to a .clap instrument");
         };
         let found = inspect(Path::new(&path)).unwrap();
         let info = found.iter().find(|p| p.instrument).expect("no instrument");
@@ -2668,7 +2668,7 @@ mod tests {
         assert!(loudest(&run(&mut processor, 20, &[note(1.0)], &[])) > 1e-3);
         run(&mut processor, 1, &[note(0.0)], &[]);
 
-        // Its presets: those it finds, and tempo's own files.
+        // Its presets: those it finds, and Pina Studio's own files.
         let presets = again.presets();
         let some: Vec<_> = presets.iter().take(3).collect();
         eprintln!("{} presets, like {some:?}", presets.len());
@@ -2683,7 +2683,7 @@ mod tests {
             });
             assert!(changed, "{preset:?} changed nothing");
         }
-        let saved = again.save_preset("tempo clap test").unwrap();
+        let saved = again.save_preset("pina clap test").unwrap();
         let file = PresetSource::File {
             file: saved.clone(),
         };
@@ -2693,12 +2693,12 @@ mod tests {
         loaded.expect("its saved preset isn't listed").unwrap();
     }
 
-    /// `TEMPO_TEST_CLAP_FX=/path/DragonflyRoomReverb.clap cargo test -p tempo-engine clap -- --ignored`
+    /// `PINA_TEST_CLAP_FX=/path/DragonflyRoomReverb.clap cargo test -p pina-engine clap -- --ignored`
     #[test]
     #[ignore]
     fn a_real_effect_processes_audio() {
-        let Ok(path) = std::env::var("TEMPO_TEST_CLAP_FX") else {
-            return eprintln!("skipped: set TEMPO_TEST_CLAP_FX to a .clap effect");
+        let Ok(path) = std::env::var("PINA_TEST_CLAP_FX") else {
+            return eprintln!("skipped: set PINA_TEST_CLAP_FX to a .clap effect");
         };
         let found = inspect(Path::new(&path)).unwrap();
         let info = found.iter().find(|p| !p.instrument).expect("no effect");

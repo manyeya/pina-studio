@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn keeps_the_channels_asked_for() {
-        let dir = std::env::temp_dir().join(format!("tempo-test-record-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-test-record-{}", std::process::id()));
         let path = dir.join("Audio Files/take.wav");
         let read = |input: Input| {
             let mut w = Writer::create(&path, 48_000, 4, input).unwrap();

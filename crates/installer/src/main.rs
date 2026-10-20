@@ -1,7 +1,7 @@
-//! Install tempo: the app that comes on tempo's disk image. It puts tempo in Applications (or
-//! updates the one there), adds the `tempo` command and the example songs if wanted, opens tempo
-//! and puts the disk image away; or takes tempo out again. `scripts/release-mac.sh` builds it
-//! with tempo inside it.
+//! Install Pina Studio: the app that comes on Pina Studio's disk image. It puts Pina Studio in
+//! Applications (or updates the one there), adds the `pina` command and the example songs if
+//! wanted, opens Pina Studio and puts the disk image away; or takes it out again.
+//! `scripts/release-mac.sh` builds it with Pina Studio inside it.
 
 mod install;
 mod ui;
@@ -12,7 +12,7 @@ use gpui::{
     App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, point, px, size,
 };
 
-/// Geist, tempo's type.
+/// Geist, Pina Studio's type.
 fn fonts() -> Vec<Cow<'static, [u8]>> {
     vec![
         Cow::Borrowed(include_bytes!("../../app/assets/fonts/Geist-Regular.ttf")),
@@ -39,7 +39,7 @@ fn main() {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
-                title: Some("Install tempo".into()),
+                title: Some("Install Pina Studio".into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(16.), px(16.))),
             }),
@@ -61,17 +61,17 @@ mod tests {
     use crate::ui::{Installer, Stage, State};
 
     /// The installer's screens drawn to PNGs, no window shown:
-    /// `TEMPO_SHOT=<dir> cargo test -p tempo-installer shots -- --ignored` (all of them), with a
-    /// tempo.app of the tests' own made beside them to install.
+    /// `PINA_SHOT=<dir> cargo test -p pina-installer shots -- --ignored` (all of them), with a
+    /// Pina Studio.app of the tests' own made beside them to install.
     #[test]
     #[ignore]
     fn shots() {
-        let out = PathBuf::from(std::env::var("TEMPO_SHOT").expect("TEMPO_SHOT: a folder"));
+        let out = PathBuf::from(std::env::var("PINA_SHOT").expect("PINA_SHOT: a folder"));
         std::fs::create_dir_all(&out).unwrap();
         let root =
-            std::env::temp_dir().join(format!("tempo-installer-shots-{}", std::process::id()));
+            std::env::temp_dir().join(format!("pina-installer-shots-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let payload = root.join("Resources/tempo.app");
+        let payload = root.join("Resources").join(install::APP);
         std::fs::create_dir_all(payload.join("Contents/MacOS")).unwrap();
         std::fs::write(
             payload.join("Contents/Info.plist"),
@@ -89,7 +89,7 @@ mod tests {
             examples: Some(root.join("Resources/Examples")),
             apps: root.join("Applications"),
             bin: root.join("bin"),
-            songs: root.join("Music/tempo"),
+            songs: root.join("Music/Pina Studio"),
         };
         type Set = Box<dyn Fn(&mut Installer)>;
         let pages: [(&str, Set); 6] = [
@@ -103,7 +103,10 @@ mod tests {
                 Box::new(|v| {
                     v.stage = Stage::Working;
                     v.steps = vec![
-                        (ui::Job::Copy, State::Done("/Applications/tempo.app".into())),
+                        (
+                            ui::Job::Copy,
+                            State::Done("/Applications/Pina Studio.app".into()),
+                        ),
                         (
                             ui::Job::Register,
                             State::Done("Ready to open from anywhere".into()),
@@ -118,13 +121,19 @@ mod tests {
                 Box::new(|v| {
                     v.stage = Stage::Done;
                     v.steps = vec![
-                        (ui::Job::Copy, State::Done("/Applications/tempo.app".into())),
+                        (
+                            ui::Job::Copy,
+                            State::Done("/Applications/Pina Studio.app".into()),
+                        ),
                         (
                             ui::Job::Register,
                             State::Done("Ready to open from anywhere".into()),
                         ),
-                        (ui::Job::Command, State::Done("/usr/local/bin/tempo".into())),
-                        (ui::Job::Examples, State::Done("1 in ~/Music/tempo".into())),
+                        (ui::Job::Command, State::Done("/usr/local/bin/pina".into())),
+                        (
+                            ui::Job::Examples,
+                            State::Done("1 in ~/Music/Pina Studio".into()),
+                        ),
                     ];
                 }),
             ),

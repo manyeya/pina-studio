@@ -2,10 +2,10 @@
 //! from the audio alone), loop or one-shot, pitch, tempo, key, how alike the embedding's
 //! neighbours are, duplicates by fingerprint, and speed.
 //!
-//!     cargo run --release -p tempo-engine --example sample_eval -- [options] [pack folders]
+//!     cargo run --release -p pina-engine --example sample_eval -- [options] [pack folders]
 //!
-//! It always measures MusicRadar's free "90s Hip Hop" pack, where tempo keeps it
-//! (`~/Music/tempo/Samples/MusicRadar 90s Hip Hop`); folders of the other free SampleRadar
+//! It always measures MusicRadar's free "90s Hip Hop" pack, where Pina Studio keeps it
+//! (`~/Music/Pina Studio/Samples/MusicRadar 90s Hip Hop`); folders of the other free SampleRadar
 //! packs `truth` knows the names of can be given too, each measured on its own.
 //!
 //! - `--list`: every file's result too.
@@ -28,7 +28,7 @@ use std::{
     time::Instant,
 };
 
-use tempo_engine::samples::{
+use pina_engine::samples::{
     Analysis, Category, Kind, NOTES,
     analyze::{analyze, trait_inputs},
     classify, features,
@@ -733,7 +733,7 @@ fn run(files: &[PathBuf], fit: bool) -> Vec<Row> {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(path) = files.get(i) else { break };
                     let start = Instant::now();
-                    let Ok((channels, rate)) = tempo_engine::engine::read_audio(path) else {
+                    let Ok((channels, rate)) = pina_engine::engine::read_audio(path) else {
                         eprintln!("can't read {}", path.display());
                         continue;
                     };
@@ -949,7 +949,7 @@ fn tempos(rows: &[&Row]) {
         e[4] += 1;
         let got = r.blind.bpm.or_else(|| {
             // Called a one-shot: what tempo would it have had?
-            let (c, rate) = tempo_engine::engine::read_audio(&r.path).ok()?;
+            let (c, rate) = pina_engine::engine::read_audio(&r.path).ok()?;
             let f = features::extract(&c, rate, None);
             f.tempo.map(|t| t.bpm)
         });
@@ -1143,7 +1143,7 @@ fn duplicates(rows: &[&Row]) {
     let groups: Vec<&Vec<&PathBuf>> = by.values().filter(|g| g.len() > 1).collect();
     let mut same = 0;
     for g in &groups {
-        let read = |p: &PathBuf| tempo_engine::engine::read_audio(p).ok().map(|a| a.0);
+        let read = |p: &PathBuf| pina_engine::engine::read_audio(p).ok().map(|a| a.0);
         let first = read(g[0]);
         if g[1..].iter().all(|p| read(p) == first) {
             same += 1;
@@ -2028,7 +2028,7 @@ fn time_check(files: &[PathBuf]) {
     let (mut shots, mut loops) = (Vec::new(), Vec::new());
     for path in files {
         let start = Instant::now();
-        let Ok(a) = tempo_engine::samples::analyze::analyze_file(path) else {
+        let Ok(a) = pina_engine::samples::analyze::analyze_file(path) else {
             continue;
         };
         let ms = start.elapsed().as_secs_f32() * 1000.0;
@@ -2076,7 +2076,7 @@ fn key_check(files: &[PathBuf]) {
                     let Some((path, t)) = labelled.get(i) else {
                         break;
                     };
-                    let Ok((c, rate)) = tempo_engine::engine::read_audio(path) else {
+                    let Ok((c, rate)) = pina_engine::engine::read_audio(path) else {
                         continue;
                     };
                     let f = features::extract(&c, rate, None);
@@ -2096,7 +2096,7 @@ fn key_check(files: &[PathBuf]) {
         let mut bass = [0usize; 12];
         for (t, tonal) in out.iter().filter(|o| &o.0.pack == pack) {
             let root = t.root.unwrap() as usize;
-            if let Some((tonic, _, _)) = tempo_engine::samples::tonal::key(tonal) {
+            if let Some((tonic, _, _)) = pina_engine::samples::tonal::key(tonal) {
                 off[(tonic as usize + 12 - root) % 12] += 1;
             }
             let strongest = (0..12)
@@ -2116,7 +2116,7 @@ fn key_check(files: &[PathBuf]) {
     let (n, right) = chords.fold((0, 0), |(n, r), (t, tonal)| {
         (
             n + 1,
-            r + (tempo_engine::samples::tonal::chord(tonal).map(|c| c.0) == t.root) as usize,
+            r + (pina_engine::samples::tonal::chord(tonal).map(|c| c.0) == t.root) as usize,
         )
     });
     println!("chord roots of one-shots: {}", pct(right, n));
@@ -2136,7 +2136,7 @@ fn key_check(files: &[PathBuf]) {
                 let e = by.entry(t.pack.clone()).or_default();
                 e.2 += 1;
                 if let Some((tonic, minor, _)) =
-                    tempo_engine::samples::tonal::key_weighted(tonal, bass, first, root)
+                    pina_engine::samples::tonal::key_weighted(tonal, bass, first, root)
                     && Some(tonic) == t.root
                 {
                     e.0 += 1;
@@ -2179,7 +2179,7 @@ fn tempo_check(files: &[PathBuf]) {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some((path, t)) = loops.get(i) else { break };
-                    let Ok((c, rate)) = tempo_engine::engine::read_audio(path) else {
+                    let Ok((c, rate)) = pina_engine::engine::read_audio(path) else {
                         continue;
                     };
                     let f = features::extract(&c, rate, None);
@@ -2262,7 +2262,7 @@ fn main() {
         i += 1;
     }
     let pack = PathBuf::from(std::env::var("HOME").unwrap())
-        .join("Music/tempo/Samples/MusicRadar 90s Hip Hop");
+        .join("Music/Pina Studio/Samples/MusicRadar 90s Hip Hop");
     if !folders.contains(&pack) {
         folders.insert(0, pack.clone());
     }
@@ -2324,9 +2324,9 @@ fn main() {
         speed(&of);
     }
     if scan {
-        let dir = std::env::temp_dir().join(format!("tempo-eval-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-eval-{}", std::process::id()));
         // SAFETY: nothing else in this process reads the environment now.
-        unsafe { std::env::set_var("TEMPO_LIBRARY", &dir) };
+        unsafe { std::env::set_var("PINA_LIBRARY", &dir) };
         let mut library = Library {
             folders: vec![pack],
             samples: Vec::new(),

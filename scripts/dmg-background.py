@@ -1,5 +1,5 @@
-"""The picture behind tempo's disk image window (640 by 400, and twice that for Retina): tempo's
-dark, its name and version, a glow and rings round where "Install tempo" sits, a plate under its
+"""The picture behind Pina Studio's disk image window (640 by 400, and twice that for Retina): its
+dark, its name and version, a glow and rings round where "Install Pina Studio" sits, a plate under its
 name (mid grey, so the Finder's label reads in light mode and dark), "Double-click to install",
 and the EQ curve over a spectrum along the bottom, as in the installer. Unsigned builds say how
 to open it anyway.
@@ -86,10 +86,10 @@ def draw(version, unsigned):
     for k in range(1, 8):
         x = W * k / 8
         d.line([(s(x), s(top - 10)), (s(x), s(H))], fill=(255, 255, 255, 8), width=s(1))
-    # tempo, and its version.
+    # Pina Studio, and its version.
     bold = font("Geist-Bold.ttf", 20)
-    d.text((s(28), s(24)), "tempo", font=bold, fill=TEXT)
-    tw = d.textlength("tempo", font=bold)
+    d.text((s(28), s(24)), "Pina Studio", font=bold, fill=TEXT)
+    tw = d.textlength("Pina Studio", font=bold)
     d.text((s(28) + tw + s(8), s(31)), version, font=font("GeistMono-Regular.ttf", 11), fill=TEXT_3)
     # The plate the Finder's label sits on.
     py = cy + ICON_SIZE / 2 + 12

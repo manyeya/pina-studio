@@ -64,17 +64,17 @@ use crate::{
     scan::PluginInfo,
 };
 
-/// The kinds of unit tempo plays: instruments, effects that take MIDI, and effects.
+/// The kinds of unit Pina Studio plays: instruments, effects that take MIDI, and effects.
 const KINDS: [u32; 3] = [
     kAudioUnitType_MusicDevice,
     kAudioUnitType_MusicEffect,
     kAudioUnitType_Effect,
 ];
 
-/// Most channels a unit's output can have; tempo hears the first two.
+/// Most channels a unit's output can have; Pina Studio hears the first two.
 const MAX_CHANNELS: usize = 8;
 
-/// The scope of what's the unit's as a whole: its settings, and the parameters tempo shows.
+/// The scope of what's the unit's as a whole: its settings, and the parameters Pina Studio shows.
 const GLOBAL: AudioUnitScope = kAudioUnitScope_Global;
 
 /// Where Audio Units are installed, as `.component` bundles.
@@ -206,7 +206,7 @@ fn find([t, s, m]: [u32; 3]) -> Vec<Component> {
     }
 }
 
-/// Every unit tempo can play.
+/// Every unit Pina Studio can play.
 fn all() -> Vec<Component> {
     KINDS
         .into_iter()
@@ -666,7 +666,7 @@ impl Range {
     }
 }
 
-/// A parameter unit's name, as tempo shows it after a value.
+/// A parameter unit's name, as Pina Studio shows it after a value.
 fn units(unit: AudioUnitParameterUnit) -> &'static str {
     use AudioUnitParameterUnit as U;
     match unit {
@@ -689,7 +689,7 @@ fn units(unit: AudioUnitParameterUnit) -> &'static str {
     }
 }
 
-/// A value and its unit, as tempo shows a parameter the unit doesn't put into words: "2400 Hz",
+/// A value and its unit, as Pina Studio shows a parameter the unit doesn't put into words: "2400 Hz",
 /// "-6.0 dB", "50%".
 fn with_units(v: f32, units: &str) -> String {
     let v = v as f64;
@@ -818,7 +818,7 @@ impl AuPlugin {
             &(max_block as u32),
         );
 
-        // It pulls its inputs from tempo, and asks tempo where the transport is.
+        // It pulls its inputs from Pina Studio, and asks Pina Studio where the transport is.
         let silence = || [vec![0f32; max_block], vec![0f32; max_block]];
         let mut input = Box::new(Input {
             buses: [silence(), silence(), silence()],
@@ -1041,7 +1041,7 @@ impl PluginApi for AuPlugin {
                 .position(|n| n.trim().eq_ignore_ascii_case(text.trim()))?;
             return Some(info.range.position(info.range.min + i as f32));
         }
-        // Otherwise it reads as tempo shows it: a number in its units.
+        // Otherwise it reads as Pina Studio shows it: a number in its units.
         typed(text).map(|v| info.range.position(v))
     }
 
@@ -1267,7 +1267,7 @@ unsafe extern "C-unwind" fn render_input(
             _ => &mut input.buses[2][0],
         };
         if b.mData.is_null() {
-            // It wants tempo's buffers.
+            // It wants Pina Studio's buffers.
             if frames > src.len() {
                 return kAudioUnitErr_TooManyFramesToProcess;
             }
@@ -1526,7 +1526,7 @@ impl ProcessorApi for AuProcessor {
             }
         }
 
-        // Render into tempo's buffers; the unit may point the list at its own instead.
+        // Render into Pina Studio's buffers; the unit may point the list at its own instead.
         let list = &mut *self.list;
         for (b, out) in list.buffers.iter_mut().zip(&mut self.out) {
             *b = AudioBuffer {
@@ -1814,7 +1814,7 @@ mod tests {
 
     #[test]
     fn presets_save_to_files_and_load_back() {
-        let dir = std::env::temp_dir().join(format!("tempo-test-aupreset-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-test-aupreset-{}", std::process::id()));
         let (lowpass, _p) = load("aufx lpas appl");
         let cutoff = param(&lowpass, "Cutoff Frequency");
         lowpass.set_param(cutoff.id, 0.3);
@@ -1895,11 +1895,11 @@ mod tests {
     }
 
     /// With an instrument from elsewhere (its own editor, presets and settings):
-    /// `TEMPO_TEST_AU="aumu SgXT VmbA" cargo test -p tempo-engine -- --ignored`
+    /// `PINA_TEST_AU="aumu SgXT VmbA" cargo test -p pina-engine -- --ignored`
     #[test]
     #[ignore]
     fn a_real_instrument_plays_saves_restores_and_shuts_down() {
-        let uid = std::env::var("TEMPO_TEST_AU").expect("set TEMPO_TEST_AU");
+        let uid = std::env::var("PINA_TEST_AU").expect("set PINA_TEST_AU");
         let (plugin, mut p) = load(&uid);
         let played = run(&mut p, 40, silence, &[note(60, 1.0)], &[]);
         let loudest = played.iter().fold(0f32, |m, x| m.max(x.abs()));

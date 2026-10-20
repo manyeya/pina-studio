@@ -5,7 +5,7 @@
 //! buttons under the grid launch a whole scene.
 
 use gpui::{Context, Hsla, MouseButton, div, prelude::*, px, rgb};
-use tempo_engine::project::{Cell, Content, Region};
+use pina_engine::project::{Cell, Content, Region};
 
 use crate::{theme::*, workspace::Workspace};
 

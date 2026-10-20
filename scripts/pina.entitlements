@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- tempo under the hardened runtime: it records (the microphone), and it loads other people's
+<!-- Pina Studio under the hardened runtime: it records (the microphone), and it loads other people's
      plugins (VST3, CLAP, VST2, Audio Units), which aren't signed by us and some of which make
      code as they run. -->
 <plist version="1.0">

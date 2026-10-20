@@ -5,7 +5,7 @@
 use gpui::{
     Context, Div, FontWeight, MouseButton, MouseDownEvent, SharedString, div, prelude::*, px, rgb,
 };
-use tempo_engine::{
+use pina_engine::{
     music::NoteEdit,
     player::Which,
     plugin::PluginParam,
@@ -730,7 +730,7 @@ enum Field {
 /// octave, or ten.
 fn stepper(
     value: String,
-    at: tempo_engine::project::At,
+    at: pina_engine::project::At,
     field: Field,
     cx: &mut Context<Workspace>,
 ) -> Div {
@@ -796,7 +796,7 @@ fn stepper(
 impl Workspace {
     /// Writes a region's playback settings into its notes, as Logic's "Apply Quantization
     /// Settings Destructively" and "Normalize Region Parameters" do, and clears them.
-    pub fn apply_region_settings(&mut self, at: tempo_engine::project::At, cx: &mut Context<Self>) {
+    pub fn apply_region_settings(&mut self, at: pina_engine::project::At, cx: &mut Context<Self>) {
         self.edit(cx, |ws| {
             let r = &mut ws.session.project.tracks[at.0].regions[at.1];
             let played = r.clone();
@@ -825,7 +825,7 @@ impl Workspace {
     /// Edits a MIDI region's notes in one go: the selected note alone where that makes sense.
     pub fn edit_notes(
         &mut self,
-        at: tempo_engine::project::At,
+        at: pina_engine::project::At,
         edit: NoteEdit,
         cx: &mut Context<Self>,
     ) {

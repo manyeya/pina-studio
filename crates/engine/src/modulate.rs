@@ -106,7 +106,7 @@ pub enum ModTarget {
     /// The EQ's first low cut's frequency: octaves (from off, it sweeps up from 20 Hz).
     LowCut,
     /// An EQ band's gain (dB) and frequency (octaves), by its place in the EQ. (A song made with
-    /// the EQ tempo had before opens with its low cut, two bells and shelf as bands 0 to 3, so
+    /// the EQ Pina Studio had before opens with its low cut, two bells and shelf as bands 0 to 3, so
     /// `EqGain` 1 to 3 still move what they did.)
     EqGain(u8),
     EqFreq(u8),

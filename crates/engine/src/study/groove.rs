@@ -1,6 +1,6 @@
 //! The groove: the kick, snare and hats on a 16-step grid (each bar's, and the bar it plays
 //! most), its swing (where the off-beats really land), how syncopated it is, and the groove of
-//! tempo's that's nearest.
+//! Pina Studio's that's nearest.
 
 use serde::{Deserialize, Serialize};
 
@@ -9,7 +9,7 @@ use crate::theory::{self, Drum};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Groove {
-    /// Kick, snare, hats: a character a step, as tempo's grooves are written (X accent, x hit,
+    /// Kick, snare, hats: a character a step, as Pina Studio's grooves are written (X accent, x hit,
     /// o soft, g ghost, . rest).
     pub kick: String,
     pub snare: String,
@@ -19,7 +19,7 @@ pub struct Groove {
     pub swing_on: String,
     /// The share of kick and snare hits off the beat's 8ths: 0 square, 0.5 and up busy.
     pub syncopation: f32,
-    /// The nearest of tempo's grooves, and how near (0 to 1).
+    /// The nearest of Pina Studio's grooves, and how near (0 to 1).
     pub nearest: String,
     pub likeness: f32,
 }
@@ -192,7 +192,7 @@ pub fn groove(f: &Frames, beats: &[f32], bars: &[f32], per_bar: usize, loud: &[b
     }
 }
 
-/// The groove of tempo's whose kick, snare (or clap) and hats are most like these: hits shared
+/// The groove of Pina Studio's whose kick, snare (or clap) and hats are most like these: hits shared
 /// against hits in either.
 fn nearest(kick: &str, snare: &str, hats: &str) -> (String, f32) {
     let on = |p: &str| -> Vec<bool> { p.chars().map(|c| c != '.' && c != 'g').collect() };

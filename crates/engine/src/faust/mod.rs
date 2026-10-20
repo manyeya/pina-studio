@@ -1,5 +1,5 @@
 //! The channel strip's compressor and saturator, written in Faust (`crates/engine/faust/*.dsp`)
-//! and compiled to Rust by `scripts/faust.sh`. The generated code is checked in, so building tempo
+//! and compiled to Rust by `scripts/faust.sh`. The generated code is checked in, so building Pina Studio
 //! doesn't need Faust. Around it, this is what it expects: Faust's DSP and UI traits, as its Rust
 //! architecture files define them.
 

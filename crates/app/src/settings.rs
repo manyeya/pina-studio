@@ -1,5 +1,5 @@
 //! Settings (⌘,), as Logic's: a section at a time from the list down the left, kept for every
-//! song in `~/Library/Application Support/tempo/settings.json`. Track headers (which parts show,
+//! song in `~/Library/Application Support/Pina Studio/settings.json`. Track headers (which parts show,
 //! as Logic's Track Header Components, and how tall new tracks are), regions and the grid (names,
 //! contents, colour, bar shading, beat lines), editing (the loop zone at a region's end, writing
 //! with a double-click), the transport (following the playhead, going back where play started on
@@ -90,8 +90,7 @@ impl Default for Settings {
 }
 
 fn file() -> PathBuf {
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-        .join("Library/Application Support/tempo/settings.json")
+    pina_engine::paths::support().join("settings.json")
 }
 
 impl Settings {

@@ -1,4 +1,4 @@
-# tempo
+# Pina Studio
 
 A DAW with Logic Pro's structure and FL Studio's speed, written in Rust: gpui for the UI, VST3,
 CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macOS first.
@@ -10,7 +10,7 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   `vst3/`, `clap.rs`, `vst2.rs` and `au.rs` behind it).
 - `crates/engine` also has the live `player.rs` (keeps the engine in step with edits) and
   `session.rs` (an open project and its undo history).
-- `crates/installer`: Install tempo, the app on tempo's disk image (`install.rs` what it does,
+- `crates/installer`: Install Pina Studio, the app on Pina Studio's disk image (`install.rs` what it does,
   `ui.rs` its window).
 - `crates/engine` also has the built-in drum kit (`drums.rs`), the channel EQ (`eq.rs`; its
   linear phase in `eq_linear.rs`, its spectral dynamics in `eq_spectral.rs`), the
@@ -29,15 +29,15 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   sections and their names (`form.rs`), the drums' groove (`groove.rs`) and lyrics' rhymes,
   syllables and hooks (`words.rs`); `examples/study_eval.rs` measures its tempo and key against
   labelled loops.
-- `crates/app`: the gpui UI and the `tempo` binary: `workspace.rs` (the window, shortcuts, drags),
+- `crates/app`: the gpui UI and the `pina` binary: `workspace.rs` (the window, shortcuts, drags),
   `topbar.rs` (transport and display), `inspector.rs` (the Inspector, left of the tracks),
-  `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `tempo ask`),
+  `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `pina ask`),
   `palette.rs` (sounds, instruments and effects picked for the agent)
   and `producer.rs` (its song strip, producer's path, critic, undo for a turn and selection),
   `sampler.rs` (the Sampler editor), `genres.rs` (the Playbooks page, where genres are read and changed), `study.rs` (the Song
   Study page) with `study_cli.rs` (studies kept, and lyrics, year and genre looked up),
   `looks.rs` (track colours and icons, and their picker), `catalog.rs` (the Browser's devices; `browser.rs` the panel itself and its sounds),
-  `projects.rs` (songs: the Songs page, where tempo starts; making, opening, closing and trashing them),
+  `projects.rs` (songs: the Songs page, where Pina Studio starts; making, opening, closing and trashing them),
   `tracks.rs` (tools, markers, ruler, headers, regions), `automation.rs` (automation: its lanes,
   and what moving an automated control does), `editor.rs` (the
   editor under the tracks) with `pianoroll.rs`, `steps.rs` (the step sequencer), `score.rs`,
@@ -52,44 +52,51 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
 
 ## Run
 
-    cargo run -p tempo -- examples/midnight-drive           # open a project in the app
-    cargo run -p tempo -- examples/demo                     # a smaller one, with audio
-    cargo run -p tempo -- render examples/demo demo.wav     # bounce a project
-    cargo run -p tempo -- play examples/demo                # play it through the default output
-    cargo run -p tempo-engine --example play_vst -- "/path/to/Some Synth.vst3"
+    cargo run -p pina -- examples/midnight-drive           # open a project in the app
+    cargo run -p pina -- examples/demo                     # a smaller one, with audio
+    cargo run -p pina -- render examples/demo demo.wav     # bounce a project
+    cargo run -p pina -- play examples/demo                # play it through the default output
+    cargo run -p pina-engine --example play_vst -- "/path/to/Some Synth.vst3"
 
 `play` sets the output device to the project's sample rate, as Logic does. `play_vst` loads a
 plugin, opens its editor and plays an arpeggio through it.
 
-`scripts/bundle.sh` builds `tempo.app` (`scripts/mac-app.sh`: the release binary, its icon, an
+`scripts/bundle.sh` builds `Pina Studio.app` (`scripts/mac-app.sh`: the release binary, its icon, an
 Info.plist that asks for the microphone to record, the entitlements a plugin host needs under the
 hardened runtime) and installs it in `/Applications`, or the folder given.
 
-`scripts/release-mac.sh` makes the installer to give people, `dist/tempo-<version>.dmg`: tempo
-built for Apple silicon and Intel, inside "Install tempo" (`crates/installer`, a gpui app of
-tempo's own look), on a disk image whose window is drawn for it (`scripts/dmg-background.py`,
-laid out by dmgbuild from `scripts/dmg-settings.py`). Install tempo puts tempo in Applications (or
-updates or reinstalls the one there, swapping the whole app in at once, and waiting while tempo's
-open so you can save), adds the `tempo` command to `/usr/local/bin` (macOS asks for your password
-if it has to) and the example songs to `~/Music/tempo`, then opens tempo and puts the disk image
-away; or takes tempo out, its settings too if you like, never your songs. It animates all the way:
-tempo's EQ curve draws itself in and breathes, steps tick themselves off, and when it's done the
-notes float up. `TEMPO_SIGN_ID` (a Developer ID Application identity) signs everything with the
-hardened runtime and `TEMPO_NOTARY_PROFILE` (from `xcrun notarytool store-credentials`) notarizes
+Pina Studio was called tempo before. The first time it runs (app or command), it moves tempo's
+folders (`~/Music/tempo`, and `tempo` in `~/Library/Application Support` and `~/Library/Caches`)
+to its own, writes the new place into the paths it keeps (songs opened lately, sample folders,
+the sample index), and leaves a link at each old place (`crates/engine/src/paths.rs`). The
+installer puts an old `tempo.app` in the Trash and, adding the `pina` command, takes the old
+`tempo` command away.
+
+`scripts/release-mac.sh` makes the installer to give people, `dist/PinaStudio-<version>.dmg`: Pina Studio
+built for Apple silicon and Intel, inside "Install Pina Studio" (`crates/installer`, a gpui app of
+Pina Studio's own look), on a disk image whose window is drawn for it (`scripts/dmg-background.py`,
+laid out by dmgbuild from `scripts/dmg-settings.py`). Install Pina Studio puts Pina Studio in Applications (or
+updates or reinstalls the one there, swapping the whole app in at once, and waiting while Pina Studio's
+open so you can save), adds the `pina` command to `/usr/local/bin` (macOS asks for your password
+if it has to) and the example songs to `~/Music/Pina Studio`, then opens Pina Studio and puts the disk image
+away; or takes Pina Studio out, its settings too if you like, never your songs. It animates all the way:
+Pina Studio's EQ curve draws itself in and breathes, steps tick themselves off, and when it's done the
+notes float up. `PINA_SIGN_ID` (a Developer ID Application identity) signs everything with the
+hardened runtime and `PINA_NOTARY_PROFILE` (from `xcrun notarytool store-credentials`) notarizes
 and staples the disk image; without them it's signed ad hoc, and the window says how to open it
-anyway. `TEMPO_SHOT=<dir> cargo test -p tempo-installer shots -- --ignored` draws its screens.
+anyway. `PINA_SHOT=<dir> cargo test -p pina-installer shots -- --ignored` draws its screens.
 The icon, a metronome on a dark squircle on Apple's grid, is drawn by `scripts/icon.py`
-(`crates/app/icon/tempo.svg`) and packed into `tempo.icns` by `cargo run -p tempo --example
+(`crates/app/icon/pina.svg`) and packed into `pina.icns` by `cargo run -p pina --example
 icon`; macOS 26 draws it in its own glass, not in a gray box.
 
-`examples/midnight-drive` was made entirely with `tempo do` commands, as an agent would make it.
+`examples/midnight-drive` was made entirely with `pina do` commands, as an agent would make it.
 So is Corner Store Blues, a 95 BPM boom-bap beat on real samples (MusicRadar's free 90s Hip Hop
 pack, downloaded on first run: they can't be passed on, so they aren't here) with Surge XT and
 Dragonfly Room Reverb installed:
 
-    cargo build -p tempo && TEMPO=target/debug/tempo python3 examples/corner-store-blues/build.py
+    cargo build -p pina && PINA=target/debug/pina python3 examples/corner-store-blues/build.py
 
-It goes in `~/Music/tempo/Corner Store Blues`: sampler kits on swung step patterns with aliases,
+It goes in `~/Music/Pina Studio/Corner Store Blues`: sampler kits on swung step patterns with aliases,
 a Moog multisample bass and an 808 on the keys loop's roots, the loop flexed to half time in the
 break, a Surge XT pad whose filter opens through each hook and a gliding sine whistle, drums
 glued in a stack, two reverb sends, Live Loops scenes, and the master clipped by the saturator
@@ -173,7 +180,7 @@ In the app, mostly as in Logic:
   channel strips.
 - The Browser, right of the tracks (F): one panel and one search for everything that goes in a
   song, its tabs All, Instruments, Effects, Sounds (the sample library: one-shots and loops, what
-  fits the song, its categories); what's typed follows from tab to tab. tempo's own
+  fits the song, its categories); what's typed follows from tab to tab. Pina Studio's own
   instruments and effects and every plugin installed, each once however many formats it comes in
   (CLAP, VST3, AU, VST2 shown as badges, the best used), in the categories the plugin says it
   belongs to (VST3 subcategories, CLAP features, an Audio Unit's type, VST2's category; its name
@@ -184,11 +191,11 @@ In the app, mostly as in Logic:
   plugin's arrow shows its preset files. Click puts it on the selected track (an instrument in
   place of its own, an effect after its others), double-click or ⇧↵ on a new track, or drag it
   onto any track; ↑ ↓ and ↵ work from the search.
-- Songs (⌘O, or the song's name in the top bar): where tempo starts when no song is named (the
+- Songs (⌘O, or the song's name in the top bar): where Pina Studio starts when no song is named (the
   whole window, nothing to play yet). On the left a new song: its name, tempo, key and time, then
   a click on how to start it (empty, or a beat, band, lo-fi or electronic set of tracks) makes it
   and opens it; ⌘N comes here with the name ready to type. On the right every song in
-  `~/Music/tempo`, searchable, each card's cover its arrangement in miniature, coloured by what
+  `~/Music/Pina Studio`, searchable, each card's cover its arrangement in miniature, coloured by what
   each track plays, with its tempo, key, tracks and length. Click one to open it in this window
   (asked first whether to save the one open); its menu (⋯ or a right-click) renames, duplicates (a
   clone, taking no space until it changes), shows it in the Finder or moves it to the Trash, as
@@ -201,7 +208,7 @@ In the app, mostly as in Logic:
   teal, vocals pink, effects grey, each track a shade of its family's colour so they read as one
   and each as itself. Click a track's icon for the picker: its colour from a palette (hover to
   try it on the track; ⌥-click, or "Shade all", colours its whole family in shades of it), and
-  its icon from 54 instruments and marks drawn for tempo, searchable, those its sound suggests
+  its icon from 54 instruments and marks drawn for Pina Studio, searchable, those its sound suggests
   first. Auto goes back to what it plays saying. Regions and channel strips follow.
 - ⌘L, or the agent's mark in the top bar, opens the Agent panel beside the tracks: ask for
   anything and watch it work. Its thinking, each step (reading the song, finding samples, every
@@ -210,12 +217,12 @@ In the app, mostly as in Logic:
   Code or Codex, with their logos, each saying whether it's signed in and on what), and beside it
   its model and effort: Claude Code's Fable, Opus, Sonnet or Haiku and effort from Low to Max;
   Codex's models as Codex lists them, each with the efforts it takes; or its own settings. Picked
-  ones are kept for every song and `tempo ask` uses them too; changed mid-conversation, the
+  ones are kept for every song and `pina ask` uses them too; changed mid-conversation, the
   conversation carries on with them from the next question. Edits by any other agent show there
   too.
 - Sounds, instruments and effects for the agent: "Pick sounds · instruments · effects" atop the
   Agent panel's message box (the + by "Only these" once there are some) opens the Browser there
-  to pick from (＋ on each sound, plugin or tempo device, or "Agent" under the sound picked; on
+  to pick from (＋ on each sound, plugin or Pina Studio device, or "Agent" under the sound picked; on
   the sample page too), and audio files dropped on the Agent panel from the Finder are picked as
   well. They show in the message box: click a sound to hear it, a tag to give it a part (kick,
   snare, hats, 808, bass, chords, pad, lead… or any; an effect's is what it goes on), × to take
@@ -267,7 +274,7 @@ In the app, mostly as in Logic:
 - Recording over a region of the same kind makes a take folder, as in Logic. Double-click it to
   see its takes; swipe across a take to comp that stretch from it, click one to use all of it,
   and Flatten to turn the comp back into plain regions.
-- The Sampler tab (in the editor under the tracks, on a sampler track) is tempo's sampler, as
+- The Sampler tab (in the editor under the tracks, on a sampler track) is Pina Studio's sampler, as
   Logic's Sampler, Ableton's Simpler and FL Studio's Slicex: its zones down the left (drop samples
   on it, or click; right-click removes one), the picked zone's waveform with its start, end and
   loop points dragged in place and its sample's other slices marked, the keys with each zone over
@@ -304,7 +311,7 @@ In the app, mostly as in Logic:
 - Drag faders, pan knobs and the tempo; option-click a fader or knob to reset it. Click or drag
   in the ruler to move the playhead; ⌘-scroll zooms.
 - The "+" over the track headers (or ⌥⌘N) opens the New Track palette: type to search every
-  instrument installed (and tempo's), their presets (their own programs and preset files), kits
+  instrument installed (and Pina Studio's), their presets (their own programs and preset files), kits
   made from your sample library's packs, and single sounds (an 808, a bass note) played across the
   keys on a sampler; ↑↓ pick, Enter adds, ▶ plays a sound, ☆ keeps an instrument among the
   favourites. With nothing typed it shows the kinds of track as tiles (Instrument and Drums narrow
@@ -346,14 +353,14 @@ In the app, mostly as in Logic:
   for how far (⇧ finer), ✕ to take it off; click a card to pick it, and dragging any knob it moves
   sets its depth instead. Modulation plays in bounces too, and agents use it as well
   (`add_modulator`, `modulate`).
-- Settings (⌘,, the tempo menu, or the top bar's sliders), as Logic's, a section at a time: Track
+- Settings (⌘,, the Pina Studio menu, or the top bar's sliders), as Logic's, a section at a time: Track
   headers (numbers, icons, what each plays, level meters, fader and pan, record buttons, as
   Logic's Track Header Components; and how tall tracks are, Small to Huge), Regions & grid (names,
   contents, bright colours, bar shading, beat lines), Editing (the loop zone at a region's end;
   writing a region with a double-click), Transport (following the playhead; going back where play
   started on stop, as Logic's Return to Last Play Position) and Editor tabs (which show; a hidden
   one's shortcut still opens it). Kept for every song in
-  `~/Library/Application Support/tempo/settings.json`.
+  `~/Library/Application Support/Pina Studio/settings.json`.
 - N shows the score: the selected MIDI region as notation on a grand staff, in time with the
   tracks; click a note to select and hear it, delete to delete it.
 - L shows Live Loops: a grid of loop cells, a row per track and a column per scene. Click an
@@ -396,7 +403,7 @@ In the app, mostly as in Logic:
   dynamic, on/off and delete on the other; and a dynamic band's own settings in a tray under
   them (threshold, attack, release, whole band or spectral, what it listens to). The display's range
   grows as a band's dragged past it; the frequency scale zooms (drag it up and down), pans and
-  shows notes (the piano, which snaps bands to them). Along the top: presets (tempo's, and yours
+  shows notes (the piano, which snaps bands to them). Along the top: presets (Pina Studio's, and yours
   to save), undo, A/B and full screen; along the bottom: EQ Sketch (draw a curve, get its bands),
   the processing (zero latency; natural phase, an analog EQ's phase up to the top, run at twice
   the rate; or linear phase, at a resolution, its every dynamic band moving as spectral ones do)
@@ -418,10 +425,10 @@ first low cut, a bell round 3 kHz and the high shelf, adding them when first tur
   the fader (amber) or after, or to remove it. Meters are stereo, with peak holds.
 
 Plugins are VST3, CLAP, VST2 and Audio Units. They're found in `VST3`, `CLAP` and `VST` under
-`/Library/Audio/Plug-Ins` and `~/Library/Audio/Plug-Ins`, the folders in `TEMPO_PLUGIN_PATH`
+`/Library/Audio/Plug-Ins` and `~/Library/Audio/Plug-Ins`, the folders in `PINA_PLUGIN_PATH`
 (colon-separated), and, for Audio Units, wherever macOS has them registered. Each bundle is
-first opened in a child process (`tempo __scan`), so a broken one can't crash the app, and the
-results are cached in `~/Library/Caches/tempo/plugins.json`. A plugin slot's menu lists them all
+first opened in a child process (`pina __scan`), so a broken one can't crash the app, and the
+results are cached in `~/Library/Caches/Pina Studio/plugins.json`. A plugin slot's menu lists them all
 (with their format, since one plugin is often installed in several) and the presets of the one
 in it. Saving writes each plugin's settings to `Plugin States/` in the project. Plugin latency is
 compensated, as Logic does. If the output device can't run at the project's sample rate (a
@@ -440,7 +447,7 @@ hits either side pinned, so that beat moves and the audio around it stretches to
 flex markers do; double-click a marker to take it out.
 Stretches are made off the main thread, something standing in until they're done; loops from
 the sample browser follow the tempo, and their previews play at it, in time with the song while
-it plays. `cargo run --release -p tempo-engine --example stretch_ab -- <out dir> <loop.wav>
+it plays. `cargo run --release -p pina-engine --example stretch_ab -- <out dir> <loop.wav>
 <bpm>` renders a loop each way (and with Signalsmith Stretch) to compare, and measures how sharp
 and how on time its hits come out.
 
@@ -449,51 +456,51 @@ Builds need only the Command Line Tools: gpui compiles its Metal shaders at laun
 The compressor and saturator are Faust (`crates/engine/faust/*.dsp`), using its libraries: its
 soft-knee compressor gain computer, and antiderivative antialiasing for the saturator, which also runs at twice the sample rate (a
 half-band filter designed by `scripts/halfband.py`). The Rust Faust makes of them is checked in
-under `crates/engine/src/faust/`, so building tempo doesn't need Faust; after changing a .dsp, run
+under `crates/engine/src/faust/`, so building Pina Studio doesn't need Faust; after changing a .dsp, run
 `scripts/faust.sh` (with `faust` on the path, or in `~/.local/faust/bin`).
 
 ## Agents
 
-tempo is made to be driven by agents as well as people. The quickest are built in, as modisa
+Pina Studio is made to be driven by agents as well as people. The quickest are built in, as modisa
 knows them (ids, logos from modisa's logo font, brand colours): Claude Code and Codex, in the
 Agent panel (⌘L) in the app, or from a terminal
 
-    tempo ask [--agent codex] <project> "make the hook hit harder"
+    pina ask [--agent codex] <project> "make the hook hit harder"
 
 which prints the agent's words and steps as it goes (the agent last picked in the app by
 default). Each runs headless, installed and signed in on its own account (Claude Code on your
-Claude plan), with tempo's MCP server as its only tools: Claude Code with no built-in tools, other
-MCP servers, settings or hooks; Codex with tempo's server in place of yours and its sandbox
+Claude plan), with Pina Studio's MCP server as its only tools: Claude Code with no built-in tools, other
+MCP servers, settings or hooks; Codex with Pina Studio's server in place of yours and its sandbox
 read-only. One that isn't signed in says how to sign in rather than starting. When the app has
-the project open, `tempo ask`'s edits land there live and its Agent panel opens to show the
+the project open, `pina ask`'s edits land there live and its Agent panel opens to show the
 conversation. (opencode isn't one yet: version 2 hands MCP tools to its model inside a single
-code-running tool, so its steps can't show as tempo's.)
+code-running tool, so its steps can't show as Pina Studio's.)
 
-Any other agent drives tempo the same way Claude does. `tempo describe` prints every command an
+Any other agent drives Pina Studio the same way Claude does. `pina describe` prints every command an
 agent can send, with examples. An agent can:
 
-- Read a project with `tempo show <project>`.
-- Change it one command at a time with `tempo do <project> '<json>'`.
-- Measure it with `tempo analyze`, since it can't listen: loudness (integrated and loudest),
+- Read a project with `pina show <project>`.
+- Change it one command at a time with `pina do <project> '<json>'`.
+- Measure it with `pina analyze`, since it can't listen: loudness (integrated and loudest),
   peaks, clipping, crest, six-band balance, stereo correlation and width, and the notes sounding
   with the key they fit, for the mix, each section (marker to marker) and each track.
-- Find samples that sound good together: `tempo samples find "dusty keys loop in C minor 95 bpm"`
-  (or a JSON query), `tempo samples similar <file>`, `tempo samples kit "punchy" --for <project>`
+- Find samples that sound good together: `pina samples find "dusty keys loop in C minor 95 bpm"`
+  (or a JSON query), `pina samples similar <file>`, `pina samples kit "punchy" --for <project>`
   (a kit fitting the song's key and tempo, each pick going with the rest, with alternatives) and
-  `tempo samples info <file>`. Every hit says why it fits ("in C minor", "stretches from 92
+  `pina samples info <file>`. Every hit says why it fits ("in C minor", "stretches from 92
   BPM", "same pack as Kick_01"), how far to transpose it if a small move fits better, and, for a
-  one-shot, the sampler zone that plays it in tune. `tempo samples put <file> <project>` puts one
+  one-shot, the sampler zone that plays it in tune. `pina samples put <file> <project>` puts one
   in the song made to fit: a loop stretched to its tempo and moved into its key, a one-shot as a
   sampler zone in tune.
-- Play any plugin as a person would: find it with `tempo plugins`, set its parameters by name and
+- Play any plugin as a person would: find it with `pina plugins`, set its parameters by name and
   as it shows them (`"param": "Filter Cutoff", "text": "850 Hz"`), list and load its presets and
-  save new ones (`tempo presets`, `set_preset`), automate any parameter, send it controllers,
+  save new ones (`pina presets`, `set_preset`), automate any parameter, send it controllers,
   pitch bend, pressure and per-note expression with the notes (`set_controls`), and feed a track
   into its sidechain (`set_sidechain`).
 
 - Make songs that sound finished, as a producer would. An agent can't hear, and isn't a
-  musician, so tempo does the parts it would get wrong:
-  - `tempo playbook <genre>`: what a genre is (17 of them, lofi to amapiano): its tempo, swing and
+  musician, so Pina Studio does the parts it would get wrong:
+  - `pina playbook <genre>`: what a genre is (17 of them, lofi to amapiano): its tempo, swing and
     keys, its parts with the sounds they take and how to write them, its sections, progressions,
     and where its mixes sit (loudness and six-band balance, measured from released songs).
     The Playbooks page (File ▸ Genre Playbooks…, or a genre's Edit playbooks… in the Agent
@@ -502,19 +509,19 @@ agent can send, with examples. An agent can:
     the song map (sections as blocks as long as they are and as tall as they're loud, and a grid
     of which part plays in which, clicked on and off), the parts (sounds to look for, how to
     write them), the mix target (six bands dragged, and loudness) and notes for the agent.
-    Duplicate makes a genre of your own; Reset puts tempo's back. Each change is saved as it's
-    made, to JSON files, one a genre, in `~/Library/Application Support/tempo/playbooks/`
-    (`tempo playbook --edit [genre]` opens them too); tempo's own are in
+    Duplicate makes a genre of your own; Reset puts Pina Studio's back. Each change is saved as it's
+    made, to JSON files, one a genre, in `~/Library/Application Support/Pina Studio/playbooks/`
+    (`pina playbook --edit [genre]` opens them too); Pina Studio's own are in
     `crates/engine/playbooks/`.
-  - `tempo theory "A minor" dark trap`: the key's chords and progressions that suit the words.
+  - `pina theory "A minor" dark trap`: the key's chords and progressions that suit the words.
     `set_chords` takes them as symbols (`Am9 | Fmaj9`) or numerals (`i9 | VImaj9`) and makes them
     the song's chord track; `write_chords`, `write_bass`, `write_melody` and `write_drums` write
     parts on it that are in key and on the chords, voice-led, with a player's rhythm and a
     genre's groove (swing, ghosts, rolls, fills); an 808 can follow the kick.
-  - `tempo sounds <role> --genre trap`: real sounds for a part instead of the built-in sine:
+  - `pina sounds <role> --genre trap`: real sounds for a part instead of the built-in sine:
     every installed instrument's presets that suit it (each instrument asked for its own, a few
     from each, with the commands that load them), and samples.
-  - `tempo critique <project> [--quick]`: what's wrong, worst first, each with where and the
+  - `pina critique <project> [--quick]`: what's wrong, worst first, each with where and the
     command that fixes it: wrong notes and semitone clashes, a bass off its chords, kick and 808
     flamming, robotic velocities, missing swing, placeholder sounds, a song that never changes or
     a hook weaker than its verse; and from a render, clipping, loudness, tonal balance against the
@@ -522,28 +529,28 @@ agent can send, with examples. An agent can:
   - `arrange` lays a loop out as a song (the genre's sections, or given ones: parts by role or
     track, marked, quieter sections lower), `copy_bars` copies, and `transition` puts a riser,
     reversed cymbal, impact, downlifter, drum fill, gap or a whole build into a section.
-  - `tempo mix <project>` sets each part's channel EQ, compression, saturation, pan, reverb send
-    (a shared reverb aux, made once) and level, measured alone; `tempo master <project>` soft-clips
-    and limits the master to the genre's loudness (or a reference's: `tempo reference <file>
+  - `pina mix <project>` sets each part's channel EQ, compression, saturation, pan, reverb send
+    (a shared reverb aux, made once) and level, measured alone; `pina master <project>` soft-clips
+    and limits the master to the genre's loudness (or a reference's: `pina reference <file>
     <project>`), measuring until it's there.
-  - `tempo analyze` and `tempo render` take `--bars 9-16` to hear part of a song.
-  - `tempo bounce <project>` (and the agents' `bounce` tool) bounces as the Bounce sheet does:
+  - `pina analyze` and `pina render` take `--bars 9-16` to hear part of a song.
+  - `pina bounce <project>` (and the agents' `bounce` tool) bounces as the Bounce sheet does:
     `--stems` (`--tracks 0,2`, `--master` through the master) or `--sections`, `--formats
     wav,mp3,flac,aiff,aac,alac,midi`, `--bits`, `--rate`, `--lufs -14` (`--ceiling -1`) or
     `--peak -1`, `--kbps`, `--no-tail`, `--bars`, `--out`, `--name`; it answers with each file
     and its loudness and peak.
-  - `tempo study <file> [--summary] [--playbook] [--offline]`: a finished song taken apart from
+  - `pina study <file> [--summary] [--playbook] [--offline]`: a finished song taken apart from
     its audio. Its identity (tags, else its file name; online, its year and genre from
     MusicBrainz), tempo, meter, key (and tuning, and sections in another key), chords beat by
     beat with numerals, its form (intro, verses, pre-chorus, choruses, bridge, outro, found from
     what repeats and named by it, with bars, energy, loudness and the chord loop each goes round;
     a song that never repeats is named by its energy: build, drop, breakdown), its groove (kick,
-    snare and hats on a sixteen-step bar, swing, syncopation, the nearest of tempo's grooves),
+    snare and hats on a sixteen-step bar, swing, syncopation, the nearest of Pina Studio's grooves),
     what plays in it, its mix and dynamics overall and section by section, the playbooks it's
     nearest, and its lyrics from LRCLIB (timed into their sections where they can be), with each
     line's rhyme and syllables, the rhyme schemes, the hooks, who sings to whom and the words it
     keeps coming back to. Only its title, artist and length are sent anywhere; never its audio.
-    Studies are kept in `~/Library/Caches/tempo/studies/`. `--playbook` saves a playbook made from
+    Studies are kept in `~/Library/Caches/Pina Studio/studies/`. `--playbook` saves a playbook made from
     it, to write songs like it; agents have it as the `study` tool, and read its theme, story and
     imagery from the lyrics themselves.
 
@@ -560,48 +567,48 @@ what it means (its theme and message, metaphors and imagery, and why it works).
 The Agent panel is a producer's desk as well as a conversation: under its header the song at a
 glance (its genre, picked from the playbooks, its key, tempo and length); a new conversation
 offers the stages the song hasn't had yet (genre, chords, a loop, arrangement, mix, master), a
-click each, or for a finished song what it wants next; in the composer the critic, tempo's notes on the song kept
+click each, or for a finished song what it wants next; in the composer the critic, Pina Studio's notes on the song kept
 up to date as it changes, each with a Fix to ask for (or Fix all), and Listen to the mix for the
 notes a render gives; after an answer, Undo this turn puts the song back as it was when it was
 asked (one step, so ⌘Z puts it back again); and what's selected (a region and its bars, or a
 track) goes along with what's asked, unless its chip is turned off.
 
 When the project is open in the app, commands go to the app over a socket. Each lands on screen as
-one undoable edit, and `tempo save` saves it. The agent shows up like a collaborator in a shared
+one undoable edit, and `pina save` saves it. The agent shows up like a collaborator in a shared
 file: its avatar in the top bar, an outline and cursor on what it just changed, a line in the
 status bar, and each edit in the Agent panel. Otherwise the folder is edited directly.
 
-`tempo params <project> <track>` (or `--aux N`, `--master`, with `--insert N`) lists a plugin's
+`pina params <project> <track>` (or `--aux N`, `--master`, with `--insert N`) lists a plugin's
 parameters (value and display, default, unit, steps, and a choice's options), for
-`set_plugin_param` and plugin automation; `tempo presets` lists its presets, and `--save <name>`
+`set_plugin_param` and plugin automation; `pina presets` lists its presets, and `--save <name>`
 saves its settings as one. Both answer from the app if it's open, else by loading that plugin.
 
-The sample library is the folders in `~/Library/Application Support/tempo/library.json`
-(`~/Music/tempo/Samples` to start; `tempo samples add <folder>`), each sample analysed once (what
+The sample library is the folders in `~/Library/Application Support/Pina Studio/library.json`
+(`~/Music/Pina Studio/Samples` to start; `pina samples add <folder>`), each sample analysed once (what
 it is, its note or key, tempo, envelope, spectrum, stereo width, traits like punchy or lo-fi, and
-a timbre fingerprint) and indexed in `~/Library/Caches/tempo/samples.json`; `tempo samples scan`
+a timbre fingerprint) and indexed in `~/Library/Caches/Pina Studio/samples.json`; `pina samples scan`
 analyses what's new or changed, on every core. The analysis (`crates/engine/src/samples/`) reads
 WAV, AIFF, FLAC and MP3, and names a sample from its audio with small models fitted on free
 MusicRadar packs (`model.rs`), its file name a strong hint on top;
-`cargo run --release -p tempo-engine --example sample_eval` measures it against the 90s Hip Hop
+`cargo run --release -p pina-engine --example sample_eval` measures it against the 90s Hip Hop
 pack's names (held out from the fit) and, with `--fit`, fits the models again.
 
-`tempo mcp` is the same as an MCP server on stdio, for agents without a shell (Claude Desktop,
+`pina mcp` is the same as an MCP server on stdio, for agents without a shell (Claude Desktop,
 claude.ai and the like): its tools list themselves with typed inputs, and a user can allow them
 without allowing a shell. Its tools are `describe`, `show`, `edit`, `analyze`, `render`,
 `critique`, `playbook`, `theory`, `reference`, `sounds`, `mix`, `master`, `transport`,
 `plugins`, `params`, `presets`, `samples_find`, `samples_similar`, `samples_kit`, `samples_put`,
 `palette` and `samples_library`. For Claude Code:
 
-    claude mcp add tempo -- /path/to/tempo mcp
+    claude mcp add pina -- /path/to/pina mcp
 
 ## Projects
 
-`tempo projects` lists every song as JSON; `tempo new <name> [--tempo N] [--key "A minor"]
-[--time 6/8] [--template beat|band|lofi|electronic]` starts one in `~/Music/tempo` (or
-`TEMPO_SONGS`). A project is a folder holding `project.json` and, for audio regions, `Audio Files/`. Positions
+`pina projects` lists every song as JSON; `pina new <name> [--tempo N] [--key "A minor"]
+[--time 6/8] [--template beat|band|lofi|electronic]` starts one in `~/Music/Pina Studio` (or
+`PINA_SONGS`). A project is a folder holding `project.json` and, for audio regions, `Audio Files/`. Positions
 are in ticks, 960 to a quarter note; audio offsets are in samples. Unsaved edits are kept every
-30 seconds in `.recovery/`, a project of its own; if tempo stops before they're saved, opening the
+30 seconds in `.recovery/`, a project of its own; if Pina Studio stops before they're saved, opening the
 project offers them back.
 
 ```json
@@ -626,8 +633,8 @@ project offers them back.
 ```
 
 An instrument is `"synth"` (built in) or `{ "plugin": { "format": …, "path": …, "class": …,
-"uid": … } }` (as `tempo plugins` lists it; `"vst3"` is still read); a plugin can carry the
-`"preset"` tempo loaded, `"params"` tempo sets on it (by id, in the order set) and, as an insert,
+"uid": … } }` (as `pina plugins` lists it; `"vst3"` is still read); a plugin can carry the
+`"preset"` Pina Studio loaded, `"params"` Pina Studio sets on it (by id, in the order set) and, as an insert,
 the track it hears as a `"sidechain"`. A track without one is an audio track, with an `"input"`.
 Audio files are WAV, AIFF, FLAC or MP3, at any sample rate. An audio region can have a
 `"stretch"` (2 is half speed), a `"flex"` (`"polyphonic"`, `"slicing"` or `"speed"`) and
@@ -639,12 +646,12 @@ track's `"automation"` has `volume`, `pan`, `mute`, `sends` and `plugins` lanes 
 `"curve"`, `"ease"` or be a `"step"`) and a `mode`. Regions can have a
 `"name"`, a `"link"` (aliases share one), `"loop"`, `"transpose"`, `"velocity"` and `"quantize"`.
 The project can have a `"time_signature"`, `"markers"`, a `"key"`, a `"cycle"` and a `"palette"` of
-sounds, instruments and effects picked for an agent (see `tempo describe`).
+sounds, instruments and effects picked for an agent (see `pina describe`).
 
 The engine's tests that need a real plugin are opt-in, each format by its own variable:
 
-    TEMPO_TEST_VST3="/path/Some Synth.vst3" TEMPO_TEST_CLAP="/path/Some Synth.clap" \
-    TEMPO_TEST_CLAP_FX="/path/Some Reverb.clap" TEMPO_TEST_VST2="/path/Some Plugin.vst" \
-    TEMPO_TEST_AU="aumu SgXT VmbA" cargo test -p tempo-engine -- --ignored
+    PINA_TEST_VST3="/path/Some Synth.vst3" PINA_TEST_CLAP="/path/Some Synth.clap" \
+    PINA_TEST_CLAP_FX="/path/Some Reverb.clap" PINA_TEST_VST2="/path/Some Plugin.vst" \
+    PINA_TEST_AU="aumu SgXT VmbA" cargo test -p pina-engine -- --ignored
 
 Apple's own Audio Units (AUSampler, AUDelay, AULowpass…) are tested on every run.

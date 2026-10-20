@@ -4,8 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
-use tempo_engine::{
+use pina_engine::{
     analysis,
     arrange::role,
     commands::{AutoParam, ChannelRef, Command, ParamRef, PointIn},
@@ -16,6 +15,7 @@ use tempo_engine::{
     scan,
     theory::{self, PROGRESSIONS},
 };
+use serde_json::{Value, json};
 
 use crate::cli;
 
@@ -93,7 +93,7 @@ pub fn playbook(genre: Option<&str>) -> Result<Value, String> {
     }
 }
 
-/// Opens the playbooks folder (made the first time, a copy of tempo's), or one genre's file.
+/// Opens the playbooks folder (made the first time, a copy of Pina Studio's), or one genre's file.
 pub fn edit_playbooks(genre: Option<&str>) -> Result<(), String> {
     let (_, problems) = playbook::load();
     let dir = playbook::dir().ok_or("no home folder")?;
@@ -293,8 +293,7 @@ fn fit(preset: &Preset, role: &str, wanted: &[String]) -> usize {
 }
 
 fn presets_cache() -> PathBuf {
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    Path::new(&home).join("Library/Caches/tempo/presets.json")
+    pina_engine::paths::caches().join("presets.json")
 }
 
 /// Each instrument's presets, as the sounds tool lists them: those kept from before at once, and
@@ -333,7 +332,7 @@ pub fn presets_of(plugins: &[scan::PluginInfo], ask: bool) -> Vec<Vec<Preset>> {
 }
 
 /// An instrument's presets (its own programs and its files), as it lists them loaded on its
-/// own: in a process of its own, so one that crashes or hangs doesn't take tempo with it. Kept
+/// own: in a process of its own, so one that crashes or hangs doesn't take Pina Studio with it. Kept
 /// until the plugin changes.
 fn instrument_presets(
     p: &scan::PluginInfo,
@@ -473,7 +472,7 @@ pub fn sounds(
         .into_iter()
         .filter(|q| !q.is_empty())
         .find_map(|q| {
-            let query = tempo_engine::samples::search::Query {
+            let query = pina_engine::samples::search::Query {
                 text: q.into(),
                 limit: 8,
                 ..Default::default()

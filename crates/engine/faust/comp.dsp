@@ -1,4 +1,4 @@
-declare name "tempo Compressor";
+declare name "Pina Studio Compressor";
 declare description "A soft-knee feed-forward compressor, both sides linked, peak or RMS";
 
 // Faust's compressor gain computer (co.peak_compression_gain_N_chan_db): a 6 dB soft knee, the

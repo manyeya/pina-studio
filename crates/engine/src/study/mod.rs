@@ -1,4 +1,4 @@
-//! A song studied: everything tempo can tell about an existing song from its file. Who it is
+//! A song studied: everything Pina Studio can tell about an existing song from its file. Who it is
 //! (its tags), its tempo and bars, its key and chords (as numerals, and the loops each section
 //! goes round), its form (intro, verse, pre-chorus, chorus, bridge, outro, found by where it
 //! changes and what repeats), its groove (kick, snare and hats on a grid, swing, syncopation),
@@ -510,7 +510,7 @@ fn instruments(
             role: "drums".into(),
             confidence: (0.55 + busy * 0.6).min(0.95),
             about: format!(
-                "{} on a {}-step bar, nearest tempo's {} groove",
+                "{} on a {}-step bar, nearest Pina Studio {} groove",
                 parts.join(", "),
                 16,
                 g.nearest.replace('_', " ")

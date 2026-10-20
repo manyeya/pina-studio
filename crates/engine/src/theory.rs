@@ -1,4 +1,4 @@
-//! Writing music that's right, so an agent (which can't hear) picks and tempo makes it correct:
+//! Writing music that's right, so an agent (which can't hear) picks and Pina Studio makes it correct:
 //! chords from symbols or roman numerals, progressions by genre and mood, voicings led smoothly
 //! from chord to chord, basslines and melodies that follow the harmony, and drum grooves by
 //! genre with their swing, ghosts, rolls, variations and fills. All of it the same every time
@@ -615,7 +615,7 @@ pub fn lay_out(
         .split('|')
         .map(|g| {
             g.split_whitespace()
-                .map(|c| read_chord(c, key).ok_or(format!("{c:?} isn't a chord tempo reads")))
+                .map(|c| read_chord(c, key).ok_or(format!("{c:?} isn't a chord Pina Studio reads")))
                 .collect::<Result<Vec<_>, _>>()
         })
         .collect::<Result<_, _>>()?;

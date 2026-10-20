@@ -103,14 +103,14 @@ impl Session {
     }
 
     /// Keeps `project` (the edits, with its plugins' settings in the recovery folder) for if
-    /// tempo stops before they're saved.
+    /// Pina Studio stops before they're saved.
     pub fn keep(&mut self, project: &Project) -> Result<(), String> {
         project.save(&self.recovery())?;
         self.kept = true;
         Ok(())
     }
 
-    /// When the edits in the recovery folder were kept, if there are any: tempo stopped
+    /// When the edits in the recovery folder were kept, if there are any: Pina Studio stopped
     /// before saving or discarding them.
     pub fn kept_at(&self) -> Option<SystemTime> {
         std::fs::metadata(self.recovery().join(FILE))
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn unsaved_edits_are_kept_and_restored() {
-        let dir = std::env::temp_dir().join(format!("tempo-test-keep-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-test-keep-{}", std::process::id()));
         let mut s = Session::open(&dir).unwrap();
         s.save().unwrap();
         s.checkpoint();
@@ -173,7 +173,7 @@ mod tests {
         s.keep(&s.project.clone()).unwrap();
         assert!(s.kept);
 
-        // tempo stopped without saving: the project opens as saved, with the edits on offer.
+        // Pina Studio stopped without saving: the project opens as saved, with the edits on offer.
         let mut s = Session::open(&dir).unwrap();
         assert_eq!(s.project.tempo, 120.0);
         assert!(s.kept_at().is_some());
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn a_new_project_is_on_disk_once_saved() {
-        let dir = std::env::temp_dir().join(format!("tempo-test-session-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-test-session-{}", std::process::id()));
         let mut s = Session::open(&dir).unwrap();
         assert!(!s.on_disk && !s.edited);
         s.save().unwrap();

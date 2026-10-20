@@ -4,7 +4,7 @@
 //! Fade draws an audio region's fade in or out; Flex makes dragging a region's end stretch it.
 
 use gpui::{Context, MouseDownEvent, Pixels, Point};
-use tempo_engine::project::{At, Content, PPQ, Region};
+use pina_engine::project::{At, Content, PPQ, Region};
 
 use crate::{
     menu::{Menu, MenuAction},
@@ -134,13 +134,13 @@ impl Workspace {
             ) => {
                 let shift = (b.start - a.start) as i64;
                 let mut notes = notes.clone();
-                notes.extend(more.iter().map(|n| tempo_engine::project::Note {
+                notes.extend(more.iter().map(|n| pina_engine::project::Note {
                     start: n.start + shift,
                     ..*n
                 }));
                 notes.sort_by_key(|n| n.start);
                 let mut controls = controls.clone();
-                controls.extend(moves.iter().map(|c| tempo_engine::project::ControlPoint {
+                controls.extend(moves.iter().map(|c| pina_engine::project::ControlPoint {
                     start: c.start + shift,
                     ..*c
                 }));

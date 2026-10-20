@@ -2,9 +2,9 @@
 //! parts it's made of and the sounds they take, how its songs are laid out, and where its mixes
 //! sit. Mix targets are measured from released songs (`analysis::Spectrum`, dB of the total).
 //!
-//! Playbooks are JSON files: tempo's own (in `playbooks/`, built in) and the person's, in
-//! `~/Library/Application Support/tempo/playbooks/`, one a genre. One there with a built-in's
-//! id replaces it; a new id adds a genre. The folder starts as a copy of tempo's, to edit.
+//! Playbooks are JSON files: Pina Studio's own (in `playbooks/`, built in) and the person's, in
+//! `~/Library/Application Support/Pina Studio/playbooks/`, one a genre. One there with a built-in's
+//! id replaces it; a new id adds a genre. The folder starts as a copy of Pina Studio's, to edit.
 
 use std::path::{Path, PathBuf};
 
@@ -19,7 +19,7 @@ pub struct Part {
     pub role: String,
     /// What to look for: words for samples and instruments' presets.
     pub sound: String,
-    /// How to write it with tempo's commands.
+    /// How to write it with Pina Studio's commands.
     pub write: String,
 }
 
@@ -57,7 +57,7 @@ pub struct Playbook {
     pub notes: Vec<String>,
 }
 
-/// tempo's own, by id.
+/// Pina Studio's own, by id.
 const BUILT_IN: &[(&str, &str)] = &[
     ("lofi", include_str!("../playbooks/lofi.json")),
     ("boom_bap", include_str!("../playbooks/boom_bap.json")),
@@ -79,10 +79,10 @@ const BUILT_IN: &[(&str, &str)] = &[
 ];
 
 const README: &str = "\
-These are tempo's genre playbooks, one JSON file a genre: what agents follow to make a song in it,
-and what tempo critique checks a song against. Edit them, or add a file to add a genre (its id is
-what set_genre takes). Delete one to get tempo's own back; delete the folder for all of them.
-`tempo playbook` says if a file can't be read, and why.
+These are Pina Studio's genre playbooks, one JSON file a genre: what agents follow to make a song in it,
+and what pina critique checks a song against. Edit them, or add a file to add a genre (its id is
+what set_genre takes). Delete one to get Pina Studio's own back; delete the folder for all of them.
+`pina playbook` says if a file can't be read, and why.
 
   id, name     what it's called
   tempo        [slowest, fastest] bpm
@@ -90,39 +90,38 @@ what set_genre takes). Delete one to get tempo's own back; delete the folder for
   groove       write_drums' style: boom_bap, lofi, trap, drill, house, techno, afrobeats,
                amapiano, rnb, pop, reggaeton, dnb, rock or neo_soul
   swing        50 is straight, up to 75
-  harmony      words tempo theory finds progressions by (a genre or mood)
+  harmony      words pina theory finds progressions by (a genre or mood)
   parts        each part: its role (drums, perc, bass, chords, pad, lead, counter, arp, fx,
                vocals, texture), the sound to look for, and how to write it
   sections     the song's layout: name, bars, the parts (roles) playing, energy 1-5
   lufs         a finished master's loudness
   spectrum     a finished mix's sub, bass, low mid, mid, presence and air, in dB of the total
-               (tempo analyze on a song you love says what it has)
+               (pina analyze on a song you love says what it has)
   notes        what makes it sound right, for the agent
 ";
 
-/// The person's playbooks folder (`TEMPO_PLAYBOOKS` moves it). None in tests, which use only
-/// tempo's own.
+/// The person's playbooks folder (`PINA_PLAYBOOKS` moves it). None in tests, which use only
+/// Pina Studio's own.
 pub fn dir() -> Option<PathBuf> {
     if cfg!(test) {
         return None;
     }
-    if let Some(d) = std::env::var_os("TEMPO_PLAYBOOKS") {
+    if let Some(d) = std::env::var_os("PINA_PLAYBOOKS") {
         return Some(PathBuf::from(d));
     }
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join("Library/Application Support/tempo/playbooks"))
+    Some(crate::paths::support().join("playbooks"))
 }
 
-/// Every playbook, tempo's with the person's over them; and the files that couldn't be read,
+/// Every playbook, Pina Studio's with the person's over them; and the files that couldn't be read,
 /// saying why.
 pub fn load() -> (Vec<Playbook>, Vec<String>) {
     load_from(dir().as_deref())
 }
 
-/// As `load`, the person's from `dir`, which is made (a copy of tempo's, to edit) the first
+/// As `load`, the person's from `dir`, which is made (a copy of Pina Studio's, to edit) the first
 /// time.
-// ponytail: a playbook copied into the folder shadows later changes to tempo's own; deleting the
-// file brings tempo's back.
+// ponytail: a playbook copied into the folder shadows later changes to Pina Studio's own; deleting the
+// file brings Pina Studio's back.
 pub fn load_from(dir: Option<&Path>) -> (Vec<Playbook>, Vec<String>) {
     let mut all: Vec<Playbook> = BUILT_IN
         .iter()
@@ -194,15 +193,15 @@ fn check(p: &Playbook) -> Result<(), String> {
 /// Where a playbook comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
-    /// tempo's, as it ships.
-    Tempo,
-    /// tempo's, changed by the person.
+    /// Pina Studio's, as it ships.
+    Pina,
+    /// Pina Studio's, changed by the person.
     Edited,
     /// The person's own genre.
     Yours,
 }
 
-/// tempo's own playbook for `id`, as it ships.
+/// Pina Studio's own playbook for `id`, as it ships.
 pub fn builtin(id: &str) -> Option<Playbook> {
     BUILT_IN
         .iter()
@@ -213,7 +212,7 @@ pub fn builtin(id: &str) -> Option<Playbook> {
 pub fn origin(p: &Playbook) -> Origin {
     match builtin(&p.id) {
         None => Origin::Yours,
-        Some(b) if b == *p => Origin::Tempo,
+        Some(b) if b == *p => Origin::Pina,
         Some(_) => Origin::Edited,
     }
 }
@@ -235,7 +234,7 @@ fn save_in(dir: &Path, p: &Playbook) -> Result<PathBuf, String> {
     Ok(file)
 }
 
-/// Takes the person's playbook for `id` away: tempo's own comes back, or a genre of theirs is
+/// Takes the person's playbook for `id` away: Pina Studio's own comes back, or a genre of theirs is
 /// gone.
 pub fn remove(id: &str) -> Result<(), String> {
     let dir = dir().ok_or("no playbooks folder")?;
@@ -342,7 +341,7 @@ mod tests {
     #[test]
     fn playbooks_know_where_they_come_from_and_save_whole() {
         let trap = builtin("trap").unwrap();
-        assert_eq!(origin(&trap), Origin::Tempo);
+        assert_eq!(origin(&trap), Origin::Pina);
         let mut edited = trap.clone();
         edited.swing = 56.0;
         assert_eq!(origin(&edited), Origin::Edited);
@@ -354,7 +353,7 @@ mod tests {
         let taken = vec!["trap".to_string(), "dark_trap".to_string()];
         assert_eq!(new_id("Dark Trap!", &taken), "dark_trap_2");
         assert_eq!(new_id("Gqom", &taken), "gqom");
-        let dir = std::env::temp_dir().join(format!("tempo-playbook-save-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-playbook-save-{}", std::process::id()));
         let file = save_in(&dir, &edited).unwrap();
         let back: Playbook =
             serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
@@ -364,9 +363,9 @@ mod tests {
 
     #[test]
     fn the_persons_playbooks_replace_and_add() {
-        let dir = std::env::temp_dir().join(format!("tempo-playbooks-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-playbooks-{}", std::process::id()));
         let (all, _) = load_from(Some(&dir));
-        // The folder is made, with tempo's in it to edit.
+        // The folder is made, with Pina Studio's in it to edit.
         assert!(dir.join("trap.json").exists() && dir.join("README.txt").exists());
         assert_eq!(all.len(), BUILT_IN.len());
         let file = dir.join("trap.json");

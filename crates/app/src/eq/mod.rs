@@ -34,7 +34,7 @@ use gpui::{
     Bounds, Context, MouseDownEvent, Pixels, ScrollWheelEvent, anchored, deferred, div, point,
     prelude::*, px, rgb,
 };
-use tempo_engine::{
+use pina_engine::{
     eq::{TAP_LEN, auto_times, band_sections, response_db, spectrum_db},
     project::{
         Bands, Character, Dynamic, Eq, EqBand, EqField, MAX_BANDS, Param, Placement, Processing,
@@ -365,7 +365,7 @@ pub enum EqOp {
     Ab,
     CopyAb,
     FullScreen,
-    /// A preset: one of tempo's (by its place), or one saved (by its place in the list).
+    /// A preset: one of Pina Studio's (by its place), or one saved (by its place in the list).
     Factory(usize),
     Preset(usize),
     SavePreset,
@@ -662,7 +662,7 @@ fn note_of(hz: f32) -> (u8, f32) {
 
 fn note_text(hz: f32) -> String {
     let (note, cents) = note_of(hz);
-    let name = tempo_engine::samples::note_name(note);
+    let name = pina_engine::samples::note_name(note);
     match cents.round() as i32 {
         0 => name,
         c => format!("{name} {c:+}"),
@@ -759,7 +759,7 @@ fn band_at(geo: &Geo, x: f32, y: f32, drag: bool) -> EqBand {
     EqBand::new(shape, freq.round() as f32, gain)
 }
 
-/// tempo's own presets: starting points, by what they're for.
+/// Pina Studio's own presets: starting points, by what they're for.
 pub fn factory() -> Vec<(&'static str, Eq)> {
     let b = |shape: Shape, freq: f32, gain: f32, q: Option<f32>, slope: u8| {
         let mut band = EqBand::new(shape, freq, gain);
@@ -855,9 +855,8 @@ pub fn factory() -> Vec<(&'static str, Eq)> {
 /// Where saved presets go (a folder of their own while testing).
 fn presets_dir() -> std::path::PathBuf {
     match cfg!(test) {
-        true => std::env::temp_dir().join(format!("tempo-test-eq-presets-{}", std::process::id())),
-        false => std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-            .join("Library/Application Support/tempo/EQ Presets"),
+        true => std::env::temp_dir().join(format!("pina-test-eq-presets-{}", std::process::id())),
+        false => pina_engine::paths::support().join("EQ Presets"),
     }
 }
 
@@ -1458,7 +1457,7 @@ impl Workspace {
     fn eq_curve_at(&self, freq: f64) -> f32 {
         let rate = self.session.project.sample_rate as f64;
         self.shown_eq().map_or(0.0, |(_, eq)| {
-            tempo_engine::eq::eq_response(&eq, freq, rate) as f32
+            pina_engine::eq::eq_response(&eq, freq, rate) as f32
         })
     }
 
@@ -2643,7 +2642,7 @@ impl EqView {
             .columns
             .iter()
             .zip(&self.pre)
-            .map(|(&f, &p)| p + tempo_engine::eq::eq_response(eq, f, rate) as f32)
+            .map(|(&f, &p)| p + pina_engine::eq::eq_response(eq, f, rate) as f32)
             .collect();
         self.meter = [-9.5, -10.2];
         self.peak = -6.8;
@@ -2765,7 +2764,7 @@ mod tests {
         assert_eq!(low_cut(&eq), 90.0);
         set_low_cut(&mut eq, 0.0);
         assert_eq!((low_cut(&eq), eq.bands.len()), (0.0, 4));
-        // tempo's presets are all valid EQs.
+        // Pina Studio's presets are all valid EQs.
         for (name, eq) in factory() {
             assert!(!eq.bands.is_empty(), "{name}");
         }

@@ -95,7 +95,7 @@ pub struct PaletteSound {
     pub role: Option<String>,
 }
 
-/// An instrument or effect picked for the agent: tempo's own (`own`: "synth", "drums",
+/// An instrument or effect picked for the agent: Pina Studio's own (`own`: "synth", "drums",
 /// "sampler", "eq", "comp" or "sat") or a plugin, as `set_instrument` and `set_insert` take it.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PaletteDevice {
@@ -111,7 +111,7 @@ pub struct PaletteDevice {
 }
 
 impl PaletteDevice {
-    /// The same device: tempo's own by name, a plugin by its class in its bundle.
+    /// The same device: Pina Studio's own by name, a plugin by its class in its bundle.
     pub fn same(&self, other: &PaletteDevice) -> bool {
         match (&self.plugin, &other.plugin) {
             (Some(a), Some(b)) => a.class == b.class && a.path == b.path,
@@ -683,7 +683,7 @@ impl<'de> Deserialize<'de> for Bands {
 /// then a gain scale for them all and the output level. Anything left out of its JSON is as
 /// `Eq::default()` has it: no bands, flat.
 ///
-/// It reads the EQ tempo had before too (a low cut, two bells and a high shelf, by name), and
+/// It reads the EQ Pina Studio had before too (a low cut, two bells and a high shelf, by name), and
 /// takes those names in `set_eq`: `low_cut` is its first low cut, `low_mid` and `high_mid` its
 /// first and second bells, `high_shelf` its first high shelf, each added if missing.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -777,7 +777,7 @@ impl Default for Eq {
 }
 
 impl Eq {
-    /// The EQ tempo had before, flat: a low cut (off), bells at 400 Hz and 2.5 kHz and a high
+    /// The EQ Pina Studio had before, flat: a low cut (off), bells at 400 Hz and 2.5 kHz and a high
     /// shelf at 10 kHz. Songs made with it open with these four, in this order, so what moved
     /// them by number (modulators) still does.
     pub fn classic() -> Self {
@@ -2406,10 +2406,10 @@ pub struct PluginRef {
     /// Its settings, saved under `Plugin States/` in the project folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<PathBuf>,
-    /// The preset tempo last loaded into it: loaded over its settings, and undone like any edit.
+    /// The preset Pina Studio last loaded into it: loaded over its settings, and undone like any edit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<Preset>,
-    /// Parameters set from tempo (its Smart Controls, or an agent), by id, 0 to 1, in the order
+    /// Parameters set from Pina Studio (its Smart Controls, or an agent), by id, 0 to 1, in the order
     /// they were set: applied over its preset and settings, and undone like any edit.
     #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,

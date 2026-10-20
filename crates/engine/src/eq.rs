@@ -1,4 +1,4 @@
-//! tempo's EQ: up to 24 bands, each a bell, shelf, cut, notch, band pass or tilt, over the whole
+//! Pina Studio's EQ: up to 24 bands, each a bell, shelf, cut, notch, band pass or tilt, over the whole
 //! sound or part of it (left, right, mid or side), still or moving with the sound (dynamic).
 //!
 //! Its filters are matched to their analog shapes (Vicanek's matched second-order filters: the

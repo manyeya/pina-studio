@@ -1,7 +1,7 @@
-//! Agents working in tempo, as modisa knows them: Claude Code and Codex, each run
-//! headless with tempo's MCP server for its only tools, their streams of thinking, words and
-//! tool calls turned into the same events. The app's Agent panel and `tempo ask` both run them;
-//! `tempo ask` also sends its events to the app that has the project open, so the panel shows
+//! Agents working in Pina Studio, as modisa knows them: Claude Code and Codex, each run
+//! headless with Pina Studio's MCP server for its only tools, their streams of thinking, words and
+//! tool calls turned into the same events. The app's Agent panel and `pina ask` both run them;
+//! `pina ask` also sends its events to the app that has the project open, so the panel shows
 //! that too.
 
 use std::{
@@ -55,10 +55,10 @@ pub enum Event {
     },
 }
 
-/// The agents tempo runs. Only those whose headless streams and tool hookup are checked against
+/// The agents Pina Studio runs. Only those whose headless streams and tool hookup are checked against
 /// the real thing are here (modisa knows more; they come in the same way). Not opencode: version
 /// 2 hands MCP tools to its model inside one code-running `execute` tool, so its steps can't
-/// show as tempo's, and its free tier refuses headless runs.
+/// show as Pina Studio's, and its free tier refuses headless runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
@@ -113,11 +113,11 @@ impl Kind {
         AGENTS.iter().find(|d| d.id == id.trim()).map(|d| d.kind)
     }
 
-    /// Where its command is: `TEMPO_<COMMAND>` (TEMPO_CLAUDE), else on the PATH or where its
+    /// Where its command is: `PINA_<COMMAND>` (PINA_CLAUDE), else on the PATH or where its
     /// installer puts it (an app opened from the Finder has a short PATH).
     pub fn command(self) -> Option<PathBuf> {
         let bin = self.def().bin;
-        if let Some(p) = std::env::var_os(format!("TEMPO_{}", bin.to_uppercase())) {
+        if let Some(p) = std::env::var_os(format!("PINA_{}", bin.to_uppercase())) {
             return Some(p.into());
         }
         let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
@@ -204,7 +204,7 @@ pub enum Readiness {
     SignIn,
 }
 
-/// The agent chosen last, in `~/Library/Application Support/tempo/agent`; Claude Code at first.
+/// The agent chosen last, in `~/Library/Application Support/Pina Studio/agent`; Claude Code at first.
 /// How an agent runs: the model it uses and how hard it thinks (its effort). None leaves either
 /// to the agent's own settings.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
@@ -371,7 +371,7 @@ fn tuning_file() -> PathBuf {
     match cfg!(test) {
         // Tests never touch the person's.
         true => std::env::temp_dir().join(format!(
-            "tempo-test-tuning-{}-{:?}.json",
+            "pina-test-tuning-{}-{:?}.json",
             std::process::id(),
             thread::current().id()
         )),
@@ -393,17 +393,16 @@ pub fn choose(kind: Kind) {
 }
 
 fn choice_file() -> PathBuf {
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-        .join("Library/Application Support/tempo/agent")
+    pina_engine::paths::support().join("agent")
 }
 
 fn instructions(project: &Path) -> String {
     let p = project.display();
     format!(
-        "You're working inside tempo, a DAW, on the song open at {p}. The person is watching: \
+        "You're working inside Pina Studio, a DAW, on the song open at {p}. The person is watching: \
 every edit you make appears in their window as you make it, so work in small steps, and keep \
 your words short: a sentence before a group of steps saying what you're doing, and a few lines \
-at the end saying what changed. Use tempo's tools, passing \"{p}\" as the project: `describe` \
+at the end saying what changed. Use Pina Studio's tools, passing \"{p}\" as the project: `describe` \
 before your first edit (the commands, and how ticks, levels and notes work), `show` to read the \
 song, `edit` to change it, `samples_find`, `samples_kit` and `samples_put` for sounds that fit, \
 `analyze` to check levels. The person can pick sounds, instruments and effects for the song \
@@ -411,7 +410,7 @@ themselves (`palette`, and \
 listed in their message when they change): build with those before choosing your own, each for \
 the part they gave it, and with no others when they ask for only these. You can't hear the song: `critique` is your ears (quick after each \
 edit, with a render after mixing), trust it and the samples' analysis, and say what you couldn't \
-check.\n\nWrite music with tempo's write commands, not note by note: set_chords, then \
+check.\n\nWrite music with Pina Studio's write commands, not note by note: set_chords, then \
 write_chords, write_bass, write_melody and write_drums put parts on the chords that are in key, \
 voice-led and played like a player would. To make a song that sounds finished: {}",
         crate::produce::WORKFLOW
@@ -493,7 +492,7 @@ impl Agent {
             project: project.to_path_buf(),
             tx,
             run,
-            // A conversation carried on has had tempo's instructions.
+            // A conversation carried on has had Pina Studio's instructions.
             asks: carried as u32,
             tuning,
         };
@@ -531,7 +530,7 @@ impl Agent {
                 {
                     return Err("It's still working on the last one.".into());
                 }
-                // Theirs has no way in for tempo's instructions but the first question.
+                // Theirs has no way in for Pina Studio's instructions but the first question.
                 let text = match first {
                     true => format!("{}\n\n{text}", instructions(&self.project)),
                     false => text.to_string(),
@@ -599,7 +598,7 @@ fn workdir(project: &Path) -> PathBuf {
         .to_path_buf()
 }
 
-/// Claude Code with tempo's tools and nothing else: no shell, no files, no one else's MCP servers
+/// Claude Code with Pina Studio's tools and nothing else: no shell, no files, no one else's MCP servers
 /// or hooks; anything else asked for is refused, not asked about.
 fn claude_command(
     cmd: &Path,
@@ -619,7 +618,7 @@ fn claude_command(
             "stream-json",
         ])
         .args(["--strict-mcp-config", "--mcp-config", &mcp.to_string()])
-        .args(["--tools", "", "--allowedTools", "mcp__tempo"])
+        .args(["--tools", "", "--allowedTools", "mcp__pina"])
         .args(["--permission-prompts", "none", "--setting-sources", ""])
         .args(["--append-system-prompt", &instructions(project)])
         .current_dir(workdir(project))
@@ -658,7 +657,7 @@ fn tuning_args(kind: Kind, tuning: &Tuning, resume: Option<&str>) -> Vec<String>
     a
 }
 
-/// `codex exec`, resuming the conversation after its first question: tempo's MCP server in place
+/// `codex exec`, resuming the conversation after its first question: Pina Studio's MCP server in place
 /// of any others (its tools let through without asking, as nothing can be asked), its sandbox
 /// read-only, nothing asked about.
 fn codex_command(
@@ -718,7 +717,7 @@ fn codex_servers() -> Vec<String> {
     names
 }
 
-/// What makes tempo's MCP server Codex's only tools: it, its tools approved (Codex asks before
+/// What makes Pina Studio's MCP server Codex's only tools: it, its tools approved (Codex asks before
 /// an MCP tool runs, and with no one to ask, refuses), and the person's other servers, plugins,
 /// apps, computer and browser use off. Features are turned off by key, which a Codex without them
 /// ignores (its `--disable` refuses a name it doesn't know).
@@ -726,7 +725,7 @@ fn codex_isolation(exe: &Path, servers: &[String]) -> Vec<String> {
     let mut a = vec![
         "-c".into(),
         format!(
-            "mcp_servers.tempo={{command={:?},args=[\"mcp\"],default_tools_approval_mode=\"approve\"}}",
+            "mcp_servers.pina={{command={:?},args=[\"mcp\"],default_tools_approval_mode=\"approve\"}}",
             exe.display().to_string()
         ),
     ];
@@ -736,7 +735,7 @@ fn codex_isolation(exe: &Path, servers: &[String]) -> Vec<String> {
         n.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     };
-    for name in servers.iter().filter(|n| *n != "tempo").filter(bare) {
+    for name in servers.iter().filter(|n| *n != "pina").filter(bare) {
         a.extend(["-c".into(), format!("mcp_servers.{name}.enabled=false")]);
     }
     for feature in ["plugins", "apps", "computer_use", "browser_use"] {
@@ -745,7 +744,7 @@ fn codex_isolation(exe: &Path, servers: &[String]) -> Vec<String> {
     a
 }
 
-/// `tempo ask`: an agent does what's asked to the song, saying what it's doing as it goes. The app
+/// `pina ask`: an agent does what's asked to the song, saying what it's doing as it goes. The app
 /// that has the song open shows it all in its Agent panel, and the edits as they're made.
 pub fn ask(kind: Kind, dir: &Path, words: &str) -> Result<(), String> {
     use std::io::IsTerminal;
@@ -1056,7 +1055,7 @@ fn codex_events(v: &Value) -> (Vec<Event>, Option<String>) {
 /// A tool call in words: what it's doing, and to what. `bar` is the song's bar in ticks, for
 /// saying where.
 pub fn label(name: &str, input: &Value, bar: u64) -> (String, String) {
-    let tool = name.strip_prefix("mcp__tempo__").unwrap_or(name);
+    let tool = name.strip_prefix("mcp__pina__").unwrap_or(name);
     let s = |k: &str| input[k].as_str().unwrap_or_default().to_string();
     let file = |k: &str| {
         Path::new(&s(k))
@@ -1191,12 +1190,11 @@ mod tests {
 
     #[test]
     fn codex_gets_tempos_tools_approved_and_nothing_else() {
-        let home =
-            std::env::temp_dir().join(format!("tempo-test-codex-mcp-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("pina-test-codex-mcp-{}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(
             home.join("config.toml"),
-            "model = \"x\"\n[mcp_servers.node_repl]\ncommand = \"n\"\n[mcp_servers.node_repl.env]\nA = \"1\"\n[mcp_servers.\"computer-use\"]\ncommand = \"c\"\n[mcp_servers.tempo]\ncommand = \"t\"\n",
+            "model = \"x\"\n[mcp_servers.node_repl]\ncommand = \"n\"\n[mcp_servers.node_repl.env]\nA = \"1\"\n[mcp_servers.\"computer-use\"]\ncommand = \"c\"\n[mcp_servers.pina]\ncommand = \"t\"\n",
         )
         .unwrap();
         // Read where Codex keeps its config: the servers it sets up, once each.
@@ -1204,12 +1202,12 @@ mod tests {
             let _home = CodexHome::set(&home);
             codex_servers()
         };
-        assert_eq!(servers, ["node_repl", "computer-use", "tempo"]);
-        let args = codex_isolation(Path::new("/A/tempo"), &servers).join(" ");
-        assert!(args.contains(r#"mcp_servers.tempo={command="/A/tempo",args=["mcp"],default_tools_approval_mode="approve"}"#), "{args}");
+        assert_eq!(servers, ["node_repl", "computer-use", "pina"]);
+        let args = codex_isolation(Path::new("/A/pina"), &servers).join(" ");
+        assert!(args.contains(r#"mcp_servers.pina={command="/A/pina",args=["mcp"],default_tools_approval_mode="approve"}"#), "{args}");
         assert!(args.contains("mcp_servers.node_repl.enabled=false"));
         assert!(args.contains("mcp_servers.computer-use.enabled=false"));
-        assert!(!args.contains("tempo.enabled"));
+        assert!(!args.contains("pina.enabled"));
         assert!(
             args.contains("features.plugins=false") && args.contains("features.computer_use=false")
         );
@@ -1283,7 +1281,7 @@ mod tests {
 
         // Codex's from its own list: those it shows, in its order, each with its efforts; its
         // default from its config.
-        let home = std::env::temp_dir().join(format!("tempo-test-codex-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("pina-test-codex-{}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
         let list = json!({"models": [
             {"slug": "b", "display_name": "B", "visibility": "list", "priority": 9,
@@ -1334,11 +1332,11 @@ mod tests {
         );
         assert_eq!(
             line(
-                r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"mcp__tempo__edit","input":{}}}}"#
+                r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"mcp__pina__edit","input":{}}}}"#
             ),
             [Event::ToolStart {
                 id: "t1".into(),
-                name: "mcp__tempo__edit".into()
+                name: "mcp__pina__edit".into()
             }]
         );
         assert_eq!(
@@ -1378,12 +1376,12 @@ mod tests {
         let (e, id) = codex(r#"{"type":"thread.started","thread_id":"01a1"}"#);
         assert_eq!((e.len(), id.as_deref()), (1, Some("01a1")));
         let (e, _) = codex(
-            r#"{"type":"item.started","item":{"id":"item_2","type":"mcp_tool_call","server":"tempo","tool":"edit","arguments":{"command":{"op":"set_tempo","bpm":101}},"status":"in_progress"}}"#,
+            r#"{"type":"item.started","item":{"id":"item_2","type":"mcp_tool_call","server":"pina","tool":"edit","arguments":{"command":{"op":"set_tempo","bpm":101}},"status":"in_progress"}}"#,
         );
         assert!(matches!(&e[1], Event::Tool { name, input, .. }
-            if name == "mcp__tempo__edit" && input["command"]["bpm"] == 101));
+            if name == "mcp__pina__edit" && input["command"]["bpm"] == 101));
         let (e, _) = codex(
-            r#"{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"tempo","tool":"edit","status":"failed","error":{"message":"no such track"}}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"pina","tool":"edit","status":"failed","error":{"message":"no such track"}}}"#,
         );
         assert_eq!(
             e,
@@ -1400,7 +1398,7 @@ mod tests {
     #[test]
     fn a_song_not_saved_yet_runs_in_the_nearest_folder_there_is() {
         let tmp = std::env::temp_dir();
-        assert_eq!(workdir(&tmp.join("tempo-not-made-yet/Untitled")), tmp);
+        assert_eq!(workdir(&tmp.join("pina-not-made-yet/Untitled")), tmp);
         assert_eq!(workdir(&tmp), tmp);
     }
 
@@ -1418,7 +1416,7 @@ mod tests {
             "op": "add_midi_region", "track": 2, "start": 30720, "length": 15360,
             "notes": [{}, {}, {}] } });
         assert_eq!(
-            label("mcp__tempo__edit", &edit, 3840),
+            label("mcp__pina__edit", &edit, 3840),
             (
                 "Add midi region".into(),
                 "track 2 · bar 9 · 4 bars · 3 notes".into()
@@ -1426,12 +1424,12 @@ mod tests {
         );
         let set = json!({ "command": { "op": "set_track", "track": 1, "volume_db": -5 } });
         assert_eq!(
-            label("mcp__tempo__edit", &set, 3840),
+            label("mcp__pina__edit", &set, 3840),
             ("Set track 1".into(), "volume db -5".into())
         );
         let put = json!({ "path": "/s/Kick 01.wav", "project": "/p" });
         assert_eq!(
-            label("mcp__tempo__samples_put", &put, 3840),
+            label("mcp__pina__samples_put", &put, 3840),
             ("Putting in".into(), "Kick 01".into())
         );
     }

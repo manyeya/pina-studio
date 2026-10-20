@@ -226,7 +226,7 @@ pub fn editor_window(mtm: MainThreadMarker, title: &str, size: (f64, f64)) -> Re
     window
 }
 
-/// Parameter edits from the main thread (tempo's, or the plugin's own editor's) to the audio
+/// Parameter edits from the main thread (Pina Studio's, or the plugin's own editor's) to the audio
 /// thread, in order.
 pub struct EditSender(std::sync::Mutex<rtrb::Producer<(u32, f64)>>);
 

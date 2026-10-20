@@ -7,7 +7,7 @@ use gpui::{
     ScrollWheelEvent, Stateful, canvas, div, fill, linear_color_stop, linear_gradient, point,
     prelude::*, px, rgb, size,
 };
-use tempo_engine::{
+use pina_engine::{
     eq::{Section, band_sections, response_db},
     project::{Eq, EqBand, MAX_BANDS, Placement},
 };
@@ -301,7 +301,7 @@ impl Workspace {
                     .map(|&f| {
                         m.proposed
                             .iter()
-                            .map(|b| tempo_engine::eq::band_response(b, 1.0, f, rate) as f32)
+                            .map(|b| pina_engine::eq::band_response(b, 1.0, f, rate) as f32)
                             .sum()
                     })
                     .collect();

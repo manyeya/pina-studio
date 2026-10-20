@@ -2,11 +2,11 @@
 //! "_90bpm_", "in A minor", "Cmaj". Loops of six seconds or more, from the folders given (the
 //! sample library's by default), every `--every`th of them.
 //!
-//!     cargo run --release -p tempo-engine --example study_eval -- [--every N] [--list] [folders]
+//!     cargo run --release -p pina-engine --example study_eval -- [--every N] [--list] [folders]
 
 use std::path::{Path, PathBuf};
 
-use tempo_engine::{engine::read_audio, study::study_audio};
+use pina_engine::{engine::read_audio, study::study_audio};
 
 fn bpm_in(s: &str) -> Option<f32> {
     let lower = s.to_lowercase();
@@ -53,7 +53,7 @@ fn key_in(s: &str) -> Option<String> {
                 _ => None,
             };
             if let Some(q) = quality {
-                return tempo_engine::music::Key::parse(&format!("{n} {q}")).map(|k| k.name());
+                return pina_engine::music::Key::parse(&format!("{n} {q}")).map(|k| k.name());
             }
         }
     }
@@ -94,7 +94,7 @@ fn main() {
         .map(PathBuf::from)
         .collect();
     if dirs.is_empty() {
-        dirs.push(PathBuf::from(std::env::var("HOME").unwrap()).join("Music/tempo/Samples"));
+        dirs.push(pina_engine::paths::songs().join("Samples"));
     }
     let mut all = Vec::new();
     for d in &dirs {
@@ -143,9 +143,9 @@ fn main() {
         if let Some(root) = name
             .rsplit_once("]-")
             .map(|(_, r)| r.trim_end_matches(".wav").to_string())
-            && let Some(want) = tempo_engine::music::Key::parse(&format!("{root} major"))
+            && let Some(want) = pina_engine::music::Key::parse(&format!("{root} major"))
         {
-            let mine = tempo_engine::music::Key::parse(&s.key.name).unwrap();
+            let mine = pina_engine::music::Key::parse(&s.key.name).unwrap();
             roots += 1;
             // The tonic itself, or (a mode unsaid) the relative minor's.
             if mine.root == want.root
@@ -158,8 +158,8 @@ fn main() {
         }
         if let Some(k) = key_in(&name) {
             keyed += 1;
-            let mine = tempo_engine::music::Key::parse(&s.key.name).unwrap();
-            let theirs = tempo_engine::music::Key::parse(&k).unwrap();
+            let mine = pina_engine::music::Key::parse(&s.key.name).unwrap();
+            let theirs = pina_engine::music::Key::parse(&k).unwrap();
             let relative = (mine.minor != theirs.minor)
                 && (if mine.minor {
                     (mine.root + 3) % 12 == theirs.root

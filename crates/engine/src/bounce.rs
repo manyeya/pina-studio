@@ -406,7 +406,7 @@ fn write(l: &[f32], r: &[f32], opts: &Options, f: Format, file: &Path) -> Result
                 (_, b) => b,
             };
             let tmp = std::env::temp_dir().join(format!(
-                "tempo-bounce-{}-{}.wav",
+                "pina-bounce-{}-{}.wav",
                 std::process::id(),
                 file.file_stem()
                     .map_or(String::new(), |s| s.to_string_lossy().into_owned())
@@ -746,7 +746,7 @@ mod tests {
     }
 
     fn dir() -> PathBuf {
-        let d = std::env::temp_dir().join(format!("tempo-bounce-test-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("pina-bounce-test-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

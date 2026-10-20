@@ -1,15 +1,15 @@
-//! Renders the app icon (`crates/app/icon/tempo.svg`, from `scripts/icon.py`) at every size macOS
-//! asks for, and packs them into `tempo.icns` beside it with `iconutil`.
+//! Renders the app icon (`crates/app/icon/pina.svg`, from `scripts/icon.py`) at every size macOS
+//! asks for, and packs them into `pina.icns` beside it with `iconutil`.
 //!
-//! `cargo run -p tempo --example icon`
+//! `cargo run -p pina --example icon`
 
 use std::{path::Path, process::Command};
 
 fn main() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("icon");
-    let svg = std::fs::read(dir.join("tempo.svg")).expect("tempo.svg: run scripts/icon.py");
+    let svg = std::fs::read(dir.join("pina.svg")).expect("pina.svg: run scripts/icon.py");
     let tree = resvg::usvg::Tree::from_data(&svg, &resvg::usvg::Options::default()).unwrap();
-    let set = std::env::temp_dir().join("tempo.iconset");
+    let set = std::env::temp_dir().join("pina.iconset");
     let _ = std::fs::remove_dir_all(&set);
     std::fs::create_dir_all(&set).unwrap();
     for size in [16u32, 32, 128, 256, 512] {
@@ -24,7 +24,7 @@ fn main() {
                 .unwrap();
         }
     }
-    let out = dir.join("tempo.icns");
+    let out = dir.join("pina.icns");
     let ok = Command::new("iconutil")
         .args(["-c", "icns"])
         .arg(&set)

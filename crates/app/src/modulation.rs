@@ -5,13 +5,13 @@
 //! it there; that knob then wears a ring in the modulator's colour, its range, and a dot riding
 //! where it is now. Click a card to pick it: dragging a knob it moves then sets how far, not the
 //! knob. Each card lists where it goes, each route's depth dragged sideways. The engine side is
-//! `tempo_engine::modulate`.
+//! `pina_engine::modulate`.
 
 use gpui::{
     Bounds, Context, Div, FontWeight, Hsla, MouseButton, MouseDownEvent, PathBuilder, Pixels,
     Point, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
-use tempo_engine::{
+use pina_engine::{
     modulate::{
         self, LfoShape, MAX_MODS, ModKind, ModRate, ModRoute, ModTarget, Modulator, SamplerParam,
     },
@@ -406,9 +406,9 @@ impl Workspace {
                     .sound_name(t, r)
                     .unwrap_or_else(|| format!("Sound {}", r + 1));
                 let what = match param {
-                    tempo_engine::modulate::SoundParam::Velocity => "velocity",
-                    tempo_engine::modulate::SoundParam::Pitch => "pitch",
-                    tempo_engine::modulate::SoundParam::Chance => "chance",
+                    pina_engine::modulate::SoundParam::Velocity => "velocity",
+                    pina_engine::modulate::SoundParam::Pitch => "pitch",
+                    pina_engine::modulate::SoundParam::Chance => "chance",
                 };
                 format!("{sound} {what}")
             }
@@ -422,7 +422,7 @@ impl Workspace {
         let regions = shown.into_iter().chain(0..track.regions.len());
         let pitch = regions
             .filter_map(|i| match &track.regions.get(i)?.content {
-                tempo_engine::project::Content::Pattern { rows, .. } => {
+                pina_engine::project::Content::Pattern { rows, .. } => {
                     rows.get(r).map(|row| row.pitch)
                 }
                 _ => None,
@@ -463,12 +463,12 @@ impl Workspace {
             .pattern()
             .filter(|at| at.0 == t)
             .and_then(|at| match &track.regions[at.1].content {
-                tempo_engine::project::Content::Pattern { rows, .. } => Some(rows.len()),
+                pina_engine::project::Content::Pattern { rows, .. } => Some(rows.len()),
                 _ => None,
             })
             .unwrap_or(0);
         if ahead {
-            use tempo_engine::modulate::SoundParam;
+            use pina_engine::modulate::SoundParam;
             let sounds = (0..rows)
                 .flat_map(|r| {
                     [SoundParam::Velocity, SoundParam::Pitch, SoundParam::Chance]
@@ -874,7 +874,7 @@ impl Workspace {
         let tempo = self.session.project.tempo;
         match (rate, self.player.playing()) {
             (ModRate::Beats(b), true) => {
-                let beats = self.playhead() as f64 / tempo_engine::project::PPQ as f64;
+                let beats = self.playhead() as f64 / pina_engine::project::PPQ as f64;
                 beats / b.max(1e-3) as f64
             }
             _ => self.mod_clock.elapsed().as_secs_f64() * rate.hz(tempo),

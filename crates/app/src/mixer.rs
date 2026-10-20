@@ -6,7 +6,7 @@ use gpui::{
     Bounds, Context, Div, FontWeight, MouseButton, MouseDownEvent, canvas, div, fill, point,
     prelude::*, px, rgb, size,
 };
-use tempo_engine::{
+use pina_engine::{
     dsp::sat_curve,
     player::Which,
     project::{Comp, Eq, Instrument, Saturator},

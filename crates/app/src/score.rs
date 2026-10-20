@@ -8,7 +8,7 @@ use gpui::{
     Bounds, Context, FontWeight, Hsla, MouseButton, PathBuilder, Pixels, Point, Window, canvas,
     div, fill, point, prelude::*, px, rgb, size,
 };
-use tempo_engine::{
+use pina_engine::{
     music::Key,
     project::{Content, PPQ},
 };

@@ -8,7 +8,7 @@ edition = "2024"
 
 # Dependencies optimized even in dev builds: unoptimized gpui and DSP can't keep up with the
 # screen or the audio callback.
-# Dependencies fast and without debug info, tempo's own code with line numbers (enough for a
+# Dependencies fast and without debug info, Pina Studio's own code with line numbers (enough for a
 # backtrace): with full debug info everywhere target/debug grew to 37 GB.
 [profile.dev.package."*"]
 opt-level = 3

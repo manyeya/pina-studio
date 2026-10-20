@@ -1,13 +1,13 @@
 //! Renders loops to new tempos with each way of stretching, and with the Signalsmith stretch
-//! tempo used before, to hear side by side; and measures them: how long each took, how near its
+//! Pina Studio used before, to hear side by side; and measures them: how long each took, how near its
 //! hits land to their new times, and how sharp their attacks stay.
 //!
-//! `cargo run --release -p tempo-engine --example stretch_ab -- <out dir> <loop.wav> <bpm>...`
+//! `cargo run --release -p pina-engine --example stretch_ab -- <out dir> <loop.wav> <bpm>...`
 //! (a loop and its tempo, again for more): each goes to 120 and to 80 BPM.
 
 use std::{path::Path, time::Instant};
 
-use tempo_engine::{
+use pina_engine::{
     engine::{AudioData, load_audio},
     stretch::{Fit, Flex, onsets, render},
 };

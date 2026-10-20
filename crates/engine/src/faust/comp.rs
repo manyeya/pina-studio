@@ -1,5 +1,5 @@
 /* ------------------------------------------------------------
-name: "tempo Compressor"
+name: "Pina Studio Compressor"
 Code generated with Faust 2.88.0 (https://faust.grame.fr)
 Compilation options: -lang rust -fpga-mem-th 4 -ct 1 -cn CompDsp -es 1 -mcd 16 -mdd 1024 -mdy 33 -single -ftz 2
 ------------------------------------------------------------ */
@@ -103,7 +103,7 @@ impl CompDsp {
 		m.declare("maths.lib/license", r"LicenseRef-LGPL-2.1-or-later-with-Faust-exception");
 		m.declare("maths.lib/name", r"Faust Math Library");
 		m.declare("maths.lib/version", r"2.9.0");
-		m.declare("name", r"tempo Compressor");
+		m.declare("name", r"Pina Studio Compressor");
 		m.declare("platform.lib/name", r"Generic Platform Library");
 		m.declare("platform.lib/version", r"1.3.0");
 		m.declare("routes.lib/name", r"Faust Signal Routing Library");
@@ -169,7 +169,7 @@ impl CompDsp {
 	}
 	
 	pub fn build_user_interface_static(ui_interface: &mut dyn UI<FaustFloat>) {
-		ui_interface.open_vertical_box("tempo Compressor");
+		ui_interface.open_vertical_box("Pina Studio Compressor");
 		ui_interface.add_horizontal_slider("attack", ParamIndex(0), 1e+01, 0.05, 1e+03, 0.01);
 		ui_interface.add_horizontal_slider("makeup", ParamIndex(1), 0.0, -24.0, 24.0, 0.01);
 		ui_interface.add_horizontal_slider("ratio", ParamIndex(2), 4.0, 1.0, 2e+01, 0.01);

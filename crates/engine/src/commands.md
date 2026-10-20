@@ -1,22 +1,22 @@
-# tempo commands
+# Pina Studio commands
 
-A project is a folder with `project.json` (read it with `tempo show <project>`). Edit it with one
+A project is a folder with `project.json` (read it with `pina show <project>`). Edit it with one
 command at a time:
 
-    tempo do <project> '<command as JSON>'
+    pina do <project> '<command as JSON>'
 
-If the project is open in the tempo app, the command goes to the app: it's applied live, can be
-undone there, and is saved when the app saves (`tempo save <project>`). Otherwise the folder is
+If the project is open in the Pina Studio app, the command goes to the app: it's applied live, can be
+undone there, and is saved when the app saves (`pina save <project>`). Otherwise the folder is
 edited directly (and created, if it doesn't exist).
 
 Time is in ticks: 960 to a quarter note, so in 4/4 bar `b` beat `k` starts at
 `(b - 1) * 3840 + (k - 1) * 960` (in 3/4 a bar is 2880; in 6/8, 2880 with 480 to a beat). Tracks, regions, sends and auxes are numbered from 0, in the
-order `tempo show` lists them. Levels are in dB (0 is unity, -144 silent); pan is -1 (left) to 1
+order `pina show` lists them. Levels are in dB (0 is unity, -144 silent); pan is -1 (left) to 1
 (right). A note is `{"start": ticks from the region's start, "length": ticks, "pitch": 0-127,
 "velocity": 1-127}`; middle C is 60. An instrument is `"synth"` (the built-in sine) or
 `"drums"` (the built-in kit, on the General MIDI drum notes) or a plugin,
 `{"plugin": {"format": "clap", "path": "/path/to/Plugin.clap", "class": "Plugin Name", "uid": "…"}}`,
-exactly as `tempo plugins` lists it (`format` is `vst3`, the default, `clap`, `vst2` or `au`;
+exactly as `pina plugins` lists it (`format` is `vst3`, the default, `clap`, `vst2` or `au`;
 an Audio Unit is known by its `uid`, like `"aumu samp appl"`, and may have no `path`), or
 the built-in sampler: `{"sampler": {"zones": [{"file": "/path/Kick.wav", "name": "Kick", "note": 36}]}}`.
 A zone is a sample on a note (a drum kit has one each), or with `"high"` a range of notes it's
@@ -67,16 +67,16 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `set_plugin_param` `{"channel": {"track": 1}, "plugin": "instrument", "param": "Filter Cutoff", "text": "850 Hz"}`:
   turns a plugin's parameter: `param` by its id or its name, set to `value` (0 to 1) or to
   `text`, a value as the plugin shows it (`"850 Hz"`, `"2.4 kHz"`, `"-6 dB"`, `"Sine"`).
-  `plugin` is `"instrument"` or `{"insert": 0}`. `tempo params <project> <track>` (`--aux`,
+  `plugin` is `"instrument"` or `{"insert": 0}`. `pina params <project> <track>` (`--aux`,
   `--master`, `--insert N`) lists them all: id, name, value and how it's shown, default, unit,
   steps, and for a choice, `options` (what each is called, and a value for it). Parameters are
   applied in the order they're set: set an effect's type before what belongs to it. Without
-  `value` or `text`, tempo stops setting it and it goes back to what it was.
+  `value` or `text`, Pina Studio stops setting it and it goes back to what it was.
 - `set_preset` `{"channel": {"track": 1}, "plugin": "instrument", "preset": "Warm Pad"}`: loads a
   preset: by name, or `{"program": 3}` (one of the plugin's own; with `"list"` for VST3) or
-  `{"file": "/path/Some.vstpreset"}`. `tempo presets <project> <track>` lists them: the plugin's
+  `{"file": "/path/Some.vstpreset"}`. `pina presets <project> <track>` lists them: the plugin's
   programs and the preset files of its format (`.vstpreset`, `.aupreset`, `.fxp`, CLAP's), from
-  `~/Library/Audio/Presets/<vendor>/<plugin>` and `/Library/Audio/Presets/…`; `tempo presets …
+  `~/Library/Audio/Presets/<vendor>/<plugin>` and `/Library/Audio/Presets/…`; `pina presets …
   --save "My Bass"` saves its settings as a new one. A preset replaces the plugin's settings and
   what was set over them; without `preset`, it goes back to its settings from before (in the
   app; from the command line, its defaults).
@@ -144,9 +144,9 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `unlink` `{"track": 0, "region": 2}`: makes an alias a region of its own.
 - `set_cell` `{"track": 1, "scene": 0, "region": {"length": 3840, "midi": {"notes": […]}}}`:
   puts a loop in a Live Loops cell (scenes numbered from 0); any region content works, `start`
-  doesn't matter. Without `region`, empties the cell. Launch cells in the app: `tempo launch
+  doesn't matter. Without `region`, empties the cell. Launch cells in the app: `pina launch
   <project> <track> <scene>` starts a cell at the next bar (or now, starting playback), and
-  `tempo launch <project> <track>` stops it, the track's own regions playing again.
+  `pina launch <project> <track>` stops it, the track's own regions playing again.
 - `flex_region` `{"track": 2, "region": 0, "length": 7680}`: time-stretches a region to that
   length. Audio plays slower or faster at the same pitch (up to four times either way), as its
   `"flex"` says; a MIDI region's notes and controllers, or a pattern's steps, spread out or close
@@ -194,8 +194,8 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   what it's for if they said: kick, snare, hats, bass, pad, lead…); `"only": true` asks for these
   and no others. `sounds` replaces the list; leave it out to change only `only`. `"devices"`
   are the instruments and effects picked, the same way: `{"name": "Serum", "instrument": true,
-  "plugin": {…as set_instrument takes it}, "role": "bass"}`, or tempo's own by `"own"`
-  (`synth`, `drums`, `sampler`, `eq`, `comp`, `sat`). The `palette` tool (in `tempo mcp`) lists
+  "plugin": {…as set_instrument takes it}, "role": "bass"}`, or Pina Studio's own by `"own"`
+  (`synth`, `drums`, `sampler`, `eq`, `comp`, `sat`). The `palette` tool (in `pina mcp`) lists
   them with what each is and whether it's in the song yet.
 - `set_automation_mode` `{"track": 0, "mode": "latch"}`: `read` (the default) plays automation;
   `touch` and `latch` also record what's moved in the app while the song plays, until the control
@@ -273,17 +273,17 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   as a scale and the score as its signature. With `"move_notes": true` the music moves into it:
   every note and pattern row on pitched instruments goes up or down to the new tonic (the nearer
   way), each step of the old scale landing on the same step of the new, so major to minor changes
-  the mode; drums and audio stay. Without `key`, tempo works it out from the notes.
+  the mode; drums and audio stay. Without `key`, Pina Studio works it out from the notes.
 - `set_cycle` `{"start": 0, "end": 15360, "on": true}`: playback loops over that range (ticks);
   `"on": false` keeps the range without looping.
 
 ## Writing music
 
-tempo writes parts that are right (in the key, on the chords, voiced and played like a player
-would) so an agent picks what to write and tempo gets the notes right. The song's chords are its
+Pina Studio writes parts that are right (in the key, on the chords, voiced and played like a player
+would) so an agent picks what to write and Pina Studio gets the notes right. The song's chords are its
 chord track; parts are written over it, and the critic checks against it.
 
-- `set_genre` `{"genre": "lofi"}`: what the song is, by its playbook (`tempo playbook` lists them:
+- `set_genre` `{"genre": "lofi"}`: what the song is, by its playbook (`pina playbook` lists them:
   lofi, boom_bap, trap, drill, rnb, neo_soul, pop, house, deep_house, techno, afrobeats, amapiano,
   dnb, reggaeton, edm, cinematic, ambient). Drums, arrangement and the critic's targets follow it.
 - `set_chords` `{"chords": "i9 | VImaj9 | III | VII7", "start": 0, "bars": 8}`: the chord track.
@@ -291,7 +291,7 @@ chord track; parts are written over it, and the critic checks against it.
   in the song's key (`ii9 V13 Imaj9`, `bVII`, `iiø7`, `#iv°7`; in a minor key the degrees are the
   natural minor's). Bars are split by `|`; chords in one bar share it. It repeats to fill `bars`
   (one pass by default) from `start` (ticks), replacing what was there. Without `chords`, clears.
-  Answers the chords bar by bar. `tempo theory` suggests progressions for a genre or mood.
+  Answers the chords bar by bar. `pina theory` suggests progressions for a genre or mood.
 - `write_chords` `{"track": 2, "chords": "Am9 | Fmaj9", "voicing": "open", "rhythm": "push", "register": [55, 79], "bars": 8, "start": 0, "seed": 1}`:
   plays the chords (`chords` sets the chord track there first) on an instrument track as a new
   region, each voiced from the last by the smallest moves. `voicing`: `open` (root low, the rest
@@ -319,7 +319,7 @@ chord track; parts are written over it, and the critic checks against it.
   after another, each with its parts (by role: drums, perc, bass, chords, pad, lead, counter, arp,
   fx, vocals, texture; or by track number, `"3"`), marked, the chords carried along; quieter
   sections play softer (`energy` 1-5, 4 as written). Without `sections`, the genre playbook's.
-  A track's role comes from its name, what tempo wrote on it, then its sound; `roles` corrects it.
+  A track's role comes from its name, what Pina Studio wrote on it, then its sound; `roles` corrects it.
 - `copy_bars` `{"from": 0, "bars": 8, "to": 30720, "tracks": [0, 1]}`: copies bars of tracks
   (all by default) to `to`, replacing what's there; the chords come too.
 - `transition` `{"at": 30720, "kind": "build", "length": 2}`: into the downbeat at `at`:
@@ -358,10 +358,10 @@ chord track; parts are written over it, and the critic checks against it.
 
 ## Listening
 
-An agent can't hear, so tempo measures:
+An agent can't hear, so Pina Studio measures:
 
-    tempo analyze <project>          the mix, then each track alone
-    tempo analyze <file.wav>
+    pina analyze <project>          the mix, then each track alone
+    pina analyze <file.wav>
 
 Each gives the length, peak (dBFS) and RMS per channel, integrated loudness (LUFS, as
 ITU-R BS.1770) and the loudest 3 seconds' (`loudest_lufs`), crest (peak over RMS: small is
@@ -371,10 +371,10 @@ all in dB below the total; stereo `correlation` (1 mono, below 0 cancelling in m
 `width_db` (sides against middle); and the `notes` sounding, each pitch class's share of the
 tonal energy, with the key they fit best and how well (`key_fit`, above 0.7 is clear). A
 project's analysis also has each section, marker to marker, so a hook can be compared with a
-verse. `tempo render <project> <out.wav>` bounces it to listen to.
+verse. `pina render <project> <out.wav>` bounces it to listen to.
 
-`tempo params` and `tempo presets` answer from the app when it has the project open, and
+`pina params` and `pina presets` answer from the app when it has the project open, and
 otherwise load the one plugin asked about.
 
-If the app is running: `tempo play`, `tempo stop`, `tempo locate <project> <tick>`,
-`tempo save`, `tempo undo` and `tempo redo` (each with the project) drive it.
+If the app is running: `pina play`, `pina stop`, `pina locate <project> <tick>`,
+`pina save`, `pina undo` and `pina redo` (each with the project) drive it.

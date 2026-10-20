@@ -1,7 +1,7 @@
-//! The installer's window: tempo on the left (its icon over a curve that moves, as its EQ's does),
+//! The installer's window: Pina Studio on the left (its icon over a curve that moves, as its EQ's does),
 //! and on the right what's about to happen, what is happening, and what's done. Install, update
-//! or reinstall; the `tempo` command and the example songs if wanted; tempo opened at the end,
-//! and the disk image put away. Or tempo taken out again.
+//! or reinstall; the `pina` command and the example songs if wanted; Pina Studio opened at the end,
+//! and the disk image put away. Or Pina Studio taken out again.
 //!
 //! Everything moves by the clock, a frame at a time: the curve draws itself in and breathes, the
 //! icon lands, words and rows rise in turn; while it works the curve quickens, steps tick
@@ -46,7 +46,7 @@ pub fn alpha(c: u32, a: f32) -> Hsla {
 pub enum Stage {
     /// What's about to happen, and the button that does it.
     Ready,
-    /// tempo is open: it has to close first (and ask to save its song).
+    /// Pina Studio is open: it has to close first (and ask to save its song).
     Waiting,
     Working,
     Done,
@@ -76,9 +76,9 @@ pub enum Job {
 impl Job {
     fn title(self) -> &'static str {
         match self {
-            Job::Copy => "Copy tempo into Applications",
+            Job::Copy => "Copy Pina Studio into Applications",
             Job::Register => "Let the Finder, Spotlight and Dock know",
-            Job::Command => "The tempo command",
+            Job::Command => "The pina command",
             Job::Examples => "Example songs",
         }
     }
@@ -112,7 +112,7 @@ pub struct Installer {
 fn archs(app: &std::path::Path) -> String {
     let out = std::process::Command::new("lipo")
         .arg("-archs")
-        .arg(app.join("Contents/MacOS/tempo"))
+        .arg(app.join("Contents/MacOS/pina"))
         .output();
     let archs = out
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
@@ -138,7 +138,7 @@ impl Installer {
             steps: Vec::new(),
             icon: Arc::new(Image::from_bytes(
                 ImageFormat::Svg,
-                include_bytes!("../../app/icon/tempo.svg").to_vec(),
+                include_bytes!("../../app/icon/pina.svg").to_vec(),
             )),
             started: Instant::now(),
             stage_at: Instant::now(),
@@ -199,7 +199,7 @@ impl Installer {
         self.steps[i].1 = state;
     }
 
-    /// Install: once tempo's closed (if it's open), each step in turn, off this thread.
+    /// Install: once Pina Studio's closed (if it's open), each step in turn, off this thread.
     fn start(&mut self, cx: &mut Context<Self>) {
         let mut jobs = vec![Job::Copy, Job::Register];
         if self.want_command {
@@ -218,7 +218,7 @@ impl Installer {
         cx.notify();
         let plan = self.plan.clone();
         cx.spawn(async move |this, cx| {
-            // tempo open: wait for it to close (it asks to save its song first).
+            // Pina Studio open: wait for it to close (it asks to save its song first).
             loop {
                 let app = plan.app();
                 let open = cx
@@ -411,7 +411,7 @@ fn hashed(i: usize, k: f32) -> f32 {
 }
 
 /// What the curve's doing: how far it's drawn in, how lively, how calm (settling flat when
-/// it's over), and the seconds since tempo was ready (notes float up off it then).
+/// it's over), and the seconds since Pina Studio was ready (notes float up off it then).
 #[derive(Clone, Copy)]
 struct Motion {
     phase: f32,
@@ -421,7 +421,7 @@ struct Motion {
     party: Option<f32>,
 }
 
-/// The curve under tempo's icon: a few bells and shelves breathing over a moving spectrum, as an
+/// The curve under Pina Studio's icon: a few bells and shelves breathing over a moving spectrum, as an
 /// EQ's curve over a song does.
 fn curve(m: Motion) -> impl IntoElement {
     canvas(
@@ -714,14 +714,18 @@ impl Installer {
     /// The right side before anything's done: what installing means here, and the button.
     fn ready(&self, cx: &mut Context<Self>) -> Div {
         let (title, action, note) = match &self.over {
-            Over::Nothing => ("Install tempo".to_string(), "Install".to_string(), None),
+            Over::Nothing => (
+                "Install Pina Studio".to_string(),
+                "Install".to_string(),
+                None,
+            ),
             Over::Older(old) => (
-                "Update tempo".to_string(),
+                "Update Pina Studio".to_string(),
                 format!("Update to {}", self.version),
                 Some(format!("Replaces {old}. Your songs and settings stay.")),
             ),
             Over::Same => (
-                "tempo is installed".to_string(),
+                "Pina Studio is installed".to_string(),
                 "Reinstall".to_string(),
                 Some(format!(
                     "{} is here already. Your songs and settings stay.",
@@ -729,14 +733,14 @@ impl Installer {
                 )),
             ),
             Over::Newer(newer) => (
-                "A newer tempo is installed".to_string(),
+                "A newer Pina Studio is installed".to_string(),
                 format!("Replace with {}", self.version),
                 Some(format!("{newer} is here: this one's older.")),
             ),
         };
         let installed = self.over != Over::Nothing;
         let where_to = self.plan.apps.display().to_string().replace(&home(), "~");
-        // In turn: the words, each row, the button. The first time, after tempo's own entrance.
+        // In turn: the words, each row, the button. The first time, after Pina Studio's own entrance.
         let since = self.stage_at.elapsed().as_secs_f32();
         let lead = if self.started == self.stage_at {
             0.45
@@ -841,13 +845,13 @@ impl Installer {
                     .flex_col()
                     .gap(px(8.))
                     .child(rise(
-                        row("tempo", format!("Into {where_to}"), None, "install-app"),
+                        row("Pina Studio", format!("Into {where_to}"), None, "install-app"),
                         at(0.16),
                     ))
                     .child(rise(
                         row(
-                            "The tempo command",
-                            "Use tempo from Terminal and scripts: tempo new, tempo bounce… May ask for your password.".into(),
+                            "The pina command",
+                            "Use Pina Studio from Terminal and scripts: pina new, pina bounce… May ask for your password.".into(),
                             Some(self.want_command),
                             "install-command",
                         )
@@ -920,13 +924,13 @@ impl Installer {
     fn progress(&self, t: f32, cx: &mut Context<Self>) -> Div {
         let (title, sub) = match &self.stage {
             Stage::Waiting => (
-                "Quit tempo to go on".to_string(),
+                "Quit Pina Studio to go on".to_string(),
                 "It's open. Quit it (it asks to save your song first); installing goes on by itself."
                     .to_string(),
             ),
-            Stage::Working => ("Installing…".to_string(), format!("tempo {}", self.version)),
+            Stage::Working => ("Installing…".to_string(), format!("Pina Studio {}", self.version)),
             Stage::Done => (
-                "tempo is ready".to_string(),
+                "Pina Studio is ready".to_string(),
                 "Everything's in place. Open it, and start a song.".to_string(),
             ),
             Stage::Failed(why) => ("That didn't work".to_string(), why.clone()),
@@ -1099,7 +1103,7 @@ impl Installer {
                     })
                     .when(done, |d| {
                         d.child(
-                            button("Open tempo", true)
+                            button("Open Pina Studio", true)
                                 .debug_selector(|| "install-open".into())
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -1115,7 +1119,7 @@ impl Installer {
             ))
     }
 
-    /// Taking tempo out: what goes and what stays, asked first; then done.
+    /// Taking Pina Studio out: what goes and what stays, asked first; then done.
     fn removing(&self, cx: &mut Context<Self>) -> Div {
         let removed = self.stage == Stage::Removed;
         let since = self.stage_at.elapsed().as_secs_f32();
@@ -1130,9 +1134,9 @@ impl Installer {
                     .text_size(px(24.))
                     .font_weight(FontWeight::BOLD)
                     .child(if removed {
-                        "tempo is uninstalled"
+                        "Pina Studio is uninstalled"
                     } else {
-                        "Uninstall tempo?"
+                        "Uninstall Pina Studio?"
                     }),
                 at(0.0),
             ))
@@ -1143,7 +1147,7 @@ impl Installer {
                     .text_color(rgb(TEXT_3))
                     .child(match removed {
                         true => "It's in the Trash. Your songs are where they were.",
-                        false => "tempo goes to the Trash, and its tempo command with it. Your songs stay in ~/Music/tempo.",
+                        false => "Pina Studio goes to the Trash, and its pina command with it. Your songs stay in ~/Music/Pina Studio.",
                     }),
                 at(0.07),
             ))
@@ -1260,7 +1264,7 @@ impl Render for Installer {
         self.shown += (target - self.shown) * (dt * 5.0).min(1.0);
         let party = (self.stage == Stage::Done).then(|| self.stage_at.elapsed().as_secs_f32());
         let gone = (self.stage == Stage::Removed).then(|| self.stage_at.elapsed().as_secs_f32());
-        // tempo's entrance: the curve draws in, the icon lands, the words rise.
+        // Pina Studio's entrance: the curve draws in, the icon lands, the words rise.
         let reveal = appear(now, 0.0, 1.1);
         let landing = ease_back(((now - 0.12) / 0.75).clamp(0.0, 1.0));
         let pop = party.map_or(0.0, |c| {
@@ -1339,7 +1343,7 @@ impl Render for Installer {
                                 div()
                                     .text_size(px(28.))
                                     .font_weight(FontWeight::BOLD)
-                                    .child("tempo"),
+                                    .child("Pina Studio"),
                                 appear(now, 0.35, 0.6),
                             ))
                             .child(rise(

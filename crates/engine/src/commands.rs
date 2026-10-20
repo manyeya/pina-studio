@@ -1,4 +1,4 @@
-//! Edits as data: what an agent or a script sends tempo, through the CLI, a running app's socket,
+//! Edits as data: what an agent or a script sends Pina Studio, through the CLI, a running app's socket,
 //! or MCP. In the app each is one undoable step, the same as the edit made by hand.
 
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ use crate::{
     },
 };
 
-/// What `tempo describe` prints: every command, for people and agents.
+/// What `pina describe` prints: every command, for people and agents.
 pub const DESCRIBE: &str = include_str!("commands.md");
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -363,7 +363,7 @@ pub enum Command {
         track: usize,
         mode: AutoMode,
     },
-    /// Turns a plugin's parameter (0 to 1), by id; without `value`, tempo stops setting it.
+    /// Turns a plugin's parameter (0 to 1), by id; without `value`, Pina Studio stops setting it.
     SetPluginParam {
         channel: ChannelRef,
         plugin: Which,
@@ -405,7 +405,7 @@ pub enum Command {
     DeleteMarker {
         marker: usize,
     },
-    /// The song's key, like "A minor"; without one, tempo works it out from the notes. With
+    /// The song's key, like "A minor"; without one, Pina Studio works it out from the notes. With
     /// `move_notes`, the music moves into the new key.
     SetKey {
         #[serde(default)]
@@ -611,7 +611,7 @@ pub trait PluginSource {
     ) -> Result<&dyn PluginApi, String>;
 }
 
-/// Puts what a command says in words into what tempo keeps: a parameter's name into its id, a
+/// Puts what a command says in words into what Pina Studio keeps: a parameter's name into its id, a
 /// value as the plugin shows it ("850 Hz") into its value, a preset's name into the preset.
 /// Asks `plugins` for a plugin only when the command needs one.
 pub fn resolve(
@@ -862,7 +862,7 @@ fn send_param(p: &mut Project, t: usize, send: Option<usize>) -> Result<Param, S
 
 /// What a command that names a plugin's parameter, value or preset in words says when it hasn't
 /// been through `resolve` (which the CLI and the app do).
-const UNRESOLVED: &str = "send it through `tempo do` or the app, which load it";
+const UNRESOLVED: &str = "send it through `pina do` or the app, which load it";
 
 /// The plugin on a channel: a track's instrument or insert, an aux's or the master's insert.
 fn plugin_mut(
@@ -2484,7 +2484,7 @@ mod tests {
 
     #[test]
     fn audio_from_elsewhere_is_copied_in() {
-        let base = std::env::temp_dir().join(format!("tempo-test-cmd-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("pina-test-cmd-{}", std::process::id()));
         let (dir, outside) = (base.join("song"), base.join("take.wav"));
         std::fs::create_dir_all(&dir).unwrap();
         let spec = hound::WavSpec {

@@ -11,7 +11,7 @@ use gpui::{
     ScrollWheelEvent, Stateful, Subscription, canvas, div, fill, linear_color_stop,
     linear_gradient, point, prelude::*, px, rgb, size,
 };
-use tempo_engine::{
+use pina_engine::{
     eq::{LANE_LEN, eq_response, smooth_third, spectrum_db},
     project::{Eq, EqField},
 };
@@ -77,7 +77,7 @@ struct Row {
 }
 
 /// Where a band's dot is on a row's display.
-fn dot(g: &Geo, b: &tempo_engine::project::EqBand, scale: f32) -> (f32, f32) {
+fn dot(g: &Geo, b: &pina_engine::project::EqBand, scale: f32) -> (f32, f32) {
     (
         g.x(b.freq as f64),
         g.y(dot_db(b, scale).clamp(-RANGE, RANGE)),

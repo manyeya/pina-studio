@@ -1,4 +1,4 @@
-//! The Browser: everything that can go on a track, found in one search. tempo's own instruments
+//! The Browser: everything that can go on a track, found in one search. Pina Studio's own instruments
 //! and effects and every plugin installed, one entry each however many formats it comes in, in
 //! the categories its plugin says it belongs to (VST3's subcategories, CLAP's features, an Audio
 //! Unit's type, VST2's category; its name where those are silent); its preset files; the song's
@@ -10,11 +10,11 @@ use gpui::{
     Context, Div, Entity, FontWeight, MouseButton, MouseDownEvent, Subscription, Svg, div,
     prelude::*, px, rgb, svg,
 };
-use serde::{Deserialize, Serialize};
-use tempo_engine::{
+use pina_engine::{
     project::{Format, Instrument, Preset, Which},
     scan::PluginInfo,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{
     looks::{glyph, hsl},
@@ -310,7 +310,7 @@ impl Cat {
     }
 }
 
-/// tempo's own devices.
+/// Pina Studio's own devices.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Own {
     Synth,
@@ -438,16 +438,20 @@ pub fn categorize(p: &PluginInfo) -> Cat {
         })
 }
 
-/// Every device: tempo's own, then each plugin once, its formats together.
+/// Every device: Pina Studio's own, then each plugin once, its formats together.
 pub fn devices(plugins: &[PluginInfo]) -> Vec<Device> {
     let own = |key: &str, name: &str, cat: Cat, own: Own, about: &str| Device {
         key: format!("own:{key}"),
         name: name.into(),
-        vendor: "tempo".into(),
+        vendor: "Pina Studio".into(),
         cat,
         own: Some(own),
         formats: Vec::new(),
-        hay: format!("{name} tempo built in {about} {}", cat.words().join(" ")).to_lowercase(),
+        hay: format!(
+            "{name} pina studio built in {about} {}",
+            cat.words().join(" ")
+        )
+        .to_lowercase(),
     };
     let mut out = vec![
         own("synth", "Sine Synth", Cat::Synth, Own::Synth, "sine simple"),
@@ -574,8 +578,7 @@ struct Kept {
 }
 
 fn kept_file() -> PathBuf {
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-        .join("Library/Application Support/tempo/browser.json")
+    pina_engine::paths::support().join("browser.json")
 }
 
 pub struct Catalog {
@@ -657,8 +660,8 @@ impl Catalog {
             };
             let mut found = Vec::new();
             for p in &device.formats {
-                let dirs = tempo_engine::plugin::preset_dirs(&p.vendor, &p.class);
-                found.extend(tempo_engine::plugin::preset_files(&dirs, ext(p.format)));
+                let dirs = pina_engine::plugin::preset_dirs(&p.vendor, &p.class);
+                found.extend(pina_engine::plugin::preset_files(&dirs, ext(p.format)));
             }
             found.dedup_by(|a, b| a.name == b.name);
             found
@@ -846,12 +849,12 @@ impl Workspace {
 
     /// Samples in the library that a search's words find.
     fn catalog_samples(&self, query: &str, limit: usize) -> Vec<usize> {
-        let q = tempo_engine::samples::search::Query {
+        let q = pina_engine::samples::search::Query {
             text: query.to_string(),
             limit,
             ..Default::default()
         };
-        tempo_engine::samples::search::find(&self.browser.library.samples, &q)
+        pina_engine::samples::search::find(&self.browser.library.samples, &q)
             .into_iter()
             .map(|h| h.index)
             .collect()
@@ -1292,7 +1295,7 @@ impl Workspace {
         let open_key = key.clone();
         let plugin = dev.own.is_none();
         let sub = match (&dev.own, dev.badges().as_slice()) {
-            (Some(_), _) => format!("tempo · {}", dev.cat.name()),
+            (Some(_), _) => format!("Pina Studio · {}", dev.cat.name()),
             (None, b) => format!("{} · {}", dev.vendor, b.join(" ")),
         };
         div()
@@ -1475,7 +1478,7 @@ impl Workspace {
             return div();
         };
         let color = crate::browser::category_color(s.analysis.category);
-        let about = tempo_engine::samples::search::describe(s);
+        let about = pina_engine::samples::search::describe(s);
         div()
             .flex()
             .items_center()
@@ -1496,7 +1499,7 @@ impl Workspace {
                     .rounded(px(7.))
                     .bg(alpha(color, 0.14))
                     .child(
-                        glyph(tempo_engine::look::category_icon(s.analysis.category), 15.)
+                        glyph(pina_engine::look::category_icon(s.analysis.category), 15.)
                             .text_color(rgb(color)),
                     ),
             )

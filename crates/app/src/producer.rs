@@ -1,6 +1,6 @@
 //! The Agent panel's producer tools: the song at a glance (its genre, key, tempo and length),
 //! what to ask for first (the stages from a genre to a master the song hasn't had), the critic
-//! (tempo's notes on the song, each with a fix to ask for), undo for a whole turn, and what's
+//! (Pina Studio's notes on the song, each with a fix to ask for), undo for a whole turn, and what's
 //! selected, sent along as context.
 
 use std::time::Instant;
@@ -9,8 +9,8 @@ use gpui::{
     Animation, AnimationExt, Context, Div, FontWeight, MouseButton, MouseDownEvent, div,
     prelude::*, px, rgb,
 };
+use pina_engine::{arrange, critique, playbook, project::Project};
 use serde_json::Value;
-use tempo_engine::{arrange, critique, playbook, project::Project};
 
 use crate::{
     genres::genre_color,
@@ -87,7 +87,7 @@ impl Stage {
         }
     }
 
-    /// Whether the song has it, as far as tempo can tell.
+    /// Whether the song has it, as far as Pina Studio can tell.
     pub fn done(self, p: &Project) -> bool {
         let sounding = p.tracks.iter().filter(|t| !t.regions.is_empty()).count();
         match self {
@@ -96,7 +96,7 @@ impl Stage {
             Stage::Chords => {
                 !p.chords.is_empty() || {
                     let end = p.end().min(16 * p.bar());
-                    tempo_engine::compose::heard_chords(p, 0, end).len() >= 2
+                    pina_engine::compose::heard_chords(p, 0, end).len() >= 2
                 }
             }
             Stage::Loop => sounding >= 2,
@@ -126,7 +126,7 @@ impl Stage {
         let key = p.song_key().map_or("its key".into(), |k| k.name());
         match self {
             Stage::Genre => format!(
-                "Pick a genre for this song from tempo's playbooks (it's {:.0} BPM in {key}) and set it, with a tempo and key that suit it. Say why you picked it.",
+                "Pick a genre for this song from Pina Studio's playbooks (it's {:.0} BPM in {key}) and set it, with a tempo and key that suit it. Say why you picked it.",
                 p.tempo
             ),
             Stage::Chords => format!(
@@ -164,7 +164,7 @@ impl Workspace {
         self.chat.critic.error = None;
     }
 
-    /// The critic with a render: the mix heard too. In a process of its own (`tempo critique`),
+    /// The critic with a render: the mix heard too. In a process of its own (`pina critique`),
     /// which asks this window for the song.
     fn listen_critic(&mut self, cx: &mut Context<Self>) {
         if self.chat.critic.listening.is_some() {
@@ -483,7 +483,7 @@ impl Workspace {
             .enumerate()
             .map(|(i, n)| {
                 let ask = format!(
-                    "Fix this, from tempo's critic ({}): {}{}. Its advice: {} Make the change, then critique quick to check it.",
+                    "Fix this, from Pina Studio's critic ({}): {}{}. Its advice: {} Make the change, then critique quick to check it.",
                     n.area,
                     n.what,
                     n.at.as_ref().map_or(String::new(), |a| format!(" ({a})")),
@@ -554,7 +554,7 @@ impl Workspace {
                 })
                 .collect();
             format!(
-                "Fix what tempo's critic found, the worst first, then critique again to check:\n{}",
+                "Fix what Pina Studio's critic found, the worst first, then critique again to check:\n{}",
                 wrong.join("\n")
             )
         };

@@ -2853,7 +2853,7 @@ mod tests {
     }
 
     fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("tempo-test-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-test-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -4300,11 +4300,11 @@ mod tests {
     }
 
     /// With a real instrument, which CI doesn't have:
-    /// `TEMPO_TEST_VST3="/path/Some Synth.vst3" cargo test -p tempo-engine -- --ignored`
+    /// `PINA_TEST_VST3="/path/Some Synth.vst3" cargo test -p pina-engine -- --ignored`
     #[test]
     #[ignore]
     fn a_plugin_parameter_follows_its_automation() {
-        let path = std::env::var("TEMPO_TEST_VST3").expect("set TEMPO_TEST_VST3");
+        let path = std::env::var("PINA_TEST_VST3").expect("set PINA_TEST_VST3");
         let class = crate::scan::inspect(Path::new(&path))
             .unwrap()
             .remove(0)

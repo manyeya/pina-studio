@@ -1,4 +1,4 @@
-declare name "tempo Saturator";
+declare name "Pina Studio Saturator";
 declare description "Drive into a soft clip, as tape or a tube would: 2x oversampled and antialiased";
 
 // A biased tanh, scaled so quiet sounds keep their level and loud ones round off; the bias adds

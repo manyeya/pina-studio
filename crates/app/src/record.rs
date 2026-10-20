@@ -8,7 +8,7 @@ use std::{
 };
 
 use gpui::Context;
-use tempo_engine::{
+use pina_engine::{
     project::{AUDIO_DIR, Content, Note, Region},
     record::AudioRecorder,
 };

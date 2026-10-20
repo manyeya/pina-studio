@@ -1,8 +1,8 @@
 //! Hosting VST2 plugins (macOS): load a `.vst` bundle, run it on the audio thread, and open its
 //! editor in a window of its own. The VST2 interface (2.4) is written out here: the `AEffect` a
-//! plugin's entry point returns, the opcodes tempo sends it, and the host callback it calls.
+//! plugin's entry point returns, the opcodes Pina Studio sends it, and the host callback it calls.
 //!
-//! VST2 has no controller apart from the processor: what the editor shows, and what tempo reads
+//! VST2 has no controller apart from the processor: what the editor shows, and what Pina Studio reads
 //! of a parameter, is what plays.
 
 use std::{
@@ -57,7 +57,7 @@ struct AEffect {
     num_inputs: i32,
     num_outputs: i32,
     flags: i32,
-    /// The host's: tempo keeps the plugin's `Instance` here, for the host callback.
+    /// The host's: Pina Studio keeps the plugin's `Instance` here, for the host callback.
     resvd1: isize,
     resvd2: isize,
     initial_delay: i32,
@@ -81,7 +81,7 @@ const FLAG_IS_SYNTH: i32 = 1 << 8;
 const CATEGORY_SYNTH: isize = 2;
 const CATEGORY_SHELL: isize = 10;
 
-/// What tempo asks of a plugin, through its dispatcher.
+/// What Pina Studio asks of a plugin, through its dispatcher.
 mod eff {
     pub const OPEN: i32 = 0;
     pub const CLOSE: i32 = 1;
@@ -116,7 +116,7 @@ mod eff {
     pub const SET_PROCESS_PRECISION: i32 = 77;
 }
 
-/// What a plugin asks of tempo, through the host callback. The SDK skips 5: the opcodes after
+/// What a plugin asks of Pina Studio, through the host callback. The SDK skips 5: the opcodes after
 /// `audioMasterPinConnected` (4) start at 6.
 mod master {
     pub const AUTOMATE: i32 = 0;
@@ -179,7 +179,7 @@ struct VstTimeInfo {
 const TRANSPORT_CHANGED: i32 = 1;
 const TRANSPORT_PLAYING: i32 = 1 << 1;
 const PPQ_POS_VALID: i32 = 1 << 9;
-const TEMPO_VALID: i32 = 1 << 10;
+const PINA_VALID: i32 = 1 << 10;
 const BARS_VALID: i32 = 1 << 11;
 const TIME_SIG_VALID: i32 = 1 << 13;
 
@@ -388,7 +388,7 @@ fn parse_uid(s: &str) -> Option<i32> {
 /// "Nothing waiting" in `Instance::sent`.
 const NOTHING: u64 = f64::NAN.to_bits();
 
-/// One instance of a plugin, and what tempo tells it through the host callback. The plugin's
+/// One instance of a plugin, and what Pina Studio tells it through the host callback. The plugin's
 /// two halves (and its editor, while open) share it; the last of them to go closes it.
 struct Instance {
     effect: *mut AEffect,
@@ -403,7 +403,7 @@ struct Instance {
     tempo: AtomicU64,
     /// Whether it started or stopped, or jumped, since the last block.
     changed: AtomicBool,
-    /// What tempo last set each parameter to, until the processor has applied it (`NOTHING`
+    /// What Pina Studio last set each parameter to, until the processor has applied it (`NOTHING`
     /// when nothing's waiting): the plugin has it only then.
     sent: Box<[AtomicU64]>,
     /// The editor's window while one is open, for the plugin to resize.
@@ -460,7 +460,7 @@ impl Instance {
         }
     }
 
-    /// A parameter's value: what tempo last set it to, if that's still on its way.
+    /// A parameter's value: what Pina Studio last set it to, if that's still on its way.
     fn value(&self, id: u32) -> f64 {
         let sent = self.sent.get(id as usize).map(|s| s.load(Relaxed));
         match sent.map(f64::from_bits) {
@@ -469,7 +469,7 @@ impl Instance {
         }
     }
 
-    /// Marks an edit of tempo's as having reached the plugin, unless a later one is on its way.
+    /// Marks an edit of Pina Studio's as having reached the plugin, unless a later one is on its way.
     fn applied(&self, id: u32, value: f64) {
         if let Some(s) = self.sent.get(id as usize) {
             let _ = s.compare_exchange(value.to_bits(), NOTHING, Relaxed, Relaxed);
@@ -613,7 +613,7 @@ impl Instance {
         let tempo = f64::from_bits(self.tempo.load(Relaxed));
         let position = self.position.load(Relaxed) as f64;
         let ppq = position / self.rate * tempo / 60.0;
-        let mut flags = TEMPO_VALID | PPQ_POS_VALID | BARS_VALID | TIME_SIG_VALID;
+        let mut flags = PINA_VALID | PPQ_POS_VALID | BARS_VALID | TIME_SIG_VALID;
         if self.playing.load(Relaxed) {
             flags |= TRANSPORT_PLAYING;
         }
@@ -662,7 +662,7 @@ thread_local! {
     static TIME: UnsafeCell<VstTimeInfo> = const { UnsafeCell::new(unsafe { std::mem::zeroed() }) };
 }
 
-/// What a plugin asks of tempo.
+/// What a plugin asks of Pina Studio.
 unsafe extern "C" fn host_callback(
     effect: *mut AEffect,
     op: i32,
@@ -671,7 +671,7 @@ unsafe extern "C" fn host_callback(
     ptr: *mut c_void,
     _opt: f32,
 ) -> isize {
-    // While its entry point runs, `resvd1` isn't tempo's yet.
+    // While its entry point runs, `resvd1` isn't Pina Studio's yet.
     let loading = LOADING.get();
     let instance = match effect.is_null() || loading.is_some() {
         true => None,
@@ -680,7 +680,7 @@ unsafe extern "C" fn host_callback(
     let (uid, rate, block) = loading.unwrap_or((0, 44_100.0, 512));
     match op {
         // A parameter turned in the plugin's editor: the plugin has it already, so it's what
-        // tempo reads from now on.
+        // Pina Studio reads from now on.
         master::AUTOMATE => {
             if let Some(s) = instance.and_then(|i| i.sent.get(index.max(0) as usize)) {
                 s.store(NOTHING, Relaxed);
@@ -707,7 +707,7 @@ unsafe extern "C" fn host_callback(
         },
         master::SIZE_WINDOW => instance.is_some_and(|i| i.resize(index, value as i32)) as isize,
         master::GET_VENDOR_STRING | master::GET_PRODUCT_STRING if !ptr.is_null() => {
-            unsafe { ptr::copy_nonoverlapping(c"tempo".as_ptr(), ptr.cast(), 6) };
+            unsafe { ptr::copy_nonoverlapping(c"Pina Studio".as_ptr(), ptr.cast(), 12) };
             1
         }
         master::GET_VENDOR_VERSION => 1,
@@ -1696,11 +1696,11 @@ mod tests {
 
     /// With a real plugin, which CI doesn't have; an effect hears an impulse, an instrument
     /// plays a note:
-    /// `TEMPO_TEST_VST2=/path/DragonflyRoomReverb.vst cargo test -p tempo-engine -- --ignored`
+    /// `PINA_TEST_VST2=/path/DragonflyRoomReverb.vst cargo test -p pina-engine -- --ignored`
     #[test]
     #[ignore]
     fn a_real_plugin_plays_saves_restores_and_shuts_down() {
-        let path = std::env::var("TEMPO_TEST_VST2").expect("set TEMPO_TEST_VST2");
+        let path = std::env::var("PINA_TEST_VST2").expect("set PINA_TEST_VST2");
         let found = inspect(Path::new(&path)).unwrap();
         assert_eq!(found.len(), 1, "{found:?}");
         let info = &found[0];
@@ -1810,10 +1810,10 @@ mod tests {
 
         // A preset saved, the parameter moved, and the preset loaded puts it back.
         again.set_state(&state).unwrap();
-        let file = again.save_preset("tempo test preset").unwrap();
+        let file = again.save_preset("pina test preset").unwrap();
         again.set_param(p.id, 1.0 - to);
         let preset = Preset {
-            name: "tempo test preset".into(),
+            name: "pina test preset".into(),
             source: PresetSource::File { file: file.clone() },
         };
         again.load_preset(&preset).unwrap();

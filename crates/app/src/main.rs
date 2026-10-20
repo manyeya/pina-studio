@@ -51,88 +51,90 @@ use std::{
 };
 
 use gpui::{App, AppContext, Bounds, Menu, MenuItem, WindowBounds, WindowOptions, px, size};
+use pina_engine::{engine::Engine, player::Player, project::Project, session::Session};
 use serde_json::Value;
 use server::Request;
-use tempo_engine::{engine::Engine, player::Player, project::Project, session::Session};
 use topbar::MIN_W;
 use workspace::*;
 
 const USAGE: &str = "usage:
-  tempo [project]                  open a project folder (none: the Songs page, to start or open one)
-  tempo describe                   the commands an agent can send, with examples
-  tempo show <project>             the project, as JSON
-  tempo do <project> <command>     apply a command (JSON); live in the app if it's open there
-  tempo analyze <project|audio file> [--bars 9-16]
+  pina [project]                   open a project folder (none: the Songs page, to start or open one)
+  pina describe                   the commands an agent can send, with examples
+  pina show <project>             the project, as JSON
+  pina do <project> <command>     apply a command (JSON); live in the app if it's open there
+  pina analyze <project|audio file> [--bars 9-16]
                                    loudness, peaks and balance, of the mix and each track
-  tempo render <project> <out> [--bars 9-16]
-  tempo bounce <project> [--stems [--tracks 0,2] [--master] | --sections] [--formats wav,mp3,flac,aiff,aac,alac,midi]
+  pina render <project> <out> [--bars 9-16]
+  pina bounce <project> [--stems [--tracks 0,2] [--master] | --sections] [--formats wav,mp3,flac,aiff,aac,alac,midi]
                          [--bits 16|24|32] [--rate 48000] [--lufs -14 [--ceiling -1] | --peak -1] [--kbps 320]
                          [--no-tail] [--bars 9-16] [--out <folder>] [--name <name>]
                                    bounce to a WAV file
-  tempo play <project>             play it (in the app if it's open, else through the output)
-  tempo stop|save|undo|redo <project>, tempo locate <project> <tick>,
-  tempo launch <project> <track> [scene]
+  pina play <project>             play it (in the app if it's open, else through the output)
+  pina stop|save|undo|redo <project>, pina locate <project> <tick>,
+  pina launch <project> <track> [scene]
                                    drive the app that has the project open
-  tempo plugins                    the plugins installed: VST3, CLAP, VST2, Audio Units
-  tempo params <project> <track> [--insert N]
-  tempo params <project> --aux N|--master [--insert N]
+  pina plugins                    the plugins installed: VST3, CLAP, VST2, Audio Units
+  pina params <project> <track> [--insert N]
+  pina params <project> --aux N|--master [--insert N]
                                    a plugin's parameters, to automate or set
-  tempo presets <project> <track> [--insert N] [--save <name>]
-  tempo presets <project> --aux N|--master [--insert N] [--save <name>]
+  pina presets <project> <track> [--insert N] [--save <name>]
+  pina presets <project> --aux N|--master [--insert N] [--save <name>]
                                    a plugin's presets, to load with set_preset; or
                                    save its settings as one
-  tempo samples                    the sample library: its folders and what's in them
-  tempo samples scan|add <folder>|remove <folder>
+  pina samples                    the sample library: its folders and what's in them
+  pina samples scan|add <folder>|remove <folder>
                                    analyse what's new; add or take out a folder
-  tempo samples find <words or JSON> [--for <project>] [--limit N]
+  pina samples find <words or JSON> [--for <project>] [--limit N]
                                    samples by words, kind, key, tempo, traits, likeness
                                    (\"dusty keys loop in C minor 95 bpm\"); --for fits a song
-  tempo samples similar <file>     the samples most like one
-  tempo samples kit [<words or JSON>] [--for <project>]
+  pina samples similar <file>     the samples most like one
+  pina samples kit [<words or JSON>] [--for <project>]
                                    a kit that goes together, with alternatives
-  tempo samples info <file>        what a sample is
-  tempo samples put <file> <project> [--track N] [--at TICK]
+  pina samples info <file>        what a sample is
+  pina samples put <file> <project> [--track N] [--at TICK]
                                    into the song, made to fit: a loop stretched to its
                                    tempo and moved into its key; a one-shot as a sampler
                                    zone in tune
-  tempo critique <project> [--quick] [--bars 9-16]
+  pina critique <project> [--quick] [--bars 9-16]
                                    a producer's notes on the song, worst first, each with
                                    the command that fixes it; --quick skips the render
-  tempo study <file> [--summary] [--playbook] [--offline]
+  pina study <file> [--summary] [--playbook] [--offline]
                                    everything about a song: its tempo, key, chords, form,
                                    groove, what plays, its mix, the genres it's nearest, and
                                    (online) its lyrics, year and genre; --playbook makes a
                                    playbook from it to write songs like it
-  tempo playbook [genre]           what a genre is: tempo, swing, parts and their sounds,
+  pina playbook [genre]           what a genre is: tempo, swing, parts and their sounds,
                                    sections, progressions, mix targets
-  tempo playbook --edit [genre]    open the playbooks (JSON, one a genre) to edit or add to
-  tempo theory <key> [words]       the key's chords, and progressions for a genre or mood
-  tempo reference <file> [project] measure a finished song; with a project, aim its mix there
-  tempo sounds <role> [--genre g] [words]
+  pina playbook --edit [genre]    open the playbooks (JSON, one a genre) to edit or add to
+  pina theory <key> [words]       the key's chords, and progressions for a genre or mood
+  pina reference <file> [project] measure a finished song; with a project, aim its mix there
+  pina sounds <role> [--genre g] [words]
                                    every instrument's presets that suit a part, and samples
-  tempo mix <project> [--track N] [--no-levels]
+  pina mix <project> [--track N] [--no-levels]
                                    EQ, compression, saturation, pan, reverb and level, by
                                    the part each track plays
-  tempo master <project> [--lufs -9]
+  pina master <project> [--lufs -9]
                                    a limiter on the master, set to the loudness
-  tempo ask [--agent <id>] <project> <words>
+  pina ask [--agent <id>] <project> <words>
                                    an agent does what's asked to the song, saying so as it
                                    goes (live in the app, and its Agent panel, if it's open):
                                    claude-code or codex; the last one picked in the app by
                                    default
-  tempo projects                   every song in ~/Music/tempo (and opened lately), as JSON
-  tempo new <name> [--tempo N] [--key \"A minor\"] [--time 6/8] [--template beat]
-                                   start a song in ~/Music/tempo from a template: empty,
+  pina projects                   every song in ~/Music/Pina Studio (and opened lately), as JSON
+  pina new <name> [--tempo N] [--key \"A minor\"] [--time 6/8] [--template beat]
+                                   start a song in ~/Music/Pina Studio from a template: empty,
                                    beat, band, lofi or electronic
-  tempo mcp                        an MCP server on stdin and stdout";
+  pina mcp                        an MCP server on stdin and stdout";
 
 fn main() {
+    // What tempo, as it was called before, kept: moved to Pina Studio's places, once.
+    pina_engine::paths::migrate();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let p = Path::new;
     let result = match args.as_slice() {
         ["describe"] => {
-            print!("{}", tempo_engine::commands::DESCRIBE);
+            print!("{}", pina_engine::commands::DESCRIBE);
             Ok(())
         }
         ["show", dir] => print(cli::show(p(dir))),
@@ -166,7 +168,7 @@ fn main() {
         ["launch", dir, track, scene @ ..] if scene.len() <= 1 => {
             match (track.parse(), scene.first().map(|s| s.parse()).transpose()) {
                 (Ok(track), Ok(scene)) => print(cli::app(p(dir), Request::Launch { track, scene })),
-                _ => Err("tempo launch <project> <track> [scene], numbers from 0".to_string()),
+                _ => Err("pina launch <project> <track> [scene], numbers from 0".to_string()),
             }
         }
         ["plugins"] => print(cli::plugins()),
@@ -207,9 +209,9 @@ fn main() {
                     Ok(())
                 }
                 Ok(s) if rest.contains(&"--playbook") => {
-                    let taken = tempo_engine::playbook::ids();
-                    let book = tempo_engine::study::to_playbook(&s, &taken);
-                    tempo_engine::playbook::save(&book)
+                    let taken = pina_engine::playbook::ids();
+                    let book = pina_engine::study::to_playbook(&s, &taken);
+                    pina_engine::playbook::save(&book)
                         .map(|f| println!("{} ({}): {}", book.name, book.id, f.display()))
                 }
                 Ok(s) => print(Ok(study_cli::for_agent(&s))),
@@ -218,12 +220,12 @@ fn main() {
         ["playbook"] => print(produce::playbook(None)),
         ["playbook", "--edit"] => produce::edit_playbooks(None),
         ["playbook", "--edit", genre] => produce::edit_playbooks(Some(genre)),
-        // An instrument's presets, listed by loading it alone: run by `tempo sounds`.
-        ["__presets", plugin] => serde_json::from_str::<tempo_engine::project::PluginRef>(plugin)
+        // An instrument's presets, listed by loading it alone: run by `pina sounds`.
+        ["__presets", plugin] => serde_json::from_str::<pina_engine::project::PluginRef>(plugin)
             .map_err(|e| e.to_string())
             .and_then(|r| {
                 let dir = std::env::temp_dir();
-                let (plugin, _) = tempo_engine::engine::load_plugin(&r, &dir, 48_000.0)?;
+                let (plugin, _) = pina_engine::engine::load_plugin(&r, &dir, 48_000.0)?;
                 println!("{}", serde_json::to_string(&plugin.presets()).unwrap());
                 Ok(())
             }),
@@ -277,7 +279,7 @@ fn main() {
             agent::ask(agent::chosen(), p(dir), &words.join(" "))
         }
         // What a plugin bundle holds, as JSON: run by the plugin scan, one bundle per process.
-        ["__scan", bundle] => tempo_engine::scan::inspect(p(bundle))
+        ["__scan", bundle] => pina_engine::scan::inspect(p(bundle))
             .map(|found| println!("{}", serde_json::to_string(&found).unwrap())),
         ["-h" | "--help" | "help"] => {
             println!("{USAGE}");
@@ -294,7 +296,7 @@ fn main() {
 }
 
 /// "9-16" (bars from 1, both in) or "9".
-/// `tempo bounce`'s flags as the spec `cli::bounce_spec` takes.
+/// `pina bounce`'s flags as the spec `cli::bounce_spec` takes.
 fn bounce_args(args: &[&str]) -> Option<Value> {
     let mut spec = serde_json::Map::new();
     let mut i = 0;
@@ -361,10 +363,10 @@ fn bar_range(s: &str) -> Option<(u64, u64)> {
 fn params_args(
     args: &[&str],
 ) -> Option<(
-    tempo_engine::commands::ChannelRef,
-    tempo_engine::project::Which,
+    pina_engine::commands::ChannelRef,
+    pina_engine::project::Which,
 )> {
-    use tempo_engine::{commands::ChannelRef, project::Which};
+    use pina_engine::{commands::ChannelRef, project::Which};
     let (channel, rest) = match args {
         ["--aux", n, rest @ ..] => (ChannelRef::Aux(n.parse().ok()?), rest),
         ["--master", rest @ ..] => (ChannelRef::Master, rest),
@@ -401,10 +403,10 @@ fn open(dir: &Path) -> Result<(), String> {
         }
         bind_keys(cx);
         cx.set_menus([
-            Menu::new("tempo").items([
+            Menu::new("Pina Studio").items([
                 MenuItem::action("Settings…", ShowSettings),
                 MenuItem::separator(),
-                MenuItem::action("Quit tempo", Quit),
+                MenuItem::action("Quit Pina Studio", Quit),
             ]),
             Menu::new("File").items([
                 MenuItem::action("New Song…", NewSong),
@@ -478,7 +480,7 @@ fn open(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// `tempo new <name> [--tempo N] [--key "A minor"] [--time 6/8] [--template beat]`.
+/// `pina new <name> [--tempo N] [--key "A minor"] [--time 6/8] [--template beat]`.
 fn new_song(name: &str, rest: &[&str]) -> Result<(), String> {
     let mut tempo = 120.0;
     let mut key = None;
@@ -495,7 +497,7 @@ fn new_song(name: &str, rest: &[&str]) -> Result<(), String> {
             }
             "--key" => {
                 key = Some(
-                    tempo_engine::music::Key::parse(value).ok_or(format!("{value} isn't a key"))?,
+                    pina_engine::music::Key::parse(value).ok_or(format!("{value} isn't a key"))?,
                 )
             }
             "--time" => {
@@ -521,7 +523,7 @@ fn new_song(name: &str, rest: &[&str]) -> Result<(), String> {
 /// Plays a project through the default output, without the app.
 fn play(dir: &Path) -> Result<(), String> {
     let project = Project::load(dir)?;
-    let rate = tempo_engine::engine::output_rate(project.sample_rate)? as f64;
+    let rate = pina_engine::engine::output_rate(project.sample_rate)? as f64;
     let (mut engine, _plugins) = Engine::load(&project, dir, rate)?;
     let frames = project.samples(project.end(), rate) + (cli::TAIL * rate) as u64;
     let seconds = frames as f64 / rate;

@@ -3,8 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
-use tempo_engine::{
+use pina_engine::{
     analysis,
     commands::{self, ChannelRef, Command, PluginSource},
     engine::{Engine, load_plugin},
@@ -13,6 +12,7 @@ use tempo_engine::{
     scan,
     session::Session,
 };
+use serde_json::{Value, json};
 
 use crate::server::{self, Request};
 
@@ -97,7 +97,7 @@ impl PluginSource for Offline<'_> {
 pub fn app(dir: &Path, request: Request) -> Result<Value, String> {
     server::ask(dir, &request).unwrap_or_else(|| {
         Err(format!(
-            "tempo doesn't have {} open: open it with `tempo {0}`",
+            "Pina Studio doesn't have {} open: open it with `pina {0}`",
             dir.display()
         ))
     })
@@ -105,7 +105,7 @@ pub fn app(dir: &Path, request: Request) -> Result<Value, String> {
 
 /// An audio file (WAV, AIFF, FLAC or MP3) as left and right, and its rate.
 pub fn audio(path: &Path) -> Result<(Vec<f32>, Vec<f32>, f64), String> {
-    let (mut channels, rate) = tempo_engine::engine::read_audio(path)?;
+    let (mut channels, rate) = pina_engine::engine::read_audio(path)?;
     let l = channels.remove(0);
     let r = channels.pop().unwrap_or_else(|| l.clone());
     Ok((l, r, rate))
@@ -267,14 +267,14 @@ pub fn render(dir: &Path, out: &Path, bars_given: Option<(u64, u64)>) -> Result<
     Ok(json!({ "file": out, "seconds": seconds, "sample_rate": p.sample_rate }))
 }
 
-/// Bounces a project (as the app has it, if open) as `spec` says, for `tempo bounce` and agents:
+/// Bounces a project (as the app has it, if open) as `spec` says, for `pina bounce` and agents:
 /// `what` ("mix", "stems" or "sections"), `tracks` (stems: indices; all with regions by default),
 /// `formats` (wav, aiff, flac, mp3, aac, alac, midi), `bits` (16, 24, 32), `rate`, `lufs` or `peak`
 /// (dBFS) to level to (`ceiling`, -1 by default, under a loudness), `tail` (true), `master` (stems
 /// through the master), `from_bar`/`to_bar`, `out` (a folder: the song's Bounces by default),
 /// `name` (the song's by default), `kbps` (MP3 and AAC).
 pub fn bounce_spec(dir: &Path, spec: &Value) -> Result<Value, String> {
-    use tempo_engine::bounce::{self, Bits, Format, Job, Level, Options};
+    use pina_engine::bounce::{self, Bits, Format, Job, Level, Options};
     let p = project(dir)?;
     let num = |k: &str| spec.get(k).and_then(Value::as_f64);
     let kbps = num("kbps").map(|k| k as u32);

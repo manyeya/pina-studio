@@ -1,4 +1,4 @@
-//! tempo's look: colors, type, sizes, icons and the small controls every panel uses. Dark,
+//! Pina Studio's look: colors, type, sizes, icons and the small controls every panel uses. Dark,
 //! quiet surfaces in a few close greys; color is kept for what's playing (tracks, meters) and for
 //! what's on (the accent).
 

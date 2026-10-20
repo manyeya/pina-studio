@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use gpui::{
     Context, Div, FontWeight, MouseButton, MouseDownEvent, Stateful, div, prelude::*, px, rgb,
 };
-use tempo_engine::{
+use pina_engine::{
     project::{Palette, PaletteDevice, PaletteSound},
     samples::{Category, Kind, Sample, note_name},
 };
@@ -100,7 +100,7 @@ pub fn palette_device(d: &Device) -> PaletteDevice {
     }
 }
 
-/// How the agent puts a device in: a plugin as its commands take it, tempo's own by its command.
+/// How the agent puts a device in: a plugin as its commands take it, Pina Studio's own by its command.
 pub fn how_to_use(d: &PaletteDevice) -> String {
     if let Some(r) = &d.plugin {
         return format!(
@@ -109,12 +109,12 @@ pub fn how_to_use(d: &PaletteDevice) -> String {
         );
     }
     match d.own.as_deref() {
-        Some("synth") => "tempo's own: \"instrument\": \"synth\"",
-        Some("drums") => "tempo's own: \"instrument\": \"drums\"",
-        Some("sampler") => "tempo's own: samples_put puts sounds on it",
-        Some("eq") => "tempo's own: set_eq",
-        Some("comp") => "tempo's own: set_comp",
-        Some("sat") => "tempo's own: set_saturator",
+        Some("synth") => "Pina Studio's own: \"instrument\": \"synth\"",
+        Some("drums") => "Pina Studio's own: \"instrument\": \"drums\"",
+        Some("sampler") => "Pina Studio's own: samples_put puts sounds on it",
+        Some("eq") => "Pina Studio's own: set_eq",
+        Some("comp") => "Pina Studio's own: set_comp",
+        Some("sat") => "Pina Studio's own: set_saturator",
         _ => "",
     }
     .into()
@@ -363,7 +363,7 @@ impl Workspace {
             (true, "Instruments, for set_instrument or add_track:"),
             (
                 false,
-                "Effects, for set_insert (tempo's own with their own command):",
+                "Effects, for set_insert (Pina Studio's own with their own command):",
             ),
         ] {
             let these: Vec<String> = palette

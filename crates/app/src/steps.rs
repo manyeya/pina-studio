@@ -14,7 +14,7 @@ use gpui::{
     Bounds, Context, Div, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, div,
     prelude::*, px, rgb,
 };
-use tempo_engine::{
+use pina_engine::{
     drums,
     modulate::{ModKind, ModTarget, SoundParam},
     music::Key,
@@ -195,7 +195,7 @@ impl LaneMode {
                 (
                     g as f32 / 200.0,
                     false,
-                    (g != tempo_engine::project::GATE).then(|| format!("{g}%")),
+                    (g != pina_engine::project::GATE).then(|| format!("{g}%")),
                 )
             }
             LaneMode::Nudge => {
@@ -1101,7 +1101,7 @@ impl Workspace {
                     let dots: Vec<Div> = moving
                         .iter()
                         .filter_map(|(_, c, depth, kind)| {
-                            let v = tempo_engine::modulate::value_at(kind, beats, tempo)?;
+                            let v = pina_engine::modulate::value_at(kind, beats, tempo)?;
                             let (h0, _, _) = mode.shown(row, i);
                             let by = depth * v;
                             let to = match mode {
@@ -1198,7 +1198,7 @@ impl Workspace {
                                 div()
                                     .font_family(MONO)
                                     .text_color(rgb(TEXT_2))
-                                    .child(tempo_engine::modulate::depth_text(mt, *depth)),
+                                    .child(pina_engine::modulate::depth_text(mt, *depth)),
                             )
                             .child(
                                 div()
@@ -1323,7 +1323,7 @@ impl Workspace {
                     let k = ws.session.project.tracks[t].modulators.len();
                     let kind = ModKind::Steps {
                         values: vec![0.5; steps],
-                        rate: tempo_engine::modulate::ModRate::Beats(step_beats),
+                        rate: pina_engine::modulate::ModRate::Beats(step_beats),
                         glide: 0.0,
                     };
                     ws.add_modulator(t, kind, cx);
@@ -1433,7 +1433,7 @@ impl Workspace {
                     Some(r) => format!(
                         "{} {}",
                         self.target_name(t, r.target),
-                        tempo_engine::modulate::depth_text(r.target, r.depth)
+                        pina_engine::modulate::depth_text(r.target, r.depth)
                     ),
                     None => "Map to…".to_string(),
                 };

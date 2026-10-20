@@ -17,7 +17,7 @@ use gpui::{
     Bounds, Context, Div, FontWeight, Hsla, MouseButton, MouseDownEvent, PathPromptOptions, Point,
     Window, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
-use tempo_engine::{
+use pina_engine::{
     commands::{self, Command},
     engine::read_audio,
     peaks::Peaks,
@@ -234,7 +234,7 @@ pub fn field_set(s: &mut Sampler, f: Field, v: f32) {
 }
 
 /// A setting as it reads under its knob.
-fn field_text(s: &Sampler, f: Field, key: Option<tempo_engine::music::Key>) -> String {
+fn field_text(s: &Sampler, f: Field, key: Option<pina_engine::music::Key>) -> String {
     let v = &s.voice;
     let z = |i: usize| s.zones.get(i).cloned().unwrap_or_default();
     match f {

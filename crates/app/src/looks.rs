@@ -1,6 +1,6 @@
 //! How tracks look on screen: their icons, drawn; their colours, each a shade of its family's;
 //! and the picker that chooses them (click a track's icon). What a track plays decides both
-//! (`tempo_engine::look`), from its samples' and audio's analysis, done here in the background.
+//! (`pina_engine::look`), from its samples' and audio's analysis, done here in the background.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -12,14 +12,14 @@ use gpui::{
     Context, Div, Entity, FontWeight, MouseButton, MouseDownEvent, Pixels, Point, Subscription,
     Svg, anchored, deferred, div, prelude::*, px, rgb, svg,
 };
-use tempo_engine::{
+use pina_engine::{
     look::{self, Family, Look, Source},
     samples::Category,
 };
 
 use crate::{text::TextInput, theme::*, workspace::Workspace};
 
-/// An icon's shape, on the 24-unit grid every tempo icon is drawn on. Snare, piano, keys, the
+/// An icon's shape, on the 24-unit grid every Pina Studio icon is drawn on. Snare, piano, keys, the
 /// guitars, bass, pad, bells, vocals, mic, fx, vinyl, texture, foley, audio, midi, loop,
 /// reference, click and the marks are Lucide's (ISC: assets/LUCIDE-LICENSE); the rest are drawn
 /// to match.
@@ -242,7 +242,7 @@ fn to_hsl(c: u32) -> (f32, f32, f32) {
     (h * 60.0, s, l)
 }
 
-/// Each family's colour, tuned for tempo's dark surfaces: drums warm, bass deep violet, keys
+/// Each family's colour, tuned for Pina Studio's dark surfaces: drums warm, bass deep violet, keys
 /// teal, vocals pink; effects and textures greyed, so the music stands out.
 fn family_color(f: Family) -> (f32, f32, f32) {
     match f {
@@ -384,7 +384,7 @@ impl Workspace {
 
     /// Analyses the song's audio and samples not heard yet, then works the looks out again.
     fn hear_new_files(&mut self, cx: &mut Context<Self>) {
-        use tempo_engine::project::{Content, Instrument};
+        use pina_engine::project::{Content, Instrument};
         let dir = self.session.dir.clone();
         let mut new = Vec::new();
         for t in &self.session.project.tracks {
@@ -410,7 +410,7 @@ impl Workspace {
         let job = cx.background_spawn(async move {
             new.into_iter()
                 .map(|p| {
-                    let c = tempo_engine::samples::analyze::analyze_file(&p)
+                    let c = pina_engine::samples::analyze::analyze_file(&p)
                         .ok()
                         .map(|a| a.category);
                     (p, c)

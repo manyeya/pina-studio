@@ -5,16 +5,15 @@
 
 use std::path::{Path, PathBuf};
 
+use pina_engine::study::{self, Study};
 use serde_json::{Value, json};
-use tempo_engine::study::{self, Study};
 
-/// Where studies are kept (`TEMPO_STUDIES`, for tests).
+/// Where studies are kept (`PINA_STUDIES`, for tests).
 fn cache_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("TEMPO_STUDIES") {
+    if let Some(d) = std::env::var_os("PINA_STUDIES") {
         return PathBuf::from(d);
     }
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    Path::new(&home).join("Library/Caches/tempo/studies")
+    pina_engine::paths::caches().join("studies")
 }
 
 /// Every song studied, the latest first: its online study where there is one.
@@ -135,7 +134,7 @@ fn fetch_once(url: &str) -> Result<Option<Value>, ()> {
             "-w",
             "\n%{http_code}",
             "-A",
-            "tempo/0.1 (song study; https://github.com/tempo-daw)",
+            "PinaStudio/0.1 (song study; https://pina.studio)",
             url,
         ])
         .output()
@@ -352,7 +351,7 @@ pub fn summary(s: &Study) -> String {
         ));
     }
     out.push_str(&format!(
-        " Groove: kick {}, snare {}, hats {}, swing {:.0} on the {}, nearest tempo groove {}.",
+        " Groove: kick {}, snare {}, hats {}, swing {:.0} on the {}, nearest Pina Studio groove {}.",
         s.groove.kick,
         s.groove.snare,
         s.groove.hats,

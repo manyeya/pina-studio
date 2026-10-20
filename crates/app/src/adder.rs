@@ -1,6 +1,6 @@
 //! The New Track palette, under the "+" over the track headers (and ⌥⌘N): one search across
 //! everything a track can start as, as Bitwig's and Raycast's are, with the kinds of track as tiles
-//! when nothing's typed. Instruments (tempo's and every plugin installed), their presets (their own
+//! when nothing's typed. Instruments (Pina Studio's and every plugin installed), their presets (their own
 //! programs and preset files, as the sounds tool reads them), kits made from the sample library's
 //! packs, and single sounds (an 808, a bass note) played across the keys on a sampler. Arrows pick,
 //! Enter adds, Escape closes; a star keeps an instrument among the favourites, ▶ plays a sound.
@@ -11,7 +11,7 @@ use gpui::{
     Context, Div, Entity, FontWeight, MouseButton, MouseDownEvent, Pixels, Point, Subscription,
     Window, anchored, deferred, div, prelude::*, px, rgb,
 };
-use tempo_engine::{
+use pina_engine::{
     commands::{self, Command},
     project::{Instrument, Preset, Sampler},
     samples::{
@@ -171,7 +171,7 @@ impl Workspace {
             return;
         }
         self.sounds.asked = true;
-        let wanted: Vec<(String, tempo_engine::scan::PluginInfo)> = self
+        let wanted: Vec<(String, pina_engine::scan::PluginInfo)> = self
             .catalog
             .devices
             .iter()
@@ -189,7 +189,7 @@ impl Workspace {
         });
         cx.spawn(async move |this, cx| {
             let (wanted, kept) = job.await;
-            let missing: Vec<(String, tempo_engine::scan::PluginInfo)> = wanted
+            let missing: Vec<(String, pina_engine::scan::PluginInfo)> = wanted
                 .iter()
                 .zip(&kept)
                 .filter(|(_, k)| k.is_empty())
@@ -495,7 +495,7 @@ impl Workspace {
 
     /// A kit from one pack in the library: a hit for each drum, on its General MIDI note.
     fn kit_from_pack(&mut self, pack: &str, cx: &mut Context<Self>) {
-        let samples: Vec<tempo_engine::samples::Sample> = self
+        let samples: Vec<pina_engine::samples::Sample> = self
             .browser
             .library
             .samples
@@ -519,7 +519,9 @@ impl Workspace {
             }
         }
         if sampler.zones.is_empty() {
-            self.status = Some(format!("{pack} has no drums tempo could make a kit of."));
+            self.status = Some(format!(
+                "{pack} has no drums Pina Studio could make a kit of."
+            ));
             cx.notify();
             return;
         }
@@ -740,7 +742,7 @@ impl Workspace {
             Item::Device(d) => {
                 let dev = &self.catalog.devices[*d];
                 let sub = match (&dev.own, dev.badges().as_slice()) {
-                    (Some(_), _) => format!("tempo · {}", dev.cat.name()),
+                    (Some(_), _) => format!("Pina Studio · {}", dev.cat.name()),
                     (None, b) => format!("{} · {}", dev.vendor, b.join(" ")),
                 };
                 (

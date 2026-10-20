@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Builds "Corner Store Blues", a 95 BPM boom-bap beat, with tempo's agent commands alone.
+"""Builds "Corner Store Blues", a 95 BPM boom-bap beat, with Pina Studio's agent commands alone.
 
     python3 examples/corner-store-blues/build.py [project folder]
 
-The project goes in ~/Music/tempo/Corner Store Blues by default. It plays real samples from
+The project goes in ~/Music/Pina Studio/Corner Store Blues by default. It plays real samples from
 MusicRadar's free 90s Hip Hop pack (royalty-free to use in music, not to pass on, so they aren't
 in this repo: the pack is downloaded on first run) and two free plugins, Surge XT and Dragonfly
-Room Reverb, which have to be installed (`tempo plugins` lists them).
+Room Reverb, which have to be installed (`pina plugins` lists them).
 
 The keys loop the beat is built on plays a ninth chord on every beat, C9 Eb9 F9 G9, so
 everything else follows that: the bass and 808 take each beat's root, the pad holds the notes
 two chords share, and the hook's whistle lead picks notes from each chord. (Note names here are
-scientific, middle C being C4; tempo's piano roll calls it C3, as Logic does.)
+scientific, middle C being C4; Pina Studio's piano roll calls it C3, as Logic does.)
 """
 
 import json
@@ -23,9 +23,9 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-TEMPO = os.environ.get("TEMPO", "tempo")
+PINA = os.environ.get("PINA", "pina")
 PACK = "https://cdn.mos.musicradar.com/musicradar-90s-hip-hop-samples.zip"
-SAMPLES = Path.home() / "Music/tempo/Samples/MusicRadar 90s Hip Hop"
+SAMPLES = Path.home() / "Music/Pina Studio/Samples/MusicRadar 90s Hip Hop"
 VST3 = Path.home() / "Library/Audio/Plug-Ins/VST3"
 
 BEAT, BAR, S16 = 960, 3840, 240
@@ -70,7 +70,7 @@ class Song:
     def do(self, op, **args):
         args["op"] = op
         out = subprocess.run(
-            [TEMPO, "do", self.dir, json.dumps(args)], capture_output=True, text=True
+            [PINA, "do", self.dir, json.dumps(args)], capture_output=True, text=True
         )
         if out.returncode != 0:
             sys.exit(f"{op} failed: {out.stderr.strip() or out.stdout.strip()}")
@@ -78,7 +78,7 @@ class Song:
 
 
 def notes(*spec):
-    """(start, length, pitch, velocity) tuples as tempo notes."""
+    """(start, length, pitch, velocity) tuples as Pina Studio notes."""
     return [{"start": s, "length": l, "pitch": p, "velocity": v} for s, l, p, v in spec]
 
 
@@ -91,7 +91,7 @@ def steps(bars, hits):
 
 
 def main():
-    project = Path(sys.argv[1] if len(sys.argv) > 1 else Path.home() / "Music/tempo/Corner Store Blues")
+    project = Path(sys.argv[1] if len(sys.argv) > 1 else Path.home() / "Music/Pina Studio/Corner Store Blues")
     if project.exists():
         sys.exit(f"{project} already exists: move it, or give another folder")
     pack = fetch_samples()
@@ -151,7 +151,7 @@ def main():
     vinyl = do("add_track", name="Vinyl")["track"]
 
     # Surge XT's init patch, made into a warm pad and a gliding sine whistle, its settings named
-    # as Surge shows them (tempo finds the parameter and the value). Its global volume is set
+    # as Surge shows them (Pina Studio finds the parameter and the value). Its global volume is set
     # too: its default depends on whether its factory patches are installed.
     def surge_set(track, values):
         for param, text in values.items():
@@ -487,7 +487,7 @@ def main():
 
 
 def show(song):
-    out = subprocess.run([TEMPO, "show", song.dir], capture_output=True, text=True, check=True)
+    out = subprocess.run([PINA, "show", song.dir], capture_output=True, text=True, check=True)
     return json.loads(out.stdout)
 
 

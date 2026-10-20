@@ -196,7 +196,7 @@ fn a_song_is_studied_as_it_was_made() {
     assert!(near("Intro", 0.0), "{starts:?}");
     assert!(near("Verse", 8.0), "{starts:?}");
     assert!(near("Chorus", 24.0) && near("Chorus", 56.0), "{starts:?}");
-    // Its groove: the kick on the one, the snare on two and four. (Which of tempo's grooves
+    // Its groove: the kick on the one, the snare on two and four. (Which of Pina Studio's grooves
     // it's nearest isn't asked: the built-in kit's hats and snare are the same white noise,
     // which no ear could tell apart.)
     let hit = |p: &str, step: usize| p.chars().nth(step).is_some_and(|c| c != '.');

@@ -4,7 +4,7 @@
 use gpui::{
     Context, MouseButton, Pixels, Point, SharedString, anchored, deferred, div, prelude::*, px, rgb,
 };
-use tempo_engine::{
+use pina_engine::{
     commands::{self, ChannelRef, Command, PresetChoice},
     project::{
         At, AuxSend, Comp, Content, Eq, Input, Instrument, PatternRow, PluginRef, Preset,
@@ -155,12 +155,12 @@ pub enum MenuAction {
     Stamp(crate::pianoroll::Stamp),
     /// A step pattern's swing.
     PatternSwing {
-        at: tempo_engine::project::At,
+        at: pina_engine::project::At,
         swing: f32,
     },
     /// Something done to a row of a step pattern.
     Row {
-        at: tempo_engine::project::At,
+        at: pina_engine::project::At,
         row: usize,
         op: crate::steps::RowOp,
     },
@@ -199,7 +199,7 @@ pub enum MenuAction {
     ExportStem(usize),
     /// A modulator's setting, from its card (track, modulator); a modulator mapped to a setting.
     Mod(usize, usize, crate::modulation::ModChange),
-    Map(usize, usize, tempo_engine::modulate::ModTarget),
+    Map(usize, usize, pina_engine::modulate::ModTarget),
     /// A tool in hand.
     Tool(crate::workspace::Tool),
     /// The right-click menus of the tracks area (`context.rs`).
@@ -212,7 +212,7 @@ pub enum MenuAction {
     /// A region's playback quantize, in ticks, or none.
     RegionQuantize(At, Option<u64>),
     /// How an audio region is stretched.
-    RegionFlex(At, tempo_engine::stretch::Flex),
+    RegionFlex(At, pina_engine::stretch::Flex),
     /// Names a marker, or adds one at a tick.
     NameMarker(usize, String),
     AddMarker(u64, String),
@@ -250,7 +250,7 @@ impl Workspace {
             MenuAction::Study => self.open_study(cx),
             MenuAction::NewSongKey(key) => {
                 if let Some(h) = self.home.as_mut() {
-                    h.key = key.as_deref().and_then(tempo_engine::music::Key::parse);
+                    h.key = key.as_deref().and_then(pina_engine::music::Key::parse);
                 }
             }
             // Songs need the window (to ask about saving): the next frame does them.
@@ -421,7 +421,7 @@ impl Workspace {
                 }
             }),
             MenuAction::Key(key) => {
-                let key = key.as_deref().and_then(tempo_engine::music::Key::parse);
+                let key = key.as_deref().and_then(pina_engine::music::Key::parse);
                 let moves = self.key_moves_notes;
                 self.edit(cx, |ws| ws.session.project.set_key(key, moves));
             }
@@ -459,7 +459,7 @@ impl Workspace {
             MenuAction::AddMarker(tick, name) => self.edit(cx, |ws| {
                 let markers = &mut ws.session.project.markers;
                 let at = markers.partition_point(|m| m.tick <= tick);
-                markers.insert(at, tempo_engine::project::Marker { tick, name });
+                markers.insert(at, pina_engine::project::Marker { tick, name });
             }),
             MenuAction::DeleteMarker(i) => self.edit(cx, |ws| {
                 if i < ws.session.project.markers.len() {

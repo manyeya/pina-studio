@@ -1,7 +1,7 @@
 //! Loads an instrument (VST3, CLAP or VST2 bundle, or with `au` the first Audio Unit
 //! instrument), opens its editor, and plays an arpeggio through it.
 //!
-//!     cargo run -p tempo-engine --example play_vst -- "/path/to/Surge XT.vst3"
+//!     cargo run -p pina-engine --example play_vst -- "/path/to/Surge XT.vst3"
 
 use std::{
     path::Path,
@@ -16,7 +16,7 @@ use std::{
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-use tempo_engine::{
+use pina_engine::{
     plugin::{self, Libraries, Note},
     scan,
 };

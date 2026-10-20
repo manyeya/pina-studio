@@ -1,4 +1,4 @@
-//! The Playbooks page: every genre tempo's agents and critic know, to read and to change. A genre
+//! The Playbooks page: every genre Pina Studio's agents and critic know, to read and to change. A genre
 //! shows as its song's shape (a landscape of its sections' energy), its feel, its song map (which
 //! part plays in which section, toggled in a grid), its parts, its mix target and its notes;
 //! every change is saved to the person's playbook file as it's made.
@@ -7,7 +7,7 @@ use gpui::{
     Bounds, Context, Div, Entity, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
     ScrollHandle, Stateful, Subscription, Window, canvas, div, point, prelude::*, px, rgb,
 };
-use tempo_engine::{
+use pina_engine::{
     music::Key,
     playbook::{self, Origin, Part, Playbook, Section},
     theory,
@@ -37,7 +37,7 @@ pub(crate) const BANDS: [(&str, &str); 6] = [
 /// The floor of the spectrum editor, dB of the total.
 pub(crate) const FLOOR: f32 = -32.0;
 
-/// A genre's color: tempo's have their own, the person's one from the palette by name.
+/// A genre's color: Pina Studio's have their own, the person's one from the palette by name.
 pub fn genre_color(id: &str) -> u32 {
     match id {
         "lofi" => 0xffb86b,
@@ -294,7 +294,7 @@ impl Workspace {
         self.select_genre(&copy.id.clone(), cx);
     }
 
-    /// tempo's own back, for a genre the person changed; or the person's genre gone.
+    /// Pina Studio's own back, for a genre the person changed; or the person's genre gone.
     fn reset_genre(&mut self, cx: &mut Context<Self>) {
         let Some(p) = self.genres.draft.clone() else {
             return;
@@ -307,7 +307,7 @@ impl Workspace {
         let gone = playbook::origin(&p) == Origin::Yours;
         self.status = Some(match gone {
             true => format!("Deleted {}", p.name),
-            false => format!("{} is tempo's again", p.name),
+            false => format!("{} is Pina Studio's again", p.name),
         });
         let next = match gone {
             true => None,
@@ -372,7 +372,7 @@ impl Workspace {
                 let color = genre_color(&p.id);
                 let id = p.id.clone();
                 let mark = match playbook::origin(p) {
-                    Origin::Tempo => None,
+                    Origin::Pina => None,
                     Origin::Edited => Some("Edited"),
                     Origin::Yours => Some("Yours"),
                 };
@@ -568,7 +568,7 @@ impl Workspace {
                             .whitespace_nowrap()
                             .overflow_hidden()
                             .text_ellipsis()
-                            .child("~/Library/Application Support/tempo/playbooks"),
+                            .child("~/Library/Application Support/Pina Studio/playbooks"),
                     )
                     .on_mouse_down(
                         MouseButton::Left,
@@ -688,8 +688,8 @@ impl Workspace {
                                     )
                                     .child(div().text_color(rgb(TEXT_4)).child("·"))
                                     .child(div().text_color(rgb(TEXT_3)).child(match origin {
-                                        Origin::Tempo => "tempo's",
-                                        Origin::Edited => "tempo's, edited",
+                                        Origin::Pina => "Pina Studio's",
+                                        Origin::Edited => "Pina Studio's, edited",
                                         Origin::Yours => "yours",
                                     })),
                             )
@@ -736,12 +736,12 @@ impl Workspace {
                                         cx.listener(|ws, _, _, cx| ws.duplicate_genre(cx)),
                                     ),
                             )
-                            .when(origin != Origin::Tempo, |d| {
+                            .when(origin != Origin::Pina, |d| {
                                 d.child(
                                     action(
                                         match origin {
                                             Origin::Yours => "Delete",
-                                            _ => "Reset to tempo's",
+                                            _ => "Reset to Pina Studio's",
                                         },
                                         false,
                                     )

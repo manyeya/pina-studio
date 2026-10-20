@@ -1,15 +1,15 @@
-//! `tempo samples`: the sample library for agents and scripts, as JSON. Finding samples by words
+//! `pina samples`: the sample library for agents and scripts, as JSON. Finding samples by words
 //! and fit, what's similar, kits that go together, and what a sample is.
 
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
-use tempo_engine::samples::{
+use pina_engine::samples::{
     Kind, Sample,
     library::Library,
     note_name, place,
     search::{self, Aspects, Hit, KitSeed, Query},
 };
+use serde_json::{Value, json};
 
 /// The library, scanned first if it's never been (so a first search finds something).
 fn library() -> Library {
@@ -121,7 +121,7 @@ pub fn similar(path: &Path, aspects: Aspects, limit: usize) -> Result<Value, Str
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if lib.get(&path).is_none() {
         return Err(format!(
-            "{} isn't in the library (see `tempo samples`)",
+            "{} isn't in the library (see `pina samples`)",
             path.display()
         ));
     }
@@ -175,7 +175,7 @@ pub fn info(path: &Path) -> Result<Value, String> {
         }
         // Not in the library: analyse it on the spot.
         None => {
-            let analysis = tempo_engine::samples::analyze::analyze_file(&path)?;
+            let analysis = pina_engine::samples::analyze::analyze_file(&path)?;
             Ok(json!({ "path": path, "analysis": analysis }))
         }
     }
@@ -223,7 +223,7 @@ pub fn remove_folder(dir: &Path) -> Result<Value, String> {
 /// looping; a one-shot goes into a sampler (`track`'s, else a new sampler track) as a zone that
 /// plays it in tune: a drum on its note, a pitched sound across the keys from its own note.
 pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Value, String> {
-    use tempo_engine::{
+    use pina_engine::{
         commands::Command,
         project::{Instrument, Sampler},
     };
@@ -240,7 +240,7 @@ pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Val
             folder: String::new(),
             modified: 0,
             size: 0,
-            analysis: tempo_engine::samples::analyze::analyze_file(&path)?,
+            analysis: pina_engine::samples::analyze::analyze_file(&path)?,
         },
     };
     let p = crate::cli::project(dir)?;
@@ -350,7 +350,7 @@ pub fn palette(dir: &Path) -> Result<Value, String> {
         .iter()
         .map(|ps| {
             let found = lib.get(&ps.path).cloned().map(Ok).unwrap_or_else(|| {
-                tempo_engine::samples::analyze::analyze_file(&ps.path).map(|analysis| Sample {
+                pina_engine::samples::analyze::analyze_file(&ps.path).map(|analysis| Sample {
                     path: ps.path.clone(),
                     name: ps
                         .path
@@ -395,14 +395,14 @@ pub fn palette(dir: &Path) -> Result<Value, String> {
             "The person picked these and asked for these only: make the song with them, each \
              for its role (sounds with samples_put, one-shots for the same kit on one sampler \
              track by passing its `track`; instruments with set_instrument or add_track; effects \
-             with set_insert, or tempo's own with `use`), and add no other sounds, instruments \
+             with set_insert, or Pina Studio's own with `use`), and add no other sounds, instruments \
              or effects of a kind they picked. Parts none of them suits: ask, or leave out."
         }
         (false, false) => {
             "The person picked these: start with them, each for its role (none: what it suits; \
              sounds with samples_put, one-shots for the same kit on one sampler track by passing \
              its `track`; instruments with set_instrument or add_track; effects with set_insert, \
-             or tempo's own with `use`), then fill what's missing with your own."
+             or Pina Studio's own with `use`), then fill what's missing with your own."
         }
     };
     Ok(json!({
@@ -414,7 +414,7 @@ pub fn palette(dir: &Path) -> Result<Value, String> {
     }))
 }
 
-/// `tempo samples …` from the command line.
+/// `pina samples …` from the command line.
 pub fn command(args: &[&str]) -> Result<Value, String> {
     // Options anywhere: --for <project>, --limit <n>, --track <n>, --at <tick>.
     let mut rest = Vec::new();
@@ -487,7 +487,7 @@ mod tests {
     fn the_palette_says_what_each_sound_is_its_part_and_whether_its_in() {
         let demo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/demo");
         let dir =
-            std::env::temp_dir().join(format!("tempo-test-palette-tool-{}", std::process::id()));
+            std::env::temp_dir().join(format!("pina-test-palette-tool-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Audio Files")).unwrap();
         for f in ["project.json", "Audio Files/drums.wav"] {
@@ -514,7 +514,7 @@ mod tests {
         assert!(sounds[1]["role"].is_null() && sounds[1]["kind"].is_string());
         // Instruments and effects: how each goes in, and whether it has (the demo has drums).
         let (inst, fx) = (&v["instruments"][0], &v["effects"][0]);
-        assert_eq!(inst["use"], "tempo's own: \"instrument\": \"drums\"");
+        assert_eq!(inst["use"], "Pina Studio's own: \"instrument\": \"drums\"");
         assert_eq!(fx["role"], "vocal");
         assert_eq!(fx["in_song"], false);
         assert!(fx["use"].as_str().unwrap().contains(r#""class":"Room""#));

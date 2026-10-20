@@ -28,11 +28,11 @@ struct Slot {
     sound: Sound,
     latency: u32,
     plugins: LanePlugins,
-    /// Parameters the project sets, as last applied; and what each was before tempo first set
+    /// Parameters the project sets, as last applied; and what each was before Pina Studio first set
     /// it, to go back to when the project stops setting it (as when that edit is undone).
     applied: HashMap<(Which, u32), f64>,
     original: HashMap<(Which, u32), f64>,
-    /// The preset each plugin has loaded, as last applied; and its settings from before tempo
+    /// The preset each plugin has loaded, as last applied; and its settings from before Pina Studio
     /// first loaded one, to go back to.
     presets: HashMap<Which, Option<crate::project::Preset>>,
     before_preset: HashMap<Which, Vec<u8>>,
@@ -72,7 +72,7 @@ impl Slot {
                 }
             }
             self.presets.insert(which, r.preset.clone());
-            // The preset set every parameter: what tempo set before is set again over it.
+            // The preset set every parameter: what Pina Studio set before is set again over it.
             self.applied.retain(|(w, _), _| *w != which);
             self.original.retain(|(w, _), _| *w != which);
         }
@@ -355,7 +355,7 @@ impl Player {
         std::fs::create_dir_all(&dir).map_err(err)?;
         let mut kept = HashSet::new();
         let mut save = |r: &mut PluginRef, p: &Plugin, name: String| -> Result<(), String> {
-            // What tempo set may since have been turned in the plugin's own editor.
+            // What Pina Studio set may since have been turned in the plugin's own editor.
             for (&id, v) in r.params.iter_mut() {
                 *v = p.param_value(id);
             }
@@ -680,16 +680,16 @@ mod tests {
     use crate::project::Track;
 
     /// With a real instrument, which CI doesn't have:
-    /// `TEMPO_TEST_VST3="/path/Some Synth.vst3" cargo test -p tempo-engine -- --ignored`
+    /// `PINA_TEST_VST3="/path/Some Synth.vst3" cargo test -p pina-engine -- --ignored`
     #[test]
     #[ignore]
     fn plugin_settings_are_saved_with_the_project_and_loaded_back() {
-        let path = std::env::var("TEMPO_TEST_VST3").expect("set TEMPO_TEST_VST3");
+        let path = std::env::var("PINA_TEST_VST3").expect("set PINA_TEST_VST3");
         let class = crate::scan::inspect(Path::new(&path))
             .unwrap()
             .remove(0)
             .class;
-        let dir = std::env::temp_dir().join(format!("tempo-test-states-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-test-states-{}", std::process::id()));
         let plugin = PluginRef {
             path: path.into(),
             class,

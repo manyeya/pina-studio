@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn an_aiff_reads_and_fingerprints_as_its_wav_does() {
         let x = note(110.0, 0.5);
-        let dir = std::env::temp_dir().join(format!("tempo-test-aiff-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-test-aiff-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let spec = hound::WavSpec {
             channels: 1,

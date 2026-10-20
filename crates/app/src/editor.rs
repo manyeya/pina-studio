@@ -4,7 +4,7 @@
 //! Drag its top edge to make it taller or shorter; double-click the edge for its usual height.
 
 use gpui::{Context, FontWeight, MouseButton, MouseDownEvent, div, prelude::*, px, rgb};
-use tempo_engine::project::Content;
+use pina_engine::project::Content;
 
 use crate::{
     theme::*,
@@ -31,7 +31,7 @@ impl Workspace {
             (Bottom::Sampler, _) => match self.sampler_track() {
                 Some(t) => {
                     let zones = match &self.session.project.tracks[t].instrument {
-                        Some(tempo_engine::project::Instrument::Sampler(s)) => s.zones.len(),
+                        Some(pina_engine::project::Instrument::Sampler(s)) => s.zones.len(),
                         _ => 0,
                     };
                     (

@@ -15,6 +15,7 @@ pub mod look;
 pub mod midi;
 pub mod modulate;
 pub mod music;
+pub mod paths;
 pub mod peaks;
 pub mod playbook;
 pub mod player;

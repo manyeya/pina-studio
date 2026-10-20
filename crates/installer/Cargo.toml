@@ -1,10 +1,10 @@
 [package]
-name = "tempo-installer"
+name = "pina-installer"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "tempo-installer"
+name = "pina-installer"
 path = "src/main.rs"
 
 [dependencies]

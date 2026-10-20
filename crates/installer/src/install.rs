@@ -1,5 +1,5 @@
-//! What the installer does, its window aside: where tempo goes and what's there already, putting
-//! it there (the old one swapped out whole, never half-replaced), the `tempo` command in
+//! What the installer does, its window aside: where Pina Studio goes and what's there already,
+//! putting it there (the old one swapped out whole, never half-replaced), the `pina` command in
 //! Terminal, the example songs, and taking it all out again. Each step is a plain function, so the
 //! window can run them one after another off its thread and say how each went.
 
@@ -10,17 +10,20 @@ use std::{
     process::{Command, Stdio},
 };
 
+/// The app, as it's named in Applications.
+pub const APP: &str = "Pina Studio.app";
+
 /// Where everything comes from and goes.
 #[derive(Clone, Debug)]
 pub struct Plan {
-    /// The tempo.app to install, and the example songs: the installer's own.
+    /// The Pina Studio.app to install, and the example songs: the installer's own.
     pub payload: PathBuf,
     pub examples: Option<PathBuf>,
     /// Where apps go: /Applications, or ~/Applications if that can't be written to.
     pub apps: PathBuf,
-    /// Where the `tempo` command goes: on every Mac's PATH.
+    /// Where the `pina` command goes: on every Mac's PATH.
     pub bin: PathBuf,
-    /// Where songs are kept (tempo's own place for them).
+    /// Where songs are kept (Pina Studio's own place for them).
     pub songs: PathBuf,
 }
 
@@ -30,20 +33,20 @@ fn home() -> PathBuf {
 
 impl Plan {
     /// The installer's own: what it carries (beside it in its bundle, or named by
-    /// `TEMPO_INSTALL_PAYLOAD`) and where it puts it (`TEMPO_INSTALL_APPS`, `TEMPO_INSTALL_BIN`
-    /// and `TEMPO_SONGS` say elsewhere, to try it out without touching this Mac's).
+    /// `PINA_INSTALL_PAYLOAD`) and where it puts it (`PINA_INSTALL_APPS`, `PINA_INSTALL_BIN`
+    /// and `PINA_SONGS` say elsewhere, to try it out without touching this Mac's).
     pub fn here() -> Plan {
         let var = |k: &str| std::env::var_os(k).map(PathBuf::from);
         let resources = std::env::current_exe()
             .ok()
             .and_then(|e| Some(e.parent()?.parent()?.join("Resources")))
             .unwrap_or_default();
-        let payload = var("TEMPO_INSTALL_PAYLOAD").unwrap_or_else(|| resources.join("tempo.app"));
+        let payload = var("PINA_INSTALL_PAYLOAD").unwrap_or_else(|| resources.join(APP));
         let examples = payload
             .parent()
             .map(|p| p.join("Examples"))
             .filter(|e| e.is_dir());
-        let apps = var("TEMPO_INSTALL_APPS").unwrap_or_else(|| {
+        let apps = var("PINA_INSTALL_APPS").unwrap_or_else(|| {
             let system = PathBuf::from("/Applications");
             match writable(&system) {
                 true => system,
@@ -54,20 +57,20 @@ impl Plan {
             payload,
             examples,
             apps,
-            bin: var("TEMPO_INSTALL_BIN").unwrap_or_else(|| PathBuf::from("/usr/local/bin")),
-            songs: var("TEMPO_SONGS").unwrap_or_else(|| home().join("Music/tempo")),
+            bin: var("PINA_INSTALL_BIN").unwrap_or_else(|| PathBuf::from("/usr/local/bin")),
+            songs: var("PINA_SONGS").unwrap_or_else(|| home().join("Music/Pina Studio")),
         }
     }
 
-    /// Where tempo is (or will be) installed.
+    /// Where Pina Studio is (or will be) installed.
     pub fn app(&self) -> PathBuf {
-        self.apps.join("tempo.app")
+        self.apps.join(APP)
     }
 }
 
 /// Whether a folder can be written to: a file made in it and taken away again.
 fn writable(dir: &Path) -> bool {
-    let probe = dir.join(format!(".tempo-installer-{}", std::process::id()));
+    let probe = dir.join(format!(".pina-installer-{}", std::process::id()));
     match fs::create_dir(&probe) {
         Ok(()) => {
             let _ = fs::remove_dir(&probe);
@@ -115,9 +118,9 @@ pub fn over(installed: Option<String>, new: &str) -> Over {
     }
 }
 
-/// Whether tempo's window is open from this app (not its command line, run by an agent).
+/// Whether Pina Studio's window is open from this app (not its command line, run by an agent).
 pub fn running(app: &Path) -> bool {
-    let exe = app.join("Contents/MacOS/tempo");
+    let exe = app.join("Contents/MacOS/pina");
     let exe = exe.to_string_lossy();
     let Ok(out) = Command::new("ps").args(["-axo", "command="]).output() else {
         return false;
@@ -130,14 +133,15 @@ pub fn running(app: &Path) -> bool {
     })
 }
 
-/// Puts tempo where it goes: copied beside the old one, then swapped in, so a tempo is there
-/// whole at every moment. Not marked as downloaded: the installer was the one opened.
+/// Puts Pina Studio where it goes: copied beside the old one, then swapped in, so one is there
+/// whole at every moment. Not marked as downloaded: the installer was the one opened. tempo, as
+/// it was called before, goes to the Trash.
 pub fn copy_app(plan: &Plan) -> Result<PathBuf, String> {
     fs::create_dir_all(&plan.apps)
         .map_err(|e| format!("Couldn't make {}: {e}", plan.apps.display()))?;
     let dest = plan.app();
-    let staging = plan.apps.join(".tempo.app.installing");
-    let old = plan.apps.join(".tempo.app.old");
+    let staging = plan.apps.join(format!(".{APP}.installing"));
+    let old = plan.apps.join(format!(".{APP}.old"));
     let _ = fs::remove_dir_all(&staging);
     let _ = fs::remove_dir_all(&old);
     let copied = Command::new("ditto")
@@ -150,20 +154,27 @@ pub fn copy_app(plan: &Plan) -> Result<PathBuf, String> {
     if !copied.status.success() {
         let _ = fs::remove_dir_all(&staging);
         return Err(format!(
-            "Couldn't copy tempo into {}: {}",
+            "Couldn't copy Pina Studio into {}: {}",
             plan.apps.display(),
             String::from_utf8_lossy(&copied.stderr).trim()
         ));
     }
     if dest.exists() {
-        fs::rename(&dest, &old).map_err(|e| format!("Couldn't move the old tempo aside: {e}"))?;
+        fs::rename(&dest, &old)
+            .map_err(|e| format!("Couldn't move the old Pina Studio aside: {e}"))?;
     }
     if let Err(e) = fs::rename(&staging, &dest) {
         // The old one back, as it was.
         let _ = fs::rename(&old, &dest);
-        return Err(format!("Couldn't put tempo in place: {e}"));
+        return Err(format!("Couldn't put Pina Studio in place: {e}"));
     }
     let _ = fs::remove_dir_all(&old);
+    let tempo = plan.apps.join("tempo.app");
+    if fs::read_to_string(tempo.join("Contents/Info.plist"))
+        .is_ok_and(|p| p.contains("dev.tempo.daw"))
+    {
+        let _ = trash(&tempo);
+    }
     Ok(dest)
 }
 
@@ -200,18 +211,33 @@ fn as_admin(command: &str) -> Result<(), String> {
     }
 }
 
-/// The `tempo` command, for Terminal and for agents: a link in `bin` to the app's own. One that
-/// isn't tempo's is left alone; where `bin` needs an administrator, macOS asks.
+/// Whether a link in `bin` is one an installer made: to a Pina Studio, or to tempo, as it was
+/// called before.
+fn ours(link: &Path) -> bool {
+    fs::read_link(link).is_ok_and(|to| {
+        let to = to.to_string_lossy();
+        to.contains(&format!("{APP}/")) || to.contains("tempo.app/")
+    })
+}
+
+/// The `pina` command, for Terminal and for agents: a link in `bin` to the app's own (and
+/// tempo's old `tempo` command taken away). One that isn't Pina Studio's is left alone; where
+/// `bin` needs an administrator, macOS asks.
 pub fn command_line(app: &Path, bin: &Path) -> Result<PathBuf, String> {
-    let link = bin.join("tempo");
-    let target = app.join("Contents/MacOS/tempo");
+    let link = bin.join("pina");
+    let tempo = bin.join("tempo");
+    let tempo = ours(&tempo).then_some(tempo);
+    let target = app.join("Contents/MacOS/pina");
     match fs::symlink_metadata(&link) {
         Ok(m) if m.file_type().is_symlink() => {
             let to = fs::read_link(&link).unwrap_or_default();
             if to == target {
+                if let Some(t) = &tempo {
+                    let _ = fs::remove_file(t);
+                }
                 return Ok(link);
             }
-            if !to.to_string_lossy().contains("tempo.app/") {
+            if !ours(&link) {
                 return Err(format!(
                     "{} is another program's: left as it is",
                     link.display()
@@ -228,16 +254,19 @@ pub fn command_line(app: &Path, bin: &Path) -> Result<PathBuf, String> {
     }
     let direct = fs::create_dir_all(bin).and_then(|_| {
         let _ = fs::remove_file(&link);
-        std::os::unix::fs::symlink(&target, &link)
+        std::os::unix::fs::symlink(&target, &link)?;
+        tempo.as_ref().map_or(Ok(()), fs::remove_file)
     });
     match direct {
         Ok(()) => Ok(link),
         Err(e) if e.kind() == ErrorKind::PermissionDenied => {
+            let tempo = tempo.map(|t| format!(" && rm -f {}", quoted(&t)));
             as_admin(&format!(
-                "mkdir -p {} && ln -sf {} {}",
+                "mkdir -p {} && ln -sf {} {}{}",
                 quoted(bin),
                 quoted(&target),
-                quoted(&link)
+                quoted(&link),
+                tempo.unwrap_or_default()
             ))?;
             Ok(link)
         }
@@ -286,37 +315,41 @@ fn trash(p: &Path) -> Result<(), String> {
         .map_err(|e| e.localizedDescription().to_string())
 }
 
-/// tempo's own settings and caches (never its songs).
+/// Pina Studio's own settings and caches (never its songs), and the links tempo's old places are
+/// now.
 pub fn settings() -> Vec<PathBuf> {
     let lib = home().join("Library");
-    vec![
-        lib.join("Application Support/tempo"),
-        lib.join("Caches/tempo"),
-    ]
+    let mut all = Vec::new();
+    for name in ["Pina Studio", "tempo"] {
+        all.push(lib.join("Application Support").join(name));
+        all.push(lib.join("Caches").join(name));
+    }
+    all
 }
 
-/// Takes tempo out: the app to the Trash, its `tempo` command, and (if asked) its settings and
-/// caches. Songs stay.
+/// Takes Pina Studio out: the app to the Trash, its `pina` command, and (if asked) its settings
+/// and caches. Songs stay.
 pub fn uninstall(plan: &Plan, and_settings: bool) -> Result<(), String> {
     let app = plan.app();
     if app.exists() {
-        trash(&app).map_err(|e| format!("Couldn't move tempo to the Trash: {e}"))?;
+        trash(&app).map_err(|e| format!("Couldn't move Pina Studio to the Trash: {e}"))?;
     }
-    let link = plan.bin.join("tempo");
-    let ours = fs::read_link(&link)
-        .is_ok_and(|to| to.starts_with(&app) || to.to_string_lossy().contains("tempo.app/"));
-    if ours && fs::remove_file(&link).is_err() {
+    let link = plan.bin.join("pina");
+    if ours(&link) && fs::remove_file(&link).is_err() {
         as_admin(&format!("rm -f {}", quoted(&link)))?;
     }
     if and_settings {
-        for p in settings().iter().filter(|p| p.exists()) {
+        for p in settings()
+            .iter()
+            .filter(|p| fs::symlink_metadata(p).is_ok())
+        {
             trash(p)?;
         }
     }
     Ok(())
 }
 
-/// Opens tempo.
+/// Opens Pina Studio.
 pub fn launch(app: &Path) {
     let _ = Command::new("open").arg(app).status();
 }
@@ -351,13 +384,13 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("tempo-installer-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("pina-installer-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
     }
 
-    /// A tempo.app with only what the installer reads: its version and its program.
+    /// A Pina Studio.app with only what the installer reads: its version and its program.
     fn fake_app(at: &Path, v: &str) {
         fs::create_dir_all(at.join("Contents/MacOS")).unwrap();
         fs::write(
@@ -365,7 +398,7 @@ mod tests {
             format!("<plist><dict><key>CFBundleShortVersionString</key><string>{v}</string></dict></plist>"),
         )
         .unwrap();
-        fs::write(at.join("Contents/MacOS/tempo"), v).unwrap();
+        fs::write(at.join("Contents/MacOS/pina"), v).unwrap();
     }
 
     #[test]
@@ -389,7 +422,7 @@ mod tests {
     #[test]
     fn installing_puts_it_there_whole_and_an_update_replaces_it() {
         let root = scratch("install");
-        let payload = root.join("payload/tempo.app");
+        let payload = root.join("payload").join(APP);
         fake_app(&payload, "0.2.0");
         let plan = Plan {
             payload: payload.clone(),
@@ -410,23 +443,37 @@ mod tests {
             .flatten()
             .map(|e| e.file_name())
             .collect();
-        assert_eq!(left, ["tempo.app"]);
+        assert_eq!(left, [APP]);
         // The command: linked to it; again, the same; someone else's, left alone.
         let link = command_line(&app, &plan.bin).unwrap();
         assert_eq!(
             fs::read_link(&link).unwrap(),
-            app.join("Contents/MacOS/tempo")
+            app.join("Contents/MacOS/pina")
         );
         assert!(command_line(&app, &plan.bin).is_ok());
         let other = root.join("other-bin");
         fs::create_dir_all(&other).unwrap();
-        fs::write(other.join("tempo"), "#!/bin/sh").unwrap();
+        fs::write(other.join("pina"), "#!/bin/sh").unwrap();
         assert!(command_line(&app, &other).is_err());
+        // tempo, as it was called, beside it: its app to the Trash, its command gone.
+        let tempo = plan.apps.join("tempo.app");
+        fake_app(&tempo, "0.1.0");
+        let plist = tempo.join("Contents/Info.plist");
+        fs::write(
+            &plist,
+            fs::read_to_string(&plist).unwrap() + "dev.tempo.daw",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(tempo.join("Contents/MacOS/tempo"), plan.bin.join("tempo"))
+            .unwrap();
+        copy_app(&plan).unwrap();
+        command_line(&app, &plan.bin).unwrap();
+        assert!(!tempo.exists() && fs::symlink_metadata(plan.bin.join("tempo")).is_err());
         // Out again: the app and its command; songs stay.
         fs::create_dir_all(&plan.songs).unwrap();
         uninstall(&plan, false).unwrap();
         assert!(!app.exists() && fs::symlink_metadata(&link).is_err());
-        assert!(plan.songs.exists() && other.join("tempo").exists());
+        assert!(plan.songs.exists() && other.join("pina").exists());
         fs::remove_dir_all(root).unwrap();
     }
 

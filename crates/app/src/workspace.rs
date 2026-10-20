@@ -19,7 +19,7 @@ use gpui::{
     Pixels, Point, PromptLevel, ScrollDelta, ScrollWheelEvent, Subscription, Window, actions,
     canvas, div, prelude::*, px, rgb,
 };
-use tempo_engine::{
+use pina_engine::{
     engine::LiveNote,
     player::Player,
     project::{
@@ -373,7 +373,7 @@ pub enum Drag {
     ModDepth {
         track: usize,
         index: usize,
-        target: tempo_engine::modulate::ModTarget,
+        target: pina_engine::modulate::ModTarget,
         x: f32,
         y: f32,
         depth: f32,
@@ -729,7 +729,7 @@ impl AgentEdit {
     }
 }
 
-/// How often unsaved edits are kept, for if tempo stops before they're saved.
+/// How often unsaved edits are kept, for if Pina Studio stops before they're saved.
 const KEEP_EVERY: Duration = Duration::from_secs(30);
 
 /// How long ago, in words: "just now", "4 minutes ago", "2 hours ago", "3 days ago".
@@ -866,10 +866,10 @@ pub struct Workspace {
     /// the one clicked.
     pub picked: Vec<usize>,
     /// Notes copied in the piano roll, their starts from the first's.
-    pub clip: Vec<tempo_engine::project::Note>,
+    pub clip: Vec<pina_engine::project::Note>,
     /// What a piano roll drag carries: the notes picked up, as they began; the notes picked
     /// before a rubber band; the pitches the pencil sounds.
-    pub held: Vec<(usize, tempo_engine::project::Note)>,
+    pub held: Vec<(usize, pina_engine::project::Note)>,
     pub held_picks: Vec<usize>,
     pub painting: Vec<u8>,
     /// The pitch under the mouse in the piano roll.
@@ -882,16 +882,16 @@ pub struct Workspace {
     pub header_w: f32,
     pub inspector_w: f32,
     /// Regions copied (⌘C on the tracks), to paste at the playhead.
-    pub region_clip: Option<tempo_engine::project::Region>,
+    pub region_clip: Option<pina_engine::project::Region>,
     /// A MIDI or pattern region's contents as they were when its time-stretch drag began.
-    pub stretching: Option<tempo_engine::project::Content>,
+    pub stretching: Option<pina_engine::project::Content>,
     /// ⇧ held while dragging a fader or knob: it moves a fifth as far.
     pub fine: bool,
     /// Modulation: each track's modulators' values and their recent ones; the knobs a
     /// modulator can be dropped on, where they were drawn; the steps' editors; the modulator
     /// being dragged, where; the one picked (knobs it moves set its depth); a clock for those
     /// running free.
-    pub mod_values: HashMap<u64, [f32; tempo_engine::modulate::MAX_MODS]>,
+    pub mod_values: HashMap<u64, [f32; pina_engine::modulate::MAX_MODS]>,
     pub mod_trace: HashMap<(u64, usize), std::collections::VecDeque<f32>>,
     pub mod_targets: crate::modulation::DropTargets,
     pub mod_steps: crate::modulation::StepsAt,
@@ -946,15 +946,15 @@ pub struct Workspace {
     /// when a drag on it began.
     pub auto_picked: Option<crate::automation::Picked>,
     pub auto_focus: Option<(u64, Param)>,
-    pub auto_clip: Option<tempo_engine::project::AutoClip>,
-    pub auto_grab: Vec<tempo_engine::project::AutoPoint>,
+    pub auto_clip: Option<pina_engine::project::AutoClip>,
+    pub auto_grab: Vec<pina_engine::project::AutoPoint>,
     /// Controls a hand has taken over from their automation, those being trimmed, and those
     /// recorded this pass (to thin when it ends).
     pub taken: HashMap<(u64, Param), crate::automation::Live>,
     pub touches: HashMap<(u64, Param), crate::automation::Touch>,
     pub written: std::collections::HashSet<(u64, Param)>,
     /// The lines Touch is recording over, as they were.
-    pub recorded: HashMap<(u64, Param), Vec<tempo_engine::project::AutoPoint>>,
+    pub recorded: HashMap<(u64, Param), Vec<pina_engine::project::AutoPoint>>,
     /// Whether the song was playing last frame, to tell a pass starting or ending.
     pub was_playing: bool,
     /// What each group of aliases played after the last edit, to tell which one changed.
@@ -1001,7 +1001,7 @@ pub struct Workspace {
     pub lanes_bounds: Rc<Cell<Bounds<Pixels>>>,
     /// The Channel EQ's window, when it's open; and bands copied from it.
     pub eq_view: Option<crate::eq::EqView>,
-    pub eq_clipboard: Vec<tempo_engine::project::EqBand>,
+    pub eq_clipboard: Vec<pina_engine::project::EqBand>,
     /// The window's size, for what fits.
     pub viewport_h: f32,
     pub viewport_w: f32,
@@ -1197,9 +1197,9 @@ impl Workspace {
         };
         ws.refresh_looks(cx);
         ws.refresh_songs(cx);
-        // For screenshots and docs: TEMPO_PAGE=playbooks[:genre[@scroll]] (or study, agent)
+        // For screenshots and docs: PINA_PAGE=playbooks[:genre[@scroll]] (or study, agent)
         // opens on that page.
-        if let Ok(page) = std::env::var("TEMPO_PAGE") {
+        if let Ok(page) = std::env::var("PINA_PAGE") {
             match page.split_once(':').unwrap_or((page.as_str(), "")) {
                 ("playbooks", rest) => {
                     let (genre, down) = rest.split_once('@').unwrap_or((rest, "0"));
@@ -1409,9 +1409,9 @@ impl Workspace {
             }
             Param::Eq(band, field) => {
                 let what = match field {
-                    tempo_engine::project::EqField::Freq => "Frequency",
-                    tempo_engine::project::EqField::Gain => "Gain",
-                    tempo_engine::project::EqField::Q => "Q",
+                    pina_engine::project::EqField::Freq => "Frequency",
+                    pina_engine::project::EqField::Gain => "Gain",
+                    pina_engine::project::EqField::Q => "Q",
                 };
                 let shape =
                     t.eq.and_then(|e| e.bands.get(band as usize).map(|b| b.shape.name()))
@@ -2688,7 +2688,7 @@ impl Workspace {
         match target {
             Target::Param { track, param } => {
                 self.player
-                    .param_value(track, tempo_engine::player::Which::Instrument, param)
+                    .param_value(track, pina_engine::player::Which::Instrument, param)
                     as f32
             }
             Target::LowCut(ch) => {
@@ -2828,7 +2828,7 @@ impl Workspace {
         result.is_ok()
     }
 
-    /// Keeps unsaved edits in the project's recovery folder, for if tempo stops before they're
+    /// Keeps unsaved edits in the project's recovery folder, for if Pina Studio stops before they're
     /// saved: it's offered them when the project next opens.
     pub fn keep_edits(&mut self) {
         if !self.session.edited || self.session.kept {
@@ -2845,13 +2845,13 @@ impl Workspace {
         }
     }
 
-    /// Asks whether to restore edits kept from when tempo last stopped without saving them.
+    /// Asks whether to restore edits kept from when Pina Studio last stopped without saving them.
     pub fn offer_kept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(at) = self.session.kept_at() else {
             return;
         };
         let detail = format!(
-            "tempo closed before they were saved. They were kept {}.",
+            "Pina Studio closed before they were saved. They were kept {}.",
             ago(at)
         );
         // After the window is up, for the question to sit on it.

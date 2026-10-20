@@ -8,7 +8,7 @@ use gpui::{
     Context, Div, FontWeight, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point,
     ScrollWheelEvent, canvas, div, point, prelude::*, px, rgb,
 };
-use tempo_engine::project::{Eq, Placement, Shape};
+use pina_engine::project::{Eq, Placement, Shape};
 
 use super::{EqKnob, EqOp, Geo, display::Drawn, hz_text, note_text, q_text, slope_text};
 use crate::{

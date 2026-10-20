@@ -81,7 +81,7 @@ pub fn role(t: &Track) -> &'static str {
     if let Some((role, _)) = BY_NAME.iter().find(|(_, words)| says(words)) {
         return role;
     }
-    // What tempo wrote on it.
+    // What Pina Studio wrote on it.
     match t.regions.first().map(|r| r.name.as_str()) {
         Some("Chords") => return "chords",
         Some("Bass") => return "bass",
@@ -305,7 +305,7 @@ pub struct Arrangement {
     /// The sections, in order; the genre playbook's by default.
     #[serde(default)]
     pub sections: Option<Vec<SectionIn>>,
-    /// The part a track plays, where tempo would guess wrong: {"3": "lead"}.
+    /// The part a track plays, where Pina Studio would guess wrong: {"3": "lead"}.
     #[serde(default)]
     pub roles: Option<BTreeMap<String, String>>,
 }
@@ -688,7 +688,7 @@ fn make_fx(p: &Project, dir: &Path, kind: Move, ticks: u64) -> Result<PathBuf, S
     let rate = p.sample_rate;
     let frames = p.samples(ticks, rate as f64) as usize;
     let name = format!(
-        "{AUDIO_DIR}/tempo {} {}.wav",
+        "{AUDIO_DIR}/pina {} {}.wav",
         format!("{kind:?}").to_lowercase(),
         frames
     );
@@ -951,7 +951,7 @@ mod tests {
 
     #[test]
     fn transitions_lead_into_a_bar() {
-        let dir = std::env::temp_dir().join(format!("tempo-arrange-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-arrange-{}", std::process::id()));
         let mut p = sketch();
         let out = transition(
             &mut p,

@@ -1,6 +1,6 @@
 //! The library: the folders samples are found in, and the index of what's in them. Scanning
 //! analyses only what's new or changed since last time (by modification time and size), on
-//! every core, and drops what's gone; the index is kept in `~/Library/Caches/tempo`.
+//! every core, and drops what's gone; the index is kept in `~/Library/Caches/Pina Studio`.
 
 use std::{
     collections::HashMap,
@@ -45,33 +45,27 @@ pub struct ScanReport {
     pub failed: Vec<(PathBuf, String)>,
 }
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default()
-}
-
-/// Where the library's folders are kept: `TEMPO_LIBRARY` (for tests), else
-/// `~/Library/Application Support/tempo/library.json`.
+/// Where the library's folders are kept: `PINA_LIBRARY` (for tests), else
+/// `~/Library/Application Support/Pina Studio/library.json`.
 pub fn config_file() -> PathBuf {
-    match std::env::var_os("TEMPO_LIBRARY") {
+    match std::env::var_os("PINA_LIBRARY") {
         Some(dir) => PathBuf::from(dir).join("library.json"),
-        None => home().join("Library/Application Support/tempo/library.json"),
+        None => crate::paths::support().join("library.json"),
     }
 }
 
-/// Where the index is kept: beside the config under `TEMPO_LIBRARY`, else
-/// `~/Library/Caches/tempo/samples.json`.
+/// Where the index is kept: beside the config under `PINA_LIBRARY`, else
+/// `~/Library/Caches/Pina Studio/samples.json`.
 pub fn index_file() -> PathBuf {
-    match std::env::var_os("TEMPO_LIBRARY") {
+    match std::env::var_os("PINA_LIBRARY") {
         Some(dir) => PathBuf::from(dir).join("samples.json"),
-        None => home().join("Library/Caches/tempo/samples.json"),
+        None => crate::paths::caches().join("samples.json"),
     }
 }
 
-/// The folder a library starts with: where tempo keeps samples it downloads.
+/// The folder a library starts with: where Pina Studio keeps samples it downloads.
 pub fn default_folder() -> PathBuf {
-    home().join("Music/tempo/Samples")
+    crate::paths::songs().join("Samples")
 }
 
 fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -283,7 +277,7 @@ mod tests {
 
     #[test]
     fn a_scan_analyses_whats_new_and_forgets_whats_gone() {
-        let base = std::env::temp_dir().join(format!("tempo-test-library-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("pina-test-library-{}", std::process::id()));
         let pack = base.join("Pack/Drums");
         std::fs::create_dir_all(&pack).unwrap();
         tone(&pack.join("Kick_01.wav"), 0.3);
@@ -294,8 +288,8 @@ mod tests {
             folders: vec![base.clone()],
             samples: Vec::new(),
         };
-        // SAFETY: tests touching TEMPO_LIBRARY run in this one test.
-        unsafe { std::env::set_var("TEMPO_LIBRARY", base.join("config")) };
+        // SAFETY: tests touching PINA_LIBRARY run in this one test.
+        unsafe { std::env::set_var("PINA_LIBRARY", base.join("config")) };
         let report = library.scan(&|_, _| {});
         assert_eq!((report.samples, report.analysed, report.removed), (2, 2, 0));
         let kick = library.get(&pack.join("Kick_01.wav")).unwrap();

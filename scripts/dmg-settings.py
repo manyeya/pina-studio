@@ -1,6 +1,6 @@
-# tempo's disk image, for dmgbuild (scripts/release-mac.sh runs it): one thing in it, "Install
-# tempo", in the middle of a 640 by 400 window over scripts/dmg-background.py's picture; no
-# toolbar, sidebar or status bar; tempo's icon on the volume. The picture and what goes in come
+# Pina Studio's disk image, for dmgbuild (scripts/release-mac.sh runs it): one thing in it, "Install
+# Pina Studio", in the middle of a 640 by 400 window over scripts/dmg-background.py's picture; no
+# toolbar, sidebar or status bar; Pina Studio's icon on the volume. The picture and what goes in come
 # from release-mac.sh (-D installer=… background=… volicon=…).
 import os
 

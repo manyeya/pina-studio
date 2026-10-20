@@ -1,6 +1,6 @@
 //! Putting samples into a song: how long a loop lasts at the song's tempo, how far to move a
 //! sample into its key, and where a one-shot goes on a sampler, kept off the notes its other
-//! zones play. The browser and `tempo samples put` both place samples with these.
+//! zones play. The browser and `pina samples put` both place samples with these.
 
 use crate::{
     music::Key,

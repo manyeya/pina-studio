@@ -2,7 +2,7 @@
 //! who's here (you, and an agent when one is editing), and export.
 
 use gpui::{Context, Div, FontWeight, MouseButton, MouseDownEvent, div, prelude::*, px, rgb};
-use tempo_engine::{music::Key, project::PPQ};
+use pina_engine::{music::Key, project::PPQ};
 
 use crate::{
     menu::{Menu, MenuAction},
@@ -144,7 +144,7 @@ impl Workspace {
                             div()
                                 .text_size(px(15.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child("tempo"),
+                                .child("Pina Studio"),
                         )
                     }),
             )
@@ -527,7 +527,7 @@ impl Workspace {
     }
 }
 
-/// tempo's mark: a "t" with the playhead's dot, on the accent.
+/// Pina Studio's mark: the app icon's metronome, on the accent.
 fn logo() -> impl IntoElement {
     div()
         .size(px(24.))

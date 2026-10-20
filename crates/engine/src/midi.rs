@@ -1,4 +1,4 @@
-//! MIDI input: every MIDI keyboard connected when tempo starts plays the armed track.
+//! MIDI input: every MIDI keyboard connected when Pina Studio starts plays the armed track.
 
 use std::sync::{Arc, Mutex};
 
@@ -25,21 +25,21 @@ pub fn parse(msg: &[u8]) -> Option<LiveNote> {
 /// Connects every MIDI input port; they stay connected while what it returns is kept.
 // ponytail: ports present at startup only; watch for devices plugged in later.
 pub fn connect(live: &LiveInput) -> Vec<midir::MidiInputConnection<()>> {
-    let Ok(probe) = midir::MidiInput::new("tempo") else {
+    let Ok(probe) = midir::MidiInput::new("Pina Studio") else {
         return Vec::new();
     };
     probe
         .ports()
         .iter()
         .filter_map(|port| {
-            let input = midir::MidiInput::new("tempo").ok()?;
+            let input = midir::MidiInput::new("Pina Studio").ok()?;
             let live = live.clone();
             let on_message = move |_: u64, msg: &[u8], _: &mut ()| {
                 if let Some(n) = parse(msg) {
                     let _ = live.lock().unwrap().push(n);
                 }
             };
-            input.connect(port, "tempo in", on_message, ()).ok()
+            input.connect(port, "Pina Studio in", on_message, ()).ok()
         })
         .collect()
 }

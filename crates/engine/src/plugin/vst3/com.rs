@@ -1,4 +1,4 @@
-//! The COM objects tempo hands to a plugin: the host, the component handler that hears its
+//! The COM objects Pina Studio hands to a plugin: the host, the component handler that hears its
 //! editor's parameter edits, and the stream, event list and parameter changes it reads.
 //!
 //! The lists are filled and read on the audio thread, so they never allocate after creation.
@@ -24,7 +24,7 @@ impl Class for HostApplication {
 impl IHostApplicationTrait for HostApplication {
     unsafe fn getName(&self, name: *mut String128) -> tresult {
         let name = unsafe { &mut *name };
-        for (dst, src) in name.iter_mut().zip("tempo".encode_utf16().chain([0])) {
+        for (dst, src) in name.iter_mut().zip("Pina Studio".encode_utf16().chain([0])) {
             *dst = src;
         }
         kResultOk
@@ -52,7 +52,7 @@ impl ComponentHandler {
         ComponentHandler { edits }
     }
 
-    /// Passes an edit made from tempo itself to the processor.
+    /// Passes an edit made from Pina Studio itself to the processor.
     pub fn edit(&self, id: ParamID, value: ParamValue) {
         self.edits.push(id, value);
     }

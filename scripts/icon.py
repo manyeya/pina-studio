@@ -1,7 +1,7 @@
-"""tempo's app icon: a metronome, its arm swung, on a dark squircle (Apple's grid: 824 of 1024,
-a superellipse), as SVG. `cargo run -p tempo --example icon` renders it to tempo.icns.
+"""Pina Studio's app icon: a metronome, its arm swung, on a dark squircle (Apple's grid: 824 of 1024,
+a superellipse), as SVG. `cargo run -p pina --example icon` renders it to pina.icns.
 
-    python3 scripts/icon.py   # writes crates/app/icon/tempo.svg
+    python3 scripts/icon.py   # writes crates/app/icon/pina.svg
 """
 import math, os
 
@@ -88,4 +88,4 @@ grid = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" vi
 <g transform="translate(512 512) scale(0.76) translate(-512 -508)">{GLYPH}</g></g>
 <path d="{sq}" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="3"/>
 </svg>'''
-write("tempo.svg", grid)
+write("pina.svg", grid)

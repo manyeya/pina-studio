@@ -1,5 +1,5 @@
 //! Finding the plugins installed: VST3, CLAP and VST2 bundles, and Audio Units. Each bundle is
-//! opened in a child process (`tempo __scan <bundle>`, or `tempo __scan au` for the Audio
+//! opened in a child process (`pina __scan <bundle>`, or `pina __scan au` for the Audio
 //! Units), so one that crashes takes only its scan down, and results are cached by bundle and
 //! modification time, so a scan only opens what's new.
 
@@ -64,8 +64,8 @@ struct Cached {
 /// What a scan reads; 2 added each plugin's categories.
 const VERSION: u32 = 2;
 
-/// Where VST3, CLAP and VST2 plugins are installed, and the folders in `TEMPO_PLUGIN_PATH` (or,
-/// as before, `TEMPO_VST3_PATH`; colon-separated).
+/// Where VST3, CLAP and VST2 plugins are installed, and the folders in `PINA_PLUGIN_PATH` (or,
+/// as before, `PINA_VST3_PATH`; colon-separated).
 pub fn folders() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -75,7 +75,7 @@ pub fn folders() -> Vec<PathBuf> {
         dirs.push(PathBuf::from("/Library/Audio/Plug-Ins").join(kind));
         dirs.push(home.join("Library/Audio/Plug-Ins").join(kind));
     }
-    for var in ["TEMPO_PLUGIN_PATH", "TEMPO_VST3_PATH"] {
+    for var in ["PINA_PLUGIN_PATH", "PINA_VST3_PATH"] {
         if let Some(extra) = std::env::var_os(var) {
             dirs.extend(std::env::split_paths(&extra));
         }
@@ -114,7 +114,7 @@ pub fn bundles(dirs: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// The plugins in one bundle (or with `AUDIO_UNITS`, the Audio Units), opening it in this
-/// process. What `tempo __scan` runs.
+/// process. What `pina __scan` runs.
 pub fn inspect(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
     if bundle == Path::new(AUDIO_UNITS) {
         return Ok(plugin::au::list());
@@ -226,10 +226,7 @@ pub fn everything() -> Vec<PathBuf> {
 
 /// Where the scan cache lives.
 pub fn cache_file() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    home.join("Library/Caches/tempo/plugins.json")
+    crate::paths::caches().join("plugins.json")
 }
 
 #[cfg(test)]
@@ -238,7 +235,7 @@ mod tests {
 
     #[test]
     fn finds_bundles_in_vendor_folders_and_survives_a_bad_scanner() {
-        let dir = std::env::temp_dir().join(format!("tempo-test-scan-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pina-test-scan-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("Vendor/Thing.vst3/Contents")).unwrap();
         std::fs::create_dir_all(dir.join("Other.vst3")).unwrap();
         std::fs::create_dir_all(dir.join("not a plugin")).unwrap();

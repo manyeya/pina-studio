@@ -1,5 +1,5 @@
 [package]
-name = "tempo-engine"
+name = "pina-engine"
 version.workspace = true
 edition.workspace = true
 
@@ -26,5 +26,5 @@ symphonia = { version = "0.6.1", default-features = false, features = ["aiff", "
 rustfft = "6.4"
 
 [dev-dependencies]
-# The stretch tempo used before Rubber Band, for examples/stretch_ab to compare with.
+# The stretch Pina Studio used before Rubber Band, for examples/stretch_ab to compare with.
 signalsmith-stretch = "0.1"

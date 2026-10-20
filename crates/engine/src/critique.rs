@@ -25,7 +25,7 @@ pub struct Issue {
     pub what: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
-    /// What to do, with tempo's commands.
+    /// What to do, with Pina Studio's commands.
     pub fix: String,
 }
 

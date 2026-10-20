@@ -1,4 +1,4 @@
-//! A running tempo serves its project on a socket, so `tempo do` and the MCP server edit what's
+//! A running Pina Studio serves its project on a socket, so `pina do` and the MCP server edit what's
 //! on screen (live, and undoable) instead of the file underneath it. One JSON request per line,
 //! one JSON reply per line: `{"ok": …}` or `{"error": "…"}`.
 
@@ -13,14 +13,14 @@ use std::{
 
 use futures::StreamExt;
 use gpui::{App, Context, WeakEntity};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use tempo_engine::{
+use pina_engine::{
     commands::{self, ChannelRef, Command, PluginSource},
     player::Player,
     plugin::PluginApi,
     project::{Project, Which},
 };
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::{
     strip::Channel,
@@ -64,7 +64,7 @@ pub enum Request {
         plugin: Which,
         name: String,
     },
-    /// What Claude is doing for `tempo ask`, for the Agent panel to show.
+    /// What Claude is doing for `pina ask`, for the Agent panel to show.
     Agent {
         event: crate::agent::Event,
     },
@@ -105,7 +105,7 @@ pub fn socket_path(dir: &Path) -> PathBuf {
     for b in dir.as_os_str().as_encoded_bytes() {
         h = (h ^ *b as u64).wrapping_mul(0x100_0000_01b3);
     }
-    std::env::temp_dir().join(format!("tempo-{h:016x}.sock"))
+    std::env::temp_dir().join(format!("pina-{h:016x}.sock"))
 }
 
 /// Asks the app that has `dir` open, if one does.
@@ -122,7 +122,7 @@ pub fn ask(dir: &Path, request: &Request) -> Option<Reply> {
     })
 }
 
-/// One connection to the app, for many requests: `tempo ask` sends Claude's events over it.
+/// One connection to the app, for many requests: `pina ask` sends Claude's events over it.
 pub struct Link {
     out: UnixStream,
     replies: BufReader<UnixStream>,
@@ -146,7 +146,7 @@ impl Link {
 /// Serves the workspace's project while the app runs.
 pub fn serve(ws: WeakEntity<Workspace>, dir: &Path, cx: &mut App) {
     let path = socket_path(dir);
-    let _ = std::fs::remove_file(&path); // left by a tempo that crashed
+    let _ = std::fs::remove_file(&path); // left by a Pina Studio that crashed
     let Ok(listener) = UnixListener::bind(&path) else {
         return;
     };
@@ -222,7 +222,7 @@ impl Workspace {
             },
             None => op,
         };
-        // An agent working outside a conversation the panel shows (`tempo do`, another MCP
+        // An agent working outside a conversation the panel shows (`pina do`, another MCP
         // client) shows there edit by edit.
         if !self.chat.busy {
             self.chat.outside(&what);

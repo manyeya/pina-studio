@@ -1043,11 +1043,11 @@ mod tests {
     use super::*;
 
     /// With a real instrument, which CI doesn't have:
-    /// `TEMPO_TEST_VST3="/path/Some Synth.vst3" cargo test -p tempo-engine -- --ignored`
+    /// `PINA_TEST_VST3="/path/Some Synth.vst3" cargo test -p pina-engine -- --ignored`
     #[test]
     #[ignore]
     fn a_real_instrument_plays_saves_restores_and_shuts_down() {
-        let path = std::env::var("TEMPO_TEST_VST3").expect("set TEMPO_TEST_VST3");
+        let path = std::env::var("PINA_TEST_VST3").expect("set PINA_TEST_VST3");
         let module = Module::load(Path::new(&path)).unwrap();
         let classes = module.classes();
         let class = classes.iter().find(|c| c.category == AUDIO_MODULE).unwrap();
