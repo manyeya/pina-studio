@@ -375,7 +375,10 @@ In the app, mostly as in Logic:
   the processing (zero latency; natural phase, an analog EQ's phase up to the top, run at twice
   the rate; or linear phase, at a resolution, its every dynamic band moving as spectral ones do)
   with the latency it adds (the engine waits for it, so every channel stays in time), the
-  character (clean, subtle, warm), the instance list (every EQ in the song, to switch between),
+  character (clean, subtle, warm), the instance list (every EQ in the song, each with what
+  it's playing, where it collides with the reference's, and its curve; zoomed in, or under the
+  pointer with auto-zoom, its bands dragged and made right there; filter by name, pin, bypass,
+  compare, match or open one),
   EQ Match (to another track or a file: bands fitted to the difference), the analyzer's settings
   (pre and post, range, resolution, speed, tilt, freeze, compare and collisions), bypass, and the
   output (level, pan left/right or mid/side, phase, gain scale, auto gain). Every band's

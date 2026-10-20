@@ -1,17 +1,16 @@
-//! The EQ window's tools, as Pro-Q's: the instance list (every channel's EQ, to switch to,
-//! compare with or match to), EQ Match (this track's sound made like another's, or a song's:
+//! The EQ window's tools, as Pro-Q's: EQ Match (this track's sound made like another's, or a song's:
 //! bands fitted to the difference), EQ Sketch (a curve drawn, bands made along it), and
 //! Spectrum Grab's peaks.
 
 use std::path::PathBuf;
 
 use gpui::{
-    Bounds, Context, Div, FontWeight, MouseButton, MouseDownEvent, PathBuilder, PathPromptOptions,
-    Stateful, canvas, div, point, prelude::*, px, rgb, size,
+    Context, Div, FontWeight, MouseButton, MouseDownEvent, PathPromptOptions, div, prelude::*, px,
+    rgb,
 };
 use tempo_engine::{
-    eq::{average_spectrum, eq_response, fit_bands, smooth_third, spectrum_db},
-    project::{Eq, EqBand, Shape},
+    eq::{average_spectrum, fit_bands, smooth_third, spectrum_db},
+    project::{EqBand, Shape},
 };
 
 use super::{EqOp, Geo};
@@ -595,203 +594,6 @@ impl Workspace {
                         }),
                 ),
         )
-    }
-
-    /// The instance list, in the display's place: every channel with an EQ, its curve, how many
-    /// bands; click one to show it, Compare to see its spectrum against this one, Match to make
-    /// this one like it.
-    pub(super) fn eq_list(&self, w: f32, h: f32, cx: &mut Context<Self>) -> Stateful<Div> {
-        let rate = self.session.project.sample_rate as f64;
-        let view = self.eq_view.as_ref().expect("the window's open");
-        let (now, ext) = (view.ch, view.ext);
-        let p = &self.session.project;
-        let mut rows: Vec<(Channel, String, u32, Option<u64>, Eq)> = Vec::new();
-        for (i, t) in p.tracks.iter().enumerate() {
-            if let Some(eq) = t.eq {
-                rows.push((
-                    Channel::Track(i),
-                    t.name.clone(),
-                    self.color(i),
-                    Some(t.id),
-                    eq,
-                ));
-            }
-        }
-        for (i, a) in p.auxes.iter().enumerate() {
-            if let Some(eq) = a.eq {
-                rows.push((Channel::Aux(i), a.name.clone(), BUS, Some(a.id), eq));
-            }
-        }
-        if let Some(eq) = p.master_eq {
-            rows.push((Channel::Master, "Stereo Out".into(), MASTER, None, eq));
-        }
-        let items = rows
-            .into_iter()
-            .enumerate()
-            .map(|(k, (ch, name, color, id, eq))| {
-                let curve: Vec<f32> = (0..120)
-                    .map(|i| eq_response(&eq, 20.0 * 1000f64.powf(i as f64 / 119.0), rate) as f32)
-                    .collect();
-                let compared = id.is_some() && id == ext;
-                let small = |label: &'static str,
-                             on: bool,
-                             sel: String,
-                             op: EqOp,
-                             cx: &mut Context<Self>| {
-                    div()
-                        .h(px(22.))
-                        .px(px(8.))
-                        .flex()
-                        .items_center()
-                        .rounded(px(5.))
-                        .cursor_pointer()
-                        .text_size(px(10.5))
-                        .when(on, |d| d.bg(alpha(RECORD, 0.2)).text_color(rgb(RECORD)))
-                        .when(!on, |d| {
-                            d.bg(rgb(FIELD))
-                                .text_color(rgb(TEXT_3))
-                                .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
-                        })
-                        .debug_selector(move || sel.clone())
-                        .child(label)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |ws, _, _, cx| {
-                                cx.stop_propagation();
-                                ws.eq_op(op, cx);
-                            }),
-                        )
-                };
-                div()
-                    .h(px(58.))
-                    .flex_none()
-                    .px(px(12.))
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .rounded(px(8.))
-                    .cursor_pointer()
-                    .when(ch == now, |d| d.bg(alpha(ACCENT, 0.14)))
-                    .when(ch != now, |d| d.hover(|d| d.bg(rgb(0x1a1b21))))
-                    .debug_selector(move || format!("eq-instance-{k}"))
-                    .child(div().w(px(4.)).h(px(34.)).rounded(px(2.)).bg(rgb(color)))
-                    .child(
-                        div()
-                            .w(px(150.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .text_size(px(12.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .whitespace_nowrap()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(name),
-                            )
-                            .child(div().text_size(px(10.5)).text_color(rgb(TEXT_3)).child(
-                                match (eq.bypass, eq.bands.len()) {
-                                    (true, _) => "bypassed".to_string(),
-                                    (_, 1) => "1 band".into(),
-                                    (_, n) => format!("{n} bands"),
-                                },
-                            )),
-                    )
-                    .child(
-                        canvas(
-                            |_, _, _| {},
-                            move |b, _, window, _| {
-                                let (cw, ch_h) =
-                                    (f32::from(b.size.width), f32::from(b.size.height));
-                                let y = |db: f32| {
-                                    ch_h / 2.0 - db.clamp(-18.0, 18.0) / 18.0 * (ch_h / 2.0 - 2.0)
-                                };
-                                window.paint_quad(gpui::fill(
-                                    Bounds::new(
-                                        point(b.origin.x, b.origin.y + px(ch_h / 2.0)),
-                                        size(b.size.width, px(1.)),
-                                    ),
-                                    alpha(0xffffff, 0.08),
-                                ));
-                                let mut line = PathBuilder::stroke(px(1.5));
-                                for (i, &d) in curve.iter().enumerate() {
-                                    let p = point(
-                                        b.origin.x + px(i as f32 / (curve.len() - 1) as f32 * cw),
-                                        b.origin.y + px(y(d)),
-                                    );
-                                    if i == 0 {
-                                        line.move_to(p);
-                                    } else {
-                                        line.line_to(p);
-                                    }
-                                }
-                                if let Ok(p) = line.build() {
-                                    window.paint_path(p, rgb(super::CURVE));
-                                }
-                            },
-                        )
-                        .flex_1()
-                        .h(px(40.)),
-                    )
-                    .when(ch != now && id.is_some(), |d| {
-                        let id = id.unwrap_or_default();
-                        d.child(small(
-                            "Compare",
-                            compared,
-                            format!("eq-compare-{k}"),
-                            EqOp::Ext(if compared { None } else { Some(id) }),
-                            cx,
-                        ))
-                        .child(small(
-                            "Match",
-                            false,
-                            format!("eq-match-{k}"),
-                            EqOp::Match(Some(id)),
-                            cx,
-                        ))
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            ws.open_eq(ch, cx);
-                            if let Some(v) = ws.eq_view.as_mut() {
-                                v.list = false;
-                            }
-                        }),
-                    )
-            });
-        div()
-            .id("eq-list")
-            .w(px(w))
-            .h(px(h))
-            .p(px(12.))
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .overflow_y_scroll()
-            .bg(rgb(0x0e0f13))
-            .debug_selector(|| "eq-list".into())
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .pb(px(6.))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::BOLD)
-                            .child("Every EQ in the song"),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_size(px(10.5))
-                            .text_color(rgb(TEXT_4))
-                            .child("Click one to work on it · Compare shows its sound against this one's · Match makes this one like it"),
-                    ),
-            )
-            .children(items)
     }
 
     /// EQ Sketch let go: the bands along the curve drawn.

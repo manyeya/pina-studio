@@ -17,11 +17,11 @@ use std::f64::consts::{FRAC_1_SQRT_2, PI};
 use rustfft::num_complex::Complex;
 use std::sync::{
     Arc,
-    atomic::{AtomicU32, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
 };
 
 use crate::{
-    engine::MAX_BLOCK,
+    engine::{MASTER, MAX_BLOCK},
     eq_linear::{self, Linear},
     eq_spectral,
     project::{Character, Eq, EqBand, MAX_BANDS, Placement, Processing, Shape},
@@ -1459,6 +1459,9 @@ impl Processor {
 /// Samples the analyzer keeps: enough for 6 Hz bins at 48 kHz.
 pub const TAP_LEN: usize = 8192;
 
+/// Samples each lane keeps for the instance list.
+pub const LANE_LEN: usize = 2048;
+
 /// What the EQ window watches, shared with the audio thread: which lane's EQ, a band to hear
 /// alone and how loud, and that EQ's latest sound going in (mono) and coming out (each side),
 /// and its dynamic bands' moves.
@@ -1480,6 +1483,11 @@ pub struct Tap {
     pub ext_slot: AtomicUsize,
     ext: Vec<AtomicU32>,
     ext_written: AtomicUsize,
+    /// Every lane's sound lately (mono, `LANE_LEN` each, the master's last), for the instance
+    /// list: kept while it's open.
+    pub lanes_on: AtomicBool,
+    lanes: Vec<AtomicU32>,
+    lanes_written: Vec<AtomicUsize>,
 }
 
 impl Default for Tap {
@@ -1503,7 +1511,39 @@ impl Tap {
             ext_slot: AtomicUsize::new(usize::MAX),
             ext: ring(),
             ext_written: AtomicUsize::new(0),
+            lanes_on: AtomicBool::new(false),
+            lanes: (0..(MASTER + 1) * LANE_LEN)
+                .map(|_| AtomicU32::new(0))
+                .collect(),
+            lanes_written: (0..=MASTER).map(|_| AtomicUsize::new(0)).collect(),
         }
+    }
+
+    /// A lane's sound (`MASTER` the master's), while the instance list is open.
+    pub fn write_lane(&self, slot: usize, l: &[f32], r: &[f32]) {
+        if !self.lanes_on.load(Ordering::Relaxed) || slot > MASTER {
+            return;
+        }
+        let ring = &self.lanes[slot * LANE_LEN..(slot + 1) * LANE_LEN];
+        let mut at = self.lanes_written[slot].load(Ordering::Relaxed);
+        for (a, b) in l.iter().zip(r) {
+            ring[at % LANE_LEN].store((0.5 * (a + b)).to_bits(), Ordering::Relaxed);
+            at += 1;
+        }
+        self.lanes_written[slot].store(at, Ordering::Release);
+    }
+
+    /// A lane's latest `LANE_LEN` samples, oldest first; how many it's had written ever.
+    pub fn read_lane(&self, slot: usize, out: &mut [f32; LANE_LEN]) -> usize {
+        if slot > MASTER {
+            return 0;
+        }
+        let ring = &self.lanes[slot * LANE_LEN..(slot + 1) * LANE_LEN];
+        let at = self.lanes_written[slot].load(Ordering::Acquire);
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = f32::from_bits(ring[(at + i) % LANE_LEN].load(Ordering::Relaxed));
+        }
+        at
     }
 
     /// A lane's output, if it's the one compared with.
@@ -2597,5 +2637,21 @@ mod tests {
         }
         // The sine's own biggest step: 0.5 * 2π * 800 / 48000.
         assert!(most < 0.06, "{most}");
+    }
+
+    #[test]
+    fn every_lane_is_kept_for_the_instance_list_while_it_is_open() {
+        let tap = Tap::new();
+        let mut out = [0f32; LANE_LEN];
+        tap.write_lane(3, &[0.5; 64], &[0.5; 64]);
+        assert_eq!(tap.read_lane(3, &mut out), 0, "closed, nothing kept");
+        tap.lanes_on.store(true, Ordering::Relaxed);
+        tap.write_lane(3, &[0.5; 64], &[0.25; 64]);
+        tap.write_lane(MASTER, &[1.0; 8], &[1.0; 8]);
+        assert_eq!(tap.read_lane(3, &mut out), 64);
+        assert_eq!(out[LANE_LEN - 1], 0.375);
+        assert_eq!(out[LANE_LEN - 65], 0.0);
+        assert_eq!(tap.read_lane(MASTER, &mut out), 8);
+        assert_eq!(tap.read_lane(MASTER + 1, &mut out), 0);
     }
 }

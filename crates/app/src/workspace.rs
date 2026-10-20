@@ -541,6 +541,11 @@ pub enum Drag {
         x: f32,
         start: f32,
     },
+    /// A band on the instance list dragged, over its row's display (where it was).
+    EqListBand {
+        id: u16,
+        frame: Bounds<Pixels>,
+    },
     /// The EQ window, moved by its title or resized by its corner.
     EqWindow {
         from: Point<f32>,
@@ -2014,6 +2019,7 @@ impl Workspace {
                 start,
                 ..
             }) => self.drag_eq_knob(id, knob, from, start, p.y),
+            Some(Drag::EqListBand { id, frame }) => self.drag_list_band(id, frame, p),
             Some(Drag::EqWindow {
                 from,
                 start,
@@ -2098,7 +2104,12 @@ impl Workspace {
             Some(Drag::ZoomSpan) => self.zoom_release(cx),
             Some(Drag::SoloHold) => self.solo_release(cx),
             // A dot or knob clicked, not moved: no edit to undo; a dot's click may do something.
-            Some(d @ (Drag::EqNode { .. } | Drag::EqKnob { .. } | Drag::EqSolo { .. })) => {
+            Some(
+                d @ (Drag::EqNode { .. }
+                | Drag::EqKnob { .. }
+                | Drag::EqSolo { .. }
+                | Drag::EqListBand { .. }),
+            ) => {
                 let still = self.session.unchanged();
                 if still {
                     self.session.cancel();

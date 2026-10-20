@@ -2005,6 +2005,102 @@ fn the_eq_window_sets_dynamics_character_output_and_records_automation(cx: &mut 
 }
 
 #[gpui::test]
+fn the_instance_list_edits_every_eq_in_the_song(cx: &mut TestAppContext) {
+    use tempo_engine::project::{Bands, Eq, EqBand};
+    let (ws, cx) = open(cx);
+    cx.simulate_resize(gpui::size(px(1500.), px(1000.)));
+    ws.update(cx, |ws, cx| {
+        for t in 0..3 {
+            ws.session.project.tracks[t].eq = Some(Eq {
+                bands: Bands::from_slice(&[EqBand::new(Shape::Bell, 1_000.0, 3.0)]),
+                ..Eq::default()
+            });
+        }
+        ws.changed(cx);
+        ws.open_eq(Channel::Track(0), cx);
+    });
+    cx.run_until_parked();
+    let eq = |cx: &VisualTestContext, t: usize| {
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[t].eq.unwrap())
+    };
+    click_on(cx, "eq-instances", Modifiers::none(), MouseButton::Left);
+    assert!(cx.debug_bounds("eq-list").is_some());
+    // Zoomed to edit: the second track's band dragged up from its own row; the first's alone.
+    click_on(
+        cx,
+        "eq-instance-zoom-2",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    let row = cx.debug_bounds("eq-instance-display-1").unwrap();
+    let (w, h) = (f32::from(row.size.width), f32::from(row.size.height));
+    let dot = point(
+        row.origin.x + px(w * (50f32).ln() / (1000f32).ln()),
+        row.origin.y + px(h / 2.0 - 3.0 / 18.0 * (h / 2.0 - 18.0)),
+    );
+    drag(cx, dot, dot - point(px(0.), px(30.)));
+    assert!(eq(cx, 1).bands[0].gain_db > 6.0, "{:?}", eq(cx, 1).bands[0]);
+    assert_eq!(eq(cx, 0).bands[0].gain_db, 3.0);
+    // A click where there's no band makes one there; its bypass, from its row.
+    let empty = point(row.origin.x + px(w * 0.25), row.origin.y + px(h * 0.3));
+    let third = cx.debug_bounds("eq-instance-display-2").unwrap();
+    let empty3 = empty + point(px(0.), third.origin.y - row.origin.y);
+    drag(cx, empty3, empty3);
+    assert_eq!(eq(cx, 2).bands.len(), 2);
+    click_on(
+        cx,
+        "eq-instance-bypass-1",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert!(eq(cx, 1).bypass);
+    cx.simulate_keystrokes("cmd-z");
+    assert!(!eq(cx, 1).bypass);
+    // Pinned, only those; filtered by name, only those.
+    click_on(
+        cx,
+        "eq-instance-pin-1",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(
+        cx,
+        "eq-instance-pinned",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert!(cx.debug_bounds("eq-instance-0").is_some());
+    assert!(cx.debug_bounds("eq-instance-1").is_none());
+    click_on(
+        cx,
+        "eq-instance-pinned",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(
+        cx,
+        "eq-instance-filter",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    cx.simulate_input("dru");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("eq-instance-1").is_none());
+    // Opened: the window on it, the list gone.
+    click_on(
+        cx,
+        "eq-instance-open-0",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    let (ch, list) = ws.read_with(cx, |ws, _| {
+        let v = ws.eq_view.as_ref().unwrap();
+        (v.ch, v.list)
+    });
+    assert_eq!((ch, list), (Channel::Track(2), false));
+}
+
+#[gpui::test]
 fn the_mixer_shapes_a_channel_with_its_eq_and_compressor(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     cx.simulate_keystrokes("x");
@@ -5480,7 +5576,7 @@ fn shots() {
                 "eq" | "eq-picked" | "eq-menu" | "eq-mixer" | "eq-hover" | "eq-multi"
                 | "eq-piano" | "eq-analyzer" | "eq-empty" | "eq-dynamics" | "eq-output"
                 | "eq-list" | "eq-match" | "eq-sketch" | "eq-grab" | "eq-compare"
-                | "eq-spectral" | "eq-modes" | "eq-slopes" => {
+                | "eq-spectral" | "eq-modes" | "eq-slopes" | "eq-instances" => {
                     use tempo_engine::project::{Bands, Dynamic, Eq, EqBand, Placement, Shape};
                     let mut cut = EqBand::new(Shape::LowCut, 32.0, 0.0);
                     cut.slope = 24.0;
@@ -5514,6 +5610,22 @@ fn shots() {
                         (d.spectral, d.density) = (true, 0.7);
                     }
                     ws.session.project.tracks[0].eq = Some(eq);
+                    if page == "eq-instances" {
+                        let others = [
+                            (1, vec![EqBand::new(Shape::Bell, 2_500.0, 3.0), air]),
+                            (2, vec![cut, EqBand::new(Shape::Bell, 60.0, 4.0)]),
+                        ];
+                        for (t, bands) in others {
+                            ws.session.project.tracks[t].eq = Some(Eq {
+                                bands: Bands::from_slice(&bands),
+                                ..Eq::default()
+                            });
+                        }
+                        ws.session.project.master_eq = Some(Eq {
+                            bands: Bands::from_slice(&[EqBand::new(Shape::TiltShelf, 900.0, 1.5)]),
+                            ..Eq::default()
+                        });
+                    }
                     ws.channel = Channel::Track(0);
                     if page == "eq-mixer" {
                         ws.view = View::Mixer;
@@ -5554,6 +5666,12 @@ fn shots() {
                                 v.picked.clear();
                                 v.pretend_tool(&page[3..], rate);
                             }
+                            "eq-instances" => {
+                                v.picked.clear();
+                                v.list = true;
+                                v.listing.zoom = 1;
+                                v.listing.expanded = Some(Channel::Track(1));
+                            }
                             "eq-compare" => {
                                 v.picked.clear();
                                 v.ext = Some(ws.session.project.tracks[1].id);
@@ -5563,6 +5681,10 @@ fn shots() {
                                 v.popup = Some(crate::eq::Popup::Output);
                             }
                             _ => {}
+                        }
+                        if page == "eq-instances" {
+                            ws.open_list(cx);
+                            ws.pretend_list();
                         }
                         if page == "eq-modes" {
                             ws.eq_view.as_mut().unwrap().picked.clear();

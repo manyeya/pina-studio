@@ -22,6 +22,7 @@
 
 mod bars;
 mod display;
+mod list;
 mod panel;
 mod tools;
 
@@ -224,8 +225,9 @@ pub struct EqView {
     /// while grabbing.
     grab_since: Option<std::time::Instant>,
     pub grabbing: Option<Vec<f32>>,
-    /// The instance list in the display's place.
+    /// The instance list in the display's place, and its settings.
     pub list: bool,
+    pub listing: list::Listing,
     /// EQ Match, while it's open.
     pub matching: Option<Match>,
     /// EQ Sketch: on, and the stroke drawn (plot coordinates, left to right).
@@ -273,6 +275,7 @@ impl EqView {
             grab_since: None,
             grabbing: None,
             list: false,
+            listing: list::Listing::default(),
             matching: None,
             sketching: false,
             stroke: Vec::new(),
@@ -912,6 +915,7 @@ impl Workspace {
     pub fn close_eq(&mut self, cx: &mut Context<Self>) {
         self.eq_view = None;
         self.player.watch_eq(None);
+        self.player.watch_lanes(false);
         self.player.solo_band(None);
         cx.notify();
     }
@@ -1025,6 +1029,7 @@ impl Workspace {
     /// Each frame the window's open: tells the engine which EQ to tap and which band to solo,
     /// and moves the analyzer and meter on with what it's heard.
     pub fn eq_frame(&mut self) {
+        self.list_frame();
         let rate = self.session.project.sample_rate as f64;
         let Some(view) = self.eq_view.as_mut() else {
             return;
@@ -2330,6 +2335,7 @@ impl Workspace {
                 if let Some(v) = self.eq_view.as_mut() {
                     v.list = !v.list;
                 }
+                self.open_list(cx);
             }
             EqOp::Sketch => {
                 if let Some(v) = self.eq_view.as_mut() {

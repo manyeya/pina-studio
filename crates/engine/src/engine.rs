@@ -2322,6 +2322,7 @@ impl Engine {
             }
             if let Some(s) = shared {
                 s.eq_tap.write_ext(plan.slot, l, r);
+                s.eq_tap.write_lane(plan.slot, l, r);
                 s.report(plan.slot, peak, reduction);
             }
             if let Some(p) = self.peaks.get_mut(plan.slot) {
@@ -2352,6 +2353,7 @@ impl Engine {
             }
             if let Some(s) = shared {
                 s.eq_tap.write_ext(plan.slot, l, r);
+                s.eq_tap.write_lane(plan.slot, l, r);
                 s.report(plan.slot, peak, reduction);
             }
         }
@@ -2385,6 +2387,11 @@ impl Engine {
                     sc,
                 );
             }
+        }
+        // The master's sound, for the instance list: the mix through its EQ and inserts.
+        if let Some(s) = shared {
+            s.eq_tap
+                .write_lane(MASTER, &out_l[..frames], &out_r[..frames]);
         }
         // A preview plays over the mix, after the master's fader.
         if let Some(a) = self.audition.as_deref_mut().filter(|a| !a.done()) {

@@ -569,6 +569,25 @@ impl Player {
             .store(slot, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// The instance list open or not: every lane's sound is kept for it while it is.
+    pub fn watch_lanes(&self, on: bool) {
+        let tap = &self.shared.eq_tap;
+        tap.lanes_on.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A channel's sound lately (a track's or aux's by id; none, the master's), oldest first;
+    /// how many samples it's had ever (0: none yet).
+    pub fn lane_sound(&self, channel: Option<u64>, out: &mut [f32; crate::eq::LANE_LEN]) -> usize {
+        let slot = match channel {
+            None => crate::engine::MASTER,
+            Some(id) => match self.lanes.get(&id) {
+                Some(s) => s.slot,
+                None => return 0,
+            },
+        };
+        self.shared.eq_tap.read_lane(slot, out)
+    }
+
     /// A band of the watched EQ heard alone (by id) at a listening level (dB), or none.
     pub fn solo_band(&self, band: Option<(u16, f32)>) {
         let tap = &self.shared.eq_tap;
