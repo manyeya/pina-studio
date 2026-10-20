@@ -25,6 +25,7 @@ use crate::modulate::{
 use crate::{
     drums::Drums,
     dsp::Strip,
+    eq::Made,
     peaks::Peaks,
     plugin::{self, Control, ControlKind, Libraries, Note, Plugin, Processor},
     project::{
@@ -44,8 +45,9 @@ const BLOCK_NOTES: usize = 256;
 const BLOCK_CONTROLS: usize = 256;
 /// Most live or previewed notes the engine takes in one block.
 const LIVE_NOTES: usize = 64;
-/// The longest delay compensation for one lane, in samples.
-const MAX_DELAY: usize = 1 << 14;
+/// The longest delay compensation for one lane, in samples: room for an EQ's longest linear
+/// phase (two stages at very high resolution) and spectral dynamics, with plugins after.
+const MAX_DELAY: usize = 1 << 16;
 /// Lanes the live engine holds.
 pub const SLOTS: usize = 256;
 /// The master meter's index in `Shared::meters`.
@@ -427,10 +429,13 @@ impl Arrangement {
     }
 }
 
-/// A channel's built-in EQ, compressor and saturator, unless absent or bypassed.
-fn strip_dsp(eq: Option<&Eq>, comp: Option<&Comp>, sat: Option<&Saturator>) -> StripDsp {
+/// A channel's built-in EQ, compressor and saturator, unless absent or bypassed; and what the
+/// EQ's linear phase or spectral dynamics need, made here, off the audio thread.
+fn strip_dsp(eq: Option<&Eq>, comp: Option<&Comp>, sat: Option<&Saturator>, rate: f64) -> StripDsp {
+    let eq = eq.filter(|e| !e.bypass).copied();
     StripDsp {
-        eq: eq.filter(|e| !e.bypass).copied(),
+        made: eq.as_ref().map(|e| Arc::new(Made::new(e, rate))),
+        eq,
         comp: comp.filter(|c| !c.bypass).copied(),
         sat: sat.filter(|s| !s.bypass).copied(),
     }
@@ -441,6 +446,7 @@ fn strip_dsp(eq: Option<&Eq>, comp: Option<&Comp>, sat: Option<&Saturator>) -> S
 #[derive(Default)]
 struct StripDsp {
     eq: Option<Eq>,
+    made: Option<Arc<Made>>,
     comp: Option<Comp>,
     sat: Option<Saturator>,
 }
@@ -463,6 +469,7 @@ impl Strip {
             .filter(|t| dsp.eq.is_some() && t.watches(slot));
         self.process(
             dsp.eq.as_ref(),
+            dsp.made.as_deref(),
             dsp.comp.as_ref(),
             dsp.sat.as_ref(),
             l,
@@ -1087,8 +1094,18 @@ pub fn compile(
 ) -> (Arrangement, Vec<String>) {
     files.begin();
     let mut problems = Vec::new();
-    let latencies = |l: &[(usize, u32)]| l.iter().map(|&(_, l)| l).collect::<Vec<_>>();
-    let pdc = compensate(&latencies(tracks), &latencies(auxes));
+    // Each channel's plugins' latency, and its EQ's.
+    let eq_latency = |eq: &Option<Eq>| eq.as_ref().map_or(0, crate::eq::latency);
+    let latencies = |l: &[(usize, u32)], eqs: &mut dyn Iterator<Item = &Option<Eq>>| {
+        l.iter()
+            .zip(eqs)
+            .map(|(&(_, l), eq)| l + eq_latency(eq))
+            .collect::<Vec<_>>()
+    };
+    let pdc = compensate(
+        &latencies(tracks, &mut project.tracks.iter().map(|t| &t.eq)),
+        &latencies(auxes, &mut project.auxes.iter().map(|a| &a.eq)),
+    );
     let any_solo = project.tracks.iter().any(|t| t.solo);
     let mut plans = Vec::new();
     // Which track (by its place) each plugin hears as a sidechain, by the source's id.
@@ -1304,7 +1321,7 @@ pub fn compile(
                 .and_then(|bus| project.auxes.iter().position(|a| a.bus == bus)),
             // Through an aux, the aux's own compensation lines it up.
             direct: if t.output.is_some() { 0 } else { pdc.direct },
-            dsp: strip_dsp(t.eq.as_ref(), t.comp.as_ref(), t.sat.as_ref()),
+            dsp: strip_dsp(t.eq.as_ref(), t.comp.as_ref(), t.sat.as_ref(), rate),
             sampler: match &t.instrument {
                 Some(Instrument::Sampler(s)) => Some(Arc::new(s.clone())),
                 _ => None,
@@ -1322,7 +1339,7 @@ pub fn compile(
             AuxPlan {
                 slot,
                 gain: balance(g, a.pan),
-                dsp: strip_dsp(a.eq.as_ref(), a.comp.as_ref(), a.sat.as_ref()),
+                dsp: strip_dsp(a.eq.as_ref(), a.comp.as_ref(), a.sat.as_ref(), rate),
                 delay,
                 sidechains,
             }
@@ -1349,11 +1366,13 @@ pub fn compile(
             .map(|_| [vec![0.0; MAX_BLOCK], vec![0.0; MAX_BLOCK]])
             .collect(),
         auxes,
-        lookahead: pdc.lookahead,
+        // The master's EQ holds back everything heard: the engine reads that much further ahead.
+        lookahead: pdc.lookahead + eq_latency(&project.master_eq) as u64,
         master_strip: strip_dsp(
             project.master_eq.as_ref(),
             project.master_comp.as_ref(),
             project.master_sat.as_ref(),
+            rate,
         ),
         cycle: project
             .cycle
@@ -2196,6 +2215,7 @@ impl Engine {
                 true => {
                     let mut dsp = StripDsp {
                         eq: plan.dsp.eq,
+                        made: plan.dsp.made.clone(),
                         comp: plan.dsp.comp,
                         sat: plan.dsp.sat,
                     };
@@ -3151,6 +3171,39 @@ mod tests {
         let onset = |s: &[f32]| s.iter().position(|x| x.abs() > 0.0).unwrap();
         assert_eq!(onset(&r) - onset(&l), 100);
         assert!((onset(&r) as i64 - BEAT as i64).abs() <= 1);
+    }
+
+    #[test]
+    fn an_eq_in_linear_phase_is_waited_for() {
+        // Two synth tracks, left and right, the left's EQ in linear phase (some 2,300 samples
+        // late): the right waits for it, and the engine reads ahead, so both are heard on time.
+        // The master's EQ in natural phase, likewise.
+        let mut a = synth_track("a", vec![note(PPQ as i64, PPQ, 69)], PPQ * 2);
+        a.pan = -1.0;
+        let mut b = a.clone();
+        b.pan = 1.0;
+        let plain = project(vec![a.clone(), b.clone()]);
+        a.eq = Some(Eq {
+            processing: crate::project::Processing::Linear,
+            resolution: 0,
+            ..Eq::default()
+        });
+        let mut p = project(vec![a, b]);
+        p.master_eq = Some(Eq {
+            processing: crate::project::Processing::Natural,
+            ..Eq::default()
+        });
+        assert!(crate::eq::latency(p.tracks[0].eq.as_ref().unwrap()) > 2_000);
+        let onset = |s: &[f32]| s.iter().position(|x| x.abs() > 1e-3).unwrap() as i64;
+        let [l, r] = render(&p, Path::new("."), BEAT * 2);
+        let [on_time, _] = render(&plain, Path::new("."), BEAT * 2);
+        assert!(
+            (onset(&l) - onset(&r)).abs() <= 1,
+            "{} {}",
+            onset(&l),
+            onset(&r)
+        );
+        assert!((onset(&r) - onset(&on_time)).abs() <= 1, "{}", onset(&r));
     }
 
     #[test]

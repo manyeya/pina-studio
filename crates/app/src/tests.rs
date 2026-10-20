@@ -1884,7 +1884,9 @@ fn snap_follows_the_menu(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_eq_window_sets_dynamics_character_output_and_records_automation(cx: &mut TestAppContext) {
-    use tempo_engine::project::{AutoMode, Bands, Character, Eq, EqBand, EqField, Param};
+    use tempo_engine::project::{
+        AutoMode, Bands, Character, Eq, EqBand, EqField, Param, Processing,
+    };
     let (ws, cx) = open(cx);
     cx.simulate_resize(gpui::size(px(1500.), px(1000.)));
     ws.update(cx, |ws, cx| {
@@ -1930,10 +1932,29 @@ fn the_eq_window_sets_dynamics_character_output_and_records_automation(cx: &mut 
     let drums = ws.read_with(cx, |ws, _| ws.session.project.tracks[2].id);
     assert_eq!(eq(cx).sidechain, Some(drums));
     assert!(eq(cx).bands[0].dynamic.unwrap().external);
+    // Spectral: its tilt off, its density dragged up.
+    click_on(cx, "eq-spectral", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "eq-spectral-tilt", Modifiers::none(), MouseButton::Left);
+    let density = cx.debug_bounds("eq-knob-density").unwrap().center();
+    drag(cx, density, density - point(px(0.), px(40.)));
+    let d = eq(cx).bands[0].dynamic.unwrap();
+    assert!(d.spectral && !d.tilt && d.density > 0.6, "{d:?}");
     // The character, and the output's pan, phase and auto gain.
     click_on(cx, "eq-character", Modifiers::none(), MouseButton::Left);
     pick(cx, &ws, "Warm");
     assert_eq!(eq(cx).character, Character::Warm);
+    // Linear phase, high resolution: its latency shown, and no analog character to pick.
+    assert!(cx.debug_bounds("eq-latency").is_some(), "spectral's window");
+    click_on(cx, "eq-processing", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Linear Phase");
+    click_on(cx, "eq-processing", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "High");
+    let e = eq(cx);
+    assert_eq!((e.processing, e.resolution), (Processing::Linear, 2));
+    assert!(cx.debug_bounds("eq-character").is_none());
+    click_on(cx, "eq-processing", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Natural Phase");
+    assert_eq!(eq(cx).processing, Processing::Natural);
     click_on(cx, "eq-output", Modifiers::none(), MouseButton::Left);
     click_on(cx, "eq-pan-ms", Modifiers::none(), MouseButton::Left);
     click_on(cx, "eq-invert", Modifiers::none(), MouseButton::Left);
@@ -5437,7 +5458,8 @@ fn shots() {
                 // The Channel EQ's window: a mix's bands, the analyzer as if playing.
                 "eq" | "eq-picked" | "eq-menu" | "eq-mixer" | "eq-hover" | "eq-multi"
                 | "eq-piano" | "eq-analyzer" | "eq-empty" | "eq-dynamics" | "eq-output"
-                | "eq-list" | "eq-match" | "eq-sketch" | "eq-grab" | "eq-compare" => {
+                | "eq-list" | "eq-match" | "eq-sketch" | "eq-grab" | "eq-compare"
+                | "eq-spectral" | "eq-modes" => {
                     use tempo_engine::project::{Bands, Dynamic, Eq, EqBand, Placement, Shape};
                     let mut cut = EqBand::new(Shape::LowCut, 32.0, 0.0);
                     cut.slope = 24;
@@ -5454,10 +5476,16 @@ fn shots() {
                     });
                     let notch = EqBand::new(Shape::Notch, 1_150.0, 0.0);
                     let air = EqBand::new(Shape::HighShelf, 11_000.0, 3.0);
-                    let eq = Eq {
+                    let mut eq = Eq {
                         bands: Bands::from_slice(&[cut, side, mud, notch, harsh, air]),
                         ..Eq::default()
                     };
+                    if page == "eq-spectral" {
+                        use tempo_engine::project::Processing;
+                        (eq.processing, eq.resolution) = (Processing::Linear, 2);
+                        let d = eq.bands[4].dynamic.as_mut().unwrap();
+                        (d.spectral, d.density) = (true, 0.7);
+                    }
                     ws.session.project.tracks[0].eq = Some(eq);
                     ws.channel = Channel::Track(0);
                     if page == "eq-mixer" {
@@ -5494,7 +5522,7 @@ fn shots() {
                                 v.picked.clear();
                                 v.popup = Some(crate::eq::Popup::Analyzer);
                             }
-                            "eq-dynamics" => v.dyn_open = true,
+                            "eq-dynamics" | "eq-spectral" => v.dyn_open = true,
                             "eq-list" | "eq-match" | "eq-sketch" | "eq-grab" => {
                                 v.picked.clear();
                                 v.pretend_tool(&page[3..], rate);
@@ -5508,6 +5536,10 @@ fn shots() {
                                 v.popup = Some(crate::eq::Popup::Output);
                             }
                             _ => {}
+                        }
+                        if page == "eq-modes" {
+                            ws.eq_view.as_mut().unwrap().picked.clear();
+                            ws.eq_processing_menu(point(px(330.), px(560.)), cx);
                         }
                         if page == "eq-empty" {
                             ws.session.project.tracks[0].eq = Some(Eq::default());

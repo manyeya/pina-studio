@@ -35,7 +35,10 @@ use gpui::{
 };
 use tempo_engine::{
     eq::{TAP_LEN, auto_times, band_sections, response_db, spectrum_db},
-    project::{Bands, Character, Dynamic, Eq, EqBand, EqField, MAX_BANDS, Param, Placement, Shape},
+    project::{
+        Bands, Character, Dynamic, Eq, EqBand, EqField, MAX_BANDS, Param, Placement, Processing,
+        Shape,
+    },
 };
 
 use crate::{
@@ -379,6 +382,12 @@ pub enum EqOp {
     External,
     Trigger,
     AutoThreshold,
+    /// The bands picked: spectral dynamics on or off; their tilt on or off.
+    Spectral,
+    SpectralTilt,
+    /// How the EQ treats phase; how fine its linear phase and spectral dynamics work.
+    Processing(Processing),
+    PhaseResolution(u8),
     /// The track the EQ's sidechain is (by id), or none.
     Sidechain(Option<u64>),
     /// A track to compare with (by id), or none; collisions shown or not; Spectrum Grab on
@@ -417,6 +426,8 @@ pub enum EqKnob {
     High,
     /// The output's balance.
     Pan,
+    /// A spectral band's density: wide stretches moving together (0) or each frequency alone (1).
+    Density,
 }
 
 impl EqKnob {
@@ -428,6 +439,7 @@ impl EqKnob {
             }
             EqKnob::Attack | EqKnob::Release => ((v / 0.1).ln() / 10_000f32.ln()).clamp(0.0, 1.0),
             EqKnob::Pan => (v + 1.0) / 2.0,
+            EqKnob::Density => v.clamp(0.0, 1.0),
             EqKnob::Q => ((v / 0.025).ln() / 1600f32.ln()).clamp(0.0, 1.0),
             EqKnob::Gain | EqKnob::Range => (v + 30.0) / 60.0,
             EqKnob::Threshold => (v + 80.0) / 80.0,
@@ -443,6 +455,7 @@ impl EqKnob {
             EqKnob::Freq | EqKnob::Low | EqKnob::High => 10.0 * 3000f32.powf(p),
             EqKnob::Attack | EqKnob::Release => ((0.1 * 10_000f32.powf(p)) * 10.0).round() / 10.0,
             EqKnob::Pan => ((p * 2.0 - 1.0) * 100.0).round() / 100.0,
+            EqKnob::Density => (p * 100.0).round() / 100.0,
             EqKnob::Q => 0.025 * 1600f32.powf(p),
             EqKnob::Gain | EqKnob::Range => ((p * 60.0 - 30.0) * 100.0).round() / 100.0,
             EqKnob::Threshold => (p * 80.0 - 80.0).round(),
@@ -473,7 +486,7 @@ impl EqKnob {
             EqKnob::Q => q_text(v),
             EqKnob::Gain | EqKnob::Range | EqKnob::Output => format!("{} dB", db_text(v)),
             EqKnob::Threshold => format!("{} dB", db_text(v).trim_end_matches(".0")),
-            EqKnob::Scale => format!("{:.0}%", v * 100.0),
+            EqKnob::Scale | EqKnob::Density => format!("{:.0}%", v * 100.0),
         }
     }
 
@@ -491,6 +504,7 @@ impl EqKnob {
             EqKnob::Low => "LOW",
             EqKnob::High => "HIGH",
             EqKnob::Pan => "PAN",
+            EqKnob::Density => "DENSITY",
         }
     }
 
@@ -526,6 +540,8 @@ impl EqKnob {
             }
             EqKnob::Q => number(t.trim_start_matches('q'))?,
             EqKnob::Scale => number(&t)?,
+            // As a share: "0.3", or "30".
+            EqKnob::Density => number(&t).map(|n| if n > 1.0 { n / 100.0 } else { n })?,
         };
         v.is_finite().then_some(v)
     }
@@ -1640,6 +1656,9 @@ impl Workspace {
                     EqKnob::Release => {
                         b.dynamic.get_or_insert_default().release_ms = Some(v.clamp(1.0, 5_000.0))
                     }
+                    EqKnob::Density => {
+                        b.dynamic.get_or_insert_default().density = v.clamp(0.0, 1.0)
+                    }
                     EqKnob::Low | EqKnob::High => {
                         let d = b.dynamic.get_or_insert_default();
                         let mut t = d.trigger.unwrap_or([b.freq / 2.0, b.freq * 2.0]);
@@ -1673,6 +1692,7 @@ impl Workspace {
             EqKnob::Low => trigger[0],
             EqKnob::High => trigger[1],
             EqKnob::Pan => eq.pan,
+            EqKnob::Density => d.density,
         }
     }
 
@@ -1700,6 +1720,7 @@ impl Workspace {
             EqKnob::Gain | EqKnob::Output | EqKnob::Pan => 0.0,
             EqKnob::Q => shape.default_q(),
             EqKnob::Range => d.range_db,
+            EqKnob::Density => d.density,
             EqKnob::Scale => 1.0,
             EqKnob::Low => 100.0,
             EqKnob::High => 10_000.0,
@@ -2122,6 +2143,38 @@ impl Workspace {
                 })
             }
             EqOp::DynClear => self.edit_picked(cx, |b| b.dynamic = None),
+            EqOp::Spectral => {
+                let all = self
+                    .picked_bands()
+                    .iter()
+                    .all(|b| b.dynamic.is_some_and(|d| d.spectral));
+                self.edit_picked(cx, |b| {
+                    if let Some(d) = b.dynamic.as_mut() {
+                        d.spectral = !all;
+                    }
+                })
+            }
+            EqOp::SpectralTilt => {
+                let all = self
+                    .picked_bands()
+                    .iter()
+                    .all(|b| b.dynamic.is_some_and(|d| d.tilt));
+                self.edit_picked(cx, |b| {
+                    if let Some(d) = b.dynamic.as_mut() {
+                        d.tilt = !all;
+                    }
+                })
+            }
+            EqOp::Processing(p) => self.edit(cx, |ws| {
+                if let Some(eq) = ws.eq_mut() {
+                    eq.processing = p;
+                }
+            }),
+            EqOp::PhaseResolution(r) => self.edit(cx, |ws| {
+                if let Some(eq) = ws.eq_mut() {
+                    eq.resolution = r.min(3);
+                }
+            }),
             EqOp::External => {
                 let all = self
                     .picked_bands()

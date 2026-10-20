@@ -4,7 +4,7 @@
 
 use crate::{
     engine::MAX_BLOCK,
-    eq::{Processor, Tap},
+    eq::{Made, Processor, Tap},
     faust::{FaustDsp, ParamIndex, comp::CompDsp, controls, sat::SatDsp},
     project::{Comp, Eq, Saturator},
 };
@@ -61,14 +61,16 @@ impl Strip {
     }
 
     /// Runs a block (at most `MAX_BLOCK`) through whichever of the EQ, compressor and saturator
-    /// are given, in place; returns the most the compressor turned it down, in dB. `sidechain`
-    /// is what the EQ's dynamic bands can listen to; `tap`, when the EQ window watches this
+    /// are given, in place; returns the most the compressor turned it down, in dB. `made` is
+    /// what the EQ's linear phase and spectral dynamics need; `sidechain` what its dynamic bands
+    /// can listen to; `tap`, when the EQ window watches this
     /// channel, gets what the EQ heard and played (and says which band to hear alone).
     /// Allocation-free.
     #[allow(clippy::too_many_arguments)]
     pub fn process(
         &mut self,
         eq: Option<&Eq>,
+        made: Option<&Made>,
         comp: Option<&Comp>,
         sat: Option<&Saturator>,
         l: &mut [f32],
@@ -81,7 +83,7 @@ impl Strip {
         match eq {
             Some(e) => {
                 let solo = tap.and_then(Tap::solo);
-                self.eq.process(e, solo, l, r, sidechain, tap);
+                self.eq.process(e, made, solo, l, r, sidechain, tap);
             }
             None => self.eq.rest(),
         }
@@ -185,12 +187,14 @@ mod tests {
         level: f32,
     ) -> (Vec<f32>, f32) {
         let mut strip = Strip::new(RATE);
+        let made = eq.map(|e| Made::new(e, RATE));
         let (mut l, mut r) = (sine(freq, 48_000, level), sine(freq, 48_000, level));
         let mut most = 0f32;
         for at in (0..l.len()).step_by(MAX_BLOCK) {
             let end = (at + MAX_BLOCK).min(l.len());
             most = most.max(strip.process(
                 eq,
+                made.as_ref(),
                 comp,
                 sat,
                 &mut l[at..end],
@@ -366,7 +370,7 @@ mod cost {
         let mut time = |e: Option<&Eq>, c: Option<&Comp>, s: Option<&Saturator>| {
             let began = std::time::Instant::now();
             for _ in 0..(seconds * 48_000) / MAX_BLOCK {
-                strip.process(e, c, s, &mut l, &mut r, None, None);
+                strip.process(e, None, c, s, &mut l, &mut r, None, None);
             }
             began.elapsed().as_secs_f64() / seconds as f64 * 100.0
         };

@@ -5,7 +5,7 @@
 use gpui::{
     Context, Div, FontWeight, MouseButton, MouseDownEvent, Stateful, div, prelude::*, px, rgb,
 };
-use tempo_engine::project::Eq;
+use tempo_engine::project::{Eq, Processing, RESOLUTIONS};
 
 use super::{EqKnob, EqOp, FOOT_H, HEAD_H, Popup, factory, saved_presets};
 use crate::{
@@ -323,6 +323,34 @@ impl Workspace {
         self.eq_menu(at, items, cx);
     }
 
+    /// How the EQ treats phase, and how finely its linear phase and spectral dynamics work.
+    pub fn eq_processing_menu(&mut self, at: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let Some(now) = self.shown_eq().map(|(_, e)| e) else {
+            return;
+        };
+        let tick = |on: bool| if on { "✓ " } else { "" };
+        let modes = Processing::ALL.iter().map(|&p| {
+            (
+                format!("{}{}", tick(p == now.processing), p.name()),
+                MenuAction::Eq(EqOp::Processing(p)),
+            )
+        });
+        let resolutions = RESOLUTIONS.iter().enumerate().map(|(i, name)| {
+            (
+                format!("{}{name}", tick(i as u8 == now.resolution)),
+                MenuAction::Eq(EqOp::PhaseResolution(i as u8)),
+            )
+        });
+        let items = modes
+            .chain([
+                (String::new(), MenuAction::Nothing),
+                ("Resolution".to_string(), MenuAction::Nothing),
+            ])
+            .chain(resolutions)
+            .collect();
+        self.eq_menu(at, items, cx);
+    }
+
     /// Along the bottom: the piano, the processing, the analyzer, the output; and a corner to
     /// resize the window by.
     pub(super) fn eq_foot(&self, eq: &Eq, cx: &mut Context<Self>) -> Div {
@@ -332,6 +360,19 @@ impl Workspace {
         let popup = view.popup;
         let analyzing = a.pre || a.post;
         let (sketching, listing, matching) = (view.sketching, view.list, view.matching.is_some());
+        // How it treats phase, and (linear) how finely; how late that makes it.
+        let processing = match eq.processing {
+            Processing::Linear => {
+                format!(
+                    "{} · {}",
+                    eq.processing.name(),
+                    RESOLUTIONS[eq.resolution.min(3) as usize]
+                )
+            }
+            p => p.name().to_string(),
+        };
+        let latency = tempo_engine::eq::latency(eq) as f32;
+        let latency_ms = latency / self.session.project.sample_rate.max(1) as f32 * 1_000.0;
         let tool =
             |label: &'static str, on: bool, sel: &'static str, op: EqOp, cx: &mut Context<Self>| {
                 bar_button(label, on, ACCENT_TEXT)
@@ -368,46 +409,65 @@ impl Workspace {
                     ),
             )
             .child(
-                div()
-                    .h(px(26.))
-                    .px(px(9.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(6.))
-                    .bg(rgb(0x1c1d23))
-                    .text_size(px(11.5))
-                    .text_color(rgb(TEXT_3))
-                    .child("Zero Latency"),
-            )
-            .child(
                 bar_button(
-                    format!("Character · {}", eq.character.name()),
-                    eq.character != tempo_engine::project::Character::Clean,
-                    AMBER,
+                    processing,
+                    eq.processing != Processing::ZeroLatency,
+                    ACCENT_TEXT,
                 )
-                .debug_selector(|| "eq-character".into())
+                .debug_selector(|| "eq-processing".into())
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|ws, e: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        let now = ws.shown_eq().map(|(_, e)| e.character);
-                        let items = tempo_engine::project::Character::ALL
-                            .iter()
-                            .map(|&c| {
-                                (
-                                    format!(
-                                        "{}{}",
-                                        if Some(c) == now { "✓ " } else { "" },
-                                        c.name()
-                                    ),
-                                    MenuAction::Eq(EqOp::Character(c)),
-                                )
-                            })
-                            .collect();
-                        ws.eq_menu(e.position, items, cx);
+                        ws.eq_processing_menu(e.position, cx);
                     }),
                 ),
             )
+            .when(latency > 0.0, |el| {
+                el.child(
+                    div()
+                        .text_size(px(10.5))
+                        .font_family(MONO)
+                        .text_color(rgb(TEXT_3))
+                        .debug_selector(|| "eq-latency".into())
+                        .child(match latency_ms < 10.0 {
+                            true => format!("{latency_ms:.1} ms"),
+                            false => format!("{latency_ms:.0} ms"),
+                        }),
+                )
+            })
+            // Linear phase has no analog character: its filters aren't analog ones.
+            .when(eq.processing != Processing::Linear, |el| {
+                el.child(
+                    bar_button(
+                        format!("Character · {}", eq.character.name()),
+                        eq.character != tempo_engine::project::Character::Clean,
+                        AMBER,
+                    )
+                    .debug_selector(|| "eq-character".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            let now = ws.shown_eq().map(|(_, e)| e.character);
+                            let items = tempo_engine::project::Character::ALL
+                                .iter()
+                                .map(|&c| {
+                                    (
+                                        format!(
+                                            "{}{}",
+                                            if Some(c) == now { "✓ " } else { "" },
+                                            c.name()
+                                        ),
+                                        MenuAction::Eq(EqOp::Character(c)),
+                                    )
+                                })
+                                .collect();
+                            ws.eq_menu(e.position, items, cx);
+                        }),
+                    ),
+                )
+            })
             .child(div().flex_1())
             .child(tool("Instances", listing, "eq-instances", EqOp::List, cx))
             .child(tool(

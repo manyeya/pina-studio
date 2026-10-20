@@ -1706,6 +1706,11 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             });
         }
         Command::SetEq { channel, eq } => {
+            // Loading a song takes the nearest; asked for, it's a mistake.
+            let resolution = eq.as_ref().and_then(|e| e.get("resolution")?.as_f64());
+            if let Some(r) = resolution.filter(|r| !(0.0..=3.0).contains(r)) {
+                return Err(format!("resolution {r}: it's 0 (low) to 3 (very high)"));
+            }
             let slot = strip(p, channel)?.eq;
             let mut new = *slot;
             set_effect(&mut new, eq)?;
@@ -1920,14 +1925,18 @@ fn check_eq(eq: &Eq) -> Result<(), String> {
         }
         if let Some(d) = b.dynamic
             && (!(-30.0..=30.0).contains(&d.range_db)
-                || d.threshold_db.is_some_and(|t| !(-80.0..=0.0).contains(&t)))
+                || d.threshold_db.is_some_and(|t| !(-80.0..=0.0).contains(&t))
+                || !(0.0..=1.0).contains(&d.density))
         {
-            return fail("dynamic: range_db is -30 to 30, threshold_db -80 to 0".into());
+            return fail(
+                "dynamic: range_db is -30 to 30, threshold_db -80 to 0, density 0 to 1".into(),
+            );
         }
     }
     if !(0.0..=2.0).contains(&eq.scale) {
         return Err(format!("scale {}: it's 0 to 2", eq.scale));
     }
+
     Ok(())
 }
 
@@ -2345,6 +2354,29 @@ mod tests {
         assert_eq!(b.dynamic.unwrap().threshold_db, Some(-24.0));
         let wrong = run(&mut p, &band(r#""band": 0, "slope": 20"#)).unwrap_err();
         assert!(wrong.contains("band 0: slope 20"), "{wrong}");
+        // Spectral, and the EQ in linear phase at high resolution.
+        run(
+            &mut p,
+            &band(r#""band": 2, "dynamic": {"spectral": true, "density": 0.8, "tilt": false}"#),
+        )
+        .unwrap();
+        let d = p.tracks[0].eq.unwrap().bands[2].dynamic.unwrap();
+        assert!(
+            d.spectral && !d.tilt && d.density == 0.8 && d.range_db == -4.0,
+            "{d:?}"
+        );
+        let set = |eq: &str| format!(r#"{{"op": "set_eq", {ch}, "eq": {eq}}}"#);
+        run(&mut p, &set(r#"{"processing": "linear", "resolution": 2}"#)).unwrap();
+        let eq = p.tracks[0].eq.unwrap();
+        assert_eq!(
+            (eq.processing, eq.resolution, eq.bands.len()),
+            (crate::project::Processing::Linear, 2, 3)
+        );
+        let wrong = run(&mut p, &set(r#"{"resolution": 7}"#)).unwrap_err();
+        assert!(wrong.contains("resolution 7"), "{wrong}");
+        let wrong = run(&mut p, &band(r#""band": 2, "dynamic": {"density": 2}"#)).unwrap_err();
+        assert!(wrong.contains("density"), "{wrong}");
+        run(&mut p, &set(r#"{"processing": "zero_latency"}"#)).unwrap();
         assert!(
             run(&mut p, &band(r#""band": 5"#))
                 .unwrap_err()

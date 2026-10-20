@@ -339,6 +339,24 @@ pub struct Dynamic {
     /// Kept but still.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub bypass: bool,
+    /// Spectral: rather than the whole band moving, only what stands out in it, frequency by
+    /// frequency (in linear phase, so with the EQ's latency). `density` 0 moves wide stretches
+    /// together, 1 each frequency on its own; `tilt` has it hear the highs 3 dB an octave
+    /// louder, as a mix's pink spectrum needs.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub spectral: bool,
+    #[serde(skip_serializing_if = "is_half")]
+    pub density: f32,
+    #[serde(skip_serializing_if = "is_true")]
+    pub tilt: bool,
+}
+
+fn is_half(v: &f32) -> bool {
+    *v == 0.5
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 impl Default for Dynamic {
@@ -351,9 +369,47 @@ impl Default for Dynamic {
             trigger: None,
             external: false,
             bypass: false,
+            spectral: false,
+            density: 0.5,
+            tilt: true,
         }
     }
 }
+
+/// How an EQ's filters treat phase: as analog EQs do, with no latency; as an analog EQ's phase
+/// too, all through what's heard (a little latency); or not at all, linear phase (more latency,
+/// as `resolution` sets it, and its bands' timing kept together).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Processing {
+    #[default]
+    ZeroLatency,
+    Natural,
+    Linear,
+}
+
+impl Processing {
+    pub const ALL: [Processing; 3] = [
+        Processing::ZeroLatency,
+        Processing::Natural,
+        Processing::Linear,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Processing::ZeroLatency => "Zero Latency",
+            Processing::Natural => "Natural Phase",
+            Processing::Linear => "Linear Phase",
+        }
+    }
+
+    fn is_zero(&self) -> bool {
+        *self == Processing::ZeroLatency
+    }
+}
+
+/// The resolutions linear phase and spectral bands can work at, low to very high.
+pub const RESOLUTIONS: [&str; 4] = ["Low", "Medium", "High", "Very High"];
 
 /// One band of an EQ: its shape at a frequency (Hz), its gain (dB) and width (Q), or for a cut
 /// or shelf its slope (dB an octave); the part of the sound it works on; and whether it moves
@@ -614,9 +670,19 @@ pub struct Eq {
     /// A track (by id) its dynamic bands can listen to instead of what goes through it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sidechain: Option<u64>,
+    /// How its filters treat phase, and (for linear phase and spectral bands) at what
+    /// resolution: 0 low to 3 very high, the latency doubling each step.
+    #[serde(skip_serializing_if = "Processing::is_zero")]
+    pub processing: Processing,
+    #[serde(skip_serializing_if = "is_one_u8")]
+    pub resolution: u8,
     /// Kept but not heard.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub bypass: bool,
+}
+
+fn is_one_u8(v: &u8) -> bool {
+    *v == 1
 }
 
 /// An EQ's character: clean (transparent), or the saturation of an analog one, subtle or warm.
@@ -661,6 +727,8 @@ impl Default for Eq {
             auto_gain: false,
             character: Character::Clean,
             sidechain: None,
+            processing: Processing::ZeroLatency,
+            resolution: 1,
             bypass: false,
         }
     }
@@ -757,6 +825,10 @@ struct EqJson {
     #[serde(default)]
     sidechain: Option<u64>,
     #[serde(default)]
+    processing: Processing,
+    #[serde(default = "one_u8")]
+    resolution: u8,
+    #[serde(default)]
     bypass: bool,
     low_cut: Option<f32>,
     low_mid: Option<ClassicBand>,
@@ -766,6 +838,10 @@ struct EqJson {
 
 fn unity() -> f32 {
     1.0
+}
+
+fn one_u8() -> u8 {
+    1
 }
 
 /// One of the old EQ's bands, as much of it as was given.
@@ -799,6 +875,8 @@ impl From<EqJson> for Eq {
         eq.auto_gain = j.auto_gain;
         eq.character = j.character;
         eq.sidechain = j.sidechain;
+        eq.processing = j.processing;
+        eq.resolution = j.resolution.min(3);
         eq.bypass = j.bypass;
         eq
     }

@@ -8,6 +8,8 @@ pub mod drums;
 pub mod dsp;
 pub mod engine;
 pub mod eq;
+pub mod eq_linear;
+pub mod eq_spectral;
 mod faust;
 pub mod look;
 pub mod midi;

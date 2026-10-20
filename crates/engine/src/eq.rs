@@ -13,11 +13,16 @@
 //! have, where this runs only the sections the bands in use need.
 
 use std::f64::consts::{FRAC_1_SQRT_2, PI};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, AtomicUsize, Ordering},
+};
 
 use crate::{
     engine::MAX_BLOCK,
-    project::{Character, Eq, EqBand, MAX_BANDS, Placement, Shape},
+    eq_linear::{self, Linear},
+    eq_spectral,
+    project::{Character, Eq, EqBand, MAX_BANDS, Placement, Processing, Shape},
 };
 
 /// The most second-order sections a band takes: a brickwall cut (144 dB an octave).
@@ -551,8 +556,10 @@ pub struct Processor {
     live: [Live; LIVE],
     /// The bands' places in `live`, in the order they run: the EQ's, then those fading out.
     order: [u8; LIVE],
-    /// Whether it ran last block: one coming back on starts with its bands as they are.
+    /// Whether it ran last block, and whether its bands did: one coming back on starts with its
+    /// bands as they are.
     running: bool,
+    bands: bool,
     /// The output's gain and pan, gliding; the make-up auto gain works out (dB) and what for.
     output: f64,
     pan: f64,
@@ -563,6 +570,12 @@ pub struct Processor {
     dc: [[f64; 2]; 2],
     /// A copy of the block going in, for the solo and the analyzer.
     input: [[f32; MAX_BLOCK]; 2],
+    /// How it treats phase last block; natural phase's bands at twice the rate (none for those
+    /// bands themselves); linear phase's convolvers; the spectral dynamics.
+    mode: Processing,
+    natural: Option<Box<Natural>>,
+    linear: eq_linear::Runner,
+    spectral: eq_spectral::Runner,
 }
 
 /// The make-up gain an EQ wants (dB): as much as it makes the sound louder on average across
@@ -585,19 +598,188 @@ pub fn auto_gain_db(eq: &Eq, rate: f64) -> f64 {
     -10.0 * power.max(1e-12).log10()
 }
 
+/// What an EQ in linear phase or with spectral dynamics needs made off the audio thread, when the
+/// song's planned: kernels, and the spectral stage's memory.
+#[derive(Default)]
+pub struct Made {
+    linear: Option<Arc<Linear>>,
+    spectral: Option<eq_spectral::Plan>,
+}
+
+impl Made {
+    pub fn new(eq: &Eq, rate: f64) -> Made {
+        Made {
+            linear: (eq.processing == Processing::Linear).then(|| Arc::new(Linear::new(eq, rate))),
+            spectral: eq_spectral::needed(eq).then(|| eq_spectral::Plan::new(eq)),
+        }
+    }
+}
+
+/// How many samples an EQ holds the sound back (none bypassed): natural phase's filters, linear
+/// phase's kernels; the spectral stage's window, for spectral dynamics (or any dynamics, in
+/// linear phase).
+pub fn latency(eq: &Eq) -> u32 {
+    if eq.bypass {
+        return 0;
+    }
+    let mode = match eq.processing {
+        Processing::ZeroLatency => 0,
+        Processing::Natural => NATURAL_LATENCY,
+        Processing::Linear => eq_linear::latency(eq),
+    };
+    mode + eq_spectral::latency(eq)
+}
+
+/// Natural phase's filters, up to twice the rate and back: half band, linear phase, so they add
+/// their latency and nothing else (flat to 20 kHz at 44.1 kHz, 80 dB down where they cut).
+const NATURAL_TAPS: usize = 127;
+const NATURAL_LATENCY: u32 = (NATURAL_TAPS as u32 - 1) / 2;
+
+/// The filters' taps that aren't 0 (a half band's every other one is), each its place and
+/// value, for a DC gain of 1.
+fn halfband() -> Vec<(usize, f32)> {
+    let mid = (NATURAL_TAPS / 2) as f64;
+    let i0 = |x: f64| {
+        let (mut sum, mut term) = (1.0, 1.0);
+        for k in 1..40 {
+            term *= (x / (2.0 * k as f64)).powi(2);
+            sum += term;
+        }
+        sum
+    };
+    let beta = 8.0;
+    let h: Vec<f64> = (0..NATURAL_TAPS)
+        .map(|i| {
+            let t = i as f64 - mid;
+            let sinc = if t == 0.0 {
+                1.0
+            } else {
+                (PI * t / 2.0).sin() / (PI * t / 2.0)
+            };
+            sinc * i0(beta * (1.0 - (t / mid).powi(2)).max(0.0).sqrt()) / i0(beta)
+        })
+        .collect();
+    let sum: f64 = h.iter().sum();
+    h.iter()
+        .enumerate()
+        .filter(|(_, v)| v.abs() > 1e-12)
+        .map(|(i, v)| (i, (v / sum) as f32))
+        .collect()
+}
+
+/// A filter's last samples, twice over so the newest `NATURAL_TAPS` sit side by side.
+struct Fir {
+    hist: Vec<f32>,
+    at: usize,
+}
+
+impl Fir {
+    fn new() -> Fir {
+        Fir {
+            hist: vec![0.0; 2 * NATURAL_TAPS],
+            at: 0,
+        }
+    }
+
+    fn push(&mut self, x: f32) {
+        self.hist[self.at] = x;
+        self.hist[self.at + NATURAL_TAPS] = x;
+        self.at = (self.at + 1) % NATURAL_TAPS;
+    }
+
+    fn out(&self, taps: &[(usize, f32)]) -> f32 {
+        let w = &self.hist[self.at..self.at + NATURAL_TAPS];
+        taps.iter().map(|&(i, h)| w[i] * h).sum()
+    }
+}
+
+/// Natural phase: the bands run at twice the rate, where their phase is an analog EQ's up to the
+/// top of what's heard rather than bent by the sample rate.
+struct Natural {
+    inner: Processor,
+    taps: Vec<(usize, f32)>,
+    up: [Fir; 2],
+    down: [Fir; 2],
+    /// The block, and the sidechain, at twice the rate.
+    twice: [Vec<f32>; 2],
+    sc: [Vec<f32>; 2],
+}
+
+impl Natural {
+    fn new(rate: f64) -> Natural {
+        let block = || vec![0.0; 2 * MAX_BLOCK];
+        Natural {
+            inner: Processor::at(2.0 * rate, false),
+            taps: halfband(),
+            up: [Fir::new(), Fir::new()],
+            down: [Fir::new(), Fir::new()],
+            twice: [block(), block()],
+            sc: [block(), block()],
+        }
+    }
+
+    fn clear(&mut self) {
+        self.inner.bands = false;
+        for f in self.up.iter_mut().chain(&mut self.down) {
+            f.hist.fill(0.0);
+        }
+    }
+
+    fn process(&mut self, eq: &Eq, l: &mut [f32], r: &mut [f32], sc: Option<[&[f32]; 2]>) {
+        let n = l.len();
+        for (c, side) in [&*l, &*r].into_iter().enumerate() {
+            let (up, out) = (&mut self.up[c], &mut self.twice[c]);
+            for (i, &x) in side.iter().enumerate() {
+                // Every other sample 0, the filter's gain doubled for them.
+                up.push(x);
+                out[2 * i] = 2.0 * up.out(&self.taps);
+                up.push(0.0);
+                out[2 * i + 1] = 2.0 * up.out(&self.taps);
+            }
+            if let Some(s) = sc {
+                for (i, &x) in s[c][..n].iter().enumerate() {
+                    self.sc[c][2 * i] = x;
+                    self.sc[c][2 * i + 1] = x;
+                }
+            }
+        }
+        let [a, b] = &mut self.twice;
+        let sc = sc.map(|_| [&self.sc[0][..2 * n], &self.sc[1][..2 * n]]);
+        self.inner
+            .run_bands(eq, &mut a[..2 * n], &mut b[..2 * n], sc);
+        for (c, side) in [l, r].into_iter().enumerate() {
+            let down = &mut self.down[c];
+            for (i, y) in side.iter_mut().enumerate() {
+                down.push(self.twice[c][2 * i]);
+                *y = down.out(&self.taps);
+                down.push(self.twice[c][2 * i + 1]);
+            }
+        }
+    }
+}
+
 impl Processor {
     pub fn new(rate: f64) -> Self {
+        Processor::at(rate, true)
+    }
+
+    fn at(rate: f64, natural: bool) -> Self {
         Processor {
             rate,
             live: [Live::FREE; LIVE],
             order: [0; LIVE],
             running: false,
+            bands: false,
             output: 1.0,
             pan: 0.0,
             auto: (0.0, None),
             solo: (0, Section::default(), [[0.0; 2]; 2]),
             dc: [[0.0; 2]; 2],
             input: [[0.0; MAX_BLOCK]; 2],
+            mode: Processing::ZeroLatency,
+            natural: natural.then(|| Box::new(Natural::new(rate))),
+            linear: eq_linear::Runner::default(),
+            spectral: eq_spectral::Runner::default(),
         }
     }
 
@@ -626,12 +808,9 @@ impl Processor {
 
     /// The bands' places, matched to the EQ's by id: new ones take a free place, those gone fade.
     fn reconcile(&mut self, eq: &Eq) -> usize {
-        let fresh = !self.running;
+        let fresh = !self.bands;
         if fresh {
             self.live = [Live::FREE; LIVE];
-            self.output = self.output_target(eq);
-            self.pan = eq.pan as f64;
-            self.dc = [[0.0; 2]; 2];
         }
         for l in self.live.iter_mut().filter(|l| l.id != 0) {
             l.gone = !eq.bands.iter().any(|b| b.id == l.id);
@@ -666,16 +845,19 @@ impl Processor {
                 n += 1;
             }
         }
-        self.running = true;
+        self.bands = true;
         n
     }
 
-    /// Runs a block (at most `MAX_BLOCK`) through the EQ in place. `solo` is a band to hear
+    /// Runs a block (at most `MAX_BLOCK`) through the EQ in place. `made` is what its linear
+    /// phase and spectral dynamics need (without it, they're left out); `solo` a band to hear
     /// alone, by id, and its listening level; `sidechain` what its dynamic bands can listen to
     /// instead; `tap` gets what went in and came out, and the dynamic bands' moves and levels.
+    #[allow(clippy::too_many_arguments)]
     pub fn process(
         &mut self,
         eq: &Eq,
+        made: Option<&Made>,
         solo: Option<(u16, f32)>,
         l: &mut [f32],
         r: &mut [f32],
@@ -684,18 +866,94 @@ impl Processor {
     ) {
         let frames = l.len().min(r.len()).min(MAX_BLOCK);
         let (l, r) = (&mut l[..frames], &mut r[..frames]);
-        let count = self.reconcile(eq);
         let keep = solo.is_some() || tap.is_some();
         if keep {
             self.input[0][..frames].copy_from_slice(l);
             self.input[1][..frames].copy_from_slice(r);
         }
+        let sc = sidechain.filter(|s| s[0].len() >= frames && s[1].len() >= frames);
+        // Back on, or treating phase another way: everything starts afresh.
+        if !self.running || self.mode != eq.processing {
+            if !self.running {
+                self.output = self.output_target(eq);
+                self.pan = eq.pan as f64;
+                self.spectral.rest();
+            }
+            self.dc = [[0.0; 2]; 2];
+            self.mode = eq.processing;
+            self.bands = false;
+            self.linear.rest();
+            if let Some(n) = self.natural.as_mut() {
+                n.clear();
+            }
+            self.running = true;
+        }
+        // Spectral dynamics first, hearing what comes in.
+        match made.and_then(|m| m.spectral.as_ref()) {
+            Some(plan) if eq_spectral::needed(eq) => {
+                self.spectral.process(plan, eq, self.rate, l, r, sc)
+            }
+            _ => self.spectral.rest(),
+        }
+        match eq.processing {
+            Processing::ZeroLatency => self.run_bands(eq, l, r, sc),
+            Processing::Natural => {
+                if let Some(n) = self.natural.as_mut() {
+                    n.process(eq, l, r, sc);
+                }
+            }
+            Processing::Linear => {
+                if let Some(linear) = made.and_then(|m| m.linear.as_ref()) {
+                    self.linear.process(linear, eq, l, r);
+                }
+            }
+        }
+        self.run_output(eq, l, r);
+        // The warm character leans its wave: no DC from it.
+        if eq.character == Character::Warm && eq.processing != Processing::Linear {
+            let k = 1.0 - (-2.0 * PI * 5.0 / self.rate).exp();
+            for (lane, side) in [&mut *l, &mut *r].into_iter().enumerate() {
+                let [avg, _] = &mut self.dc[lane];
+                for x in side.iter_mut() {
+                    *avg += (*x as f64 - *avg) * k;
+                    *x = (*x as f64 - *avg) as f32;
+                }
+            }
+        }
+        self.hear_alone(eq, solo, l, r);
+        if let Some(tap) = tap {
+            tap.write(&self.input[0][..frames], &self.input[1][..frames], l, r);
+            let bands = match (eq.processing, &self.natural) {
+                (Processing::Natural, Some(n)) => &n.inner.live,
+                _ => &self.live,
+            };
+            let scale = eq.scale as f64;
+            for (i, band) in eq.bands.iter().enumerate() {
+                let (moved, level) = match self.spectral.moved(band.id) {
+                    Some((m, level)) => (m as f64, level as f64),
+                    None => {
+                        let live = bands.iter().find(|x| x.id == band.id);
+                        (
+                            live.map_or(0.0, |x| x.moved * scale),
+                            live.map_or(-120.0, |x| 20.0 * x.env.max(1e-6).log10()),
+                        )
+                    }
+                };
+                tap.moved[i].store((moved as f32).to_bits(), Ordering::Relaxed);
+                tap.level[i].store((level as f32).to_bits(), Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// The bands' filters on a block, in place.
+    fn run_bands(&mut self, eq: &Eq, l: &mut [f32], r: &mut [f32], sc: Option<[&[f32]; 2]>) {
+        let frames = l.len();
+        let count = self.reconcile(eq);
         let rate = self.rate;
         let glide = 1.0 - (-(STEP as f64) / (GLIDE * rate)).exp();
         let fade = STEP as f64 / (FADE * rate);
         let scale = eq.scale as f64;
         let character = eq.character;
-        let sc = sidechain.filter(|s| s[0].len() >= frames && s[1].len() >= frames);
         let mut start = 0;
         while start < frames {
             let end = (start + STEP).min(frames);
@@ -723,10 +981,12 @@ impl Processor {
                 // A dynamic band's move, from what it's heard: over its threshold (its own, a
                 // little over what it usually hears), through a soft knee, by 4:1, up to its
                 // range.
-                let dynamic = live
-                    .band
-                    .dynamic
-                    .filter(|d| live.band.shape.can_be_dynamic() && !d.bypass && d.range_db != 0.0);
+                let dynamic = live.band.dynamic.filter(|d| {
+                    live.band.shape.can_be_dynamic()
+                        && !d.bypass
+                        && d.range_db != 0.0
+                        && !eq_spectral::takes(&live.band, eq)
+                });
                 if let Some(d) = dynamic {
                     // What it usually hears: up to a louder sound in under half a second,
                     // down from one over two, so what stands out is a jump or a peak.
@@ -863,7 +1123,18 @@ impl Processor {
                     }
                 }
             }
-            // The output: its level and pan, gliding; upside down if asked.
+            start = end;
+        }
+    }
+
+    /// The output's level and pan on a block, gliding; upside down if asked.
+    fn run_output(&mut self, eq: &Eq, l: &mut [f32], r: &mut [f32]) {
+        let frames = l.len();
+        let glide = 1.0 - (-(STEP as f64) / (GLIDE * self.rate)).exp();
+        let mut start = 0;
+        while start < frames {
+            let end = (start + STEP).min(frames);
+            let len = end - start;
             let to = self.output_target(eq);
             let from = self.output;
             let next = from + (to - from) * glide;
@@ -896,28 +1167,6 @@ impl Processor {
             self.output = next;
             self.pan = p1;
             start = end;
-        }
-        // The warm character leans its wave: no DC from it.
-        if character == Character::Warm {
-            let k = 1.0 - (-2.0 * PI * 5.0 / rate).exp();
-            for (lane, side) in [&mut *l, &mut *r].into_iter().enumerate() {
-                let [avg, _] = &mut self.dc[lane];
-                for x in side.iter_mut() {
-                    *avg += (*x as f64 - *avg) * k;
-                    *x = (*x as f64 - *avg) as f32;
-                }
-            }
-        }
-        self.hear_alone(eq, solo, l, r);
-        if let Some(tap) = tap {
-            tap.write(&self.input[0][..frames], &self.input[1][..frames], l, r);
-            for (i, band) in eq.bands.iter().enumerate() {
-                let live = self.live.iter().find(|x| x.id == band.id);
-                let moved = live.map_or(0.0, |x| x.moved * scale);
-                let level = live.map_or(-120.0, |x| 20.0 * x.env.max(1e-6).log10());
-                tap.moved[i].store((moved as f32).to_bits(), Ordering::Relaxed);
-                tap.level[i].store((level as f32).to_bits(), Ordering::Relaxed);
-            }
         }
     }
 
@@ -1373,7 +1622,7 @@ mod tests {
             let frames = MAX_BLOCK.min(n - i);
             let mut l: Vec<f32> = (i..i + frames).map(sine).collect();
             let mut r: Vec<f32> = l.iter().map(|&x| if side { -x } else { x }).collect();
-            p.process(e, None, &mut l, &mut r, None, None);
+            p.process(e, None, None, &mut l, &mut r, None, None);
             if i > n / 2 {
                 for k in 0..frames {
                     peak = [
@@ -1486,7 +1735,7 @@ mod tests {
                 .collect();
             let mut r = l.clone();
             phase += MAX_BLOCK;
-            p.process(&e, None, &mut l, &mut r, None, None);
+            p.process(&e, None, None, &mut l, &mut r, None, None);
             if block > 20 {
                 for &x in &l {
                     biggest_step = biggest_step.max((x - prev).abs());
@@ -1612,7 +1861,15 @@ mod tests {
         for at in (0..l.len()).step_by(MAX_BLOCK) {
             let end = (at + MAX_BLOCK).min(l.len());
             let side = sc.map(|[a, b]| [&a[at..end], &b[at..end]]);
-            p.process(e, None, &mut ol[at..end], &mut or[at..end], side, None);
+            p.process(
+                e,
+                None,
+                None,
+                &mut ol[at..end],
+                &mut or[at..end],
+                side,
+                None,
+            );
         }
         (ol, or, p)
     }
@@ -1818,7 +2075,7 @@ mod tests {
                 })
                 .collect();
             let mut r = l.clone();
-            p.process(&e, None, &mut l, &mut r, None, None);
+            p.process(&e, None, None, &mut l, &mut r, None, None);
             assert!(l.iter().chain(&r).all(|x| x.is_finite() && x.abs() < 50.0));
         }
     }
@@ -1840,7 +2097,7 @@ mod tests {
                     })
                     .collect();
                 let mut r = l.clone();
-                p.process(&e, Some((id, 0.0)), &mut l, &mut r, None, Some(&tap));
+                p.process(&e, None, Some((id, 0.0)), &mut l, &mut r, None, Some(&tap));
                 if k > 20 {
                     peak = l.iter().fold(peak, |m, x| m.max(x.abs()));
                 }
@@ -1855,5 +2112,115 @@ mod tests {
             (peak, ())
         };
         assert!(low < 0.05, "{low}");
+    }
+
+    /// An impulse through an EQ as the engine runs it, what it needs made first: what came out.
+    fn impulse(e: &Eq, n: usize) -> Vec<f32> {
+        let made = Made::new(e, RATE);
+        let mut p = Processor::new(RATE);
+        let mut l = vec![0f32; n];
+        l[0] = 1.0;
+        let mut r = l.clone();
+        for at in (0..n).step_by(MAX_BLOCK) {
+            let end = (at + MAX_BLOCK).min(n);
+            p.process(
+                e,
+                Some(&made),
+                None,
+                &mut l[at..end],
+                &mut r[at..end],
+                None,
+                None,
+            );
+        }
+        l
+    }
+
+    #[test]
+    fn the_sound_comes_as_late_as_the_latency_says() {
+        let still = |spectral| {
+            let mut b = band(Shape::Bell, 1_000.0, 0.0);
+            b.dynamic = Some(Dynamic {
+                range_db: -6.0,
+                threshold_db: Some(20.0),
+                spectral,
+                ..Dynamic::default()
+            });
+            b
+        };
+        let mut cases = Vec::new();
+        for processing in Processing::ALL {
+            cases.push(Eq {
+                processing,
+                ..eq(&[])
+            });
+            cases.push(Eq {
+                processing,
+                resolution: 0,
+                ..eq(&[still(true)])
+            });
+        }
+        // In linear phase any dynamic band takes the spectral stage.
+        cases.push(Eq {
+            processing: Processing::Linear,
+            resolution: 0,
+            ..eq(&[still(false)])
+        });
+        for &e in &cases {
+            let lat = latency(&e) as usize;
+            let out = impulse(&e, lat + 4096);
+            let peak = (0..out.len())
+                .max_by(|&a, &b| out[a].abs().total_cmp(&out[b].abs()))
+                .unwrap();
+            let how = (e.processing, eq_spectral::needed(&e));
+            assert_eq!(peak, lat, "{how:?}");
+            // Natural phase's filters stop short of Nyquist: an impulse comes out a little round.
+            assert!((out[peak] - 1.0).abs() < 0.12, "{how:?}: {}", out[peak]);
+        }
+        assert_eq!(latency(&cases[2]), NATURAL_LATENCY);
+        let off = Eq {
+            bypass: true,
+            ..cases[5]
+        };
+        assert_eq!(latency(&off), 0);
+    }
+
+    #[test]
+    fn natural_phase_has_the_analog_phase_up_high() {
+        use rustfft::num_complex::Complex;
+        // A bell high up: its phase near the top as an analog EQ's. Zero latency's is bent by
+        // the sample rate; natural phase's much less. Their magnitudes alike.
+        let (a, q, f0) = (10f64.powf(9.0 / 40.0), 1.0, 12_000.0);
+        let mut b = band(Shape::Bell, f0 as f32, 9.0);
+        b.q = q as f32;
+        let analog = |f: f64| {
+            let s = Complex::new(0.0, f / f0);
+            ((s * s + s * (a / q) + 1.0) / (s * s + s / (a * q) + 1.0)).arg()
+        };
+        let response = |e: &Eq, f: f64| {
+            let lat = latency(e) as f64;
+            let out = impulse(e, 8192);
+            let mut h = Complex::new(0.0, 0.0);
+            for (i, &x) in out.iter().enumerate() {
+                h += Complex::from_polar(x as f64, -2.0 * PI * f * (i as f64 - lat) / RATE);
+            }
+            h
+        };
+        let zero = eq(&[b]);
+        let natural = Eq {
+            processing: Processing::Natural,
+            ..zero
+        };
+        for f in [15_000.0, 18_000.0] {
+            let want = analog(f);
+            let off = |e: &Eq| (response(e, f).arg() - want).abs();
+            let (z, n) = (off(&zero), off(&natural));
+            assert!(n < z / 2.0, "{f}: zero latency {z}, natural {n}");
+        }
+        for f in [100.0, 1_000.0, 10_000.0, 15_000.0] {
+            let db = 20.0 * response(&natural, f).norm().log10();
+            let drawn = eq_response(&natural, f, RATE);
+            assert!(close(db, drawn, 0.3), "{f}: {db} vs {drawn}");
+        }
     }
 }

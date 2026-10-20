@@ -10,7 +10,8 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   `vst3/`, `clap.rs`, `vst2.rs` and `au.rs` behind it).
 - `crates/engine` also has the live `player.rs` (keeps the engine in step with edits) and
   `session.rs` (an open project and its undo history).
-- `crates/engine` also has the built-in drum kit (`drums.rs`), the channel EQ (`eq.rs`), the
+- `crates/engine` also has the built-in drum kit (`drums.rs`), the channel EQ (`eq.rs`; its
+  linear phase in `eq_linear.rs`, its spectral dynamics in `eq_spectral.rs`), the
   compressor and saturator (written in Faust, in `faust/*.dsp`, compiled to Rust in `src/faust/`;
   `dsp.rs` runs the three), keys, scales and note edits like quantize and legato (`music.rs`), MIDI input
   (`midi.rs`), audio recording (`record.rs`), the plugin scan (`scan.rs`), edits as data
@@ -351,8 +352,11 @@ In the app, mostly as in Logic:
   draws those curves white, red, green and blue, the whole's yellow); gain-Q interaction; and
   dynamic: past its threshold (its own, following what it usually hears, unless set) it turns by
   up to its range, listening to what it covers, between two frequencies, or another track (the
-  EQ's sidechain), its attack and release its own unless turned. A live analyzer shows what goes
-  in and comes out, an output meter beside it. Hover the display for the band a click would make
+  EQ's sidechain), its attack and release its own unless turned; or spectral, where only what
+  stands out in the band moves, frequency by frequency (its density how wide a stretch moves
+  together, its tilt hearing the highs as a mix has them). A live analyzer shows what goes in and
+  comes out, an output meter beside it, and can show another track's spectrum to compare with,
+  lit where the two collide; Spectrum Grab lets you rest on a peak and pull it into a band. Hover the display for the band a click would make
   there (a cut at either end, a notch low down, a bell between), click to make it (double-click
   or ⌘-click once one's picked), or pull the curve to make one and drag it (a shelf from either
   end; ⌥ for a dynamic one). Drag a box to pick bands, ⌘-click to add one, ⇧-click a run; drag a
@@ -366,8 +370,13 @@ In the app, mostly as in Logic:
   and down for the level), dynamic and its own settings, on/off and delete. The display's range
   grows as a band's dragged past it; the frequency scale zooms (drag it up and down), pans and
   shows notes (the piano, which snaps bands to them). Along the top: presets (tempo's, and yours
-  to save), undo, A/B and full screen; along the bottom: the analyzer's settings (pre and post,
-  range, resolution, speed, tilt, freeze), the character (clean, subtle, warm), bypass, and the
+  to save), undo, A/B and full screen; along the bottom: EQ Sketch (draw a curve, get its bands),
+  the processing (zero latency; natural phase, an analog EQ's phase up to the top, run at twice
+  the rate; or linear phase, at a resolution, its every dynamic band moving as spectral ones do)
+  with the latency it adds (the engine waits for it, so every channel stays in time), the
+  character (clean, subtle, warm), the instance list (every EQ in the song, to switch between),
+  EQ Match (to another track or a file: bands fitted to the difference), the analyzer's settings
+  (pre and post, range, resolution, speed, tilt, freeze, compare and collisions), bypass, and the
   output (level, pan left/right or mid/side, phase, gain scale, auto gain). Every band's
   frequency, gain and width can be automated, in the track's lanes or by moving it in Touch, Latch
   or Write. Its filters are matched to their analog shapes, so a bell or shelf near the top keeps

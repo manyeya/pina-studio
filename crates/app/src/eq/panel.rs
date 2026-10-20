@@ -433,8 +433,8 @@ impl Workspace {
     }
 
     /// A dynamic band's own settings, opened beside its knobs: its threshold (its own at the
-    /// top, the level it's hearing shown), attack and release (its own unless turned), what it
-    /// listens to (what it covers, or between two frequencies; or the sidechain, from a track
+    /// top, the level it's hearing shown), attack and release (its own unless turned), spectral
+    /// (its density and tilt), what it listens to (what it covers, or between two frequencies; or the sidechain, from a track
     /// picked), its dynamics bypassed, or cleared.
     fn dynamics(&self, d: &Drawn, cx: &mut Context<Self>) -> Div {
         let id = d.id;
@@ -581,6 +581,31 @@ impl Workspace {
             .child(thresh)
             .child(timing(EqKnob::Attack, dynamic.attack_ms.is_none(), cx))
             .child(timing(EqKnob::Release, dynamic.release_ms.is_none(), cx))
+            // Spectral: only what stands out moves, frequency by frequency; how many move
+            // together, and whether it hears the highs as a mix's tilt has them.
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(5.))
+                    .child(toggle(
+                        "Spectral".into(),
+                        "eq-spectral",
+                        dynamic.spectral,
+                        EqOp::Spectral,
+                        cx,
+                    ))
+                    .when(dynamic.spectral, |el| {
+                        el.child(toggle(
+                            "Tilt".into(),
+                            "eq-spectral-tilt",
+                            dynamic.tilt,
+                            EqOp::SpectralTilt,
+                            cx,
+                        ))
+                    }),
+            )
+            .when(dynamic.spectral, |el| el.child(knob(EqKnob::Density, cx)))
             .child(
                 div()
                     .flex()

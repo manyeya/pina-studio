@@ -221,12 +221,23 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   `"threshold_db"` (-80 to 0), and its own attack and release (by its frequency) unless given
   `"attack_ms"` and `"release_ms"`; `"trigger": [5000, 8000]` has it listen between two
   frequencies rather than to what it covers, `"external": true` to the EQ's sidechain, and
-  `"bypass": true` keeps it still. `"off": true` keeps a band but stops it. The EQ's `"scale"` (0
+  `"bypass": true` keeps it still. `"spectral": true` moves only what stands out in the band,
+  frequency by frequency (resonances, harsh peaks, a masking clash), the rest left alone, linear
+  phase (adding the latency of its window); its `"density"` (0 to 1, 0.5 if left out) is how
+  wide a stretch moves together (0 wide, 1 each frequency alone), and `"tilt": false` stops it
+  hearing the highs 3 dB an octave louder, as a mix's spectrum needs. `"off": true` keeps a band
+  but stops it. The EQ's `"scale"` (0
   to 2, 1 as set) scales every band's gain; `"output_db"` is its level after them, `"auto_gain":
   true` makes up for how much louder or quieter its bands make it, `"pan"` (-1 to 1) balances
   left and right (with `"pan_ms": true` mid against side), `"invert": true` turns it upside down;
   `"character"` is `clean`, `subtle` or `warm` (an analog EQ's saturation, more where it boosts);
-  `"sidechain"` is the id of the track its dynamic bands hear with `external`. `bands` replaces
+  `"sidechain"` is the id of the track its dynamic bands hear with `external`. `"processing"` is
+  how it treats phase: `zero_latency` (the default: as an analog EQ, no latency), `natural` (an
+  analog EQ's phase right up to the top, about 1 ms late) or `linear` (no phase shift at all, the
+  bands' timing kept together, its every dynamic band moving as spectral ones do; tens to
+  hundreds of ms late, more with mid or side bands). `"resolution"` (0 low to 3 very high, 1 if
+  left out) is how finely linear phase and spectral dynamics work: truer low down, more latency.
+  The engine waits for that latency, so every channel stays in time. `bands` replaces
   them all; to change one,
   `set_eq_band`. The old names still work, on the first of their kind: `"low_cut": 80` (Hz; 20 or
   less is off), `"low_mid"` and `"high_mid"` (`{"freq", "gain_db", "q"}`, the first and second
