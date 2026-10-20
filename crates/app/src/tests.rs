@@ -5166,6 +5166,9 @@ fn bounce_in_place_puts_a_track_on_audio_and_mutes_it(cx: &mut TestAppContext) {
 fn shots() {
     let out = PathBuf::from(std::env::var("PINA_SHOT").expect("PINA_SHOT: a folder for the PNGs"));
     std::fs::create_dir_all(&out).unwrap();
+    // Playbooks of its own, as every test's: opening the window makes the folder if it's missing.
+    let books = std::env::temp_dir().join(format!("pina-shot-books-{}", std::process::id()));
+    unsafe { std::env::set_var("PINA_PLAYBOOKS", &books) };
     let page = std::env::var("PINA_SHOT_PAGE").unwrap_or_else(|_| "study".into());
     let tall: f32 = std::env::var("PINA_SHOT_H")
         .ok()
