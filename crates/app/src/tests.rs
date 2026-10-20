@@ -4141,7 +4141,7 @@ fn the_browser_finds_by_words_and_puts_devices_on_tracks(cx: &mut TestAppContext
 }
 
 #[gpui::test]
-fn songs_start_from_a_sheet_and_open_in_this_window(cx: &mut TestAppContext) {
+fn songs_start_from_the_songs_page_open_here_and_go_to_the_trash(cx: &mut TestAppContext) {
     let root = std::env::temp_dir().join(format!("tempo-test-window-songs-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -4170,21 +4170,21 @@ fn songs_start_from_a_sheet_and_open_in_this_window(cx: &mut TestAppContext) {
         let icons: Vec<&str> = (0..5).map(|i| ws.shown(i).look.icon).collect();
         assert_eq!(icons, ["drums", "bass", "keys", "guitar", "vocals"]);
     });
-    // ⌘N: the sheet. A name, a template, Create: the song is made where songs are kept (here a
-    // scratch folder) and opens.
+    // ⌘N: the Songs page, a new song's name ready to type. A name, then a template's click:
+    // the song is made where songs are kept (here a scratch folder) and opens.
     // SAFETY: no other test reads TEMPO_SONGS.
     unsafe { std::env::set_var("TEMPO_SONGS", &root) };
     cx.simulate_keystrokes("cmd-n");
     cx.run_until_parked();
+    assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Songs);
     let name = ws
-        .read_with(cx, |ws, _| ws.new_song.as_ref().map(|s| s.name.clone()))
-        .expect("the sheet");
+        .read_with(cx, |ws, _| ws.home.as_ref().map(|h| h.name.clone()))
+        .expect("the Songs page");
     name.update(cx, |i, cx| i.set_text("Rain", cx));
     click_on(cx, "template-Lo-fi", Modifiers::none(), MouseButton::Left);
-    click_on(cx, "new-song-create", Modifiers::none(), MouseButton::Left);
     ws.read_with(cx, |ws, _| {
-        assert!(ws.new_song.is_none());
         assert_eq!(ws.session.dir, root.join("Rain"));
+        assert_eq!(ws.view, View::Arrange);
         let names: Vec<&str> = ws
             .session
             .project
@@ -4194,7 +4194,59 @@ fn songs_start_from_a_sheet_and_open_in_this_window(cx: &mut TestAppContext) {
             .collect();
         assert_eq!(names, ["Vinyl", "Drums", "Keys", "Bass"]);
     });
+    // The song open, to the Trash (asked first): it closes, and the window is the Songs page
+    // alone, nothing to play.
+    ws.update(cx, |ws, cx| {
+        ws.song_pending = Some(crate::menu::MenuAction::TrashSong(root.join("Rain")));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Move to Trash");
+    cx.run_until_parked();
+    assert!(!root.join("Rain").exists());
+    assert!(ws.read_with(cx, |ws, _| ws.home_alone()));
+    assert!(cx.debug_bounds("play").is_none());
+    // Two picked with ⌘-click, Delete: both to the Trash, asked once.
+    let third = crate::projects::create(
+        &root,
+        "Third",
+        100.0,
+        None,
+        [4, 4],
+        crate::projects::Template::Empty,
+    )
+    .unwrap();
+    ws.update(cx, |ws, cx| {
+        ws.songs = crate::projects::list(&root, &[]);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    click_on(cx, "song-Other", Modifiers::command(), MouseButton::Left);
+    click_on(cx, "song-Third", Modifiers::command(), MouseButton::Left);
+    let picks = ws.read_with(cx, |ws, _| ws.home.as_ref().unwrap().picks.len());
+    assert_eq!(picks, 2);
+    cx.simulate_keystrokes("backspace");
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Move to Trash");
+    cx.run_until_parked();
+    assert!(!other.exists() && !third.exists());
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn with_no_song_open_tempo_starts_on_the_songs_page(cx: &mut TestAppContext) {
+    // A song not made yet, as tempo opens with none named: the Songs page is the whole window,
+    // a template a click away. Close Song from a song comes back here.
+    let scratch = std::env::temp_dir().join(format!("tempo-test-scratch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let (ws, cx) = open_at(cx, &scratch.join("Untitled"));
+    assert!(ws.read_with(cx, |ws, _| ws.home_alone()));
+    assert!(cx.debug_bounds("play").is_none());
+    assert!(cx.debug_bounds("template-Beat").is_some());
+    assert!(cx.debug_bounds("new-song-name").is_some());
+    // ⌘O has no song to go back to.
+    cx.simulate_keystrokes("cmd-o");
+    assert!(ws.read_with(cx, |ws, _| ws.home_alone()));
 }
 
 #[gpui::test]
@@ -5591,6 +5643,32 @@ fn shots() {
                         "auto-shapes" => ws.auto_lane_menu(0, 0, at, cx),
                         _ => ws.point_menu(0, 0, 1, at, cx),
                     }
+                }
+                // The Songs page: as tempo opens with no song ("home"), or with one open.
+                "home" | "songs" => {
+                    let demo = crate::projects::summary(&demo()).unwrap();
+                    let names = [
+                        ("Night Drive", 92.0, 0),
+                        ("Rain on Glass", 74.0, 3_600),
+                        ("Untitled 9", 120.0, 7_200),
+                        ("Lo-fi Sketch", 84.0, 90_000),
+                        ("Warehouse", 128.0, 200_000),
+                        ("Morning Pages", 100.0, 400_000),
+                    ];
+                    ws.songs = names
+                        .iter()
+                        .map(|&(name, tempo, ago)| crate::projects::Song {
+                            dir: std::path::PathBuf::from(format!("/songs/{name}")),
+                            name: name.to_string(),
+                            modified: std::time::SystemTime::now()
+                                - std::time::Duration::from_secs(ago),
+                            tempo,
+                            ..demo.clone()
+                        })
+                        .collect();
+                    ws.session.on_disk = page == "songs";
+                    ws.view = View::Songs;
+                    cx.notify();
                 }
                 // The Tool menu open on the Fade tool, the drums faded in and out.
                 "tools" => {

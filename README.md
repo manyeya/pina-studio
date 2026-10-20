@@ -35,7 +35,7 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   `sampler.rs` (the Sampler editor), `genres.rs` (the Playbooks page, where genres are read and changed), `study.rs` (the Song
   Study page) with `study_cli.rs` (studies kept, and lyrics, year and genre looked up),
   `looks.rs` (track colours and icons, and their picker), `catalog.rs` (the Browser's devices; `browser.rs` the panel itself and its sounds),
-  `projects.rs` (songs: the Songs page, the new-song sheet, opening another in the window),
+  `projects.rs` (songs: the Songs page, where tempo starts; making, opening, closing and trashing them),
   `tracks.rs` (tools, markers, ruler, headers, regions), `automation.rs` (automation: its lanes,
   and what moving an automated control does), `editor.rs` (the
   editor under the tracks) with `pianoroll.rs`, `steps.rs` (the step sequencer), `score.rs`,
@@ -167,12 +167,18 @@ In the app, mostly as in Logic:
   plugin's arrow shows its preset files. Click puts it on the selected track (an instrument in
   place of its own, an effect after its others), double-click or ⇧↵ on a new track, or drag it
   onto any track; ↑ ↓ and ↵ work from the search.
-- Songs (⌘O, or the song's name in the top bar): every song in `~/Music/tempo`, each card's cover
-  its arrangement in miniature, coloured by what each track plays, with its tempo, key, tracks
-  and length. Open one in this window (asked first whether to save the one open), or from its
-  card's menu rename, duplicate (a clone, taking no space until it changes), show in the Finder,
-  or move to the Trash. New Song (⌘N): a name, tempo, key and time, and a start: empty, or a
-  beat, band, lo-fi or electronic set of tracks. The top bar's menu has the songs opened lately.
+- Songs (⌘O, or the song's name in the top bar): where tempo starts when no song is named (the
+  whole window, nothing to play yet). On the left a new song: its name, tempo, key and time, then
+  a click on how to start it (empty, or a beat, band, lo-fi or electronic set of tracks) makes it
+  and opens it; ⌘N comes here with the name ready to type. On the right every song in
+  `~/Music/tempo`, searchable, each card's cover its arrangement in miniature, coloured by what
+  each track plays, with its tempo, key, tracks and length. Click one to open it in this window
+  (asked first whether to save the one open); its menu (⋯ or a right-click) renames, duplicates (a
+  clone, taking no space until it changes), shows it in the Finder or moves it to the Trash, as
+  does the bin on its card. ⌘-click picks several, and Delete moves them all to the Trash (asked
+  first; the song open closes first, and can go too). Close Song (File menu, or the song's name in
+  the top bar) comes back here. A song in a folder elsewhere opens from "Open a song from a
+  folder…". The top bar's menu has the songs opened lately.
 - Every track is coloured and drawn by what it plays, worked out from its sound (its samples' and
   audio's analysis), the plugin it plays, its name and its notes: drums warm, bass violet, keys
   teal, vocals pink, effects grey, each track a shade of its family's colour so they read as one

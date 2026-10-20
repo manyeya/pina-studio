@@ -46,6 +46,7 @@ actions!(
         ToggleAgent,
         NewSong,
         ShowSongs,
+        CloseSong,
         EditPlaybooks,
         StudySong,
         BrowserUp,
@@ -836,8 +837,8 @@ pub struct Workspace {
     pub opening: Option<std::path::PathBuf>,
     /// A song action from a menu, for the next frame.
     pub song_pending: Option<crate::menu::MenuAction>,
-    /// The new-song sheet, while it's open.
-    pub new_song: Option<crate::projects::NewSong>,
+    /// The Songs page's new-song settings, search and songs picked, once it's been shown.
+    pub home: Option<crate::projects::Home>,
     /// A song being renamed on its card.
     pub renaming: Option<crate::projects::Renaming>,
     /// Each track's icon and colour, as what it plays says or as chosen (`looks.rs`).
@@ -1186,7 +1187,7 @@ impl Workspace {
             edits: 0,
             opening: None,
             song_pending: None,
-            new_song: None,
+            home: None,
             renaming: None,
             looks: Vec::new(),
             heard: Default::default(),
@@ -2479,6 +2480,14 @@ impl Workspace {
     }
 
     fn delete(&mut self, cx: &mut Context<Self>) {
+        // On the Songs page: the songs picked, to the Trash (asked first).
+        if self.view == View::Songs {
+            if self.home.as_ref().is_some_and(|h| !h.picks.is_empty()) {
+                self.song_pending = Some(crate::menu::MenuAction::TrashPicked);
+                cx.notify();
+            }
+            return;
+        }
         if self.delete_eq_band(cx) || self.delete_picked(cx) {
             return;
         }
@@ -3021,6 +3030,9 @@ impl Workspace {
 
     fn status_bar(&self) -> impl IntoElement {
         let hint = match (self.view, self.tool, self.bottom) {
+            (View::Songs, ..) => {
+                "Click a song to open it · ⌘-click to pick several, Delete to move them to the Trash · right-click for more"
+            }
             (View::Mixer, ..) => {
                 "Click a slot to open it · right-click a send for pre or post · drag a fader, ⌥-click to reset · double-click a name to rename"
             }
@@ -3163,6 +3175,9 @@ impl Render for Workspace {
         }
         if let Some(action) = self.song_pending.take() {
             self.song_action(action, window, cx);
+        }
+        if self.view == View::Songs && self.home.is_none() {
+            self.home = Some(crate::projects::Home::new(window, cx));
         }
         self.browser_frame(window, cx);
         if std::mem::take(&mut self.refocus) && self.naming.is_none() {
@@ -3367,7 +3382,10 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|ws, _: &ToggleMixer, _, cx| ws.toggle_mixer(cx)))
             .on_action(cx.listener(|ws, _: &ToggleAgent, window, cx| ws.toggle_agent(window, cx)))
-            .on_action(cx.listener(|ws, _: &NewSong, window, cx| ws.new_song_sheet(window, cx)))
+            .on_action(cx.listener(|ws, _: &NewSong, window, cx| ws.show_home(true, window, cx)))
+            .on_action(cx.listener(|ws, _: &CloseSong, window, cx| {
+                ws.song_action(crate::menu::MenuAction::CloseSong, window, cx)
+            }))
             .on_action(cx.listener(|ws, _: &ShowSongs, _, cx| ws.toggle_songs(cx)))
             .on_action(cx.listener(|ws, _: &EditPlaybooks, _, cx| ws.open_genres(None, cx)))
             .on_action(cx.listener(|ws, _: &StudySong, _, cx| ws.open_study(cx)))
@@ -3415,7 +3433,8 @@ impl Render for Workspace {
                 ws.show_inspector = !ws.show_inspector;
                 cx.notify();
             }))
-            .child(self.control_bar(cx))
+            // With no song open, the Songs page is the whole window: nothing to play.
+            .when(!self.home_alone(), |d| d.child(self.control_bar(cx)))
             .child(
                 div()
                     .flex_1()
@@ -3452,14 +3471,15 @@ impl Render for Workspace {
                             })
                     }),
             )
-            .child(self.status_bar())
+            .when(!self.home_alone() || self.status.is_some(), |d| {
+                d.child(self.status_bar())
+            })
             .when(self.drag.is_some(), |d| d.child(self.drag_listener(cx)))
             .when(self.file_drag.is_some(), |d| {
                 d.child(self.file_listener(cx))
             })
             .children(self.sample_ghost())
             .children(self.device_ghost())
-            .children(self.new_song_view(cx))
             .children(self.panner_view(cx))
             .children(self.mod_ghost())
             .children(self.eq_window(cx))

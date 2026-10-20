@@ -85,7 +85,10 @@ pub enum MenuAction {
     RenameSong(std::path::PathBuf),
     RevealSong(std::path::PathBuf),
     TrashSong(std::path::PathBuf),
-    /// The new-song sheet's key.
+    /// The songs picked on the Songs page, to the Trash; the song open, closed.
+    TrashPicked,
+    CloseSong,
+    /// A new song's key.
     NewSongKey(Option<String>),
     /// Works with this agent in the Agent panel.
     Agent(crate::agent::Kind),
@@ -246,8 +249,8 @@ impl Workspace {
             MenuAction::Playbooks(id) => self.open_genres(id.as_deref(), cx),
             MenuAction::Study => self.open_study(cx),
             MenuAction::NewSongKey(key) => {
-                if let Some(s) = self.new_song.as_mut() {
-                    s.key = key.as_deref().and_then(tempo_engine::music::Key::parse);
+                if let Some(h) = self.home.as_mut() {
+                    h.key = key.as_deref().and_then(tempo_engine::music::Key::parse);
                 }
             }
             // Songs need the window (to ask about saving): the next frame does them.
@@ -257,7 +260,9 @@ impl Workspace {
             | MenuAction::DuplicateSong(_)
             | MenuAction::RenameSong(_)
             | MenuAction::RevealSong(_)
-            | MenuAction::TrashSong(_)) => self.song_pending = Some(a),
+            | MenuAction::TrashSong(_)
+            | MenuAction::TrashPicked
+            | MenuAction::CloseSong) => self.song_pending = Some(a),
             MenuAction::Agent(kind) => self.pick_agent(kind, cx),
             MenuAction::AgentModel(model) => self.pick_model(model, cx),
             MenuAction::AgentEffort(effort) => self.pick_effort(effort, cx),

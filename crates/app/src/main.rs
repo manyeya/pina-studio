@@ -58,7 +58,7 @@ use topbar::MIN_W;
 use workspace::*;
 
 const USAGE: &str = "usage:
-  tempo [project]                  open a project folder (default ~/Music/tempo/Untitled)
+  tempo [project]                  open a project folder (none: the Songs page, to start or open one)
   tempo describe                   the commands an agent can send, with examples
   tempo show <project>             the project, as JSON
   tempo do <project> <command>     apply a command (JSON); live in the app if it's open there
@@ -384,9 +384,9 @@ fn print(result: Result<Value, String>) -> Result<(), String> {
     Ok(())
 }
 
+/// With no song named: a new one, not made yet, so the window opens on the Songs page.
 fn default_project() -> PathBuf {
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    Path::new(&home).join("Music/tempo/Untitled")
+    projects::scratch()
 }
 
 fn open(dir: &Path) -> Result<(), String> {
@@ -409,6 +409,7 @@ fn open(dir: &Path) -> Result<(), String> {
             Menu::new("File").items([
                 MenuItem::action("New Song…", NewSong),
                 MenuItem::action("Songs…", ShowSongs),
+                MenuItem::action("Close Song", CloseSong),
                 MenuItem::action("Genre Playbooks…", EditPlaybooks),
                 MenuItem::action("Study a Song…", StudySong),
                 MenuItem::separator(),

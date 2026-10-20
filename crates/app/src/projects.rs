@@ -1,7 +1,8 @@
 //! Songs: every project in `~/Music/tempo` (and those opened from elsewhere), each with a cover
 //! drawn from its arrangement; to open in this window, start from a template, duplicate, rename,
-//! show in the Finder, or move to the Trash. `tempo new` and `tempo projects` do the same from a
-//! terminal.
+//! show in the Finder, or move to the Trash (several at once, or the one open). With no song
+//! open the Songs page is the whole window: where tempo starts. `tempo new` and `tempo projects`
+//! do the same from a terminal.
 
 use std::{
     path::{Path, PathBuf},
@@ -319,22 +320,24 @@ pub fn rename(dir: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(to)
 }
 
-/// Moves a song to the Trash, where it can be taken back from.
+/// Moves a song to the Trash, where it can be taken back from: as the Finder does, so it works
+/// on any volume and without special access. (Tests remove it instead: they never touch the
+/// person's Trash.)
 pub fn trash(dir: &Path) -> Result<(), String> {
-    let trash = PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".Trash");
-    let name = dir
-        .file_name()
-        .ok_or("no name")?
-        .to_string_lossy()
-        .into_owned();
-    let to = (1..)
-        .map(|n| match n {
-            1 => trash.join(&name),
-            n => trash.join(format!("{name} {n}")),
-        })
-        .find(|p| !p.exists())
-        .unwrap();
-    std::fs::rename(dir, to).map_err(|e| e.to_string())
+    if cfg!(test) {
+        return std::fs::remove_dir_all(dir).map_err(|e| e.to_string());
+    }
+    use objc2_foundation::{NSFileManager, NSString, NSURL};
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&dir.to_string_lossy()));
+    NSFileManager::defaultManager()
+        .trashItemAtURL_resultingItemURL_error(&url, None)
+        .map_err(|e| e.localizedDescription().to_string())
+}
+
+/// A new song not made yet, where songs are kept: what a window with no song open has.
+pub fn scratch() -> PathBuf {
+    let root = root();
+    root.join(unique_name(&root, "Untitled"))
 }
 
 /// Shows a song's folder in the Finder.
@@ -362,14 +365,54 @@ fn length(seconds: f64) -> String {
     format!("{}:{:02}", s / 60, s % 60)
 }
 
-/// The new-song sheet's choices.
-pub struct NewSong {
+/// The Songs page's own: a new song's name, tempo, key and time (a template's click makes it),
+/// the search, and the songs picked to act on together.
+pub struct Home {
     pub name: Entity<TextInput>,
     pub tempo: Entity<TextInput>,
     pub key: Option<Key>,
     pub signature: [u64; 2],
-    pub template: Template,
+    pub search: Entity<TextInput>,
+    pub picks: Vec<PathBuf>,
     _subs: Vec<Subscription>,
+}
+
+impl Home {
+    pub fn new(window: &mut Window, cx: &mut Context<Workspace>) -> Home {
+        let name = cx.new(|cx| TextInput::search("Untitled", cx));
+        let tempo = cx.new(|cx| {
+            let mut t = TextInput::field("", cx);
+            t.set_text("120", cx);
+            t
+        });
+        let search = cx.new(|cx| TextInput::search("Search songs", cx));
+        let mut subs = Vec::new();
+        // Enter in either: an empty song, at once.
+        for field in [&name, &tempo] {
+            subs.push(
+                cx.subscribe_in(field, window, |ws, _, e: &TextEvent, window, cx| {
+                    if let TextEvent::Confirm(_) = e {
+                        ws.create_song(Template::Empty, window, cx);
+                    }
+                }),
+            );
+        }
+        subs.push(cx.observe(&search, |_, _, cx| cx.notify()));
+        subs.push(cx.subscribe(&search, |_, search, e: &TextEvent, cx| {
+            if let TextEvent::Cancel = e {
+                search.update(cx, |s, cx| s.set_text("", cx));
+            }
+        }));
+        Home {
+            name,
+            tempo,
+            key: None,
+            signature: [4, 4],
+            search,
+            picks: Vec::new(),
+            _subs: subs,
+        }
+    }
 }
 
 /// A song being renamed on its card.
@@ -398,15 +441,33 @@ impl Workspace {
         .detach();
     }
 
-    /// ⌘O: the Songs page, or the tracks again.
+    /// ⌘O: the Songs page, or the tracks again (if there's a song open to go back to).
     pub fn toggle_songs(&mut self, cx: &mut Context<Self>) {
         self.view = match self.view {
-            View::Songs => View::Arrange,
+            View::Songs if !self.home_alone() => View::Arrange,
+            View::Songs => View::Songs,
             _ => {
                 self.refresh_songs(cx);
                 View::Songs
             }
         };
+        cx.notify();
+    }
+
+    /// Whether the window has no song open: a new one not started, so only the Songs page.
+    pub fn home_alone(&self) -> bool {
+        self.view == View::Songs && !self.session.on_disk && !self.session.edited
+    }
+
+    /// ⌘N, or Songs: the Songs page; for ⌘N, its new song's name ready to type.
+    pub fn show_home(&mut self, name: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.view = View::Songs;
+        self.refresh_songs(cx);
+        let home = self.home.get_or_insert_with(|| Home::new(window, cx));
+        if name {
+            let focus = gpui::Focusable::focus_handle(home.name.read(cx), cx);
+            focus.focus(window, cx);
+        }
         cx.notify();
     }
 
@@ -480,30 +541,39 @@ impl Workspace {
         if !cfg!(test) {
             crate::server::serve(cx.entity().downgrade(), &dir, cx);
         }
-        opened(&dir);
-        self.view = View::Arrange;
+        // A song not made yet (the window closing one) opens on the Songs page.
+        match self.session.on_disk {
+            true => {
+                opened(&dir);
+                self.view = View::Arrange;
+            }
+            false => self.view = View::Songs,
+        }
+        if let Some(h) = self.home.as_mut() {
+            h.picks.clear();
+        }
         self.offer_kept(window, cx);
         self.refresh_songs(cx);
         cx.notify();
     }
 
-    /// Starts a song from the sheet's choices, and opens it.
-    fn create_song(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(s) = self.new_song.as_ref() else {
+    /// Starts a song from the Songs page's settings and a template, and opens it.
+    pub fn create_song(&mut self, template: Template, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(h) = self.home.as_ref() else {
             return;
         };
-        let name = s.name.read(cx).text().to_string();
-        let tempo = s
+        let name = h.name.read(cx).text().trim().to_string();
+        let tempo = h
             .tempo
             .read(cx)
             .text()
             .trim()
             .parse::<f64>()
             .unwrap_or(120.0);
-        let (key, signature, template) = (s.key, s.signature, s.template);
-        match create(&root(), &name, tempo, key, signature, template) {
+        let name = if name.is_empty() { "Untitled" } else { &name };
+        match create(&root(), name, tempo, h.key, h.signature, template) {
             Ok(dir) => {
-                self.new_song = None;
+                h.name.update(cx, |f, cx| f.set_text("", cx));
                 self.open_song(dir, window, cx);
             }
             Err(e) => self.status = Some(e),
@@ -511,37 +581,98 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ⌘N: the sheet for a new song.
-    pub fn new_song_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let name = cx.new(|cx| TextInput::field(&unique_name(&root(), "Untitled"), cx));
-        let tempo = cx.new(|cx| {
-            let mut t = TextInput::field("", cx);
-            t.set_text("120", cx);
-            t
+    /// Asks before songs go to the Trash.
+    fn ask_to_trash(&mut self, dirs: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        if dirs.is_empty() {
+            return;
+        }
+        let name = |d: &Path| {
+            d.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let what = match dirs.as_slice() {
+            [one] => format!("Move \u{201c}{}\u{201d} to the Trash?", name(one)),
+            many => format!("Move {} songs to the Trash?", many.len()),
+        };
+        let open = dirs.contains(&self.session.dir);
+        let detail = match open {
+            true => "It's open: it closes first. You can take it back out of the Trash.",
+            false => "You can take it back out of the Trash.",
+        };
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            &what,
+            Some(detail),
+            &["Move to Trash", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(0) = answer.await {
+                this.update_in(cx, |ws, window, cx| ws.trash_songs(dirs, window, cx))
+                    .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Songs to the Trash; the one open, closed first (nothing of it kept: it's going).
+    pub fn trash_songs(&mut self, dirs: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        if dirs.contains(&self.session.dir) {
+            self.session.forget_kept();
+            self.switch_to(scratch(), window, cx);
+        }
+        let mut gone = 0;
+        let mut problems = Vec::new();
+        for d in &dirs {
+            match trash(d) {
+                Ok(()) => gone += 1,
+                Err(e) => problems.push(e),
+            }
+        }
+        self.status = Some(match (gone, problems.first()) {
+            (_, Some(e)) => format!("Couldn't move it to the Trash: {e}"),
+            (1, None) => format!(
+                "Moved {} to the Trash",
+                dirs[0].file_name().unwrap_or_default().to_string_lossy()
+            ),
+            (n, None) => format!("Moved {n} songs to the Trash"),
         });
-        let mut subs = Vec::new();
-        for field in [&name, &tempo] {
-            subs.push(
-                cx.subscribe_in(field, window, |ws, _, e: &TextEvent, window, cx| match e {
-                    TextEvent::Confirm(_) => ws.create_song(window, cx),
-                    TextEvent::Cancel => {
-                        ws.new_song = None;
+        if let Some(h) = self.home.as_mut() {
+            h.picks.retain(|p| !dirs.contains(p));
+        }
+        self.refresh_songs(cx);
+        cx.notify();
+    }
+
+    /// A song from a folder anywhere, picked in the Finder.
+    fn open_folder(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Open".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            this.update(cx, |ws, cx| {
+                let Some(dir) = paths.into_iter().next() else {
+                    return;
+                };
+                match dir.join(FILE).is_file() {
+                    true => ws.ask_to_open(dir, cx),
+                    false => {
+                        ws.status = Some(format!("No tempo song in {}", dir.display()));
                         cx.notify();
                     }
-                }),
-            );
-        }
-        let focus = gpui::Focusable::focus_handle(name.read(cx), cx);
-        focus.focus(window, cx);
-        self.new_song = Some(NewSong {
-            name,
-            tempo,
-            key: None,
-            signature: [4, 4],
-            template: Template::Empty,
-            _subs: subs,
-        });
-        cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn start_renaming(&mut self, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -586,10 +717,20 @@ impl Workspace {
     pub fn song_action(&mut self, action: MenuAction, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             MenuAction::OpenSong(dir) => self.open_song(dir, window, cx),
-            MenuAction::NewSong => self.new_song_sheet(window, cx),
-            MenuAction::ShowSongs => {
-                self.refresh_songs(cx);
-                self.view = View::Songs;
+            MenuAction::NewSong => self.show_home(true, window, cx),
+            MenuAction::ShowSongs => self.show_home(false, window, cx),
+            MenuAction::CloseSong => {
+                if !self.home_alone() {
+                    self.open_song(scratch(), window, cx);
+                }
+            }
+            MenuAction::TrashPicked => {
+                let picks = self
+                    .home
+                    .as_ref()
+                    .map(|h| h.picks.clone())
+                    .unwrap_or_default();
+                self.ask_to_trash(picks, window, cx);
             }
             MenuAction::DuplicateSong(dir) => match duplicate(&dir) {
                 Ok(to) => {
@@ -607,25 +748,7 @@ impl Workspace {
                 self.start_renaming(dir, window, cx);
             }
             MenuAction::RevealSong(dir) => reveal(&dir),
-            MenuAction::TrashSong(dir) => {
-                if dir == self.session.dir {
-                    self.status = Some(
-                        "That's the song open: open another first, then move it to the Trash."
-                            .into(),
-                    );
-                } else {
-                    match trash(&dir) {
-                        Ok(()) => {
-                            self.status = Some(format!(
-                                "Moved {} to the Trash",
-                                dir.file_name().unwrap_or_default().to_string_lossy()
-                            ));
-                            self.refresh_songs(cx);
-                        }
-                        Err(e) => self.status = Some(e),
-                    }
-                }
-            }
+            MenuAction::TrashSong(dir) => self.ask_to_trash(vec![dir], window, cx),
             _ => {}
         }
         cx.notify();
@@ -661,11 +784,15 @@ impl Workspace {
             ),
             (
                 "    Show in Finder".to_string(),
-                MenuAction::RevealSong(dir),
+                MenuAction::RevealSong(dir.clone()),
             ),
             ("    Save    ⌘S".to_string(), MenuAction::Save),
             ("    Bounce…    ⌘B".to_string(), MenuAction::Export),
+            ("    Close Song".to_string(), MenuAction::CloseSong),
         ]);
+        if self.session.on_disk {
+            items.push(("    Move to Trash…".to_string(), MenuAction::TrashSong(dir)));
+        }
         Menu {
             at,
             items,
@@ -673,115 +800,203 @@ impl Workspace {
         }
     }
 
-    /// The Songs page: every song, its cover drawn from its arrangement, newest first.
+    /// The Songs page: a new song on the left (its name, tempo, key and time; a template's click
+    /// makes it), every song on the right, newest first, to search, open, pick several of
+    /// (⌘-click) and move to the Trash. With no song open, it's the whole window.
     pub fn songs_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let current = self.session.dir.clone();
+        let open = self.session.on_disk.then(|| {
+            current
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        });
         let renaming = self
             .renaming
             .as_ref()
             .map(|r| (r.dir.clone(), r.field.clone()));
-        let cards: Vec<_> = self
+        let (search, picks) = match self.home.as_ref() {
+            Some(h) => (
+                h.search.read(cx).text().trim().to_lowercase(),
+                h.picks.clone(),
+            ),
+            None => (String::new(), Vec::new()),
+        };
+        let songs: Vec<Song> = self
             .songs
-            .clone()
+            .iter()
+            .filter(|s| search.is_empty() || s.name.to_lowercase().contains(&search))
+            .cloned()
+            .collect();
+        let shown = songs.len();
+        let cards: Vec<_> = songs
             .into_iter()
             .map(|s| {
                 let here = s.dir == current;
+                let picked = picks.contains(&s.dir);
                 let field = renaming
                     .as_ref()
                     .filter(|(d, _)| *d == s.dir)
                     .map(|(_, f)| f.clone());
-                song_card(s, here, field, cx)
+                song_card(s, here, picked, field, cx)
             })
             .collect();
-        let empty = cards.is_empty();
+        let empty = match (self.songs.is_empty(), shown) {
+            (true, _) => Some("No songs yet. Pick how to start one, on the left.".to_string()),
+            (false, 0) => Some(format!("No songs called \u{201c}{search}\u{201d}")),
+            _ => None,
+        };
+        let picked_bar = (!picks.is_empty()).then(|| {
+            div()
+                .h(px(40.))
+                .px(px(12.))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .rounded(px(10.))
+                .bg(alpha(ACCENT, 0.12))
+                .border_1()
+                .border_color(alpha(ACCENT, 0.4))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(match picks.len() {
+                            1 => "1 song picked".to_string(),
+                            n => format!("{n} songs picked"),
+                        }),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(TEXT_3))
+                        .child("⌘-click to pick more · Delete to trash them"),
+                )
+                .child(div().flex_1())
+                .child(
+                    button("Move to Trash", false)
+                        .text_color(rgb(RECORD))
+                        .debug_selector(|| "songs-trash-picked".into())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, _, window, cx| {
+                                ws.song_action(MenuAction::TrashPicked, window, cx)
+                            }),
+                        ),
+                )
+                .child(
+                    button("Done", false)
+                        .debug_selector(|| "songs-unpick".into())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, _, _, cx| {
+                                if let Some(h) = ws.home.as_mut() {
+                                    h.picks.clear();
+                                }
+                                cx.notify();
+                            }),
+                        ),
+                )
+        });
+        let new_song = self.new_song_column(open, cx);
+        let search_field = self.home.as_ref().map(|h| {
+            div()
+                .w(px(240.))
+                .h(px(34.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(7.))
+                .rounded(px(9.))
+                .bg(rgb(FIELD))
+                .border_1()
+                .border_color(rgb(LINE))
+                .text_size(px(13.))
+                .debug_selector(|| "songs-search".into())
+                .child(icon(Icon::Search, 14.).text_color(rgb(TEXT_3)))
+                .child(div().flex_1().child(h.search.clone()))
+        });
         div()
             .id("songs-page")
             .flex_1()
             .min_w(px(0.))
             .h_full()
-            .overflow_y_scroll()
+            .flex()
             .bg(rgb(BG))
+            .child(new_song)
             .child(
                 div()
-                    .px(px(36.))
-                    .py(px(28.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(22.))
+                    .id("songs-list")
+                    .flex_1()
+                    .min_w(px(0.))
+                    .h_full()
+                    .overflow_y_scroll()
                     .child(
                         div()
+                            .px(px(32.))
+                            .py(px(28.))
                             .flex()
-                            .items_center()
-                            .gap(px(14.))
+                            .flex_col()
+                            .gap(px(18.))
                             .child(
                                 div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(3.))
-                                    .child(
-                                        div()
-                                            .text_size(px(24.))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child("Songs"),
-                                    )
-                                    .child(
-                                        div().text_size(px(12.5)).text_color(rgb(TEXT_3)).child(
-                                            format!("{} in {}", self.songs.len(), root().display()),
-                                        ),
-                                    ),
-                            )
-                            .child(div().flex_1())
-                            .child(
-                                div()
-                                    .id("new-song")
-                                    .h(px(34.))
-                                    .px(px(14.))
                                     .flex()
                                     .items_center()
-                                    .gap(px(7.))
-                                    .rounded(px(9.))
-                                    .bg(rgb(TEXT))
-                                    .text_color(rgb(BG))
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .cursor_pointer()
-                                    .hover(|d| d.bg(rgb(0xffffff)))
-                                    .child(icon(Icon::Plus, 14.).text_color(rgb(BG)))
-                                    .child("New Song")
-                                    .debug_selector(|| "new-song".into())
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|ws, _, window, cx| {
-                                            ws.new_song_sheet(window, cx)
-                                        }),
-                                    ),
-                            ),
-                    )
-                    .child(div().flex().flex_wrap().gap(px(18.)).children(cards).when(
-                        empty,
-                        |d| {
-                            d.child(
-                                div()
-                                    .text_size(px(13.))
-                                    .text_color(rgb(TEXT_3))
-                                    .child("No songs yet. Start one with New Song."),
+                                    .gap(px(14.))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(3.))
+                                            .child(
+                                                div()
+                                                    .text_size(px(22.))
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .child("Songs"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.5))
+                                                    .text_color(rgb(TEXT_3))
+                                                    .child(format!(
+                                                        "{} in {}",
+                                                        self.songs.len(),
+                                                        root().display()
+                                                    )),
+                                            ),
+                                    )
+                                    .child(div().flex_1())
+                                    .children(search_field),
                             )
-                        },
-                    )),
+                            .children(picked_bar)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .gap(px(18.))
+                                    .children(cards)
+                                    .children(empty.map(|e| {
+                                        div()
+                                            .py(px(40.))
+                                            .text_size(px(13.))
+                                            .text_color(rgb(TEXT_3))
+                                            .child(e)
+                                    })),
+                            ),
+                    ),
             )
     }
 
-    /// The new-song sheet, over the window.
-    pub fn new_song_view(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let s = self.new_song.as_ref()?;
-        let (key, signature, template) = (s.key, s.signature, s.template);
-        let label = |t: &str| {
-            div()
-                .text_size(px(10.5))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(TEXT_3))
-                .child(t.to_uppercase())
+    /// The Songs page's left: back to the song open, if there is one; a new song's name,
+    /// tempo, key and time, and the templates (a click makes it and opens it); a song from a
+    /// folder anywhere; a song to study.
+    fn new_song_column(&self, open: Option<String>, cx: &mut Context<Self>) -> Div {
+        let label = |t: &'static str| section_title(t).mb(px(-2.));
+        let Some(h) = self.home.as_ref() else {
+            return div().w(px(360.));
         };
+        let (key, signature) = (h.key, h.signature);
         let field = |f: &Entity<TextInput>, sel: &'static str| {
             div()
                 .h(px(36.))
@@ -796,42 +1011,20 @@ impl Workspace {
                 .debug_selector(move || sel.into())
                 .child(f.clone())
         };
-        let seg = |text: String, on: bool| {
-            div()
-                .h(px(30.))
-                .px(px(12.))
-                .flex()
-                .items_center()
-                .rounded(px(8.))
-                .text_size(px(12.5))
-                .cursor_pointer()
-                .border_1()
-                .when(on, |d| {
-                    d.bg(alpha(ACCENT, 0.2))
-                        .border_color(alpha(ACCENT, 0.7))
-                        .text_color(rgb(TEXT))
-                })
-                .when(!on, |d| {
-                    d.bg(rgb(CARD))
-                        .border_color(rgb(LINE))
-                        .text_color(rgb(TEXT_2))
-                        .hover(|d| d.bg(rgb(RAISED)))
-                })
-                .child(text)
-        };
-        let signatures = [[4, 4], [3, 4], [6, 8], [7, 8]].map(|sig| {
-            seg(format!("{}/{}", sig[0], sig[1]), signature == sig).on_mouse_down(
+        let signatures = tray().children([[4, 4], [3, 4], [6, 8], [7, 8]].map(|sig| {
+            seg(format!("{}/{}", sig[0], sig[1]), signature == sig, 28.).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |ws, _, _, cx| {
-                    if let Some(s) = ws.new_song.as_mut() {
-                        s.signature = sig;
+                    if let Some(h) = ws.home.as_mut() {
+                        h.signature = sig;
                     }
                     cx.notify();
                 }),
             )
-        });
-        let key_label = key.map_or("No key".to_string(), |k| k.name());
-        let key_pick = seg(format!("{key_label}  ▾"), key.is_some())
+        }));
+        let key_pick = dropdown(key.map_or("No key".to_string(), |k| k.name()), 36.)
+            .flex_1()
+            .rounded(px(9.))
             .debug_selector(|| "new-song-key".into())
             .on_mouse_down(
                 MouseButton::Left,
@@ -851,7 +1044,6 @@ impl Workspace {
                 }),
             );
         let templates = TEMPLATES.map(|t| {
-            let on = t == template;
             let none = |_: &Path| None;
             let marks: Vec<_> = t
                 .tracks()
@@ -868,188 +1060,158 @@ impl Workspace {
                 .collect();
             div()
                 .id(t.name())
-                .w(px(132.))
+                .h(px(56.))
+                .px(px(12.))
                 .flex()
-                .flex_col()
-                .gap(px(8.))
-                .p(px(11.))
-                .rounded(px(11.))
+                .items_center()
+                .gap(px(12.))
+                .rounded(px(10.))
                 .cursor_pointer()
+                .bg(rgb(CARD))
                 .border_1()
-                .when(on, |d| {
-                    d.bg(alpha(ACCENT, 0.12)).border_color(alpha(ACCENT, 0.7))
-                })
-                .when(!on, |d| {
-                    d.bg(rgb(CARD))
-                        .border_color(rgb(LINE))
-                        .hover(|d| d.bg(rgb(RAISED)))
-                })
+                .border_color(rgb(LINE))
+                .hover(|d| d.bg(rgb(RAISED)).border_color(rgb(LINE_STRONG)))
                 .child(
                     div()
-                        .h(px(20.))
+                        .w(px(92.))
                         .flex()
-                        .gap(px(4.))
+                        .gap(px(3.))
                         .children(
                             marks
                                 .into_iter()
-                                .map(|(i, c)| glyph(i, 16.).text_color(rgb(c))),
+                                .map(|(i, c)| glyph(i, 15.).text_color(rgb(c))),
                         )
                         .when(t == Template::Empty, |d| {
-                            d.child(icon(Icon::Plus, 16.).text_color(rgb(TEXT_3)))
+                            d.child(icon(Icon::Plus, 15.).text_color(rgb(TEXT_3)))
                         }),
                 )
                 .child(
                     div()
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(t.name()),
+                        .flex_1()
+                        .min_w(px(0.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(t.name()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(TEXT_3))
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(t.about()),
+                        ),
                 )
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .line_height(px(15.))
-                        .text_color(rgb(TEXT_3))
-                        .child(t.about()),
-                )
+                .child(icon(Icon::Forward, 14.).text_color(rgb(TEXT_3)))
                 .debug_selector(move || format!("template-{}", t.name()))
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        if let Some(s) = ws.new_song.as_mut() {
-                            s.template = t;
-                        }
-                        cx.notify();
-                    }),
+                    cx.listener(move |ws, _, window, cx| ws.create_song(t, window, cx)),
                 )
         });
-        let sheet = div()
-            .id("new-song-sheet")
-            .w(px(720.))
+        let link = |glyph: Icon, text: &'static str, sel: &'static str| {
+            div()
+                .h(px(34.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(9.))
+                .rounded(px(8.))
+                .cursor_pointer()
+                .text_size(px(13.))
+                .text_color(rgb(TEXT_2))
+                .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+                .debug_selector(move || sel.into())
+                .child(icon(glyph, 15.).text_color(rgb(TEXT_3)))
+                .child(text)
+        };
+        div()
+            .w(px(360.))
+            .flex_none()
+            .h_full()
             .flex()
             .flex_col()
-            .gap(px(18.))
-            .p(px(24.))
-            .rounded(px(16.))
-            .bg(rgb(0x18181d))
-            .border_1()
-            .border_color(rgb(LINE_STRONG))
-            .shadow_lg()
-            .child(
-                div()
-                    .text_size(px(20.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("New Song"),
-            )
+            .gap(px(16.))
+            .px(px(24.))
+            .py(px(26.))
+            .bg(rgb(SURFACE))
+            .border_r_1()
+            .border_color(rgb(LINE))
             .child(
                 div()
                     .flex()
-                    .gap(px(14.))
+                    .items_center()
+                    .justify_between()
                     .child(
                         div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap(px(7.))
-                            .child(label("Name"))
-                            .child(field(&s.name, "new-song-name")),
+                            .text_size(px(24.))
+                            .font_weight(FontWeight::BOLD)
+                            .child("tempo"),
                     )
-                    .child(
-                        div()
-                            .w(px(110.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(7.))
-                            .child(label("Tempo"))
-                            .child(field(&s.tempo, "new-song-tempo")),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(24.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(7.))
-                            .child(label("Key"))
-                            .child(key_pick),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(7.))
-                            .child(label("Time"))
-                            .child(div().flex().gap(px(6.)).children(signatures)),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(7.))
-                    .child(label("Start with"))
-                    .child(div().flex().gap(px(10.)).children(templates)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap(px(10.))
-                    .child(
-                        div()
-                            .id("new-song-cancel")
-                            .h(px(34.))
-                            .px(px(16.))
-                            .flex()
-                            .items_center()
-                            .rounded(px(9.))
-                            .bg(rgb(FIELD))
-                            .text_size(px(13.))
-                            .cursor_pointer()
-                            .hover(|d| d.bg(rgb(RAISED)))
-                            .child("Cancel")
+                    .children(open.map(|name| {
+                        button(format!("Back to {name}"), false)
+                            .max_w(px(200.))
+                            .overflow_hidden()
+                            .debug_selector(|| "songs-back".into())
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|ws, _, _, cx| {
-                                    ws.new_song = None;
+                                    ws.view = View::Arrange;
                                     cx.notify();
                                 }),
-                            ),
-                    )
+                            )
+                    })),
+            )
+            .child(label("NEW SONG"))
+            .child(field(&h.name, "new-song-name"))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.))
                     .child(
                         div()
-                            .id("new-song-create")
-                            .h(px(34.))
-                            .px(px(18.))
+                            .w(px(92.))
                             .flex()
                             .items_center()
-                            .rounded(px(9.))
-                            .bg(rgb(ACCENT))
-                            .text_color(rgb(0xffffff))
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .cursor_pointer()
-                            .hover(|d| d.opacity(0.9))
-                            .child("Create")
-                            .debug_selector(|| "new-song-create".into())
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|ws, _, window, cx| ws.create_song(window, cx)),
+                            .gap(px(6.))
+                            .child(div().flex_1().child(field(&h.tempo, "new-song-tempo")))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(TEXT_3))
+                                    .child("BPM"),
                             ),
-                    ),
-            );
-        Some(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(alpha(0x000000, 0.55))
-                .child(sheet),
-        )
+                    )
+                    .child(key_pick),
+            )
+            .child(div().flex().child(signatures))
+            .child(label("START WITH"))
+            .child(div().flex().flex_col().gap(px(8.)).children(templates))
+            .child(div().flex_1())
+            .child(div().h(px(1.)).bg(rgb(LINE)))
+            .child(
+                link(
+                    Icon::Folder,
+                    "Open a song from a folder…",
+                    "songs-open-folder",
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|ws, _, _, cx| ws.open_folder(cx)),
+                ),
+            )
+            .child(
+                link(Icon::Samples, "Study a song…", "songs-study").on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|ws, _, _, cx| ws.open_study(cx)),
+                ),
+            )
     }
 
     /// What goes back to the start when another song opens.
@@ -1106,10 +1268,28 @@ fn cover(lanes: &[(u32, Vec<(f32, f32)>)], w: f32, h: f32) -> Div {
         )
 }
 
-/// A song's card on the Songs page.
+/// What can be done to a song, from its card's menu.
+fn card_menu(dir: &Path, at: gpui::Point<gpui::Pixels>) -> Menu {
+    let d = dir.to_path_buf();
+    Menu {
+        at,
+        items: vec![
+            ("Open".into(), MenuAction::OpenSong(d.clone())),
+            ("Rename…".into(), MenuAction::RenameSong(d.clone())),
+            ("Duplicate".into(), MenuAction::DuplicateSong(d.clone())),
+            ("Show in Finder".into(), MenuAction::RevealSong(d.clone())),
+            ("Move to Trash…".into(), MenuAction::TrashSong(d)),
+        ],
+        ..Default::default()
+    }
+}
+
+/// A song's card on the Songs page: a click opens it, ⌘-click picks it (to trash several); its
+/// menu (⋯, or a right-click) and, on hover, the Trash.
 fn song_card(
     s: Song,
     here: bool,
+    picked: bool,
     renaming: Option<Entity<TextInput>>,
     cx: &mut Context<Workspace>,
 ) -> gpui::Stateful<Div> {
@@ -1129,35 +1309,66 @@ fn song_card(
         }
         parts.join(" · ")
     };
-    let open_dir = dir.clone();
-    let menu_dir = dir.clone();
+    let (open_dir, menu_dir, right_dir, trash_dir) =
+        (dir.clone(), dir.clone(), dir.clone(), dir.clone());
+    let name = s.name.clone();
+    let corner = |glyph: Icon, sel: String, hot: u32| {
+        div()
+            .size(px(26.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(7.))
+            .text_color(rgb(TEXT_3))
+            .hover(move |d| d.bg(rgb(RAISED)).text_color(rgb(hot)))
+            .debug_selector(move || sel.clone())
+            .child(icon(glyph, 15.))
+    };
     div()
         .id(gpui::SharedString::from(format!("song-{}", s.name)))
+        .group("song-card")
+        .relative()
         .w(px(264.))
         .flex()
         .flex_col()
         .gap(px(10.))
         .p(px(10.))
         .rounded(px(14.))
-        .bg(rgb(CARD))
+        .bg(rgb(if picked { 0x1c2233 } else { CARD }))
         .border_1()
-        .border_color(if here {
-            alpha(ACCENT, 0.6)
-        } else {
-            rgb(LINE).into()
+        .border_color(match (picked, here) {
+            (true, _) => alpha(ACCENT, 0.9),
+            (false, true) => alpha(ACCENT, 0.5),
+            _ => rgb(LINE).into(),
         })
         .cursor_pointer()
-        .hover(|d| d.bg(rgb(0x1f1f25)))
+        .when(!picked, |d| d.hover(|d| d.bg(rgb(0x1f1f25))))
         .debug_selector({
             let name = s.name.clone();
             move || format!("song-{name}")
         })
         .child(cover(&s.lanes, 244.0, 112.0))
+        .when(picked, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .top(px(16.))
+                    .left(px(16.))
+                    .size(px(20.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(10.))
+                    .bg(rgb(ACCENT))
+                    .child(icon(Icon::Check, 13.).text_color(rgb(0xffffff))),
+            )
+        })
         .child(
             div()
                 .flex()
                 .items_start()
-                .gap(px(8.))
+                .gap(px(4.))
                 .child(
                     div()
                         .flex_1()
@@ -1190,7 +1401,7 @@ fn song_card(
                         .child(
                             div()
                                 .text_size(px(11.))
-                                .text_color(rgb(if here { ACCENT_TEXT } else { TEXT_4 }))
+                                .text_color(rgb(if here { ACCENT_TEXT } else { TEXT_3 }))
                                 .child(if here {
                                     "Open now".to_string()
                                 } else {
@@ -1199,47 +1410,73 @@ fn song_card(
                         ),
                 )
                 .child(
-                    div()
-                        .id("song-more")
-                        .size(px(26.))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(7.))
-                        .text_color(rgb(TEXT_3))
-                        .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
-                        .child(icon(Icon::More, 15.))
+                    corner(Icon::Trash, format!("song-trash-{name}"), RECORD)
+                        .invisible()
+                        .group_hover("song-card", |d| d.visible())
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            cx.listener(move |ws, _, _, cx| {
                                 cx.stop_propagation();
-                                let d = menu_dir.clone();
-                                ws.menu = Some(Menu {
-                                    at: e.position,
-                                    items: vec![
-                                        ("Open".into(), MenuAction::OpenSong(d.clone())),
-                                        ("Rename…".into(), MenuAction::RenameSong(d.clone())),
-                                        ("Duplicate".into(), MenuAction::DuplicateSong(d.clone())),
-                                        (
-                                            "Show in Finder".into(),
-                                            MenuAction::RevealSong(d.clone()),
-                                        ),
-                                        ("Move to Trash".into(), MenuAction::TrashSong(d)),
-                                    ],
-                                    ..Default::default()
-                                });
+                                ws.song_pending = Some(MenuAction::TrashSong(trash_dir.clone()));
                                 cx.notify();
                             }),
                         ),
+                )
+                .child(
+                    corner(Icon::More, format!("song-more-{}", s.name), TEXT).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            ws.menu = Some(card_menu(&menu_dir, e.position));
+                            cx.notify();
+                        }),
+                    ),
                 ),
         )
         .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                // Several picked, this among them: the Trash for them all.
+                let picks = ws
+                    .home
+                    .as_ref()
+                    .map(|h| h.picks.clone())
+                    .unwrap_or_default();
+                ws.menu = Some(match picks.len() > 1 && picks.contains(&right_dir) {
+                    true => Menu {
+                        at: e.position,
+                        items: vec![(
+                            format!("Move {} Songs to Trash…", picks.len()),
+                            MenuAction::TrashPicked,
+                        )],
+                        ..Default::default()
+                    },
+                    false => card_menu(&right_dir, e.position),
+                });
+                cx.notify();
+            }),
+        )
+        .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |ws, _, window, cx| {
-                if ws.renaming.is_none() {
-                    ws.open_song(open_dir.clone(), window, cx);
+            cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                if ws.renaming.is_some() {
+                    return;
                 }
+                let picking = ws.home.as_ref().is_some_and(|h| !h.picks.is_empty());
+                if e.modifiers.platform || e.modifiers.shift || picking {
+                    if let Some(h) = ws.home.as_mut() {
+                        match h.picks.iter().position(|p| *p == open_dir) {
+                            Some(i) => {
+                                h.picks.remove(i);
+                            }
+                            None => h.picks.push(open_dir.clone()),
+                        }
+                    }
+                    cx.notify();
+                    return;
+                }
+                ws.open_song(open_dir.clone(), window, cx);
             }),
         )
 }
