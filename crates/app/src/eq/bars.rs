@@ -331,6 +331,19 @@ impl Workspace {
         let piano = view.piano;
         let popup = view.popup;
         let analyzing = a.pre || a.post;
+        let (sketching, listing, matching) = (view.sketching, view.list, view.matching.is_some());
+        let tool =
+            |label: &'static str, on: bool, sel: &'static str, op: EqOp, cx: &mut Context<Self>| {
+                bar_button(label, on, ACCENT_TEXT)
+                    .debug_selector(move || sel.into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| {
+                            cx.stop_propagation();
+                            ws.eq_op(op, cx);
+                        }),
+                    )
+            };
         div()
             .h(px(FOOT_H))
             .flex_none()
@@ -342,6 +355,7 @@ impl Workspace {
             .bg(rgb(0x14151a))
             .border_t_1()
             .border_color(rgb(LINE))
+            .child(tool("Sketch", sketching, "eq-sketch", EqOp::Sketch, cx))
             .child(
                 bar_button("Piano", piano, ACCENT_TEXT)
                     .debug_selector(|| "eq-piano".into())
@@ -394,6 +408,19 @@ impl Workspace {
                     }),
                 ),
             )
+            .child(div().flex_1())
+            .child(tool("Instances", listing, "eq-instances", EqOp::List, cx))
+            .child(tool(
+                "Match",
+                matching,
+                "eq-match-open",
+                if matching {
+                    EqOp::MatchCancel
+                } else {
+                    EqOp::Match(None)
+                },
+                cx,
+            ))
             .child(div().flex_1())
             .child(
                 bar_button(
@@ -527,6 +554,83 @@ impl Workspace {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|ws, _, _, cx| ws.eq_op(EqOp::Freeze, cx)),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .w(px(74.))
+                                .text_size(px(11.))
+                                .text_color(rgb(TEXT_3))
+                                .child("Compare with"),
+                        )
+                        .child(
+                            dropdown(
+                                view.ext
+                                    .and_then(|id| {
+                                        self.session.project.tracks.iter().find(|t| t.id == id)
+                                    })
+                                    .map_or("No other track".to_string(), |t| t.name.clone()),
+                                24.,
+                            )
+                            .debug_selector(|| "eq-ext".into())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    let now = ws.eq_view.as_ref().and_then(|v| v.ext);
+                                    let own = ws.eq_view.as_ref().and_then(|v| match v.ch {
+                                        Channel::Track(i) => {
+                                            ws.session.project.tracks.get(i).map(|t| t.id)
+                                        }
+                                        _ => None,
+                                    });
+                                    let tick = |on: bool| if on { "✓ " } else { "" };
+                                    let mut items = vec![(
+                                        format!("{}None", tick(now.is_none())),
+                                        MenuAction::Eq(EqOp::Ext(None)),
+                                    )];
+                                    items.extend(
+                                        ws.session
+                                            .project
+                                            .tracks
+                                            .iter()
+                                            .filter(|t| Some(t.id) != own)
+                                            .map(|t| {
+                                                (
+                                                    format!(
+                                                        "{}{}",
+                                                        tick(now == Some(t.id)),
+                                                        t.name
+                                                    ),
+                                                    MenuAction::Eq(EqOp::Ext(Some(t.id))),
+                                                )
+                                            }),
+                                    );
+                                    ws.eq_menu(e.position, items, cx);
+                                }),
+                            ),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            bar_button("Collisions", a.collisions, RECORD)
+                                .debug_selector(|| "eq-collisions".into())
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|ws, _, _, cx| ws.eq_op(EqOp::Collisions, cx)),
+                                ),
+                        )
+                        .child(
+                            bar_button("Grab", a.grab, ACCENT_TEXT)
+                                .debug_selector(|| "eq-grab".into())
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|ws, _, _, cx| ws.eq_op(EqOp::Grab, cx)),
                                 ),
                         ),
                 )

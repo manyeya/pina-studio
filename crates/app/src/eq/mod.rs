@@ -23,6 +23,9 @@
 mod bars;
 mod display;
 mod panel;
+mod tools;
+
+pub use tools::Match;
 
 use std::{cell::Cell, rc::Rc};
 
@@ -99,6 +102,10 @@ pub struct Analysis {
     pub tilt: f32,
     /// It holds the most it's seen, rather than falling.
     pub freeze: bool,
+    /// Where this sound and the one compared with crowd each other, a red glow.
+    pub collisions: bool,
+    /// Resting the pointer on the spectrum grabs it: a peak to pull into a band.
+    pub grab: bool,
 }
 
 impl Default for Analysis {
@@ -111,6 +118,8 @@ impl Default for Analysis {
             speed: 2,
             tilt: 4.5,
             freeze: false,
+            collisions: true,
+            grab: true,
         }
     }
 }
@@ -205,13 +214,27 @@ pub struct EqView {
     /// The other of A and B, and whether B is the one heard.
     other: Option<Eq>,
     pub on_b: bool,
+    /// Another track to compare with (its spectrum drawn, and where they collide), by id.
+    pub ext: Option<u64>,
+    ext_spec: Vec<f32>,
+    /// Spectrum Grab: when the pointer came to rest on the spectrum, and the spectrum held
+    /// while grabbing.
+    grab_since: Option<std::time::Instant>,
+    pub grabbing: Option<Vec<f32>>,
+    /// The instance list in the display's place.
+    pub list: bool,
+    /// EQ Match, while it's open.
+    pub matching: Option<Match>,
+    /// EQ Sketch: on, and the stroke drawn (plot coordinates, left to right).
+    pub sketching: bool,
+    pub stroke: Vec<(f32, f32)>,
     /// The analyzer's curves (dB at each of `columns`), and the frequencies those are at.
     pre: Vec<f32>,
     post: Vec<f32>,
     columns: Vec<f64>,
     written: usize,
     hearing: bool,
-    buf: Box<[[f32; TAP_LEN]; 3]>,
+    buf: Box<[[f32; TAP_LEN]; 4]>,
     /// The output meter: each side's level now and the loudest since it was clicked (dB).
     pub meter: [f32; 2],
     pub peak: f32,
@@ -242,12 +265,20 @@ impl EqView {
             start: Vec::new(),
             other: None,
             on_b: false,
+            ext: None,
+            ext_spec: Vec::new(),
+            grab_since: None,
+            grabbing: None,
+            list: false,
+            matching: None,
+            sketching: false,
+            stroke: Vec::new(),
             pre: Vec::new(),
             post: Vec::new(),
             columns: Vec::new(),
             written: 0,
             hearing: false,
-            buf: Box::new([[0.0; TAP_LEN]; 3]),
+            buf: Box::new([[0.0; TAP_LEN]; 4]),
             meter: [-120.0; 2],
             peak: -120.0,
             display: Rc::new(Cell::new(Bounds::default())),
@@ -274,6 +305,8 @@ impl EqView {
     /// Whether the analyzer or meter still show something: they fall away when sound stops.
     pub fn moving(&self) -> bool {
         self.hearing
+            || self.grab_since.is_some()
+            || self.matching.is_some()
             || self.meter.iter().any(|&m| m > -100.0)
             || self
                 .pre
@@ -348,6 +381,23 @@ pub enum EqOp {
     AutoThreshold,
     /// The track the EQ's sidechain is (by id), or none.
     Sidechain(Option<u64>),
+    /// A track to compare with (by id), or none; collisions shown or not; Spectrum Grab on
+    /// or off.
+    Ext(Option<u64>),
+    Collisions,
+    Grab,
+    /// The instance list shown or not; EQ Sketch on or off.
+    List,
+    Sketch,
+    /// EQ Match: opened (comparing with a track, if given), its reference a track or a file
+    /// asked for, matched, its bands fewer or more, finished, or closed.
+    Match(Option<u64>),
+    MatchTrack(u64),
+    MatchFile,
+    MatchRun,
+    MatchBands(i8),
+    MatchFinish,
+    MatchCancel,
 }
 
 /// A knob (or value) in the EQ window.
@@ -956,9 +1006,11 @@ impl Workspace {
             view.pre = vec![floor; n];
             view.post = vec![floor; n];
         }
+        self.player.watch_ext(view.ext);
         let tap = self.player.eq_tap();
-        let [pre, left, right] = &mut *view.buf;
+        let [pre, left, right, ext] = &mut *view.buf;
         let written = tap.read(pre, left, right);
+        let ext_written = tap.read_ext(ext);
         let heard = written != view.written;
         view.written = written;
         view.hearing = heard && pre[TAP_LEN - 1024..].iter().any(|x| x.abs() > 1e-4);
@@ -974,6 +1026,42 @@ impl Workspace {
             };
             view.meter[side] = db.max(view.meter[side] - 1.5);
             view.peak = view.peak.max(view.meter[side]);
+        }
+        // EQ Match learns while it listens: this track going in, and the reference.
+        if let Some(m) = view.matching.as_mut()
+            && heard
+        {
+            m.learn(
+                &pre[..],
+                (ext_written > 0 && view.ext.is_some()).then_some(&ext[..]),
+                rate,
+            );
+        }
+        // Spectrum Grab: the pointer resting on the spectrum a moment grabs it.
+        let on_spectrum = view.pointer.is_some_and(|(x, y)| {
+            let i = ((x / geo.w) * (n.max(2) - 1) as f32).round() as usize;
+            let floor = -(view.analysis.range as f32);
+            view.post.get(i).is_some_and(|&db| {
+                db > floor + 3.0 && ((-db / view.analysis.range as f32 * geo.h) - y).abs() < 14.0
+            })
+        });
+        let can_grab = view.analysis.grab
+            && view.analysis.post
+            && view.hover.is_none()
+            && view.grabbing.is_none()
+            && !view.sketching
+            && view.matching.is_none();
+        match (can_grab && on_spectrum, view.grab_since) {
+            (true, None) => view.grab_since = Some(std::time::Instant::now()),
+            (true, Some(at)) if at.elapsed().as_secs_f32() > 1.2 => {
+                view.grabbing = Some(view.post.clone());
+                view.grab_since = None;
+            }
+            (false, _) => view.grab_since = None,
+            _ => {}
+        }
+        if view.grabbing.is_some() && view.pointer.is_none() {
+            view.grabbing = None;
         }
         if !(view.analysis.pre || view.analysis.post) {
             return;
@@ -997,7 +1085,19 @@ impl Workspace {
             fresh(&pre[TAP_LEN - len..], view.analysis.pre),
             fresh(&post, view.analysis.post),
         );
-        for (smooth, now) in [(&mut view.pre, now.0), (&mut view.post, now.1)] {
+        // The track compared with.
+        let ext_now = match (view.ext.is_some(), ext_written != 0) {
+            (true, true) => spectrum_db(&ext[TAP_LEN - len..], rate, &view.columns),
+            _ => vec![floor - 30.0; n],
+        };
+        if view.ext_spec.len() != n {
+            view.ext_spec = vec![floor; n];
+        }
+        for (smooth, now) in [
+            (&mut view.pre, now.0),
+            (&mut view.post, now.1),
+            (&mut view.ext_spec, ext_now),
+        ] {
             for (i, (s, v)) in smooth.iter_mut().zip(now).enumerate() {
                 let v = (v + tilt * (view.columns[i] / 1_000.0).log2() as f32).max(floor);
                 // Up quickly, down slowly; frozen, it only rises.
@@ -1259,6 +1359,14 @@ impl Workspace {
         let o = view.display.get().origin;
         let (x, y) = (f32::from(e.position.x - o.x), f32::from(e.position.y - o.y));
         let m = e.modifiers;
+        let sketching = view.sketching;
+        // Spectrum Grab: a peak pressed, a bell to pull.
+        if view.grabbing.is_some() && self.grab_peak(x, e, cx) {
+            return;
+        }
+        if let Some(v) = self.eq_view.as_mut() {
+            v.grabbing = None;
+        }
         if e.click_count == 2 || m.platform {
             let band = band_at(&geo, x, y, false);
             self.make_band(band, m.alt, cx);
@@ -1266,6 +1374,15 @@ impl Workspace {
         }
         let curve = self.eq_curve_at(geo.freq(x));
         let on_curve = (geo.y(curve) - y).abs() < 8.0;
+        // EQ Sketch, or on an empty EQ a drag off the line: a curve drawn.
+        let empty = self.shown_eq().is_some_and(|(_, e)| e.bands.is_empty());
+        if sketching || (empty && !on_curve) {
+            if let Some(v) = self.eq_view.as_mut() {
+                v.stroke = vec![(x, y)];
+            }
+            self.begin_drag(Drag::EqSketch, cx);
+            return;
+        }
         self.begin_drag(
             Drag::EqPress {
                 from: pt(e.position),
@@ -2051,6 +2168,41 @@ impl Workspace {
                     });
                 }
             }
+            EqOp::Ext(source) => {
+                if let Some(v) = self.eq_view.as_mut() {
+                    v.ext = source;
+                    v.ext_spec.clear();
+                }
+            }
+            EqOp::Collisions => {
+                if let Some(v) = self.eq_view.as_mut() {
+                    v.analysis.collisions = !v.analysis.collisions;
+                }
+            }
+            EqOp::Grab => {
+                if let Some(v) = self.eq_view.as_mut() {
+                    v.analysis.grab = !v.analysis.grab;
+                }
+            }
+            EqOp::List => {
+                if let Some(v) = self.eq_view.as_mut() {
+                    v.list = !v.list;
+                }
+            }
+            EqOp::Sketch => {
+                if let Some(v) = self.eq_view.as_mut() {
+                    v.sketching = !v.sketching;
+                    v.stroke.clear();
+                    v.picked.clear();
+                }
+            }
+            EqOp::Match(..)
+            | EqOp::MatchTrack(_)
+            | EqOp::MatchFile
+            | EqOp::MatchRun
+            | EqOp::MatchBands(_)
+            | EqOp::MatchFinish
+            | EqOp::MatchCancel => self.match_op(op, cx),
             EqOp::SavePreset => {
                 let Some((_, eq)) = self.shown_eq() else {
                     return;

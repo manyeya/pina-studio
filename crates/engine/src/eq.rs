@@ -981,6 +981,10 @@ pub struct Tap {
     /// bits), by its place in the EQ.
     moved: Vec<AtomicU32>,
     level: Vec<AtomicU32>,
+    /// Another lane, heard to compare with (its output, mono): for collisions and matching.
+    pub ext_slot: AtomicUsize,
+    ext: Vec<AtomicU32>,
+    ext_written: AtomicUsize,
 }
 
 impl Default for Tap {
@@ -1001,7 +1005,33 @@ impl Tap {
             written: AtomicUsize::new(0),
             moved: (0..MAX_BANDS).map(|_| AtomicU32::new(0)).collect(),
             level: (0..MAX_BANDS).map(|_| AtomicU32::new(0)).collect(),
+            ext_slot: AtomicUsize::new(usize::MAX),
+            ext: ring(),
+            ext_written: AtomicUsize::new(0),
         }
+    }
+
+    /// A lane's output, if it's the one compared with.
+    pub fn write_ext(&self, slot: usize, l: &[f32], r: &[f32]) {
+        if self.ext_slot.load(Ordering::Relaxed) != slot {
+            return;
+        }
+        let mut at = self.ext_written.load(Ordering::Relaxed);
+        for (a, b) in l.iter().zip(r) {
+            self.ext[at % TAP_LEN].store((0.5 * (a + b)).to_bits(), Ordering::Relaxed);
+            at += 1;
+        }
+        self.ext_written.store(at, Ordering::Release);
+    }
+
+    /// The latest `TAP_LEN` samples of the lane compared with, oldest first; and how many
+    /// have been written ever.
+    pub fn read_ext(&self, out: &mut [f32; TAP_LEN]) -> usize {
+        let at = self.ext_written.load(Ordering::Acquire);
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = f32::from_bits(self.ext[(at + i) % TAP_LEN].load(Ordering::Relaxed));
+        }
+        at
     }
 
     /// Whether `slot`'s EQ is watched.
@@ -1111,6 +1141,91 @@ pub fn spectrum_db(samples: &[f32], rate: f64, freqs: &[f64]) -> Vec<f32> {
             20.0 * m.max(1e-7).log10()
         })
         .collect()
+}
+
+/// A sound's average spectrum (dB at each of `freqs`): the mean power of up to 400 windows of
+/// `len` samples spread across it. For matching one sound to another.
+pub fn average_spectrum(samples: &[f32], rate: f64, freqs: &[f64], len: usize) -> Vec<f32> {
+    if samples.len() < len {
+        return spectrum_db(samples, rate, freqs);
+    }
+    let windows = ((samples.len() - len) / (len / 2) + 1).min(400);
+    let step = (samples.len() - len) / windows.max(2).saturating_sub(1).max(1);
+    let mut power = vec![0f64; freqs.len()];
+    for w in 0..windows {
+        let at = (w * step).min(samples.len() - len);
+        for (p, db) in power
+            .iter_mut()
+            .zip(spectrum_db(&samples[at..at + len], rate, freqs))
+        {
+            *p += 10f64.powf(db as f64 / 10.0);
+        }
+    }
+    power
+        .iter()
+        .map(|p| (10.0 * (p / windows as f64).max(1e-14).log10()) as f32)
+        .collect()
+}
+
+/// A curve smoothed over a third of an octave either way (`freqs` spaced evenly in octaves).
+pub fn smooth_third(curve: &[f32], freqs: &[f64]) -> Vec<f32> {
+    let n = curve.len();
+    if n < 3 {
+        return curve.to_vec();
+    }
+    let per_octave = (n - 1) as f64 / (freqs[n - 1] / freqs[0]).log2();
+    let k = ((per_octave / 3.0) as usize).max(1);
+    (0..n)
+        .map(|i| {
+            let (a, b) = (i.saturating_sub(k), (i + k).min(n - 1));
+            curve[a..=b].iter().sum::<f32>() / (b - a + 1) as f32
+        })
+        .collect()
+}
+
+/// Bells that make a curve (dB at each of `freqs`, the difference one sound needs to sound like
+/// another): the biggest stretch of it first, as wide as it goes, then what's left, up to `count`
+/// bands (or until what's left is under half a dB). Each bell at most 12 dB.
+pub fn fit_bands(curve: &[f32], freqs: &[f64], count: usize, rate: f64) -> Vec<EqBand> {
+    let mut left = curve.to_vec();
+    let mut out = Vec::new();
+    let usable = |f: f64| (25.0..=18_000.0).contains(&f);
+    for _ in 0..count {
+        let Some(i) = (0..left.len())
+            .filter(|&i| usable(freqs[i]))
+            .max_by(|&a, &b| left[a].abs().total_cmp(&left[b].abs()))
+        else {
+            break;
+        };
+        let g = left[i].clamp(-12.0, 12.0);
+        if g.abs() < 0.5 {
+            break;
+        }
+        // As wide as it stays over half of it, the same way.
+        let over = |j: usize| left[j].signum() == g.signum() && left[j].abs() >= g.abs() / 2.0;
+        let (mut lo, mut hi) = (i, i);
+        while lo > 0 && over(lo - 1) {
+            lo -= 1;
+        }
+        while hi + 1 < left.len() && over(hi + 1) {
+            hi += 1;
+        }
+        let octaves = (freqs[hi] / freqs[lo]).log2().max(0.2);
+        let r = 2f64.powf(octaves);
+        let q = (r.sqrt() / (r - 1.0)).clamp(0.3, 8.0) as f32;
+        let mut band = EqBand::new(
+            Shape::Bell,
+            freqs[i].round() as f32,
+            (g * 10.0).round() / 10.0,
+        );
+        band.q = (q * 100.0).round() / 100.0;
+        let sections = band_sections(&band, 1.0, rate);
+        for (j, v) in left.iter_mut().enumerate() {
+            *v -= response_db(&sections, freqs[j], rate) as f32;
+        }
+        out.push(band);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1631,6 +1746,58 @@ mod tests {
             20.0 * 0.005f64.log10() - 6.0,
             0.4
         ));
+    }
+
+    #[test]
+    fn bands_are_fitted_to_a_difference_and_spectra_averaged() {
+        let freqs: Vec<f64> = (0..300)
+            .map(|i| 20.0 * 1000f64.powf(i as f64 / 299.0))
+            .collect();
+        // A curve two bells made: fitted, two bells near them, and what's left small.
+        let mut a = band(Shape::Bell, 200.0, 5.0);
+        a.q = 1.0;
+        let mut b = band(Shape::Bell, 4_000.0, -4.0);
+        b.q = 2.0;
+        let curve: Vec<f32> = freqs
+            .iter()
+            .map(|&f| (at(&a, f) + at(&b, f)) as f32)
+            .collect();
+        let fitted = fit_bands(&curve, &freqs, 6, RATE);
+        assert!(fitted.len() >= 2 && fitted.len() <= 6, "{fitted:?}");
+        let near = |f: f32, g: f32| {
+            fitted
+                .iter()
+                .any(|x| (x.freq / f - 1.0).abs() < 0.15 && (x.gain_db - g).abs() < 1.0)
+        };
+        assert!(near(200.0, 5.0) && near(4_000.0, -4.0), "{fitted:?}");
+        let made: Vec<f32> = freqs
+            .iter()
+            .map(|&f| fitted.iter().map(|x| at(x, f)).sum::<f64>() as f32)
+            .collect();
+        let worst = curve
+            .iter()
+            .zip(&made)
+            .fold(0f32, |m, (c, m2)| m.max((c - m2).abs()));
+        assert!(worst < 1.0, "{worst}");
+        // A sine's average spectrum: its level where it is.
+        let x: Vec<f32> = (0..48_000)
+            .map(|i| (2.0 * PI * 1_000.0 * i as f64 / RATE).sin() as f32 * 0.5)
+            .collect();
+        let avg = average_spectrum(&x, RATE, &freqs, 4096);
+        let (i, loudest) = avg
+            .iter()
+            .enumerate()
+            .fold((0, f32::MIN), |m, (i, &d)| if d > m.1 { (i, d) } else { m });
+        assert!(
+            (freqs[i] / 1_000.0 - 1.0).abs() < 0.05 && loudest > -9.0,
+            "{loudest}"
+        );
+        // Smoothing keeps a flat curve flat.
+        assert!(
+            smooth_third(&vec![3.0; 300], &freqs)
+                .iter()
+                .all(|&v| (v - 3.0).abs() < 1e-5)
+        );
     }
 
     #[test]

@@ -2301,6 +2301,7 @@ impl Engine {
                 dest_r[i] += r[i];
             }
             if let Some(s) = shared {
+                s.eq_tap.write_ext(plan.slot, l, r);
                 s.report(plan.slot, peak, reduction);
             }
             if let Some(p) = self.peaks.get_mut(plan.slot) {
@@ -2330,6 +2331,7 @@ impl Engine {
                 peak = [peak[0].max(a.abs()), peak[1].max(b.abs())];
             }
             if let Some(s) = shared {
+                s.eq_tap.write_ext(plan.slot, l, r);
                 s.report(plan.slot, peak, reduction);
             }
         }

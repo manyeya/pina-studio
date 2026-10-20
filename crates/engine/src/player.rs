@@ -558,6 +558,17 @@ impl Player {
             .store(slot, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Another channel the EQ window compares its EQ's with (a track's or aux's by id), or none.
+    pub fn watch_ext(&self, channel: Option<u64>) {
+        let slot = channel
+            .and_then(|id| self.lanes.get(&id))
+            .map_or(usize::MAX, |s| s.slot);
+        self.shared
+            .eq_tap
+            .ext_slot
+            .store(slot, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// A band of the watched EQ heard alone (by id) at a listening level (dB), or none.
     pub fn solo_band(&self, band: Option<(u16, f32)>) {
         let tap = &self.shared.eq_tap;

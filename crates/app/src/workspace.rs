@@ -525,6 +525,8 @@ pub enum Drag {
         from: Point<f32>,
         freq: f32,
     },
+    /// EQ Sketch: a curve being drawn.
+    EqSketch,
     /// The EQ's frequency scale dragged, from the frequencies it showed: zoom and pan.
     EqScale {
         from: Point<f32>,
@@ -1637,6 +1639,7 @@ impl Workspace {
                 | Drag::EqWindow { .. }
                 | Drag::EqPress { .. }
                 | Drag::EqScale { .. }
+                | Drag::EqSketch
         );
         if edits {
             self.session.checkpoint();
@@ -1998,6 +2001,11 @@ impl Workspace {
                 cx.notify();
                 return;
             }
+            Some(Drag::EqSketch) => {
+                self.drag_eq_sketch(p);
+                cx.notify();
+                return;
+            }
             Some(Drag::EqKnob {
                 id,
                 knob,
@@ -2094,6 +2102,7 @@ impl Workspace {
                 }
                 if let Some(v) = self.eq_view.as_mut() {
                     v.solo = None;
+                    v.grabbing = None;
                 }
                 self.eq_let_go();
                 if let Drag::EqNode {
@@ -2113,6 +2122,10 @@ impl Workspace {
             }) => {
                 self.drag = None;
                 self.release_eq_press(from, moved, alt, cx);
+            }
+            Some(Drag::EqSketch) => {
+                self.drag = None;
+                self.finish_sketch(cx);
             }
             _ => {}
         }

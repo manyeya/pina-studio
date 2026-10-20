@@ -140,11 +140,24 @@ impl Workspace {
         let freqs: Vec<f64> = (0..n)
             .map(|i| geo.freq(i as f32 / (n - 1) as f32 * geo.w))
             .collect();
+        let bounds = view.display.clone();
+        if view.list {
+            let list = self.eq_list(dw, dh, cx);
+            return div()
+                .relative()
+                .w(px(dw))
+                .h(px(dh))
+                .child(
+                    canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {})
+                        .absolute()
+                        .size_full(),
+                )
+                .child(list);
+        }
         let drawn = self.eq_drawn(eq, &geo, &freqs);
         let plot = self.eq_plot(eq, &geo, &freqs, &drawn, cx);
         let scale = self.eq_scale(&geo, &drawn, cx);
         let side = self.eq_side(&geo, dh, cx);
-        let bounds = view.display.clone();
         div()
             .relative()
             .w(px(dw))
@@ -262,6 +275,39 @@ impl Workspace {
         let marquee = view.marquee;
         let bypass = eq.bypass;
         let floor = -(analysis.range as f32);
+        // The track compared with, and where the two crowd each other.
+        let ext = view
+            .ext
+            .map(|_| view.ext_spec.clone())
+            .filter(|e| e.len() == columns.len());
+        let collide = analysis.collisions;
+        // Spectrum Grab: the spectrum held, the rest dimmed, its peaks named.
+        let held = view.grabbing.clone().filter(|h| h.len() == columns.len());
+        let dim = if held.is_some() { 0.3 } else { 1.0 };
+        let grab_peaks: Vec<usize> = held
+            .as_ref()
+            .map(|h| super::tools::peaks(h, floor))
+            .unwrap_or_default();
+        // EQ Match: the difference it's fitting, and what the bands it fitted would do.
+        let matched: Option<(Vec<f32>, Vec<f32>, Vec<f32>)> = view
+            .matching
+            .as_ref()
+            .filter(|m| !m.proposed.is_empty())
+            .map(|m| {
+                let xs: Vec<f32> = m.freqs().iter().map(|&f| g.x(f)).collect();
+                let fitted: Vec<f32> = m
+                    .freqs()
+                    .iter()
+                    .map(|&f| {
+                        m.proposed
+                            .iter()
+                            .map(|b| tempo_engine::eq::band_response(b, 1.0, f, rate) as f32)
+                            .sum()
+                    })
+                    .collect();
+                (xs, m.difference.clone(), fitted)
+            });
+        let stroke = view.stroke.clone();
         let ay = move |db: f32| (-db / analysis.range as f32 * g.h).clamp(0.0, g.h);
         let steps = match g.range as u8 {
             3 => 1.0,
@@ -339,7 +385,46 @@ impl Workspace {
                     spectrum(&pre, window, 0x46507a, 0.45, None);
                 }
                 if analysis.post && post.iter().any(|&d| d > floor + 0.5) {
-                    spectrum(&post, window, 0x7f9cf5, 0.30, Some(0.5));
+                    spectrum(&post, window, 0x7f9cf5, 0.30 * dim, Some(0.5 * dim));
+                }
+                if let Some(ext) = &ext {
+                    // Where both are loud and close, a red glow up to the quieter.
+                    if collide {
+                        for i in 0..columns.len().min(post.len()) {
+                            let (a, e) = (post[i], ext[i]);
+                            let loud = ((a.min(e) - (floor + 36.0)) / 18.0).clamp(0.0, 1.0);
+                            let close = (1.0 - (a - e).abs() / 9.0).clamp(0.0, 1.0);
+                            let c = loud * close;
+                            if c > 0.05 {
+                                let top = ay(a.min(e));
+                                window.paint_quad(fill(
+                                    Bounds::new(
+                                        at(columns[i] - 1.5, top),
+                                        size(px(3.), px(g.h - top)),
+                                    ),
+                                    linear_gradient(
+                                        180.,
+                                        linear_color_stop(alpha(RECORD, 0.35 * c), 0.),
+                                        linear_color_stop(alpha(RECORD, 0.02), 1.),
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    let points: Vec<_> = (0..columns.len())
+                        .map(|i| at(columns[i], ay(ext[i])))
+                        .collect();
+                    if let Some(p) = line(&points, 1.2, false) {
+                        window.paint_path(p, alpha(0xff8a8a, 0.75));
+                    }
+                }
+                if let Some(held) = &held {
+                    let points: Vec<_> = (0..columns.len())
+                        .map(|i| at(columns[i], ay(held[i])))
+                        .collect();
+                    if let Some(p) = line(&points, 1.6, false) {
+                        window.paint_path(p, alpha(0xffffff, 0.95));
+                    }
                 }
                 let n = xs.len();
                 if n < 2 {
@@ -362,7 +447,7 @@ impl Workspace {
                         }
                         area.close();
                         if let Ok(p) = area.build() {
-                            window.paint_path(p, alpha(*color, a * 0.8));
+                            window.paint_path(p, alpha(*color, a * 0.8 * dim));
                         }
                     }
                     let mut area = PathBuilder::fill();
@@ -373,7 +458,7 @@ impl Workspace {
                     area.line_to(at(xs[n - 1], zero));
                     area.close();
                     if let Ok(p) = area.build() {
-                        window.paint_path(p, alpha(*color, *a));
+                        window.paint_path(p, alpha(*color, *a * dim));
                     }
                     if *strong && let Some(p) = line(&points(curve), 1.3, false) {
                         window.paint_path(p, alpha(*color, 0.9));
@@ -388,7 +473,24 @@ impl Workspace {
                 let main = if bypass { 0x6a6a74 } else { CURVE };
                 for (width, a) in [(6.0, 0.10), (2.2, 1.0)] {
                     if let Some(p) = line(&points(&total), width, false) {
-                        window.paint_path(p, alpha(main, a));
+                        window.paint_path(p, alpha(main, a * dim));
+                    }
+                }
+                if let Some((xs, difference, fitted)) = &matched {
+                    let curve = |c: &[f32]| -> Vec<_> {
+                        xs.iter().zip(c).map(|(&x, &d)| at(x, clamp_y(d))).collect()
+                    };
+                    if let Some(p) = line(&curve(difference), 3.0, false) {
+                        window.paint_path(p, alpha(0xffffff, 0.8));
+                    }
+                    if let Some(p) = line(&curve(fitted), 2.0, true) {
+                        window.paint_path(p, alpha(CURVE, 0.95));
+                    }
+                }
+                if stroke.len() > 1 {
+                    let points: Vec<_> = stroke.iter().map(|&(x, y)| at(x, y)).collect();
+                    if let Some(p) = line(&points, 2.4, false) {
+                        window.paint_path(p, alpha(0xffffff, 0.9));
                     }
                 }
                 if let Some((curve, _, dashed)) = &preview
@@ -526,6 +628,31 @@ impl Workspace {
             .and_then(|id| drawn.iter().find(|d| d.id == id))
             .map(|d| self.eq_readout(d, &g, cx));
         let panel = self.band_panel(eq, &g, drawn, cx);
+        let peak_labels: Vec<Div> = grab_peaks
+            .iter()
+            .map(|&i| {
+                let level = view.grabbing.as_ref().map_or(0.0, |h| h[i]);
+                let x = g.x(view.columns[i]);
+                div()
+                    .absolute()
+                    .left(px(x - 30.0))
+                    .top(px(((-level / analysis.range as f32) * g.h - 22.0).max(2.0)))
+                    .w(px(60.))
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .px(px(4.))
+                            .rounded(px(3.))
+                            .bg(alpha(0x000000, 0.7))
+                            .font_family(MONO)
+                            .text_size(px(9.5))
+                            .text_color(rgb(TEXT))
+                            .child(hz_text(view.columns[i] as f32)),
+                    )
+            })
+            .collect();
+        let matching = self.match_panel(&g, cx);
         let empty = eq.bands.is_empty().then(|| {
             div()
                 .absolute()
@@ -561,6 +688,8 @@ impl Workspace {
             .children(dots)
             .children(readout)
             .children(panel)
+            .children(peak_labels)
+            .children(matching)
             .on_mouse_move(cx.listener(move |ws, e: &MouseMoveEvent, _, cx| {
                 let Some(v) = ws.eq_view.as_mut() else { return };
                 let o = v.display.get().origin;
