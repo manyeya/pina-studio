@@ -2117,8 +2117,29 @@ fn the_eq_window_adds_shapes_moves_and_takes_out_bands(cx: &mut TestAppContext) 
     let b = eq(cx).bands[2];
     assert_eq!(
         (b.shape, b.slope, b.placement),
-        (Shape::LowShelf, 24, Placement::Mid)
+        (Shape::LowShelf, 24.0, Placement::Mid)
     );
+    // Its slope dragged: any between; the wheel a step, ⇧ a dB.
+    let slope = cx.debug_bounds("eq-slope").unwrap().center();
+    drag(cx, slope, slope - point(px(0.), px(15.)));
+    let s = eq(cx).bands[2].slope;
+    assert!(s > 24.0 && s.fract() != 0.0, "{s}");
+    let wheel = |cx: &mut VisualTestContext, shift: bool| {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: slope,
+            delta: gpui::ScrollDelta::Pixels(point(px(0.), px(16.))),
+            modifiers: Modifiers {
+                shift,
+                ..Modifiers::none()
+            },
+            ..Default::default()
+        });
+        cx.run_until_parked();
+    };
+    wheel(cx, false);
+    assert_eq!(eq(cx).bands[2].slope, 36.0);
+    wheel(cx, true);
+    assert_eq!(eq(cx).bands[2].slope, 37.0);
     // Dynamic: the ring round its gain knob is its range.
     click_on(cx, "eq-dynamic", Modifiers::none(), MouseButton::Left);
     let ring = cx.debug_bounds("eq-knob-range").unwrap();
@@ -5459,10 +5480,10 @@ fn shots() {
                 "eq" | "eq-picked" | "eq-menu" | "eq-mixer" | "eq-hover" | "eq-multi"
                 | "eq-piano" | "eq-analyzer" | "eq-empty" | "eq-dynamics" | "eq-output"
                 | "eq-list" | "eq-match" | "eq-sketch" | "eq-grab" | "eq-compare"
-                | "eq-spectral" | "eq-modes" => {
+                | "eq-spectral" | "eq-modes" | "eq-slopes" => {
                     use tempo_engine::project::{Bands, Dynamic, Eq, EqBand, Placement, Shape};
                     let mut cut = EqBand::new(Shape::LowCut, 32.0, 0.0);
-                    cut.slope = 24;
+                    cut.slope = 24.0;
                     let mut side = EqBand::new(Shape::LowCut, 160.0, 0.0);
                     side.placement = Placement::Side;
                     let mut mud = EqBand::new(Shape::Bell, 320.0, -3.5);
@@ -5480,6 +5501,12 @@ fn shots() {
                         bands: Bands::from_slice(&[cut, side, mud, notch, harsh, air]),
                         ..Eq::default()
                     };
+                    if page == "eq-slopes" {
+                        eq.bands[0].slope = 9.5;
+                        eq.bands[2].slope = 30.5;
+                        eq.bands[4].slope = 48.0;
+                        eq.bands[4].gain_db = 6.0;
+                    }
                     if page == "eq-spectral" {
                         use tempo_engine::project::Processing;
                         (eq.processing, eq.resolution) = (Processing::Linear, 2);

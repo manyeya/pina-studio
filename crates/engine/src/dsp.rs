@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn the_curve_drawn_is_what_the_strip_eq_does() {
         let mut cut = EqBand::new(Shape::LowCut, 120.0, 0.0);
-        cut.slope = 24;
+        cut.slope = 24.0;
         let mut bell = EqBand::new(Shape::Bell, 300.0, -4.0);
         bell.q = 1.4;
         let eq = Eq {

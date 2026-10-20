@@ -444,7 +444,7 @@ pub enum Command {
         #[serde(default)]
         q: Option<f32>,
         #[serde(default)]
-        slope: Option<u8>,
+        slope: Option<f32>,
         #[serde(default)]
         placement: Option<crate::project::Placement>,
         /// `false` makes it still; an object (any of range_db, threshold_db, attack_ms,
@@ -1915,10 +1915,19 @@ fn check_eq(eq: &Eq) -> Result<(), String> {
         if !(0.025..=40.0).contains(&b.q) {
             return fail(format!("q {}: it's 0.025 to 40", b.q));
         }
-        let slopes = b.shape.slopes();
-        if !slopes.is_empty() && !slopes.contains(&b.slope) {
+        if b.shape.slope_range().is_some() && b.shape.fit_slope(b.slope) != b.slope {
+            let (lo, hi) = b.shape.slope_range().unwrap_or_default();
+            let takes = match b.shape {
+                crate::project::Shape::LowCut | crate::project::Shape::HighCut => {
+                    format!("{lo} to {hi}, or 144 (a brickwall)")
+                }
+                crate::project::Shape::Notch | crate::project::Shape::AllPass => {
+                    format!("{lo} to {hi} in twelves")
+                }
+                _ => format!("{lo} to {hi}"),
+            };
             return fail(format!(
-                "slope {} dB an octave: a {} takes {slopes:?}",
+                "slope {} dB an octave: a {} takes {takes}",
                 b.slope,
                 b.shape.name().to_lowercase()
             ));
@@ -2344,7 +2353,7 @@ mod tests {
         )
         .unwrap();
         let eq = p.tracks[0].eq.unwrap();
-        assert_eq!(eq.bands[0].slope, 24);
+        assert_eq!(eq.bands[0].slope, 24.0);
         let b = eq.bands[2];
         assert_eq!((b.freq, b.gain_db, b.q), (300.0, -3.0, 1.5));
         assert_eq!(b.placement, crate::project::Placement::Mid);
@@ -2352,8 +2361,14 @@ mod tests {
         // Its attack and release its own, by its frequency.
         assert_eq!(b.dynamic.unwrap().attack_ms, None);
         assert_eq!(b.dynamic.unwrap().threshold_db, Some(-24.0));
-        let wrong = run(&mut p, &band(r#""band": 0, "slope": 20"#)).unwrap_err();
-        assert!(wrong.contains("band 0: slope 20"), "{wrong}");
+        let wrong = run(&mut p, &band(r#""band": 0, "slope": 120"#)).unwrap_err();
+        assert!(wrong.contains("band 0: slope 120"), "{wrong}");
+        // Fractional slopes, on any shape: a bell steeper.
+        run(&mut p, &band(r#""band": 0, "slope": 20.5"#)).unwrap();
+        run(&mut p, &band(r#""band": 2, "slope": 36"#)).unwrap();
+        let eq = p.tracks[0].eq.unwrap();
+        assert_eq!((eq.bands[0].slope, eq.bands[2].slope), (20.5, 36.0));
+        run(&mut p, &band(r#""band": 0, "slope": 24"#)).unwrap();
         // Spectral, and the EQ in linear phase at high resolution.
         run(
             &mut p,
@@ -2395,7 +2410,7 @@ mod tests {
         let eq = p.tracks[0].eq.unwrap();
         assert_eq!(
             (eq.bands.len(), eq.bands[0].slope, eq.output_db),
-            (1, 48, -2.0)
+            (1, 48.0, -2.0)
         );
         // A cut written without a width has a cut's: no bump at its corner.
         assert_eq!(eq.bands[0].q, std::f32::consts::FRAC_1_SQRT_2);

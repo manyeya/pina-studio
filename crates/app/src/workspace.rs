@@ -533,11 +533,12 @@ pub enum Drag {
         span: (f64, f64),
     },
     /// A knob in the EQ window (a band's by id; 0 for the EQ's own), from the y it was pressed
-    /// at and its value then.
+    /// at (and x) and its value then.
     EqKnob {
         id: u16,
         knob: crate::eq::EqKnob,
         from: f32,
+        x: f32,
         start: f32,
     },
     /// The EQ window, moved by its title or resized by its corner.
@@ -2011,6 +2012,7 @@ impl Workspace {
                 knob,
                 from,
                 start,
+                ..
             }) => self.drag_eq_knob(id, knob, from, start, p.y),
             Some(Drag::EqWindow {
                 from,
@@ -2097,8 +2099,22 @@ impl Workspace {
             Some(Drag::SoloHold) => self.solo_release(cx),
             // A dot or knob clicked, not moved: no edit to undo; a dot's click may do something.
             Some(d @ (Drag::EqNode { .. } | Drag::EqKnob { .. } | Drag::EqSolo { .. })) => {
-                if self.session.unchanged() {
+                let still = self.session.unchanged();
+                if still {
                     self.session.cancel();
+                }
+                // A slope clicked rather than dragged: its menu.
+                if let Drag::EqKnob {
+                    id,
+                    knob: crate::eq::EqKnob::Slope,
+                    from,
+                    x,
+                    ..
+                } = d
+                    && still
+                {
+                    self.drag = None;
+                    self.eq_slope_menu(id, gpui::point(px(x), px(from)), cx);
                 }
                 if let Some(v) = self.eq_view.as_mut() {
                     v.solo = None;

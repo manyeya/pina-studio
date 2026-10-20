@@ -227,7 +227,7 @@ impl Shape {
     ];
 
     /// The slope that's a brickwall: as steep as cuts go.
-    pub const BRICKWALL: u8 = 144;
+    pub const BRICKWALL: f32 = 144.0;
 
     pub fn name(self) -> &'static str {
         match self {
@@ -257,14 +257,56 @@ impl Shape {
         self.has_gain()
     }
 
-    /// The slopes it can have, in dB an octave; none for those that have a width (Q) instead.
-    pub fn slopes(self) -> &'static [u8] {
+    /// The slopes it steps through, in dB an octave (its menu's, the wheel's); those between
+    /// work too, as far as `slope_range` goes, but for a notch and an all pass, whose slopes go
+    /// in twelves (their filters' order). None for a flat tilt.
+    pub fn slopes(self) -> &'static [f32] {
         match self {
-            Shape::LowCut | Shape::HighCut => {
-                &[6, 12, 18, 24, 30, 36, 48, 72, 96, Shape::BRICKWALL]
+            Shape::LowCut | Shape::HighCut => &[
+                6.0,
+                12.0,
+                18.0,
+                24.0,
+                30.0,
+                36.0,
+                48.0,
+                72.0,
+                96.0,
+                Shape::BRICKWALL,
+            ],
+            Shape::LowShelf | Shape::HighShelf | Shape::TiltShelf | Shape::BandPass => {
+                &[6.0, 12.0, 18.0, 24.0, 30.0, 36.0, 48.0, 72.0, 96.0]
             }
-            Shape::LowShelf | Shape::HighShelf | Shape::TiltShelf => &[6, 12, 18, 24, 36, 48],
-            _ => &[],
+            Shape::Bell => &[12.0, 18.0, 24.0, 30.0, 36.0, 48.0, 72.0, 96.0],
+            Shape::Notch | Shape::AllPass => &[12.0, 24.0, 36.0, 48.0, 72.0, 96.0],
+            Shape::FlatTilt => &[],
+        }
+    }
+
+    /// The slopes it takes, least and most, in dB an octave (a cut's brickwall besides): from 0
+    /// for a cut or band pass (none at all), 12 for a bell, notch or all pass (a second-order
+    /// filter's), 6 for the rest.
+    pub fn slope_range(self) -> Option<(f32, f32)> {
+        match self {
+            Shape::LowCut | Shape::HighCut | Shape::BandPass => Some((0.0, 96.0)),
+            Shape::LowShelf | Shape::HighShelf | Shape::TiltShelf => Some((6.0, 96.0)),
+            Shape::Bell | Shape::Notch | Shape::AllPass => Some((12.0, 96.0)),
+            Shape::FlatTilt => None,
+        }
+    }
+
+    /// The slope it takes nearest `s`.
+    pub fn fit_slope(self, s: f32) -> f32 {
+        let Some((lo, hi)) = self.slope_range() else {
+            return 12.0;
+        };
+        if matches!(self, Shape::LowCut | Shape::HighCut) && s >= Shape::BRICKWALL {
+            return Shape::BRICKWALL;
+        }
+        let s = s.clamp(lo, hi);
+        match self {
+            Shape::Notch | Shape::AllPass => (s / 12.0).round() * 12.0,
+            _ => (s * 100.0).round() / 100.0,
         }
     }
 
@@ -411,9 +453,9 @@ impl Processing {
 /// The resolutions linear phase and spectral bands can work at, low to very high.
 pub const RESOLUTIONS: [&str; 4] = ["Low", "Medium", "High", "Very High"];
 
-/// One band of an EQ: its shape at a frequency (Hz), its gain (dB) and width (Q), or for a cut
-/// or shelf its slope (dB an octave); the part of the sound it works on; and whether it moves
-/// with the sound.
+/// One band of an EQ: its shape at a frequency (Hz), its gain (dB), width (Q) and slope (dB an
+/// octave, fractions too); the part of the sound it works on; and whether it moves with the
+/// sound.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(from = "BandJson")]
 pub struct EqBand {
@@ -423,7 +465,7 @@ pub struct EqBand {
     pub gain_db: f32,
     pub q: f32,
     #[serde(skip_serializing_if = "is_twelve")]
-    pub slope: u8,
+    pub slope: f32,
     #[serde(skip_serializing_if = "Placement::is_stereo")]
     pub placement: Placement,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -453,7 +495,7 @@ struct BandJson {
     freq: f32,
     gain_db: f32,
     q: Option<f32>,
-    slope: u8,
+    slope: f32,
     placement: Placement,
     dynamic: Option<Dynamic>,
     off: bool,
@@ -494,8 +536,8 @@ impl From<BandJson> for EqBand {
     }
 }
 
-fn is_twelve(v: &u8) -> bool {
-    *v == 12
+fn is_twelve(v: &f32) -> bool {
+    *v == 12.0
 }
 
 impl Default for EqBand {
@@ -511,7 +553,7 @@ impl EqBand {
             freq,
             gain_db,
             q: shape.default_q(),
-            slope: 12,
+            slope: 12.0,
             placement: Placement::Stereo,
             dynamic: None,
             off: false,

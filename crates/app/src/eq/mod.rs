@@ -328,7 +328,7 @@ impl EqView {
 pub enum EqOp {
     /// The bands picked made this shape, or this slope, or put on this part of the sound.
     Shape(Shape),
-    Slope(u8),
+    Slope(f32),
     Placement(Placement),
     /// The bands picked split in two: left and right, or mid and side.
     Split,
@@ -428,6 +428,8 @@ pub enum EqKnob {
     Pan,
     /// A spectral band's density: wide stretches moving together (0) or each frequency alone (1).
     Density,
+    /// A band's slope, dB an octave (fractions too).
+    Slope,
 }
 
 impl EqKnob {
@@ -440,6 +442,7 @@ impl EqKnob {
             EqKnob::Attack | EqKnob::Release => ((v / 0.1).ln() / 10_000f32.ln()).clamp(0.0, 1.0),
             EqKnob::Pan => (v + 1.0) / 2.0,
             EqKnob::Density => v.clamp(0.0, 1.0),
+            EqKnob::Slope => (v / 96.0).clamp(0.0, 1.0),
             EqKnob::Q => ((v / 0.025).ln() / 1600f32.ln()).clamp(0.0, 1.0),
             EqKnob::Gain | EqKnob::Range => (v + 30.0) / 60.0,
             EqKnob::Threshold => (v + 80.0) / 80.0,
@@ -456,6 +459,7 @@ impl EqKnob {
             EqKnob::Attack | EqKnob::Release => ((0.1 * 10_000f32.powf(p)) * 10.0).round() / 10.0,
             EqKnob::Pan => ((p * 2.0 - 1.0) * 100.0).round() / 100.0,
             EqKnob::Density => (p * 100.0).round() / 100.0,
+            EqKnob::Slope => (p * 960.0).round() / 10.0,
             EqKnob::Q => 0.025 * 1600f32.powf(p),
             EqKnob::Gain | EqKnob::Range => ((p * 60.0 - 30.0) * 100.0).round() / 100.0,
             EqKnob::Threshold => (p * 80.0 - 80.0).round(),
@@ -487,6 +491,7 @@ impl EqKnob {
             EqKnob::Gain | EqKnob::Range | EqKnob::Output => format!("{} dB", db_text(v)),
             EqKnob::Threshold => format!("{} dB", db_text(v).trim_end_matches(".0")),
             EqKnob::Scale | EqKnob::Density => format!("{:.0}%", v * 100.0),
+            EqKnob::Slope => slope_text(v),
         }
     }
 
@@ -505,6 +510,7 @@ impl EqKnob {
             EqKnob::High => "HIGH",
             EqKnob::Pan => "PAN",
             EqKnob::Density => "DENSITY",
+            EqKnob::Slope => "SLOPE",
         }
     }
 
@@ -542,6 +548,10 @@ impl EqKnob {
             EqKnob::Scale => number(&t)?,
             // As a share: "0.3", or "30".
             EqKnob::Density => number(&t).map(|n| if n > 1.0 { n / 100.0 } else { n })?,
+            EqKnob::Slope => match t.trim() {
+                "brickwall" | "bw" => Shape::BRICKWALL,
+                t => number(t.trim_end_matches("db/oct").trim_end_matches("db"))?,
+            },
         };
         v.is_finite().then_some(v)
     }
@@ -600,12 +610,36 @@ pub fn hz_text(hz: f32) -> String {
     }
 }
 
-/// "24 dB/oct", or "Brickwall".
-pub fn slope_text(s: u8) -> String {
+/// "24 dB/oct", "20.5 dB/oct", or "Brickwall".
+pub fn slope_text(s: f32) -> String {
     match s {
         Shape::BRICKWALL => "Brickwall".into(),
-        s => format!("{s} dB/oct"),
+        s if s.fract() == 0.0 => format!("{s:.0} dB/oct"),
+        s => format!("{} dB/oct", (s * 10.0).round() / 10.0),
     }
+}
+
+/// A slope a step steeper or gentler (`by` steps): through its shape's slopes, or with `fine`
+/// a dB an octave at a time, fractions between.
+pub fn step_slope(b: &mut EqBand, by: i32, fine: bool) {
+    let slopes = b.shape.slopes();
+    if slopes.is_empty() || by == 0 {
+        return;
+    }
+    if fine && !matches!(b.shape, Shape::Notch | Shape::AllPass) && b.slope < Shape::BRICKWALL {
+        b.slope = b.shape.fit_slope((b.slope + by as f32).round());
+        return;
+    }
+    // From a fraction, the next of its slopes that way.
+    let at = match by > 0 {
+        true => slopes
+            .iter()
+            .position(|&s| s > b.slope)
+            .unwrap_or(slopes.len() - 1),
+        false => slopes.iter().rposition(|&s| s < b.slope).unwrap_or(0),
+    };
+    let to = at as i32 + by - by.signum();
+    b.slope = slopes[to.clamp(0, slopes.len() as i32 - 1) as usize];
 }
 
 fn q_text(q: f32) -> String {
@@ -727,7 +761,7 @@ pub fn factory() -> Vec<(&'static str, Eq)> {
     let b = |shape: Shape, freq: f32, gain: f32, q: Option<f32>, slope: u8| {
         let mut band = EqBand::new(shape, freq, gain);
         band.q = q.unwrap_or(band.q);
-        band.slope = slope;
+        band.slope = slope as f32;
         band
     };
     let eq = |bands: &[EqBand]| Eq {
@@ -1263,11 +1297,16 @@ impl Workspace {
         if slopes.is_empty() {
             return;
         }
-        let i = slopes.iter().position(|&s| s == b.slope).unwrap_or(0);
+        // The next steeper; from the steepest, the gentlest.
+        let next = slopes
+            .iter()
+            .copied()
+            .find(|&s| s > b.slope)
+            .unwrap_or(slopes[0]);
         if let Some(v) = self.eq_view.as_mut() {
             v.picked = vec![id];
         }
-        self.eq_op(EqOp::Slope(slopes[(i + 1) % slopes.len()]), cx);
+        self.eq_op(EqOp::Slope(next), cx);
     }
 
     /// The picked bands dragged by one of them: across moves their frequencies (each by the
@@ -1540,7 +1579,9 @@ impl Workspace {
     /// range, with ⌘ its gain, with both one traded for the other. ⇧ fine. If it's picked, the
     /// others picked go with it.
     fn wheel_band(&mut self, id: u16, e: &ScrollWheelEvent, cx: &mut Context<Self>) {
-        let dy = f32::from(e.delta.pixel_delta(px(16.)).y);
+        // With ⇧ a mouse's wheel may come sideways.
+        let d = e.delta.pixel_delta(px(16.));
+        let dy = f32::from(if d.y != px(0.) { d.y } else { d.x });
         if dy == 0.0 {
             return;
         }
@@ -1573,10 +1614,7 @@ impl Workspace {
                         b.gain_db = (b.gain_db + steps * 0.5).clamp(-30.0, 30.0);
                     }
                     (false, false) if matches!(b.shape, Shape::LowCut | Shape::HighCut) => {
-                        let slopes = b.shape.slopes();
-                        let at = slopes.iter().position(|&s| s == b.slope).unwrap_or(1) as i32;
-                        let to = (at + steps.signum() as i32).clamp(0, slopes.len() as i32 - 1);
-                        b.slope = slopes[to as usize];
+                        step_slope(b, steps.signum() as i32, m.shift);
                     }
                     _ => b.q = (b.q * 2f32.powf(steps / 8.0)).clamp(0.025, 40.0),
                 }
@@ -1659,6 +1697,7 @@ impl Workspace {
                     EqKnob::Density => {
                         b.dynamic.get_or_insert_default().density = v.clamp(0.0, 1.0)
                     }
+                    EqKnob::Slope => b.slope = b.shape.fit_slope(v),
                     EqKnob::Low | EqKnob::High => {
                         let d = b.dynamic.get_or_insert_default();
                         let mut t = d.trigger.unwrap_or([b.freq / 2.0, b.freq * 2.0]);
@@ -1693,6 +1732,7 @@ impl Workspace {
             EqKnob::High => trigger[1],
             EqKnob::Pan => eq.pan,
             EqKnob::Density => d.density,
+            EqKnob::Slope => b.slope,
         }
     }
 
@@ -1721,6 +1761,7 @@ impl Workspace {
             EqKnob::Q => shape.default_q(),
             EqKnob::Range => d.range_db,
             EqKnob::Density => d.density,
+            EqKnob::Slope => 12.0,
             EqKnob::Scale => 1.0,
             EqKnob::Low => 100.0,
             EqKnob::High => 10_000.0,
@@ -1734,7 +1775,7 @@ impl Workspace {
         if e.modifiers.platform {
             return self.eq_knob_reset(id, knob, cx);
         }
-        if e.click_count == 2 {
+        if e.click_count == 2 && knob != EqKnob::Slope {
             self.pending_name = Some(Name::Eq(id, knob));
             cx.notify();
             return;
@@ -1746,10 +1787,57 @@ impl Workspace {
                 id,
                 knob,
                 from: f32::from(e.position.y),
+                x: f32::from(e.position.x),
                 start,
             },
             cx,
         );
+    }
+
+    /// A band's slopes to pick from.
+    pub fn eq_slope_menu(
+        &mut self,
+        id: u16,
+        at: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((_, b)) = self.eq_band(id) else {
+            return;
+        };
+        let items = b
+            .shape
+            .slopes()
+            .iter()
+            .map(|&s| {
+                let tick = if s == b.slope { "✓ " } else { "" };
+                (
+                    format!("{tick}{}", slope_text(s)),
+                    MenuAction::Eq(EqOp::Slope(s)),
+                )
+            })
+            .collect();
+        self.eq_menu(at, items, cx);
+    }
+
+    /// The wheel over a band's slope: a step through its slopes, ⇧ a dB an octave.
+    fn wheel_slope(&mut self, id: u16, e: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        // With ⇧ a mouse's wheel may come sideways.
+        let d = e.delta.pixel_delta(px(16.));
+        let dy = f32::from(if d.y != px(0.) { d.y } else { d.x });
+        if dy == 0.0 {
+            return;
+        }
+        let fine = e.modifiers.shift;
+        self.edit(cx, |ws| {
+            if let Some(eq) = ws.eq_mut()
+                && let Some(i) = eq.bands.find(id)
+            {
+                step_slope(&mut eq.bands[i], dy.signum() as i32, fine);
+            }
+        });
+        if self.session.unchanged() {
+            self.session.cancel();
+        }
     }
 
     /// The text a typed value starts as.
@@ -1854,10 +1942,11 @@ impl Workspace {
             EqOp::Shape(shape) => self.edit_picked(cx, |b| {
                 if b.shape != shape {
                     b.q = shape.default_q();
-                    let slopes = shape.slopes();
-                    if !slopes.is_empty() && !slopes.contains(&b.slope) {
-                        b.slope = 12;
-                    }
+                    // Its slope as near as the new shape takes (a brickwall's no bell's).
+                    b.slope = match b.slope >= Shape::BRICKWALL {
+                        true => 12.0,
+                        false => shape.fit_slope(b.slope),
+                    };
                     if !shape.has_gain() {
                         b.dynamic = None;
                     }
@@ -1865,8 +1954,8 @@ impl Workspace {
                 b.shape = shape;
             }),
             EqOp::Slope(slope) => self.edit_picked(cx, |b| {
-                if b.shape.slopes().contains(&slope) {
-                    b.slope = slope;
+                if b.shape.slope_range().is_some() {
+                    b.slope = b.shape.fit_slope(slope);
                 }
             }),
             EqOp::Placement(place) => self.edit_picked(cx, |b| b.placement = place),

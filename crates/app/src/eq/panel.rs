@@ -4,8 +4,8 @@
 //! width, the part of the sound they work on and a split, solo to hold, and dynamic.
 
 use gpui::{
-    Context, Div, FontWeight, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point, canvas, div,
-    point, prelude::*, px, rgb,
+    Context, Div, FontWeight, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point,
+    ScrollWheelEvent, canvas, div, point, prelude::*, px, rgb,
 };
 use tempo_engine::project::{Eq, Placement, Shape};
 
@@ -77,7 +77,12 @@ impl Workspace {
             1 => format!("Band {}", d.index + 1),
             n => format!("{n} bands"),
         };
-        let has_slope = !b.shape.slopes().is_empty();
+        let has_slope = b.shape.slope_range().is_some();
+        // At 6 dB an octave (or gentler) a cut or shelf has no width to set.
+        let q_idle = matches!(
+            b.shape,
+            Shape::LowCut | Shape::HighCut | Shape::LowShelf | Shape::HighShelf | Shape::TiltShelf
+        ) && b.slope <= 6.0;
         let dynamic = b.dynamic.filter(|_| b.shape.has_gain());
         let moved = match self.player.playing() {
             true => self.player.eq_tap().moved(d.index),
@@ -149,17 +154,6 @@ impl Workspace {
                                     (
                                         format!("{}{}", tick(s == b.shape), s.name()),
                                         MenuAction::Eq(EqOp::Shape(s)),
-                                    )
-                                })
-                                .collect(),
-                            "eq-slope" => b
-                                .shape
-                                .slopes()
-                                .iter()
-                                .map(|&s| {
-                                    (
-                                        format!("{}{}", tick(s == b.slope), slope_text(s)),
-                                        MenuAction::Eq(EqOp::Slope(s)),
                                     )
                                 })
                                 .collect(),
@@ -270,7 +264,28 @@ impl Workspace {
                                 .gap(px(6.))
                                 .child(choose(b.shape.name().into(), "eq-shape", cx))
                                 .when(has_slope, |el| {
-                                    el.child(choose(slope_text(b.slope), "eq-slope", cx))
+                                    // Click for its slopes, drag for any between (⇧ finer),
+                                    // the wheel a step (⇧ a dB), ⌘-click back to 12.
+                                    el.child(
+                                        dropdown(slope_text(b.slope), 24.)
+                                            .cursor_ns_resize()
+                                            .debug_selector(|| "eq-slope".into())
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(
+                                                    move |ws, e: &MouseDownEvent, _, cx| {
+                                                        cx.stop_propagation();
+                                                        ws.press_knob(id, EqKnob::Slope, e, cx);
+                                                    },
+                                                ),
+                                            )
+                                            .on_scroll_wheel(cx.listener(
+                                                move |ws, e: &ScrollWheelEvent, _, cx| {
+                                                    cx.stop_propagation();
+                                                    ws.wheel_slope(id, e, cx);
+                                                },
+                                            )),
+                                    )
                                 }),
                         )
                         .child(knob(EqKnob::Freq, cx))
@@ -306,7 +321,7 @@ impl Workspace {
                                     ),
                             )
                         })
-                        .child(knob(EqKnob::Q, cx))
+                        .child(knob(EqKnob::Q, cx).when(q_idle, |k| k.opacity(0.35)))
                         .when(open, |el| el.child(self.dynamics(d, cx)))
                         .child(div().flex_1())
                         .child(

@@ -66,7 +66,7 @@ impl Plan {
 struct Heard {
     id: u16,
     weight: Vec<f32>,
-    shaped: Option<(Shape, f32, f32, u8, bool)>,
+    shaped: Option<(Shape, f32, f32, f32, bool)>,
     env: Vec<f32>,
     usual: Vec<f32>,
     wide: (f32, f32),

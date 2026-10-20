@@ -347,8 +347,9 @@ In the app, mostly as in Logic:
   saturator's drive and curve.
 - The Channel EQ is a Pro-Q style EQ in a window of its own (click a strip's EQ curve, or the
   mixer's; the channel name at its top switches to another's): up to 24 bands, each a bell, low or
-  high shelf, low or high cut (6 to 96 dB an octave, or a brickwall), notch, band pass, tilt
-  shelf, flat tilt or all pass; on the whole sound or its left, right, mid or side (the display
+  high shelf, low or high cut (to 96 dB an octave, or a brickwall), notch, band pass, tilt shelf,
+  flat tilt or all pass, every one with a slope (fractions too: click it for the usual ones, drag
+  it for any between, the wheel a step or ⇧ a dB; a steeper bell keeps its gain and width); on the whole sound or its left, right, mid or side (the display
   draws those curves white, red, green and blue, the whole's yellow); gain-Q interaction; and
   dynamic: past its threshold (its own, following what it usually hears, unless set) it turns by
   up to its range, listening to what it covers, between two frequencies, or another track (the

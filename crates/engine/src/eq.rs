@@ -13,6 +13,8 @@
 //! have, where this runs only the sections the bands in use need.
 
 use std::f64::consts::{FRAC_1_SQRT_2, PI};
+
+use rustfft::num_complex::Complex;
 use std::sync::{
     Arc,
     atomic::{AtomicU32, AtomicUsize, Ordering},
@@ -25,8 +27,8 @@ use crate::{
     project::{Character, Eq, EqBand, MAX_BANDS, Placement, Processing, Shape},
 };
 
-/// The most second-order sections a band takes: a brickwall cut (144 dB an octave).
-pub const MAX_SECTIONS: usize = 12;
+/// The most second-order sections a band takes: a shelf between its two steepest slopes.
+pub const MAX_SECTIONS: usize = 16;
 
 /// Samples between a moving band's filter updates.
 const STEP: usize = 16;
@@ -176,6 +178,208 @@ fn shelf1(w: f64, g: f64, high: bool) -> impl Fn(f64) -> f64 {
     }
 }
 
+/// Two first-order sections as one second-order.
+fn pair(a: Section, b: Section) -> Section {
+    Section {
+        b0: a.b0 * b.b0,
+        b1: a.b0 * b.b1 + a.b1 * b.b0,
+        b2: a.b1 * b.b1,
+        a1: a.a1 + b.a1,
+        a2: a.a1 * b.a1,
+    }
+}
+
+/// A slope's fraction: `db` dB an octave more, past `w` rad/s, below it (a low cut's side) or
+/// `above`. First-order shelves an octave apart (wider if they'd take more than `room`
+/// sections), each an octave's worth, from `w` down to 10 Hz or up to the top, in pairs; after
+/// `n` in `out`; how many sections there are then.
+fn rolloff(
+    w: f64,
+    db: f64,
+    above: bool,
+    rate: f64,
+    room: usize,
+    out: &mut [Section; MAX_SECTIONS],
+    mut n: usize,
+) -> usize {
+    let end = if above {
+        0.45 * 2.0 * PI * rate
+    } else {
+        2.0 * PI * 10.0
+    };
+    let span = (end / w).log2().abs();
+    if db < 0.01 || span < 0.5 || room == 0 {
+        return n;
+    }
+    let count = (span.ceil() as usize).min(2 * room);
+    let octaves = span / count as f64;
+    let g = 10f64.powf(-db * octaves / 20.0);
+    let mut odd: Option<Section> = None;
+    for k in 0..count {
+        let at = (k as f64 + 0.5) * octaves;
+        let wk = if above { w * at.exp2() } else { w / at.exp2() };
+        let wp = if above { wk * g.sqrt() } else { wk / g.sqrt() };
+        let one = matched1(wp, rate, &shelf1(wk, g, above));
+        match odd.take() {
+            None => odd = Some(one),
+            Some(first) => {
+                out[n] = pair(first, one);
+                n += 1;
+            }
+        }
+    }
+    if let Some(last) = odd {
+        out[n] = last;
+        n += 1;
+    }
+    n
+}
+
+/// Butterworth's angles for an order `m`: each pole pair's once (the upper), then the real
+/// pole's (π) if `m` is odd.
+fn butterworth(m: usize) -> impl Iterator<Item = f64> {
+    (0..m.div_ceil(2)).map(move |k| PI / 2.0 + (2 * k + 1) as f64 * PI / (2 * m) as f64)
+}
+
+/// A root of an analog prototype (normalized, its band ±1) taken to a band round `w0` rad/s,
+/// `b` wide: the two roots of s² - r b s + w0² it makes, the higher first.
+fn to_band(r: Complex<f64>, b: f64, w0: f64) -> [Complex<f64>; 2] {
+    let rb = r * b;
+    let d = (rb * rb - 4.0 * w0 * w0).sqrt();
+    let (x, y) = ((rb + d) * 0.5, (rb - d) * 0.5);
+    if x.norm() >= y.norm() { [x, y] } else { [y, x] }
+}
+
+/// What a second-order factor with roots `r` and its conjugate does, |·|² at Ω rad/s: from a
+/// root, its frequency and Q; and the factor's |·|².
+fn factor(r: Complex<f64>) -> (f64, f64) {
+    let w = r.norm();
+    (w, w / (-2.0 * r.re).max(1e-9))
+}
+
+fn factor2(r: Complex<f64>, x: f64) -> f64 {
+    (r.norm_sqr() - x * x).powi(2) + (2.0 * r.re * x).powi(2)
+}
+
+/// A prototype of order `m` taken to a band round `w0`, `b` wide, as matched second-order
+/// sections after `n`: its poles Butterworth's at radius `rp`; its zeros by `zeros` (at radius
+/// `rz` on the same angles; at the band's middle, a notch's; or none but the band pass's s).
+/// How many sections there are then.
+#[allow(clippy::too_many_arguments)]
+fn band_filter(
+    m: usize,
+    w0: f64,
+    b: f64,
+    rp: f64,
+    zeros: Zeros,
+    rate: f64,
+    out: &mut [Section; MAX_SECTIONS],
+    mut n: usize,
+) -> usize {
+    for theta in butterworth(m) {
+        let unit = Complex::from_polar(1.0, theta);
+        let poles = to_band(unit * rp, b, w0);
+        let real = (theta - PI).abs() < 1e-9;
+        // A real prototype root makes one second-order section; a pair, two.
+        let count = if real { 1 } else { 2 };
+        let bell_zeros = match zeros {
+            Zeros::Radius(rz) => to_band(unit * rz, b, w0),
+            _ => poles,
+        };
+        for (&pole, &zero) in poles.iter().zip(&bell_zeros).take(count) {
+            let (wp, qp) = match real {
+                true => (w0, w0 / (rp * b)),
+                false => factor(pole),
+            };
+            let num = move |x: f64| match zeros {
+                Zeros::Radius(rz) if real => (w0 * w0 - x * x).powi(2) + (rz * b * x).powi(2),
+                Zeros::Radius(_) => factor2(zero, x),
+                Zeros::Middle => (w0 * w0 - x * x).powi(2),
+                Zeros::Origin => (b * x).powi(2),
+            };
+            let den = move |x: f64| (wp * wp - x * x).powi(2) + (wp * x / qp).powi(2);
+            out[n] = matched2(wp, qp, wp, rate, &move |x| num(x) / den(x));
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Where a band filter's zeros are.
+#[derive(Clone, Copy)]
+enum Zeros {
+    /// On the poles' angles at this radius: a bell.
+    Radius(f64),
+    /// At the band's middle: a notch.
+    Middle,
+    /// None but s, one a pole: a band pass.
+    Origin,
+}
+
+/// A Butterworth bell of order `m` (1 the usual second-order one): `gain_db` at `w`, half of it
+/// a band `w / q` wide, its sides steeper the higher the order.
+fn bell(
+    m: usize,
+    w: f64,
+    q: f64,
+    gain_db: f64,
+    rate: f64,
+    out: &mut [Section; MAX_SECTIONS],
+    n: usize,
+) -> usize {
+    if gain_db.abs() < 1e-4 {
+        return n;
+    }
+    let g = 10f64.powf(gain_db / 20.0);
+    let (rp, rz) = (g.powf(-0.5 / m as f64), g.powf(0.5 / m as f64));
+    band_filter(m, w, w / q, rp, Zeros::Radius(rz), rate, out, n)
+}
+
+/// A shelf of `order` first-order steps (6 dB an octave each): `gain_db` past `w`, in second-
+/// order sections each with the band's Q (RBJ's), and one first-order if the order's odd.
+#[allow(clippy::too_many_arguments)]
+fn shelf(
+    order: usize,
+    w: f64,
+    q: f64,
+    gain_db: f64,
+    high: bool,
+    rate: f64,
+    out: &mut [Section; MAX_SECTIONS],
+    mut n: usize,
+) -> usize {
+    if gain_db.abs() < 1e-4 || order == 0 {
+        return n;
+    }
+    let (pairs, odd) = (order / 2, order % 2 == 1);
+    if odd {
+        let g = 10f64.powf(gain_db / order as f64 / 20.0);
+        let wp = if high { w * g.sqrt() } else { w / g.sqrt() };
+        out[n] = matched1(wp, rate, &shelf1(w, g, high));
+        n += 1;
+    }
+    for _ in 0..pairs {
+        let a = 10f64.powf(gain_db * 2.0 / order as f64 / 40.0);
+        let wp = if high { w * a.sqrt() } else { w / a.sqrt() };
+        out[n] = matched2(wp, q, w, rate, &shelf2(w, q, a, high));
+        n += 1;
+    }
+    n
+}
+
+/// How many sections a band takes as it's set.
+fn count(band: &EqBand, rate: f64) -> usize {
+    let mut out = [Section::default(); MAX_SECTIONS];
+    sections(band, band.gain_db as f64, rate, &mut out)
+}
+
+/// A slope's whole steps and fraction: `slope` in steps of `step` dB an octave.
+fn steps(slope: f32, step: f64, most: usize) -> (usize, f64) {
+    let x = (slope.max(0.0) as f64 / step).min(most as f64);
+    let whole = x.floor();
+    (whole as usize, x - whole)
+}
+
 /// A band's sections at its settings, its gain as heard `gain_db`: how many it takes (none when
 /// it does nothing).
 pub fn sections(
@@ -196,30 +400,40 @@ pub fn sections(
     }
     match band.shape {
         Shape::Bell => {
-            if gain_db.abs() < 1e-4 {
-                return 0;
-            }
-            let a = 10f64.powf(gain_db / 40.0);
-            let mag2 = move |x: f64| {
-                let d = (w * w - x * x).powi(2);
-                (d + (a * w * x / q).powi(2)) / (d + (w * x / (a * q)).powi(2))
-            };
-            out[0] = matched2(w, a * q, w, rate, &mag2);
-            1
+            // Between two orders, the gain shared: the curve between theirs.
+            let (m, t) = steps(band.slope, 12.0, 8);
+            let m = m.max(1);
+            let n = bell(m, w, q, gain_db * (1.0 - t), rate, out, 0);
+            bell(m + 1, w, q, gain_db * t, rate, out, n)
         }
         Shape::Notch => {
-            out[0] = matched2(w, q, w, rate, &move |x| {
-                (w * w - x * x).powi(2) / resonance(w, q, x)
-            });
-            1
+            let m = (band.slope / 12.0).round().clamp(1.0, 8.0) as usize;
+            band_filter(m, w, w / q, 1.0, Zeros::Middle, rate, out, 0)
         }
         Shape::BandPass => {
-            out[0] = matched2(w, q, w, rate, &bandpass2(w, q));
-            1
+            // Whole orders a band pass; a fraction, its sides that much steeper beyond its
+            // edges (where it's 3 dB down).
+            let (m, t) = steps(band.slope, 12.0, 8);
+            let n = band_filter(m, w, w / q, 1.0, Zeros::Origin, rate, out, 0);
+            let half = 0.5 / q;
+            let low = w * ((1.0 + half * half).sqrt() - half);
+            let room = (MAX_SECTIONS - n) / 2;
+            let n = rolloff(low, 6.0 * t, false, rate, room, out, n);
+            let n = rolloff(low + w / q, 6.0 * t, true, rate, room, out, n);
+            // All of it at its middle, as a band pass is.
+            if n > 0 {
+                let middle = half_sin2(freq.min(0.49 * rate), rate);
+                let at: f64 = out[..n].iter().map(|c| c.mag2(middle)).product();
+                out[0] = out[0].times(1.0 / at.max(1e-12).sqrt());
+            }
+            n
         }
         Shape::LowCut | Shape::HighCut => {
             let high = band.shape == Shape::LowCut;
-            let order = (band.slope as usize / 6).clamp(1, 24);
+            let (order, t) = match band.slope >= Shape::BRICKWALL {
+                true => (24, 0.0),
+                false => steps(band.slope, 6.0, 16),
+            };
             let (pairs, odd) = (order / 2, order % 2 == 1);
             let mut n = 0;
             if odd {
@@ -245,29 +459,19 @@ pub fn sections(
                 };
                 n += 1;
             }
-            n
+            // A fractional slope: that much more past the corner.
+            rolloff(w, 6.0 * t, !high, rate, MAX_SECTIONS - n, out, n)
         }
         Shape::LowShelf | Shape::HighShelf | Shape::TiltShelf => {
             if gain_db.abs() < 1e-4 {
                 return 0;
             }
             let high = band.shape != Shape::LowShelf;
-            let slope = band.slope.clamp(6, 48) as usize;
-            let (pairs, odd) = (slope / 12, slope % 12 >= 6);
-            let total = (12 * pairs + if odd { 6 } else { 0 }) as f64;
-            let mut n = 0;
-            if odd {
-                let g = 10f64.powf(gain_db * 6.0 / total / 20.0);
-                let wp = if high { w * g.sqrt() } else { w / g.sqrt() };
-                out[n] = matched1(wp, rate, &shelf1(w, g, high));
-                n += 1;
-            }
-            for _ in 0..pairs {
-                let a = 10f64.powf(gain_db * 12.0 / total / 40.0);
-                let wp = if high { w * a.sqrt() } else { w / a.sqrt() };
-                out[n] = matched2(wp, q, w, rate, &shelf2(w, q, a, high));
-                n += 1;
-            }
+            // Between two orders, the gain shared: the curve between theirs.
+            let (order, t) = steps(band.slope, 6.0, 16);
+            let order = order.max(1);
+            let n = shelf(order, w, q, gain_db * (1.0 - t), high, rate, out, 0);
+            let n = shelf(order + 1, w, q, gain_db * t, high, rate, out, n);
             // A tilt is a high shelf, half its gain down: as much down below as up above.
             if band.shape == Shape::TiltShelf {
                 out[0] = out[0].times(10f64.powf(-gain_db / 40.0));
@@ -293,15 +497,19 @@ pub fn sections(
         }
         Shape::AllPass => {
             // Its poles as a resonance's at the frequency; its zeros their mirror: level flat.
+            // Steeper, more of them: more turn of the phase.
             let p = matched2(w, q, w, rate, &|_| 1.0);
-            out[0] = Section {
-                b0: p.a2,
-                b1: p.a1,
-                b2: 1.0,
-                a1: p.a1,
-                a2: p.a2,
-            };
-            1
+            let m = (band.slope / 12.0).round().clamp(1.0, 8.0) as usize;
+            for section in out.iter_mut().take(m) {
+                *section = Section {
+                    b0: p.a2,
+                    b1: p.a1,
+                    b2: 1.0,
+                    a1: p.a1,
+                    a2: p.a2,
+                };
+            }
+            m
         }
     }
 }
@@ -434,8 +642,10 @@ fn colour(d: f64, character: Character) -> f64 {
 struct Live {
     /// The band's id; 0 a free place.
     id: u16,
-    /// Taken out of the EQ: fading to nothing, then freed.
+    /// Taken out of the EQ: fading to nothing, then freed. A ghost is what a band was before its
+    /// filters were made another way, fading out as they fade in.
     gone: bool,
+    ghost: bool,
     band: EqBand,
     /// Where it is on its glide to `band`: log2 Hz, dB, log2 Q.
     at: [f64; 3],
@@ -461,12 +671,13 @@ impl Live {
     const FREE: Live = Live {
         id: 0,
         gone: false,
+        ghost: false,
         band: EqBand {
             shape: Shape::Bell,
             freq: 1_000.0,
             gain_db: 0.0,
             q: 1.0,
-            slope: 12,
+            slope: 12.0,
             placement: Placement::Stereo,
             dynamic: None,
             off: false,
@@ -530,13 +741,17 @@ impl Live {
         }
     }
 
-    /// Takes new settings: a new shape, slope or placement starts its filters afresh.
+    /// Takes new settings: a new shape or placement starts its filters afresh; a new slope
+    /// keeps their memory, unless it takes another number of sections.
     fn set(&mut self, band: EqBand, rate: f64) {
         let o = &self.band;
-        if (o.shape, o.slope, o.placement) != (band.shape, band.slope, band.placement) {
+        if (o.shape, o.placement) != (band.shape, band.placement) {
             self.state = [[[0.0; 2]; MAX_SECTIONS]; 2];
             self.det_state = [[[0.0; 2]; 2]; 2];
             self.at = Live::target(&band);
+            self.stale = true;
+        }
+        if o.slope != band.slope {
             self.stale = true;
         }
         let trigger = |b: &EqBand| b.dynamic.and_then(|d| d.trigger);
@@ -813,13 +1028,23 @@ impl Processor {
             self.live = [Live::FREE; LIVE];
         }
         for l in self.live.iter_mut().filter(|l| l.id != 0) {
-            l.gone = !eq.bands.iter().any(|b| b.id == l.id);
+            l.gone = l.ghost || !eq.bands.iter().any(|b| b.id == l.id);
         }
         let mut n = 0;
         for band in eq.bands.iter() {
-            let found = self.live.iter().position(|l| l.id == band.id && l.id != 0);
+            let found = self
+                .live
+                .iter()
+                .position(|l| l.id == band.id && l.id != 0 && !l.ghost);
             let at = match found {
                 Some(i) => {
+                    let was = self.live[i].band;
+                    if was.slope != band.slope
+                        && self.live[i].mix > 0.0
+                        && count(&was, self.rate) != count(band, self.rate)
+                    {
+                        self.fade_over(i);
+                    }
                     self.live[i].set(*band, self.rate);
                     i
                 }
@@ -847,6 +1072,22 @@ impl Processor {
         }
         self.bands = true;
         n
+    }
+
+    /// A band's filters made another way (its slope takes more sections or fewer): what it had
+    /// fades out as the new ones fade in, so the change doesn't click.
+    fn fade_over(&mut self, i: usize) {
+        if let Some(j) = self.live.iter().position(|l| l.id == 0) {
+            self.live[j] = Live {
+                ghost: true,
+                gone: true,
+                ..self.live[i]
+            };
+        }
+        let live = &mut self.live[i];
+        live.state = [[[0.0; 2]; MAX_SECTIONS]; 2];
+        live.mix = 0.0;
+        live.stale = true;
     }
 
     /// Runs a block (at most `MAX_BLOCK`) through the EQ in place. `made` is what its linear
@@ -932,7 +1173,7 @@ impl Processor {
                 let (moved, level) = match self.spectral.moved(band.id) {
                     Some((m, level)) => (m as f64, level as f64),
                     None => {
-                        let live = bands.iter().find(|x| x.id == band.id);
+                        let live = bands.iter().find(|x| x.id == band.id && !x.ghost);
                         (
                             live.map_or(0.0, |x| x.moved * scale),
                             live.map_or(-120.0, |x| 20.0 * x.env.max(1e-6).log10()),
@@ -964,6 +1205,7 @@ impl Processor {
                 if live.mix == 0.0 && target_mix == 0.0 {
                     if live.gone {
                         live.id = 0;
+                        live.ghost = false;
                     }
                     continue;
                 }
@@ -1016,7 +1258,11 @@ impl Processor {
                     let now = live.now();
                     let gain = (now.gain_db as f64 + live.moved) * scale;
                     let gain = if now.shape.has_gain() { gain } else { 0.0 };
-                    live.n = sections(&now, gain, rate, &mut live.sections);
+                    let n = sections(&now, gain, rate, &mut live.sections);
+                    if n != live.n {
+                        live.state = [[[0.0; 2]; MAX_SECTIONS]; 2];
+                    }
+                    live.n = n;
                     live.stale = false;
                 }
                 let m0 = live.mix;
@@ -1528,11 +1774,11 @@ mod tests {
         );
         // Cuts: -3 dB at the corner, then their slope an octave on.
         for (slope, octave) in [
-            (6, -7.0),
-            (12, -12.3),
-            (24, -24.1),
-            (48, -48.2),
-            (96, -96.3),
+            (6.0, -7.0),
+            (12.0, -12.3),
+            (24.0, -24.1),
+            (48.0, -48.2),
+            (96.0, -96.3),
         ] {
             let mut cut = band(Shape::HighCut, 1_000.0, 0.0);
             cut.slope = slope;
@@ -1561,7 +1807,7 @@ mod tests {
         }
         // A high cut near Nyquist is still -3 dB at its corner (a bilinear one's is pulled down).
         let mut top_cut = band(Shape::HighCut, 18_000.0, 0.0);
-        top_cut.slope = 24;
+        top_cut.slope = 24.0;
         assert!(
             close(at(&top_cut, 18_000.0), -3.01, 0.2),
             "{}",
@@ -1572,7 +1818,7 @@ mod tests {
         resonant.q = 4.0;
         assert!(at(&resonant, 100.0) > 10.0);
         // Shelves: their gain at the far end, half of it at their frequency.
-        for slope in [6, 12, 18, 24, 36, 48] {
+        for slope in [6.0, 12.0, 18.0, 24.0, 36.0, 48.0] {
             let mut low = band(Shape::LowShelf, 500.0, 6.0);
             low.slope = slope;
             assert!(
@@ -1646,7 +1892,7 @@ mod tests {
     #[test]
     fn what_plays_is_what_is_drawn() {
         let mut cut = band(Shape::LowCut, 200.0, 0.0);
-        cut.slope = 48;
+        cut.slope = 48.0;
         let e = eq(&[
             band(Shape::Bell, 1_000.0, 6.0),
             cut,
@@ -2060,9 +2306,9 @@ mod tests {
     #[test]
     fn steep_cuts_stay_steady() {
         let mut low = band(Shape::LowCut, 20.0, 0.0);
-        low.slope = 96;
+        low.slope = 96.0;
         let mut high = band(Shape::HighCut, 20_000.0, 0.0);
-        high.slope = 96;
+        high.slope = 96.0;
         high.q = 10.0;
         let e = eq(&[low, high]);
         let mut p = Processor::new(RATE);
@@ -2222,5 +2468,134 @@ mod tests {
             let drawn = eq_response(&natural, f, RATE);
             assert!(close(db, drawn, 0.3), "{f}: {db} vs {drawn}");
         }
+    }
+
+    #[test]
+    fn every_shape_takes_a_slope_fractions_too() {
+        // As steep as it says, past a cut's corner; a fraction between its neighbours.
+        let fall_at = |slope: f32, f: f64| {
+            let mut cut = band(Shape::LowCut, 4_000.0, 0.0);
+            cut.slope = slope;
+            at(&cut, f * 2.0) - at(&cut, f)
+        };
+        let fall = |slope: f32| fall_at(slope, 500.0);
+        // Steep, nearer the corner: further down is below what the filters can tell apart.
+        let near = |slope: f32| fall_at(slope, 1_000.0);
+        for slope in [3.0f32, 9.0, 15.5, 21.0, 33.0, 40.0] {
+            let (lo, hi) = ((slope / 6.0).floor() * 6.0, (slope / 6.0).ceil() * 6.0);
+            assert!(near(lo) < near(slope) && near(slope) < near(hi), "{slope}");
+            if slope < 18.0 {
+                assert!(
+                    close(fall(slope), slope as f64, 1.0),
+                    "{slope}: {}",
+                    fall(slope)
+                );
+            }
+        }
+        assert!(
+            close(fall(6.0), 6.0, 0.3) && close(fall(3.0), 3.0, 0.5),
+            "{}",
+            fall(3.0)
+        );
+        // A bell steeper: its gain and its half-gain width the same, its sides lower.
+        let width = |b: &EqBand| {
+            let edge = 1_000.0 * ((1.0f64 + 0.25).sqrt() - 0.5);
+            at(b, edge)
+        };
+        let mut wide = band(Shape::Bell, 1_000.0, 12.0);
+        let mut steep = wide;
+        steep.slope = 48.0;
+        let mut between = wide;
+        between.slope = 30.0;
+        for b in [&wide, &steep, &between] {
+            assert!(close(at(b, 1_000.0), 12.0, 0.15), "{}", at(b, 1_000.0));
+            assert!(close(width(b), 6.0, 0.4), "{}: {}", b.slope, width(b));
+        }
+        let skirt = |b: &EqBand| at(b, 125.0);
+        assert!(skirt(&steep) < skirt(&between) && skirt(&between) < skirt(&wide));
+        assert!(skirt(&steep) < 0.2, "{}", skirt(&steep));
+        wide.gain_db = -12.0;
+        assert!(close(at(&wide, 1_000.0), -12.0, 0.15));
+        // Shelves get there, half way at their frequency, steeper or in between.
+        for slope in [6.0, 15.0, 30.0, 42.0, 96.0] {
+            let mut shelf = band(Shape::HighShelf, 2_000.0, 9.0);
+            shelf.slope = slope;
+            assert!(
+                close(at(&shelf, 2_000.0), 4.5, 0.6),
+                "{slope}: {}",
+                at(&shelf, 2_000.0)
+            );
+            assert!(close(at(&shelf, 18_000.0), 9.0, 0.6), "{slope}");
+            assert!(at(&shelf, 100.0).abs() < 0.3, "{slope}");
+        }
+        // A notch wider and deeper, a band pass steeper (and gentler: 6 dB, 3 an octave a side).
+        let mut notch = band(Shape::Notch, 1_000.0, 0.0);
+        notch.q = 2.0;
+        let mut deep = notch;
+        deep.slope = 36.0;
+        assert!(at(&deep, 1_100.0) < at(&notch, 1_100.0) - 6.0);
+        assert!(at(&deep, 4_000.0).abs() < 0.5);
+        for (slope, side) in [(6.0, 3.0), (12.0, 6.0), (24.0, 12.0), (30.0, 15.0)] {
+            let mut bp = band(Shape::BandPass, 1_000.0, 0.0);
+            bp.slope = slope;
+            assert!(at(&bp, 1_000.0).abs() < 0.3, "{slope}");
+            let fall = at(&bp, 120.0) - at(&bp, 60.0);
+            assert!(close(fall, side, 1.0), "{slope}: {fall}");
+        }
+        // What a steep bell, a fractional shelf and cut play is what's drawn.
+        let (mut b, mut sh, mut c) = (
+            band(Shape::Bell, 1_000.0, 9.0),
+            band(Shape::LowShelf, 300.0, -6.0),
+            band(Shape::HighCut, 9_000.0, 0.0),
+        );
+        (b.slope, sh.slope, c.slope) = (48.0, 21.5, 27.0);
+        let e = eq(&[b, sh, c]);
+        for freq in [150.0, 600.0, 1_000.0, 1_700.0, 10_700.0] {
+            let (db, _) = through(&e, freq, false);
+            let drawn = eq_response(&e, freq, RATE);
+            assert!(close(db[0], drawn, 0.2), "{freq}: {} vs {drawn}", db[0]);
+        }
+        // No shape, slope or place takes more sections than there's room for.
+        let mut out = [Section::default(); MAX_SECTIONS];
+        for shape in Shape::ALL {
+            for slope in (0..=200).map(|i| i as f32 * 0.5).chain([Shape::BRICKWALL]) {
+                for freq in [10.0, 40.0, 1_000.0, 12_000.0, 23_900.0] {
+                    for q in [0.1, 1.0, 12.0] {
+                        let mut b = band(shape, freq, -8.0);
+                        (b.slope, b.q) = (shape.fit_slope(slope), q);
+                        let n = sections(&b, -8.0, RATE, &mut out);
+                        let db = response_db(&out[..n], freq as f64 * 0.9, RATE);
+                        assert!(!db.is_nan(), "{shape:?} {slope}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_slope_moved_while_playing_keeps_its_sound() {
+        // A cut's slope dragged through fractions as a sine plays: no jump bigger than the
+        // sine's own step.
+        let mut cut = band(Shape::LowCut, 200.0, 0.0);
+        let mut p = Processor::new(RATE);
+        let mut last = 0f32;
+        let mut most = 0f32;
+        for k in 0..200 {
+            cut.slope = 6.0 + k as f32 * 0.2;
+            let e = eq(&[cut]);
+            let mut l: Vec<f32> = (0..64)
+                .map(|i| (2.0 * PI * 800.0 * (k * 64 + i) as f64 / RATE).sin() as f32 * 0.5)
+                .collect();
+            let mut r = l.clone();
+            p.process(&e, None, None, &mut l, &mut r, None, None);
+            for &x in &l {
+                if k > 2 {
+                    most = most.max((x - last).abs());
+                }
+                last = x;
+            }
+        }
+        // The sine's own biggest step: 0.5 * 2π * 800 / 48000.
+        assert!(most < 0.06, "{most}");
     }
 }

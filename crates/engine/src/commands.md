@@ -209,9 +209,11 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   to 20 kHz, level at its frequency, its gain the difference end to end) or `all_pass` (moves the
   phase round its frequency, not the level: to line up two takes); `freq` 10 to 30000 Hz;
   `gain_db` -30 to 30 (bells, shelves, tilts); `q` 0.025 to 40, the width (a cut's or shelf's bump
-  at its corner; left out, its shape's own: none for a cut or shelf); `slope` in dB an octave for
-  cuts (6, 12, 18, 24, 30, 36, 48, 72, 96, or 144: a brickwall) and shelves (6, 12, 18, 24, 36,
-  48), 12 if left out. `"gain_q": true` narrows it as its gain grows, as an analog EQ's bands do.
+  at its corner; left out, its shape's own: none for a cut or shelf); `slope` in dB an octave, 12
+  if left out, fractions too (20.5): how steep its sides are, for every shape but a flat tilt.
+  Cuts and band passes take 0 to 96 (a cut 144 too: a brickwall), shelves and tilt shelves 6 to
+  96, bells 12 to 96 (steeper: the same gain and width, its skirts falling away faster), notches
+  and all passes 12 to 96 in twelves. At 6 or less a cut or shelf has no width to set. `"gain_q": true` narrows it as its gain grows, as an analog EQ's bands do.
   `"placement"` puts it on part of the sound: `stereo` (the default), `left`, `right`, `mid` (what
   both sides share: vocals, bass, kick) or `side` (the edges: a low cut on the side keeps the low
   end mono). `"dynamic": {"range_db": -4}` makes it move with the sound (bells, shelves and
