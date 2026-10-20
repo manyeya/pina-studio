@@ -1398,6 +1398,17 @@ impl Workspace {
                 let aux = self.session.project.auxes.iter().find(|a| a.bus == bus);
                 format!("Send to {}", aux.map_or("a bus", |a| a.name.as_str()))
             }
+            Param::Eq(band, field) => {
+                let what = match field {
+                    tempo_engine::project::EqField::Freq => "Frequency",
+                    tempo_engine::project::EqField::Gain => "Gain",
+                    tempo_engine::project::EqField::Q => "Q",
+                };
+                let shape =
+                    t.eq.and_then(|e| e.bands.get(band as usize).map(|b| b.shape.name()))
+                        .unwrap_or("Band");
+                format!("EQ {} {shape}: {what}", band + 1)
+            }
             Param::Plugin(which, id) => t
                 .automation
                 .plugins
@@ -2084,6 +2095,7 @@ impl Workspace {
                 if let Some(v) = self.eq_view.as_mut() {
                     v.solo = None;
                 }
+                self.eq_let_go();
                 if let Drag::EqNode {
                     id,
                     alt,

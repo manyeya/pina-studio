@@ -1883,6 +1883,107 @@ fn snap_follows_the_menu(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_eq_window_sets_dynamics_character_output_and_records_automation(cx: &mut TestAppContext) {
+    use tempo_engine::project::{AutoMode, Bands, Character, Eq, EqBand, EqField, Param};
+    let (ws, cx) = open(cx);
+    cx.simulate_resize(gpui::size(px(1500.), px(1000.)));
+    ws.update(cx, |ws, cx| {
+        ws.session.project.tracks[0].eq = Some(Eq {
+            bands: Bands::from_slice(&[EqBand::new(Shape::Bell, 1_000.0, 3.0)]),
+            ..Eq::default()
+        });
+        ws.changed(cx);
+        ws.open_eq(Channel::Track(0), cx);
+    });
+    cx.run_until_parked();
+    let eq =
+        |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.session.project.tracks[0].eq.unwrap());
+    click_on(cx, "eq-band-0", Modifiers::none(), MouseButton::Left);
+    // Gain-Q; dynamic, its own settings opened: free between two frequencies, from a sidechain.
+    click_on(cx, "eq-gain-q", Modifiers::none(), MouseButton::Left);
+    assert!(eq(cx).bands[0].gain_q);
+    click_on(cx, "eq-dynamic", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "eq-dyn-expand", Modifiers::none(), MouseButton::Left);
+    assert!(cx.debug_bounds("eq-dynamics").is_some());
+    let d = eq(cx).bands[0].dynamic.unwrap();
+    assert!(
+        d.threshold_db.is_none() && d.attack_ms.is_none(),
+        "its own, to start: {d:?}"
+    );
+    let thresh = cx.debug_bounds("eq-threshold").unwrap().center();
+    drag(cx, thresh, thresh + point(px(0.), px(20.)));
+    assert!(eq(cx).bands[0].dynamic.unwrap().threshold_db.is_some());
+    click_on(
+        cx,
+        "eq-auto-threshold",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert!(eq(cx).bands[0].dynamic.unwrap().threshold_db.is_none());
+    click_on(cx, "eq-trigger-free", Modifiers::none(), MouseButton::Left);
+    assert_eq!(
+        eq(cx).bands[0].dynamic.unwrap().trigger,
+        Some([500.0, 2_000.0])
+    );
+    click_on(cx, "eq-sidechain", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Drums");
+    let drums = ws.read_with(cx, |ws, _| ws.session.project.tracks[2].id);
+    assert_eq!(eq(cx).sidechain, Some(drums));
+    assert!(eq(cx).bands[0].dynamic.unwrap().external);
+    // The character, and the output's pan, phase and auto gain.
+    click_on(cx, "eq-character", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Warm");
+    assert_eq!(eq(cx).character, Character::Warm);
+    click_on(cx, "eq-output", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "eq-pan-ms", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "eq-invert", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "eq-auto-gain", Modifiers::none(), MouseButton::Left);
+    let pan = cx.debug_bounds("eq-knob-pan").unwrap().center();
+    drag(cx, pan, pan - point(px(0.), px(40.)));
+    let e = eq(cx);
+    assert!(e.pan_ms && e.invert && e.auto_gain && e.pan > 0.1, "{e:?}");
+    // Its bands' settings are in the automation lanes' list.
+    let items = ws.read_with(cx, |ws, _| ws.auto_params(0, 0));
+    let labels: Vec<&String> = items.iter().map(|(l, _)| l).collect();
+    assert!(
+        labels.iter().any(|l| l.contains("EQ 1 Bell: Gain")),
+        "{labels:?}"
+    );
+    // Latch, playing: a band dragged is recorded.
+    ws.update(cx, |ws, cx| {
+        ws.session.project.tracks[0].automation.mode = AutoMode::Latch;
+        ws.changed(cx);
+        ws.player.play();
+    });
+    until(cx, &ws, |ws| ws.playhead() > PPQ / 2);
+    let dot = cx.debug_bounds("eq-band-0").unwrap().center();
+    cx.simulate_mouse_down(dot, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        dot - point(px(0.), px(60.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    let held = ws.read_with(cx, |ws, _| ws.playhead());
+    until(cx, &ws, |ws| ws.playhead() > held + PPQ / 4);
+    cx.simulate_mouse_up(
+        dot - point(px(0.), px(60.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    ws.update(cx, |ws, cx| ws.stop(cx));
+    until(cx, &ws, |ws| ws.writing.is_empty() && !ws.was_playing);
+    let points = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[0]
+            .automation
+            .points(Param::Eq(0, EqField::Gain))
+            .to_vec()
+    });
+    assert!(!points.is_empty(), "nothing recorded");
+    assert!(points.iter().any(|p| p.value > 5.0), "{points:?}");
+}
+
+#[gpui::test]
 fn the_mixer_shapes_a_channel_with_its_eq_and_compressor(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     cx.simulate_keystrokes("x");
@@ -5335,7 +5436,7 @@ fn shots() {
                 }
                 // The Channel EQ's window: a mix's bands, the analyzer as if playing.
                 "eq" | "eq-picked" | "eq-menu" | "eq-mixer" | "eq-hover" | "eq-multi"
-                | "eq-piano" | "eq-analyzer" | "eq-empty" => {
+                | "eq-piano" | "eq-analyzer" | "eq-empty" | "eq-dynamics" | "eq-output" => {
                     use tempo_engine::project::{Bands, Dynamic, Eq, EqBand, Placement, Shape};
                     let mut cut = EqBand::new(Shape::LowCut, 32.0, 0.0);
                     cut.slope = 24;
@@ -5347,7 +5448,7 @@ fn shots() {
                     harsh.q = 2.2;
                     harsh.dynamic = Some(Dynamic {
                         range_db: -4.0,
-                        threshold_db: -28.0,
+                        threshold_db: Some(-28.0),
                         ..Dynamic::default()
                     });
                     let notch = EqBand::new(Shape::Notch, 1_150.0, 0.0);
@@ -5391,6 +5492,11 @@ fn shots() {
                             "eq-analyzer" => {
                                 v.picked.clear();
                                 v.popup = Some(crate::eq::Popup::Analyzer);
+                            }
+                            "eq-dynamics" => v.dyn_open = true,
+                            "eq-output" => {
+                                v.picked.clear();
+                                v.popup = Some(crate::eq::Popup::Output);
                             }
                             _ => {}
                         }

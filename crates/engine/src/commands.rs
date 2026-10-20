@@ -454,6 +454,8 @@ pub enum Command {
         #[serde(default)]
         off: Option<bool>,
         #[serde(default)]
+        gain_q: Option<bool>,
+        #[serde(default)]
         remove: bool,
     },
     /// A channel's built-in compressor, after its EQ; without `comp`, takes it out.
@@ -790,6 +792,32 @@ pub enum AutoParam {
     Mute,
     Send,
     Plugin,
+    /// An EQ band's frequency (Hz), gain (dB) or width (Q): the band's place as `id`.
+    EqFreq,
+    EqGain,
+    EqQ,
+}
+
+/// An EQ band's setting, as automation names it: its place in the track's EQ.
+fn eq_param(
+    p: &mut Project,
+    t: usize,
+    param: AutoParam,
+    band: Option<u32>,
+) -> Result<Param, String> {
+    let field = match param {
+        AutoParam::EqFreq => crate::project::EqField::Freq,
+        AutoParam::EqGain => crate::project::EqField::Gain,
+        _ => crate::project::EqField::Q,
+    };
+    let Some(band) = band else {
+        return Err("an EQ band's automation needs `id`: the band's place in the EQ".into());
+    };
+    let n = track(p, t)?.eq.map_or(0, |e| e.bands.len());
+    if band as usize >= n {
+        return Err(format!("track {t}'s EQ has no band {band}: it has {n}"));
+    }
+    Ok(Param::Eq(band as u8, field))
 }
 
 /// The parameter a command's automation is of.
@@ -815,6 +843,7 @@ fn auto_param(
             }
             Param::Plugin(plugin, id)
         }
+        AutoParam::EqFreq | AutoParam::EqGain | AutoParam::EqQ => eq_param(p, t, param, id)?,
     })
 }
 
@@ -1483,6 +1512,14 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                     }
                     Param::Plugin(plugin, id)
                 }
+                AutoParam::EqFreq | AutoParam::EqGain | AutoParam::EqQ => {
+                    let band = match id {
+                        Some(ParamRef::Id(n)) => Some(n),
+                        Some(_) => return Err("an EQ band's `id` is its place: a number".into()),
+                        None => None,
+                    };
+                    eq_param(p, t, param, band)?
+                }
             };
             let (lo, hi) = param.range();
             for pt in &mut points {
@@ -1688,6 +1725,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             placement,
             dynamic,
             off,
+            gain_q,
             remove,
         } => {
             let slot = strip(p, channel)?.eq;
@@ -1713,6 +1751,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                 b.slope = slope.unwrap_or(b.slope);
                 b.placement = placement.unwrap_or(b.placement);
                 b.off = off.unwrap_or(b.off);
+                b.gain_q = gain_q.unwrap_or(b.gain_q);
                 match dynamic {
                     None => {}
                     Some(Value::Bool(false)) | Some(Value::Null) => b.dynamic = None,
@@ -1880,7 +1919,8 @@ fn check_eq(eq: &Eq) -> Result<(), String> {
             ));
         }
         if let Some(d) = b.dynamic
-            && (!(-30.0..=30.0).contains(&d.range_db) || !(-80.0..=0.0).contains(&d.threshold_db))
+            && (!(-30.0..=30.0).contains(&d.range_db)
+                || d.threshold_db.is_some_and(|t| !(-80.0..=0.0).contains(&t)))
         {
             return fail("dynamic: range_db is -30 to 30, threshold_db -80 to 0".into());
         }
@@ -2300,7 +2340,9 @@ mod tests {
         assert_eq!((b.freq, b.gain_db, b.q), (300.0, -3.0, 1.5));
         assert_eq!(b.placement, crate::project::Placement::Mid);
         assert_eq!(b.dynamic.unwrap().range_db, -4.0);
-        assert_eq!(b.dynamic.unwrap().attack_ms, 10.0);
+        // Its attack and release its own, by its frequency.
+        assert_eq!(b.dynamic.unwrap().attack_ms, None);
+        assert_eq!(b.dynamic.unwrap().threshold_db, Some(-24.0));
         let wrong = run(&mut p, &band(r#""band": 0, "slope": 20"#)).unwrap_err();
         assert!(wrong.contains("band 0: slope 20"), "{wrong}");
         assert!(

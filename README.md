@@ -345,22 +345,36 @@ In the app, mostly as in Logic:
   chain shows on the right: the EQ's curve, the compressor's knobs and gain reduction, the
   saturator's drive and curve.
 - The Channel EQ is a Pro-Q style EQ in a window of its own (click a strip's EQ curve, or the
-  mixer's): up to 24 bands, each a bell, low or high shelf, low or high cut (6 to 96 dB an
-  octave), notch, band pass or tilt shelf, on the whole sound or its left, right, mid or side, and
-  still or dynamic (it moves with the sound: past a threshold it turns by up to its range, to tame
-  harshness or boom only when it's there). A live analyzer shows what goes in and comes out
-  (Pre + Post, either, or off). Double-click the display to add a band where you click (a cut at
-  either end, a bell between), drag its dot (⇧ fine), ⌘-drag or scroll on it for its width,
-  ⌥-click it to switch it off, double-click it or press Delete to take it out, right-click it for
-  its shape, slope, side and the rest. The band picked shows its controls along the bottom: shape,
-  slope, side, dynamic, frequency, gain and width (and the dynamic range and threshold), Solo to
-  hear just that band, on/off and delete. Along the window's bottom: the analyzer, the display's
-  range (±3 to ±30 dB), a gain scale for all the bands and the output level; its title moves it,
-  its corner resizes it. Its filters are matched to their analog shapes, so a bell or shelf near
-  the top keeps its shape rather than cramping; bands glide and fade in and out without clicks,
-  and cost nothing while flat. Songs made before open with their EQ as it was (a low cut, two
-  bells and a high shelf, as bands). The Inspector's Low Cut, Presence and Air knobs turn the
-  first low cut, a bell round 3 kHz and the high shelf, adding them when first turned. "Send" sends the track to a
+  mixer's; the channel name at its top switches to another's): up to 24 bands, each a bell, low or
+  high shelf, low or high cut (6 to 96 dB an octave, or a brickwall), notch, band pass, tilt
+  shelf, flat tilt or all pass; on the whole sound or its left, right, mid or side (the display
+  draws those curves white, red, green and blue, the whole's yellow); gain-Q interaction; and
+  dynamic: past its threshold (its own, following what it usually hears, unless set) it turns by
+  up to its range, listening to what it covers, between two frequencies, or another track (the
+  EQ's sidechain), its attack and release its own unless turned. A live analyzer shows what goes
+  in and comes out, an output meter beside it. Hover the display for the band a click would make
+  there (a cut at either end, a notch low down, a bell between), click to make it (double-click
+  or ⌘-click once one's picked), or pull the curve to make one and drag it (a shelf from either
+  end; ⌥ for a dynamic one). Drag a box to pick bands, ⌘-click to add one, ⇧-click a run; drag a
+  dot to move all those picked (⇧ fine, ⌥ one way only, ⌘ their width); the wheel on one changes
+  its width (a cut's slope), with ⌥ its dynamic range, with ⌘ its gain; ⌥-click switches it off,
+  ⌘⌥-click changes its shape, ⌥⇧-click its slope; double-click it to type its frequency ("2k",
+  "A4", "C#2+13"), gain ("2x") or width; right-click it, or the background, for the rest (split
+  into left and right or mid and side, copy and paste, select all). The bands picked show their
+  panel under them: shape, slope, frequency, gain with its dynamic range a ring round it, width,
+  part of the sound, solo (hold it to hear what the band works on; drag it to move the band, up
+  and down for the level), dynamic and its own settings, on/off and delete. The display's range
+  grows as a band's dragged past it; the frequency scale zooms (drag it up and down), pans and
+  shows notes (the piano, which snaps bands to them). Along the top: presets (tempo's, and yours
+  to save), undo, A/B and full screen; along the bottom: the analyzer's settings (pre and post,
+  range, resolution, speed, tilt, freeze), the character (clean, subtle, warm), bypass, and the
+  output (level, pan left/right or mid/side, phase, gain scale, auto gain). Every band's
+  frequency, gain and width can be automated, in the track's lanes or by moving it in Touch, Latch
+  or Write. Its filters are matched to their analog shapes, so a bell or shelf near the top keeps
+  its shape rather than cramping; bands glide and fade in and out without clicks, and cost
+  nothing while flat. Songs made before open with their EQ as it was (a low cut, two bells and a
+  high shelf, as bands). The Inspector's Low Cut, Presence and Air knobs turn the
+first low cut, a bell round 3 kHz and the high shelf, adding them when first turned. "Send" sends the track to a
   bus, making an aux for a new one; drag a send for its level, right-click it to switch it before
   the fader (amber) or after, or to remove it. Meters are stereo, with peak holds.
 

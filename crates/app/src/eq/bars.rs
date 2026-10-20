@@ -365,6 +365,35 @@ impl Workspace {
                     .text_color(rgb(TEXT_3))
                     .child("Zero Latency"),
             )
+            .child(
+                bar_button(
+                    format!("Character · {}", eq.character.name()),
+                    eq.character != tempo_engine::project::Character::Clean,
+                    AMBER,
+                )
+                .debug_selector(|| "eq-character".into())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        let now = ws.shown_eq().map(|(_, e)| e.character);
+                        let items = tempo_engine::project::Character::ALL
+                            .iter()
+                            .map(|&c| {
+                                (
+                                    format!(
+                                        "{}{}",
+                                        if Some(c) == now { "✓ " } else { "" },
+                                        c.name()
+                                    ),
+                                    MenuAction::Eq(EqOp::Character(c)),
+                                )
+                            })
+                            .collect();
+                        ws.eq_menu(e.position, items, cx);
+                    }),
+                ),
+            )
             .child(div().flex_1())
             .child(
                 bar_button(
@@ -543,21 +572,73 @@ impl Workspace {
                 )),
             Popup::Output => panel
                 .right(px(10.))
-                .w(px(220.))
+                .w(px(340.))
                 .debug_selector(|| "eq-output-panel".into())
                 .child(
                     div()
                         .flex()
                         .justify_around()
                         .child(self.panel_value(EqKnob::Output, eq.output_db, cx))
+                        .child(self.panel_value(EqKnob::Pan, eq.pan, cx))
                         .child(self.panel_value(EqKnob::Scale, eq.scale, cx)),
                 )
                 .child(
                     div()
-                        .text_size(px(10.5))
-                        .text_color(rgb(TEXT_4))
-                        .child("Gain scale scales every band's gain: 0% flat, 200% twice as much."),
-                ),
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(rgb(TEXT_3))
+                                .child("Pan"),
+                        )
+                        .child(
+                            tray()
+                                .rounded(px(7.))
+                                .child(
+                                    seg("L / R", !eq.pan_ms, 22.)
+                                        .debug_selector(|| "eq-pan-lr".into())
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|ws, _, _, cx| {
+                                                ws.eq_op(EqOp::PanMs(false), cx)
+                                            }),
+                                        ),
+                                )
+                                .child(
+                                    seg("M / S", eq.pan_ms, 22.)
+                                        .debug_selector(|| "eq-pan-ms".into())
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|ws, _, _, cx| {
+                                                ws.eq_op(EqOp::PanMs(true), cx)
+                                            }),
+                                        ),
+                                ),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            bar_button("Ø Phase", eq.invert, SKY)
+                                .debug_selector(|| "eq-invert".into())
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|ws, _, _, cx| ws.eq_op(EqOp::Invert, cx)),
+                                ),
+                        )
+                        .child(
+                            bar_button("Auto Gain", eq.auto_gain, AMBER)
+                                .debug_selector(|| "eq-auto-gain".into())
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|ws, _, _, cx| ws.eq_op(EqOp::AutoGain, cx)),
+                                ),
+                        ),
+                )
+                .child(div().text_size(px(10.5)).text_color(rgb(TEXT_4)).child(
+                    "Gain scale scales every band's gain: 0% flat, 200% twice as much. \
+                             Auto gain makes up for how much louder or quieter the bands make it.",
+                )),
         })
     }
 

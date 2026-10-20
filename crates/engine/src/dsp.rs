@@ -61,9 +61,11 @@ impl Strip {
     }
 
     /// Runs a block (at most `MAX_BLOCK`) through whichever of the EQ, compressor and saturator
-    /// are given, in place; returns the most the compressor turned it down, in dB. `tap`, when
-    /// the EQ window watches this channel, gets what the EQ heard and played (and says which
-    /// band to hear alone). Allocation-free.
+    /// are given, in place; returns the most the compressor turned it down, in dB. `sidechain`
+    /// is what the EQ's dynamic bands can listen to; `tap`, when the EQ window watches this
+    /// channel, gets what the EQ heard and played (and says which band to hear alone).
+    /// Allocation-free.
+    #[allow(clippy::too_many_arguments)]
     pub fn process(
         &mut self,
         eq: Option<&Eq>,
@@ -71,6 +73,7 @@ impl Strip {
         sat: Option<&Saturator>,
         l: &mut [f32],
         r: &mut [f32],
+        sidechain: Option<[&[f32]; 2]>,
         tap: Option<&Tap>,
     ) -> f32 {
         let n = l.len().min(MAX_BLOCK);
@@ -78,7 +81,7 @@ impl Strip {
         match eq {
             Some(e) => {
                 let solo = tap.and_then(Tap::solo);
-                self.eq.process(e, solo, l, r, tap);
+                self.eq.process(e, solo, l, r, sidechain, tap);
             }
             None => self.eq.rest(),
         }
@@ -186,7 +189,15 @@ mod tests {
         let mut most = 0f32;
         for at in (0..l.len()).step_by(MAX_BLOCK) {
             let end = (at + MAX_BLOCK).min(l.len());
-            most = most.max(strip.process(eq, comp, sat, &mut l[at..end], &mut r[at..end], None));
+            most = most.max(strip.process(
+                eq,
+                comp,
+                sat,
+                &mut l[at..end],
+                &mut r[at..end],
+                None,
+                None,
+            ));
         }
         assert_eq!(l, r); // both sides alike, as they went in
         (l, most)
@@ -355,7 +366,7 @@ mod cost {
         let mut time = |e: Option<&Eq>, c: Option<&Comp>, s: Option<&Saturator>| {
             let began = std::time::Instant::now();
             for _ in 0..(seconds * 48_000) / MAX_BLOCK {
-                strip.process(e, c, s, &mut l, &mut r, None);
+                strip.process(e, c, s, &mut l, &mut r, None, None);
             }
             began.elapsed().as_secs_f64() / seconds as f64 * 100.0
         };

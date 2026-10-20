@@ -28,8 +28,8 @@ use crate::{
     peaks::Peaks,
     plugin::{self, Control, ControlKind, Libraries, Note, Plugin, Processor},
     project::{
-        AutoMode, AutoPoint, Comp, Content, Eq, Flex, Instrument, PanLaw, PanMode, Param, Place,
-        PluginRef, Project, Region, Saturator, Which, chase, comp_segments, value_at,
+        AutoMode, AutoPoint, Comp, Content, Eq, EqField, Flex, Instrument, PanLaw, PanMode, Param,
+        Place, PluginRef, Project, Region, Saturator, Which, chase, comp_segments, value_at,
     },
     sampler::Sampler,
     stretch::{self, Fit},
@@ -448,6 +448,7 @@ struct StripDsp {
 impl Strip {
     /// Runs a block through the strip as `dsp` has it; returns the compressor's gain reduction,
     /// in dB. The EQ window, if it watches lane `slot`, hears what its EQ does.
+    #[allow(clippy::too_many_arguments)]
     fn run(
         &mut self,
         dsp: &StripDsp,
@@ -455,6 +456,7 @@ impl Strip {
         r: &mut [f32],
         shared: Option<&Shared>,
         slot: usize,
+        sidechain: Option<[&[f32]; 2]>,
     ) -> f32 {
         let tap = shared
             .map(|s| &s.eq_tap)
@@ -465,6 +467,7 @@ impl Strip {
             dsp.sat.as_ref(),
             l,
             r,
+            sidechain,
             tap,
         )
     }
@@ -841,6 +844,8 @@ struct Plan {
     send_levels: Vec<Vec<AutoPoint>>,
     /// Plugin parameters' automation, in samples, 0 to 1.
     params: Vec<(Which, u32, Vec<AutoPoint>)>,
+    /// The EQ's bands' automation, in samples: Hz, dB, Q.
+    eq_auto: Vec<(u8, EqField, Vec<AutoPoint>)>,
     /// Aux index, level, and whether it's taken before the fader.
     sends: Vec<(usize, f32, bool)>,
     /// Controller moves, sorted by time.
@@ -1092,16 +1097,30 @@ pub fn compile(
         project.tracks.iter().position(|t| t.id == id)
     };
     let mut feeds = vec![false; project.tracks.len()];
-    let mut sources = |inserts: &[PluginRef]| -> Vec<Option<usize>> {
-        let found: Vec<_> = inserts.iter().map(source).collect();
+    // Each channel's: its inserts', then its EQ's (for its dynamic bands), last.
+    let eq_source = |eq: &Option<Eq>| {
+        let id = eq.as_ref()?.sidechain?;
+        project.tracks.iter().position(|t| t.id == id)
+    };
+    let mut with_eq = |inserts: &[PluginRef], eq: &Option<Eq>| -> Vec<Option<usize>> {
+        let mut found: Vec<_> = inserts.iter().map(source).collect();
+        found.push(eq_source(eq));
         for &s in found.iter().flatten() {
             feeds[s] = true;
         }
         found
     };
-    let track_sidechains: Vec<_> = project.tracks.iter().map(|t| sources(&t.inserts)).collect();
-    let aux_sidechains: Vec<_> = project.auxes.iter().map(|a| sources(&a.inserts)).collect();
-    let master_sidechains = sources(&project.master_inserts);
+    let track_sidechains: Vec<_> = project
+        .tracks
+        .iter()
+        .map(|t| with_eq(&t.inserts, &t.eq))
+        .collect();
+    let aux_sidechains: Vec<_> = project
+        .auxes
+        .iter()
+        .map(|a| with_eq(&a.inserts, &a.eq))
+        .collect();
+    let master_sidechains = with_eq(&project.master_inserts, &project.master_eq);
     for (i, (t, &(slot, _))) in project.tracks.iter().zip(tracks).enumerate() {
         let (mut clips, mut events, mut controls) = (Vec::new(), Vec::new(), Vec::new());
         for (r, region) in t.regions.iter().enumerate().filter(|(_, r)| !r.mute) {
@@ -1262,6 +1281,13 @@ pub fn compile(
                 .iter()
                 .filter(|a| !a.points.is_empty())
                 .map(|a| (a.plugin, a.param, in_samples(&a.points)))
+                .collect(),
+            eq_auto: auto
+                .map(|a| &a.eq[..])
+                .unwrap_or_default()
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| (a.band, a.field, in_samples(&a.points)))
                 .collect(),
             cells,
             sends: t
@@ -2162,18 +2188,37 @@ impl Engine {
                     p.process([&mut *l, &mut *r], frames, notes, controls, None);
                 }
             }
-            let reduction = match moved.strip {
-                false => lane.strip.run(&plan.dsp, l, r, shared, plan.slot),
+            // What the EQ's dynamic bands can listen to: a track it names, as a plugin would.
+            let eq_sc = sidechain(&arrangement.sidechains, plan.sidechains.last(), frames);
+            let automated = !plan.eq_auto.is_empty() && plan.dsp.eq.is_some();
+            let reduction = match moved.strip || automated {
+                false => lane.strip.run(&plan.dsp, l, r, shared, plan.slot, eq_sc),
                 true => {
                     let mut dsp = StripDsp {
                         eq: plan.dsp.eq,
                         comp: plan.dsp.comp,
                         sat: plan.dsp.sat,
                     };
+                    // The EQ's automation where the block starts, then its modulators.
+                    if let Some(e) = dsp.eq.as_mut() {
+                        for (band, field, points) in &plan.eq_auto {
+                            let (Some(b), Some(v)) = (
+                                e.bands.get_mut(*band as usize),
+                                value_at(points, from as f64),
+                            ) else {
+                                continue;
+                            };
+                            match field {
+                                EqField::Freq => b.freq = v.clamp(10.0, 30_000.0),
+                                EqField::Gain => b.gain_db = v.clamp(-30.0, 30.0),
+                                EqField::Q => b.q = v.clamp(0.025, 40.0),
+                            }
+                        }
+                    }
                     dsp.eq.iter_mut().for_each(|e| moved.eq(e));
                     dsp.comp.iter_mut().for_each(|c| moved.comp(c));
                     dsp.sat.iter_mut().for_each(|s| moved.sat(s));
-                    lane.strip.run(&dsp, l, r, shared, plan.slot)
+                    lane.strip.run(&dsp, l, r, shared, plan.slot, eq_sc)
                 }
             };
             let sidechains = &arrangement.sidechains;
@@ -2269,7 +2314,8 @@ impl Engine {
             };
             l.copy_from_slice(&arrangement.buses[aux][0][..frames]);
             r.copy_from_slice(&arrangement.buses[aux][1][..frames]);
-            let reduction = lane.strip.run(&plan.dsp, l, r, shared, plan.slot);
+            let eq_sc = sidechain(&arrangement.sidechains, plan.sidechains.last(), frames);
+            let reduction = lane.strip.run(&plan.dsp, l, r, shared, plan.slot, eq_sc);
             for (i, p) in lane.inserts.iter_mut().enumerate() {
                 p.set_transport(playing, from, tempo);
                 let sc = sidechain(&arrangement.sidechains, plan.sidechains.get(i), frames);
@@ -2288,12 +2334,18 @@ impl Engine {
             }
         }
 
+        let eq_sc = sidechain(
+            &arrangement.sidechains,
+            arrangement.master_sidechains.last(),
+            frames,
+        );
         let reduction = self.master_strip.run(
             &arrangement.master_strip,
             &mut out_l[..frames],
             &mut out_r[..frames],
             shared,
             MASTER,
+            eq_sc,
         );
         if let Some(lane) = arrangement
             .master_lane
@@ -3959,6 +4011,25 @@ mod tests {
         });
         let quieter = peak(&render(&project(vec![squashed]), Path::new("."), BEAT)[0][BEAT / 2..]);
         assert!(quieter < dry / 4.0, "{dry} {quieter}");
+    }
+
+    #[test]
+    fn an_eq_band_plays_its_automation() {
+        let t = synth_track("a", vec![note(0, PPQ * 2, 69)], PPQ * 2);
+        let dry = peak(&render(&project(vec![t.clone()]), Path::new("."), BEAT)[0][BEAT / 2..]);
+        let mut boosted = t.clone();
+        boosted.eq = Some(Eq {
+            bands: crate::project::Bands::from_slice(&[crate::project::EqBand::new(
+                crate::project::Shape::Bell,
+                440.0,
+                0.0,
+            )]),
+            ..Eq::default()
+        });
+        // Flat as set; its automation has it 6 dB up all along.
+        *boosted.automation.points_mut(Param::Eq(0, EqField::Gain)) = vec![AutoPoint::new(0, 6.0)];
+        let louder = peak(&render(&project(vec![boosted]), Path::new("."), BEAT)[0][BEAT / 2..]);
+        assert!((louder / dry - 2.0).abs() < 0.05, "{dry} {louder}");
     }
 
     #[test]

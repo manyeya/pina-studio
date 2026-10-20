@@ -205,10 +205,15 @@ pub enum Shape {
     BandPass,
     /// A shelf that tilts round its frequency: half its gain down below, half up above.
     TiltShelf,
+    /// A straight tilt across all that's heard (20 Hz to 20 kHz), level at its frequency: its
+    /// gain the difference from end to end.
+    FlatTilt,
+    /// Shifts the phase round its frequency and leaves the level: to line up two takes.
+    AllPass,
 }
 
 impl Shape {
-    pub const ALL: [Shape; 8] = [
+    pub const ALL: [Shape; 10] = [
         Shape::Bell,
         Shape::LowShelf,
         Shape::LowCut,
@@ -217,7 +222,12 @@ impl Shape {
         Shape::Notch,
         Shape::BandPass,
         Shape::TiltShelf,
+        Shape::FlatTilt,
+        Shape::AllPass,
     ];
+
+    /// The slope that's a brickwall: as steep as cuts go.
+    pub const BRICKWALL: u8 = 144;
 
     pub fn name(self) -> &'static str {
         match self {
@@ -229,6 +239,8 @@ impl Shape {
             Shape::Notch => "Notch",
             Shape::BandPass => "Band Pass",
             Shape::TiltShelf => "Tilt Shelf",
+            Shape::FlatTilt => "Flat Tilt",
+            Shape::AllPass => "All Pass",
         }
     }
 
@@ -236,14 +248,21 @@ impl Shape {
     pub fn has_gain(self) -> bool {
         matches!(
             self,
-            Shape::Bell | Shape::LowShelf | Shape::HighShelf | Shape::TiltShelf
+            Shape::Bell | Shape::LowShelf | Shape::HighShelf | Shape::TiltShelf | Shape::FlatTilt
         )
+    }
+
+    /// Whether it can move with the sound: a bell, shelf or tilt.
+    pub fn can_be_dynamic(self) -> bool {
+        self.has_gain()
     }
 
     /// The slopes it can have, in dB an octave; none for those that have a width (Q) instead.
     pub fn slopes(self) -> &'static [u8] {
         match self {
-            Shape::LowCut | Shape::HighCut => &[6, 12, 18, 24, 30, 36, 48, 72, 96],
+            Shape::LowCut | Shape::HighCut => {
+                &[6, 12, 18, 24, 30, 36, 48, 72, 96, Shape::BRICKWALL]
+            }
             Shape::LowShelf | Shape::HighShelf | Shape::TiltShelf => &[6, 12, 18, 24, 36, 48],
             _ => &[],
         }
@@ -297,24 +316,41 @@ impl Placement {
     }
 }
 
-/// A band that moves with the sound: as what it covers gets louder than `threshold_db`, its gain
-/// goes by up to `range_db` more (below 0 down, as a compressor would; above, up).
+/// A band that moves with the sound: as what it covers gets louder than its threshold, its gain
+/// goes by up to `range_db` more (below 0 down, as a compressor would; above, up). Without a
+/// threshold it sets its own, following what the band usually hears, so it moves on what
+/// stands out; without attack and release, its own, by its frequency. It listens to what the
+/// band covers, or between `trigger`'s two frequencies; with `external`, to the EQ's sidechain.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(default)]
 pub struct Dynamic {
     pub range_db: f32,
-    pub threshold_db: f32,
-    pub attack_ms: f32,
-    pub release_ms: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold_db: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attack_ms: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_ms: Option<f32>,
+    /// What it listens to, low and high Hz, if not what the band covers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<[f32; 2]>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub external: bool,
+    /// Kept but still.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bypass: bool,
 }
 
 impl Default for Dynamic {
     fn default() -> Self {
         Dynamic {
             range_db: -6.0,
-            threshold_db: -30.0,
-            attack_ms: 10.0,
-            release_ms: 120.0,
+            threshold_db: None,
+            attack_ms: None,
+            release_ms: None,
+            trigger: None,
+            external: false,
+            bypass: false,
         }
     }
 }
@@ -339,6 +375,9 @@ pub struct EqBand {
     /// Kept but not heard.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub off: bool,
+    /// Its width narrows as its gain grows, as an analog EQ's does.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub gain_q: bool,
     /// Which band it is while the song's open, so the engine keeps its sound through edits (a
     /// band taken out before it fades rather than clicking). Not saved.
     #[serde(skip)]
@@ -362,6 +401,7 @@ struct BandJson {
     placement: Placement,
     dynamic: Option<Dynamic>,
     off: bool,
+    gain_q: bool,
 }
 
 impl Default for BandJson {
@@ -376,6 +416,7 @@ impl Default for BandJson {
             placement: b.placement,
             dynamic: None,
             off: false,
+            gain_q: false,
         }
     }
 }
@@ -391,6 +432,7 @@ impl From<BandJson> for EqBand {
             placement: j.placement,
             dynamic: j.dynamic,
             off: j.off,
+            gain_q: j.gain_q,
             id: 0,
         }
     }
@@ -417,6 +459,7 @@ impl EqBand {
             placement: Placement::Stereo,
             dynamic: None,
             off: false,
+            gain_q: false,
             id: 0,
         }
     }
@@ -554,9 +597,52 @@ pub struct Eq {
     pub scale: f32,
     #[serde(skip_serializing_if = "zero_f32")]
     pub output_db: f32,
+    /// Its output's balance, -1 to 1: left and right, or with `pan_ms` mid (-1) and side (1).
+    #[serde(skip_serializing_if = "zero_f32")]
+    pub pan: f32,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub pan_ms: bool,
+    /// Its output turned upside down.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub invert: bool,
+    /// Makes up for how much louder or quieter its bands make the sound.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub auto_gain: bool,
+    /// Clean, or with an analog EQ's saturation: subtle, or warm.
+    #[serde(skip_serializing_if = "Character::is_clean")]
+    pub character: Character,
+    /// A track (by id) its dynamic bands can listen to instead of what goes through it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<u64>,
     /// Kept but not heard.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub bypass: bool,
+}
+
+/// An EQ's character: clean (transparent), or the saturation of an analog one, subtle or warm.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Character {
+    #[default]
+    Clean,
+    Subtle,
+    Warm,
+}
+
+impl Character {
+    pub const ALL: [Character; 3] = [Character::Clean, Character::Subtle, Character::Warm];
+
+    fn is_clean(&self) -> bool {
+        *self == Character::Clean
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Character::Clean => "Clean",
+            Character::Subtle => "Subtle",
+            Character::Warm => "Warm",
+        }
+    }
 }
 
 fn one_f32(v: &f32) -> bool {
@@ -569,6 +655,12 @@ impl Default for Eq {
             bands: Bands::default(),
             scale: 1.0,
             output_db: 0.0,
+            pan: 0.0,
+            pan_ms: false,
+            invert: false,
+            auto_gain: false,
+            character: Character::Clean,
+            sidechain: None,
             bypass: false,
         }
     }
@@ -653,6 +745,18 @@ struct EqJson {
     #[serde(default)]
     output_db: f32,
     #[serde(default)]
+    pan: f32,
+    #[serde(default)]
+    pan_ms: bool,
+    #[serde(default)]
+    invert: bool,
+    #[serde(default)]
+    auto_gain: bool,
+    #[serde(default)]
+    character: Character,
+    #[serde(default)]
+    sidechain: Option<u64>,
+    #[serde(default)]
     bypass: bool,
     low_cut: Option<f32>,
     low_mid: Option<ClassicBand>,
@@ -689,6 +793,12 @@ impl From<EqJson> for Eq {
         eq.apply_classic(&j);
         eq.scale = j.scale.clamp(0.0, 2.0);
         eq.output_db = j.output_db;
+        eq.pan = j.pan.clamp(-1.0, 1.0);
+        eq.pan_ms = j.pan_ms;
+        eq.invert = j.invert;
+        eq.auto_gain = j.auto_gain;
+        eq.character = j.character;
+        eq.sidechain = j.sidechain;
         eq.bypass = j.bypass;
         eq
     }
@@ -1070,8 +1180,28 @@ pub struct Automation {
     /// Plugin parameters over time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginAuto>,
+    /// The EQ's bands' frequencies, gains and widths over time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub eq: Vec<EqAuto>,
     #[serde(default, skip_serializing_if = "AutoMode::is_read")]
     pub mode: AutoMode,
+}
+
+/// An EQ band's setting over time: the band by its place in the EQ; Hz, dB or Q.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct EqAuto {
+    pub band: u8,
+    pub field: EqField,
+    pub points: Vec<AutoPoint>,
+}
+
+/// What of an EQ band automation moves.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum EqField {
+    Freq,
+    Gain,
+    Q,
 }
 
 /// A send's level over time.
@@ -1190,7 +1320,7 @@ impl AutoPoint {
 }
 
 /// An automatable parameter: the fader, the pan knob, the mute button, a send's level (by its
-/// bus), or a plugin's parameter by id.
+/// bus), a plugin's parameter by id, or an EQ band's frequency, gain or width (by its place).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Param {
     #[default]
@@ -1199,6 +1329,7 @@ pub enum Param {
     Mute,
     Send(u32),
     Plugin(Which, u32),
+    Eq(u8, EqField),
 }
 
 impl Param {
@@ -1208,7 +1339,15 @@ impl Param {
             Param::Volume | Param::Send(_) => (SILENT_DB, 6.0),
             Param::Pan => (-1.0, 1.0),
             Param::Mute | Param::Plugin(..) => (0.0, 1.0),
+            Param::Eq(_, EqField::Freq) => (10.0, 30_000.0),
+            Param::Eq(_, EqField::Gain) => (-30.0, 30.0),
+            Param::Eq(_, EqField::Q) => (0.025, 40.0),
         }
+    }
+
+    /// Whether its scale is octaves (frequencies, widths) rather than steps.
+    fn logarithmic(self) -> bool {
+        matches!(self, Param::Eq(_, EqField::Freq | EqField::Q))
     }
 
     /// Whether it only ever jumps from value to value.
@@ -1222,6 +1361,7 @@ impl Param {
         let (lo, hi) = self.range();
         match self {
             Param::Volume | Param::Send(_) => 10f32.powf((v - 6.0) / 40.0).clamp(0.0, 1.0),
+            p if p.logarithmic() => ((v.max(lo) / lo).ln() / (hi / lo).ln()).clamp(0.0, 1.0),
             _ => ((v - lo) / (hi - lo)).clamp(0.0, 1.0),
         }
     }
@@ -1231,6 +1371,7 @@ impl Param {
         match self {
             Param::Volume | Param::Send(_) if u <= 1e-4 => SILENT_DB,
             Param::Volume | Param::Send(_) => (40.0 * u.log10() + 6.0).max(SILENT_DB),
+            p if p.logarithmic() => lo * (hi / lo).powf(u.clamp(0.0, 1.0)),
             _ => lo + u.clamp(0.0, 1.0) * (hi - lo),
         }
     }
@@ -1380,6 +1521,7 @@ impl Automation {
             && self.mute.is_empty()
             && self.sends.is_empty()
             && self.plugins.is_empty()
+            && self.eq.is_empty()
             && self.mode == AutoMode::Read
     }
 
@@ -1397,6 +1539,11 @@ impl Automation {
                 .plugins
                 .iter()
                 .find(|a| a.plugin == which && a.param == id)
+                .map_or(&[], |a| &a.points),
+            Param::Eq(band, field) => self
+                .eq
+                .iter()
+                .find(|a| a.band == band && a.field == field)
                 .map_or(&[], |a| &a.points),
         }
     }
@@ -1439,6 +1586,24 @@ impl Automation {
                 };
                 &mut self.plugins[i].points
             }
+            Param::Eq(band, field) => {
+                let i = match self
+                    .eq
+                    .iter()
+                    .position(|a| a.band == band && a.field == field)
+                {
+                    Some(i) => i,
+                    None => {
+                        self.eq.push(EqAuto {
+                            band,
+                            field,
+                            points: Vec::new(),
+                        });
+                        self.eq.len() - 1
+                    }
+                };
+                &mut self.eq[i].points
+            }
         }
     }
 
@@ -1454,10 +1619,11 @@ impl Automation {
         }
     }
 
-    /// Drops plugin and send lanes left without points.
+    /// Drops plugin, send and EQ lanes left without points.
     pub fn tidy(&mut self) {
         self.plugins.retain(|a| !a.points.is_empty());
         self.sends.retain(|a| !a.points.is_empty());
+        self.eq.retain(|a| !a.points.is_empty());
     }
 
     /// Every parameter with points, faders first.
@@ -1483,6 +1649,12 @@ impl Automation {
                 .iter()
                 .filter(|a| !a.points.is_empty())
                 .map(|a| Param::Plugin(a.plugin, a.param)),
+        );
+        out.extend(
+            self.eq
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| Param::Eq(a.band, a.field)),
         );
         out
     }
@@ -1637,6 +1809,8 @@ impl Automation {
         // The fader's range is mostly silence: judge it by the top 60 dB.
         let span = match param {
             Param::Volume | Param::Send(_) => 66.0,
+            // On an octave scale a straight line in Hz isn't one: keep every point.
+            p if p.logarithmic() => 0.0,
             _ => hi - lo,
         };
         let tol = tolerance * span;

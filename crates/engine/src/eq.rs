@@ -17,11 +17,11 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use crate::{
     engine::MAX_BLOCK,
-    project::{Eq, EqBand, MAX_BANDS, Placement, Shape},
+    project::{Character, Eq, EqBand, MAX_BANDS, Placement, Shape},
 };
 
-/// The most second-order sections a band takes: a 96 dB an octave cut.
-pub const MAX_SECTIONS: usize = 8;
+/// The most second-order sections a band takes: a brickwall cut (144 dB an octave).
+pub const MAX_SECTIONS: usize = 12;
 
 /// Samples between a moving band's filter updates.
 const STEP: usize = 16;
@@ -184,7 +184,11 @@ pub fn sections(
         return 0;
     }
     let w = 2.0 * PI * freq.clamp(10.0, 0.49 * rate);
-    let q = (band.q as f64).clamp(0.025, 40.0);
+    let mut q = (band.q as f64).clamp(0.025, 40.0);
+    // Gain-Q interaction: the more it boosts or cuts, the narrower.
+    if band.gain_q && band.shape.has_gain() {
+        q = (q * 10f64.powf(gain_db.abs() / 60.0)).min(40.0);
+    }
     match band.shape {
         Shape::Bell => {
             if gain_db.abs() < 1e-4 {
@@ -210,7 +214,7 @@ pub fn sections(
         }
         Shape::LowCut | Shape::HighCut => {
             let high = band.shape == Shape::LowCut;
-            let order = (band.slope as usize / 6).clamp(1, 16);
+            let order = (band.slope as usize / 6).clamp(1, 24);
             let (pairs, odd) = (order / 2, order % 2 == 1);
             let mut n = 0;
             if odd {
@@ -264,6 +268,35 @@ pub fn sections(
                 out[0] = out[0].times(10f64.powf(-gain_db / 40.0));
             }
             n
+        }
+        Shape::FlatTilt => {
+            if gain_db.abs() < 1e-4 {
+                return 0;
+            }
+            // Ten first-order shelves an octave apart, 20 Hz to 20 kHz, each a tenth of the
+            // tilt: a straight line, near enough; then level at its frequency.
+            for (k, section) in out.iter_mut().enumerate().take(10) {
+                let f = 20.0 * 2f64.powf(k as f64 + 0.5);
+                let wk = 2.0 * PI * f.min(0.49 * rate);
+                let g = 10f64.powf(gain_db / 10.0 / 20.0);
+                *section = matched1(wk * g.sqrt(), rate, &shelf1(wk, g, true));
+            }
+            let pivot = half_sin2(freq.min(0.49 * rate), rate);
+            let at: f64 = out[..10].iter().map(|c| c.mag2(pivot)).product();
+            out[0] = out[0].times(1.0 / at.max(1e-12).sqrt());
+            10
+        }
+        Shape::AllPass => {
+            // Its poles as a resonance's at the frequency; its zeros their mirror: level flat.
+            let p = matched2(w, q, w, rate, &|_| 1.0);
+            out[0] = Section {
+                b0: p.a2,
+                b1: p.a1,
+                b2: 1.0,
+                a1: p.a1,
+                a2: p.a2,
+            };
+            1
         }
     }
 }
@@ -341,16 +374,53 @@ fn cascade2(
     (a, b)
 }
 
-/// What a dynamic band listens to: what's around its frequency.
-fn detector(band: &EqBand, rate: f64) -> Section {
-    let w = 2.0 * PI * (band.freq as f64).clamp(10.0, 0.49 * rate);
+/// What a dynamic band listens to: what's round its frequency (a shelf's side of it), or what
+/// lies between its trigger's two frequencies. Up to two sections, and how many.
+fn detector(band: &EqBand, rate: f64) -> ([Section; 2], usize) {
+    let r2 = FRAC_1_SQRT_2;
+    let at = |hz: f64| 2.0 * PI * hz.clamp(10.0, 0.49 * rate);
+    if let Some([lo, hi]) = band.dynamic.and_then(|d| d.trigger) {
+        let (a, b) = (at(lo as f64), at(hi as f64));
+        return (
+            [
+                matched2(a, r2, a, rate, &highpass2(a, r2)),
+                matched2(b, r2, b, rate, &lowpass2(b, r2)),
+            ],
+            2,
+        );
+    }
+    let w = at(band.freq as f64);
     let q = (band.q as f64).clamp(0.3, 40.0);
-    match band.shape {
-        Shape::LowShelf => matched2(w, FRAC_1_SQRT_2, w, rate, &lowpass2(w, FRAC_1_SQRT_2)),
-        Shape::HighShelf | Shape::TiltShelf => {
-            matched2(w, FRAC_1_SQRT_2, w, rate, &highpass2(w, FRAC_1_SQRT_2))
-        }
+    let one = match band.shape {
+        Shape::LowShelf => matched2(w, r2, w, rate, &lowpass2(w, r2)),
+        Shape::HighShelf | Shape::TiltShelf => matched2(w, r2, w, rate, &highpass2(w, r2)),
+        Shape::FlatTilt => Section {
+            b0: 1.0,
+            ..Section::default()
+        },
         _ => matched2(w, q, w, rate, &bandpass2(w, q)),
+    };
+    ([one, Section::default()], 1)
+}
+
+/// A dynamic band's own attack and release, by its frequency (ms): quick up top, slower down
+/// low, where a cycle takes longer.
+pub fn auto_times(freq: f32) -> (f64, f64) {
+    let attack = (4_000.0 / freq.max(10.0) as f64).clamp(0.5, 40.0);
+    (attack, (attack * 10.0).clamp(30.0, 500.0))
+}
+
+/// The analog warmth of the subtle and warm characters, on what a band adds or takes away: soft
+/// above a whisper; the warm one lopsided, for even harmonics.
+#[inline]
+fn colour(d: f64, character: Character) -> f64 {
+    match character {
+        Character::Clean => d,
+        Character::Subtle => (1.2 * d).tanh() / 1.2,
+        Character::Warm => {
+            const BIAS: f64 = 0.12;
+            ((1.8 * d + BIAS).tanh() - BIAS.tanh()) / 1.8
+        }
     }
 }
 
@@ -372,10 +442,13 @@ struct Live {
     state: [[[f64; 2]; MAX_SECTIONS]; 2],
     /// Its sections need working out again.
     stale: bool,
-    /// A dynamic band's ear, its memory, its level (linear) and how far it's moved now (dB).
-    det: Section,
-    det_state: [[f64; 2]; 2],
+    /// A dynamic band's ear and its memory; its level now (linear) and usually (dB, for its
+    /// own threshold); how far it's moved now (dB).
+    det: [Section; 2],
+    det_n: usize,
+    det_state: [[[f64; 2]; 2]; 2],
     env: f64,
+    usual: f64,
     moved: f64,
 }
 
@@ -392,6 +465,7 @@ impl Live {
             placement: Placement::Stereo,
             dynamic: None,
             off: false,
+            gain_q: false,
             id: 0,
         },
         at: [0.0; 3],
@@ -406,15 +480,17 @@ impl Live {
         n: 0,
         state: [[[0.0; 2]; MAX_SECTIONS]; 2],
         stale: true,
-        det: Section {
+        det: [Section {
             b0: 0.0,
             b1: 0.0,
             b2: 0.0,
             a1: 0.0,
             a2: 0.0,
-        },
-        det_state: [[0.0; 2]; 2],
+        }; 2],
+        det_n: 0,
+        det_state: [[[0.0; 2]; 2]; 2],
         env: 0.0,
+        usual: -120.0,
         moved: 0.0,
     };
 
@@ -427,12 +503,14 @@ impl Live {
     }
 
     fn start(band: EqBand, mix: f64, rate: f64) -> Live {
+        let (det, det_n) = detector(&band, rate);
         Live {
             id: band.id,
             band,
             at: Live::target(&band),
             mix,
-            det: detector(&band, rate),
+            det,
+            det_n,
             ..Live::FREE
         }
     }
@@ -452,12 +530,16 @@ impl Live {
         let o = &self.band;
         if (o.shape, o.slope, o.placement) != (band.shape, band.slope, band.placement) {
             self.state = [[[0.0; 2]; MAX_SECTIONS]; 2];
-            self.det_state = [[0.0; 2]; 2];
+            self.det_state = [[[0.0; 2]; 2]; 2];
             self.at = Live::target(&band);
             self.stale = true;
         }
-        if (o.freq, o.q, o.shape) != (band.freq, band.q, band.shape) {
-            self.det = detector(&band, rate);
+        let trigger = |b: &EqBand| b.dynamic.and_then(|d| d.trigger);
+        if (o.freq, o.q, o.shape, trigger(o)) != (band.freq, band.q, band.shape, trigger(&band)) {
+            (self.det, self.det_n) = detector(&band, rate);
+        }
+        if o.gain_q != band.gain_q {
+            self.stale = true;
         }
         self.band = band;
     }
@@ -471,11 +553,36 @@ pub struct Processor {
     order: [u8; LIVE],
     /// Whether it ran last block: one coming back on starts with its bands as they are.
     running: bool,
+    /// The output's gain and pan, gliding; the make-up auto gain works out (dB) and what for.
     output: f64,
+    pan: f64,
+    auto: (f64, Option<Eq>),
     /// A band heard alone: its id, the filter it's heard through and that filter's memory.
     solo: (u16, Section, [[f64; 2]; 2]),
+    /// The warm character's DC blocker, each side.
+    dc: [[f64; 2]; 2],
     /// A copy of the block going in, for the solo and the analyzer.
     input: [[f32; MAX_BLOCK]; 2],
+}
+
+/// The make-up gain an EQ wants (dB): as much as it makes the sound louder on average across
+/// what's heard, as pink noise would hear it (each octave alike), the other way.
+pub fn auto_gain_db(eq: &Eq, rate: f64) -> f64 {
+    let n = 48;
+    let power: f64 = (0..n)
+        .map(|i| {
+            let f = 20.0 * 1000f64.powf(i as f64 / (n - 1) as f64);
+            let db = eq
+                .bands
+                .iter()
+                .filter(|b| !b.off && b.shape != Shape::AllPass)
+                .map(|b| band_response(b, eq.scale, f, rate))
+                .sum::<f64>();
+            10f64.powf(db / 10.0)
+        })
+        .sum::<f64>()
+        / n as f64;
+    -10.0 * power.max(1e-12).log10()
 }
 
 impl Processor {
@@ -486,7 +593,10 @@ impl Processor {
             order: [0; LIVE],
             running: false,
             output: 1.0,
+            pan: 0.0,
+            auto: (0.0, None),
             solo: (0, Section::default(), [[0.0; 2]; 2]),
+            dc: [[0.0; 2]; 2],
             input: [[0.0; MAX_BLOCK]; 2],
         }
     }
@@ -496,12 +606,32 @@ impl Processor {
         self.running = false;
     }
 
+    /// The output gain it's going to: its level, and its make-up if it makes its own.
+    fn output_target(&mut self, eq: &Eq) -> f64 {
+        let mut db = eq.output_db as f64;
+        if eq.auto_gain {
+            // Worked out again only when the EQ's changed.
+            let same = self
+                .auto
+                .1
+                .as_ref()
+                .is_some_and(|e| e.bands == eq.bands && e.scale == eq.scale);
+            if !same {
+                self.auto = (auto_gain_db(eq, self.rate), Some(*eq));
+            }
+            db += self.auto.0;
+        }
+        10f64.powf(db / 20.0)
+    }
+
     /// The bands' places, matched to the EQ's by id: new ones take a free place, those gone fade.
     fn reconcile(&mut self, eq: &Eq) -> usize {
         let fresh = !self.running;
         if fresh {
             self.live = [Live::FREE; LIVE];
-            self.output = 10f64.powf(eq.output_db as f64 / 20.0);
+            self.output = self.output_target(eq);
+            self.pan = eq.pan as f64;
+            self.dc = [[0.0; 2]; 2];
         }
         for l in self.live.iter_mut().filter(|l| l.id != 0) {
             l.gone = !eq.bands.iter().any(|b| b.id == l.id);
@@ -541,14 +671,15 @@ impl Processor {
     }
 
     /// Runs a block (at most `MAX_BLOCK`) through the EQ in place. `solo` is a band to hear
-    /// alone, by id, and its listening level; `tap` gets what went in and came out, and the
-    /// dynamic bands' moves.
+    /// alone, by id, and its listening level; `sidechain` what its dynamic bands can listen to
+    /// instead; `tap` gets what went in and came out, and the dynamic bands' moves and levels.
     pub fn process(
         &mut self,
         eq: &Eq,
         solo: Option<(u16, f32)>,
         l: &mut [f32],
         r: &mut [f32],
+        sidechain: Option<[&[f32]; 2]>,
         tap: Option<&Tap>,
     ) {
         let frames = l.len().min(r.len()).min(MAX_BLOCK);
@@ -563,6 +694,8 @@ impl Processor {
         let glide = 1.0 - (-(STEP as f64) / (GLIDE * rate)).exp();
         let fade = STEP as f64 / (FADE * rate);
         let scale = eq.scale as f64;
+        let character = eq.character;
+        let sc = sidechain.filter(|s| s[0].len() >= frames && s[1].len() >= frames);
         let mut start = 0;
         while start < frames {
             let end = (start + STEP).min(frames);
@@ -587,10 +720,28 @@ impl Processor {
                         live.stale = true;
                     }
                 }
-                // A dynamic band's move, from what it's heard.
-                let dynamic = live.band.dynamic.filter(|_| live.band.shape.has_gain());
+                // A dynamic band's move, from what it's heard: over its threshold (its own, a
+                // little over what it usually hears), through a soft knee, by 4:1, up to its
+                // range.
+                let dynamic = live
+                    .band
+                    .dynamic
+                    .filter(|d| live.band.shape.can_be_dynamic() && !d.bypass && d.range_db != 0.0);
                 if let Some(d) = dynamic {
-                    let over = 20.0 * live.env.max(1e-9).log10() - d.threshold_db as f64;
+                    // What it usually hears: up to a louder sound in under half a second,
+                    // down from one over two, so what stands out is a jump or a peak.
+                    let level = 20.0 * live.env.max(1e-9).log10();
+                    let tau = if level > live.usual { 0.4 } else { 2.0 };
+                    let k = 1.0 - (-(len as f64) / (tau * rate)).exp();
+                    live.usual += (level - live.usual) * k;
+                    let threshold = d.threshold_db.map_or(live.usual + 3.0, f64::from);
+                    let over = level - threshold;
+                    const KNEE: f64 = 6.0;
+                    let over = match over {
+                        o if o <= -KNEE / 2.0 => 0.0,
+                        o if o >= KNEE / 2.0 => o,
+                        o => (o + KNEE / 2.0).powi(2) / (2.0 * KNEE),
+                    };
                     let range = d.range_db as f64;
                     let moved = (over * DYNAMIC_RATIO).clamp(0.0, range.abs()) * range.signum();
                     if (moved - live.moved).abs() > 0.01 {
@@ -622,15 +773,21 @@ impl Processor {
                 };
                 let ms = matches!(live.band.placement, Placement::Mid | Placement::Side);
                 let (attack, release) = match dynamic {
-                    Some(d) => (
-                        1.0 - (-1.0 / (d.attack_ms.max(0.1) as f64 * 1e-3 * rate)).exp(),
-                        1.0 - (-1.0 / (d.release_ms.max(1.0) as f64 * 1e-3 * rate)).exp(),
-                    ),
+                    Some(d) => {
+                        let (a, z) = auto_times(live.band.freq);
+                        let coef = |ms: f64| 1.0 - (-1.0 / (ms.max(0.05) * 1e-3 * rate)).exp();
+                        (
+                            coef(d.attack_ms.map_or(a, f64::from)),
+                            coef(d.release_ms.map_or(z, f64::from)),
+                        )
+                    }
                     None => (0.0, 0.0),
                 };
+                let coloured = character != Character::Clean && live.band.shape.has_gain();
                 let sections = &live.sections[..live.n];
-                // Most bands: on both sides or one, still, all in. Each side a tight run.
-                if !ms && dynamic.is_none() && m0 == 1.0 && m1 == 1.0 && lanes == [true, true] {
+                let plain = !ms && dynamic.is_none() && !coloured && m0 == 1.0 && m1 == 1.0;
+                // Most bands: on both sides or one, still, clean, all in. Each side a tight run.
+                if plain && lanes == [true, true] {
                     let [sl, sr] = &mut live.state;
                     for i in start..end {
                         let (a, b) = cascade2(sections, sl, sr, l[i] as f64, r[i] as f64);
@@ -639,7 +796,7 @@ impl Processor {
                     flush(&mut live.state);
                     continue;
                 }
-                if !ms && dynamic.is_none() && m0 == 1.0 && m1 == 1.0 {
+                if plain {
                     for (lane, side) in [&mut *l, &mut *r].into_iter().enumerate() {
                         if lanes[lane] {
                             for x in &mut side[start..end] {
@@ -650,15 +807,21 @@ impl Processor {
                     flush(&mut live.state);
                     continue;
                 }
+                let external = dynamic.is_some_and(|d| d.external) && sc.is_some();
                 for i in start..end {
-                    let (x0, x1) = match ms {
-                        true => (
-                            (l[i] as f64 + r[i] as f64) * 0.5,
-                            (l[i] as f64 - r[i] as f64) * 0.5,
-                        ),
-                        false => (l[i] as f64, r[i] as f64),
+                    let split = |a: f64, b: f64| match ms {
+                        true => ((a + b) * 0.5, (a - b) * 0.5),
+                        false => (a, b),
                     };
+                    let (x0, x1) = split(l[i] as f64, r[i] as f64);
                     let x = [x0, x1];
+                    let heard = match (external, sc) {
+                        (true, Some([a, b])) => {
+                            let (h0, h1) = split(a[i] as f64, b[i] as f64);
+                            [h0, h1]
+                        }
+                        _ => x,
+                    };
                     let mut y = x;
                     let mut level = 0f64;
                     for lane in 0..2 {
@@ -667,13 +830,16 @@ impl Processor {
                         }
                         if dynamic.is_some() {
                             let d = cascade(
-                                std::slice::from_ref(&live.det),
-                                std::slice::from_mut(&mut live.det_state[lane]),
-                                x[lane],
+                                &live.det[..live.det_n],
+                                &mut live.det_state[lane],
+                                heard[lane],
                             );
                             level = level.max(d.abs());
                         }
                         y[lane] = cascade(sections, &mut live.state[lane], x[lane]);
+                        if coloured {
+                            y[lane] = x[lane] + colour(y[lane] - x[lane], character);
+                        }
                     }
                     if dynamic.is_some() {
                         let k = if level > live.env { attack } else { release };
@@ -691,32 +857,66 @@ impl Processor {
                     r[i] = b as f32;
                 }
                 flush(&mut live.state);
+                for st in live.det_state.iter_mut().flatten().flatten() {
+                    if st.abs() < 1e-30 {
+                        *st = 0.0;
+                    }
+                }
             }
-            // The output level, gliding.
-            let to = 10f64.powf(eq.output_db as f64 / 20.0);
+            // The output: its level and pan, gliding; upside down if asked.
+            let to = self.output_target(eq);
             let from = self.output;
             let next = from + (to - from) * glide;
             let next = if (next - to).abs() < 1e-6 { to } else { next };
-            if from != 1.0 || next != 1.0 {
+            let (p0, pan_to) = (self.pan, eq.pan as f64);
+            let p1 = match (pan_to - p0).abs() < 1e-4 {
+                true => pan_to,
+                false => p0 + (pan_to - p0) * glide,
+            };
+            let sign = if eq.invert { -1.0 } else { 1.0 };
+            if from != 1.0 || next != 1.0 || p0 != 0.0 || p1 != 0.0 || eq.invert {
                 for i in start..end {
-                    let g = from + (next - from) * ((i - start + 1) as f64 / len as f64);
-                    l[i] = (l[i] as f64 * g) as f32;
-                    r[i] = (r[i] as f64 * g) as f32;
+                    let t = (i - start + 1) as f64 / len as f64;
+                    let g = (from + (next - from) * t) * sign;
+                    let p = p0 + (p1 - p0) * t;
+                    let (a, b) = (l[i] as f64 * g, r[i] as f64 * g);
+                    // Balance: the side it's turned from, down; or mid against side.
+                    let (ga, gb) = ((1.0 - p).min(1.0), (1.0 + p).min(1.0));
+                    let (a, b) = match eq.pan_ms {
+                        false => (a * ga, b * gb),
+                        true => {
+                            let (m, s) = ((a + b) * 0.5 * ga, (a - b) * 0.5 * gb);
+                            (m + s, m - s)
+                        }
+                    };
+                    l[i] = a as f32;
+                    r[i] = b as f32;
                 }
             }
             self.output = next;
+            self.pan = p1;
             start = end;
+        }
+        // The warm character leans its wave: no DC from it.
+        if character == Character::Warm {
+            let k = 1.0 - (-2.0 * PI * 5.0 / rate).exp();
+            for (lane, side) in [&mut *l, &mut *r].into_iter().enumerate() {
+                let [avg, _] = &mut self.dc[lane];
+                for x in side.iter_mut() {
+                    *avg += (*x as f64 - *avg) * k;
+                    *x = (*x as f64 - *avg) as f32;
+                }
+            }
         }
         self.hear_alone(eq, solo, l, r);
         if let Some(tap) = tap {
             tap.write(&self.input[0][..frames], &self.input[1][..frames], l, r);
             for (i, band) in eq.bands.iter().enumerate() {
-                let moved = self
-                    .live
-                    .iter()
-                    .find(|x| x.id == band.id)
-                    .map_or(0.0, |x| x.moved * scale);
+                let live = self.live.iter().find(|x| x.id == band.id);
+                let moved = live.map_or(0.0, |x| x.moved * scale);
+                let level = live.map_or(-120.0, |x| 20.0 * x.env.max(1e-6).log10());
                 tap.moved[i].store((moved as f32).to_bits(), Ordering::Relaxed);
+                tap.level[i].store((level as f32).to_bits(), Ordering::Relaxed);
             }
         }
     }
@@ -736,7 +936,7 @@ impl Processor {
         let r2 = FRAC_1_SQRT_2;
         let filter = match band.shape {
             Shape::LowCut | Shape::LowShelf => matched2(w, r2, w, self.rate, &lowpass2(w, r2)),
-            Shape::HighCut | Shape::HighShelf | Shape::TiltShelf => {
+            Shape::HighCut | Shape::HighShelf | Shape::TiltShelf | Shape::FlatTilt => {
                 matched2(w, r2, w, self.rate, &highpass2(w, r2))
             }
             _ => matched2(w, q, w, self.rate, &bandpass2(w, q)),
@@ -777,8 +977,10 @@ pub struct Tap {
     post: [Vec<AtomicU32>; 2],
     /// Samples written, ever: where the next goes.
     written: AtomicUsize,
-    /// Each band's dynamic move now, dB (f32 bits), by its place in the EQ.
+    /// Each band's dynamic move now, and what it's hearing (its trigger level), dB (f32
+    /// bits), by its place in the EQ.
     moved: Vec<AtomicU32>,
+    level: Vec<AtomicU32>,
 }
 
 impl Default for Tap {
@@ -798,6 +1000,7 @@ impl Tap {
             post: [ring(), ring()],
             written: AtomicUsize::new(0),
             moved: (0..MAX_BANDS).map(|_| AtomicU32::new(0)).collect(),
+            level: (0..MAX_BANDS).map(|_| AtomicU32::new(0)).collect(),
         }
     }
 
@@ -853,6 +1056,13 @@ impl Tap {
         self.moved
             .get(i)
             .map_or(0.0, |m| f32::from_bits(m.load(Ordering::Relaxed)))
+    }
+
+    /// What the EQ's band at `i` hears to move by (its trigger level), dB.
+    pub fn level(&self, i: usize) -> f32 {
+        self.level
+            .get(i)
+            .map_or(-120.0, |m| f32::from_bits(m.load(Ordering::Relaxed)))
     }
 }
 
@@ -1048,7 +1258,7 @@ mod tests {
             let frames = MAX_BLOCK.min(n - i);
             let mut l: Vec<f32> = (i..i + frames).map(sine).collect();
             let mut r: Vec<f32> = l.iter().map(|&x| if side { -x } else { x }).collect();
-            p.process(e, None, &mut l, &mut r, None);
+            p.process(e, None, &mut l, &mut r, None, None);
             if i > n / 2 {
                 for k in 0..frames {
                     peak = [
@@ -1120,19 +1330,21 @@ mod tests {
         let mut b = band(Shape::Bell, 1_000.0, 0.0);
         b.dynamic = Some(Dynamic {
             range_db: -6.0,
-            threshold_db: -40.0,
+            threshold_db: Some(-40.0),
+            attack_ms: Some(10.0),
+            release_ms: Some(120.0),
             ..Dynamic::default()
         });
         // Loud (-12 dBFS, 28 over): down its whole range.
         let (db, _) = through(&eq(&[b]), 1_000.0, false);
         assert!(close(db[0], -6.0, 0.3), "{db:?}");
         // Under the threshold: untouched.
-        b.dynamic.as_mut().unwrap().threshold_db = -6.0;
+        b.dynamic.as_mut().unwrap().threshold_db = Some(-6.0);
         let (db, _) = through(&eq(&[b]), 1_000.0, false);
         assert!(close(db[0], 0.0, 0.05), "{db:?}");
         // It listens round its frequency: three octaves away, the same sine is 18 dB quieter to
         // it, under a threshold the sine at its frequency is well over.
-        b.dynamic.as_mut().unwrap().threshold_db = -24.0;
+        b.dynamic.as_mut().unwrap().threshold_db = Some(-24.0);
         let (db, _) = through(&eq(&[b]), 1_000.0, false);
         assert!(close(db[0], -6.0, 0.3), "{db:?}");
         let (db, _) = through(&eq(&[b]), 8_123.0, false);
@@ -1159,7 +1371,7 @@ mod tests {
                 .collect();
             let mut r = l.clone();
             phase += MAX_BLOCK;
-            p.process(&e, None, &mut l, &mut r, None);
+            p.process(&e, None, &mut l, &mut r, None, None);
             if block > 20 {
                 for &x in &l {
                     biggest_step = biggest_step.max((x - prev).abs());
@@ -1239,6 +1451,189 @@ mod tests {
     }
 
     #[test]
+    fn tilts_all_passes_brickwalls_and_gain_q() {
+        // A flat tilt: a straight line through its frequency, its gain from end to end.
+        let tilt = band(Shape::FlatTilt, 1_000.0, 6.0);
+        assert!(
+            close(at(&tilt, 1_000.0), 0.0, 0.05),
+            "{}",
+            at(&tilt, 1_000.0)
+        );
+        let per_octave = 6.0 / 10.0;
+        for f in [100.0, 250.0, 4_000.0, 10_000.0] {
+            let want = per_octave * (f / 1_000.0f64).log2();
+            assert!(
+                close(at(&tilt, f), want, 0.35),
+                "{f}: {} vs {want}",
+                at(&tilt, f)
+            );
+        }
+        // An all pass leaves the level alone.
+        let all = band(Shape::AllPass, 800.0, 0.0);
+        for f in [50.0, 800.0, 12_000.0] {
+            assert!(close(at(&all, f), 0.0, 1e-6));
+        }
+        // A brickwall: nothing an octave on.
+        let mut wall = band(Shape::HighCut, 1_000.0, 0.0);
+        wall.slope = Shape::BRICKWALL;
+        assert!(at(&wall, 2_000.0) < -120.0 && close(at(&wall, 500.0), 0.0, 0.01));
+        // Gain-Q: a big boost, narrower.
+        let mut wide = band(Shape::Bell, 1_000.0, 12.0);
+        let plain = at(&wide, 2_000.0);
+        wide.gain_q = true;
+        assert!(at(&wide, 2_000.0) < plain - 1.0);
+        assert!(close(at(&wide, 1_000.0), 12.0, 0.01));
+    }
+
+    /// Runs a second of stereo sound through an EQ, a block at a time; what came out.
+    fn run(
+        e: &Eq,
+        l: &[f32],
+        r: &[f32],
+        sc: Option<[&[f32]; 2]>,
+    ) -> (Vec<f32>, Vec<f32>, Processor) {
+        let mut p = Processor::new(RATE);
+        let (mut ol, mut or) = (l.to_vec(), r.to_vec());
+        for at in (0..l.len()).step_by(MAX_BLOCK) {
+            let end = (at + MAX_BLOCK).min(l.len());
+            let side = sc.map(|[a, b]| [&a[at..end], &b[at..end]]);
+            p.process(e, None, &mut ol[at..end], &mut or[at..end], side, None);
+        }
+        (ol, or, p)
+    }
+
+    fn tone(freq: f64, level: f32, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| (2.0 * PI * freq * i as f64 / RATE).sin() as f32 * level)
+            .collect()
+    }
+
+    fn peak_db(s: &[f32]) -> f64 {
+        20.0 * (s.iter().fold(0f32, |m, x| m.max(x.abs())) as f64)
+            .max(1e-9)
+            .log10()
+    }
+
+    #[test]
+    fn the_output_pans_inverts_and_makes_up_its_own_gain() {
+        let x = tone(1_000.0, 0.5, 24_000);
+        // Panned hard left: the right goes; mid and side, all the way to the side: a mono
+        // sound goes.
+        let mut e = eq(&[]);
+        e.pan = -1.0;
+        let (l, r, _) = run(&e, &x, &x, None);
+        assert!(peak_db(&l[12_000..]) > -6.1 && peak_db(&r[12_000..]) < -100.0);
+        e.pan_ms = true;
+        e.pan = 1.0;
+        let (l, _, _) = run(&e, &x, &x, None);
+        assert!(peak_db(&l[12_000..]) < -100.0);
+        // Upside down.
+        let mut e = eq(&[]);
+        e.invert = true;
+        let (l, _, _) = run(&e, &x, &x, None);
+        assert!((l[5_000] + x[5_000]).abs() < 1e-6);
+        // Auto gain: a broad boost turns the whole down by about as much.
+        let mut boost = eq(&[band(Shape::LowShelf, 20_000.0, 6.0)]);
+        assert!(
+            close(auto_gain_db(&boost, RATE), -6.0, 0.3),
+            "{}",
+            auto_gain_db(&boost, RATE)
+        );
+        boost.auto_gain = true;
+        let (l, _, _) = run(&boost, &x, &x, None);
+        assert!(
+            close(peak_db(&l[12_000..]), -6.02, 0.4),
+            "{}",
+            peak_db(&l[12_000..])
+        );
+    }
+
+    /// How loud a harmonic of `f` is in `s`, against `f` (dB).
+    fn harmonic(s: &[f32], f: f64, k: f64) -> f64 {
+        let dft = |f: f64| {
+            let (mut re, mut im) = (0.0, 0.0);
+            for (i, &x) in s.iter().enumerate() {
+                let w = 2.0 * PI * f * i as f64 / RATE;
+                re += x as f64 * w.cos();
+                im += x as f64 * w.sin();
+            }
+            (re * re + im * im).sqrt()
+        };
+        20.0 * (dft(f * k) / dft(f)).max(1e-12).log10()
+    }
+
+    #[test]
+    fn the_warm_and_subtle_characters_colour_what_the_bands_do() {
+        let x = tone(500.0, 0.8, 24_000);
+        let mut e = eq(&[band(Shape::Bell, 500.0, 9.0)]);
+        let tail = |s: &[f32]| s[12_000..].to_vec();
+        let (clean, _, _) = run(&e, &x, &x, None);
+        e.character = crate::project::Character::Subtle;
+        let (subtle, _, _) = run(&e, &x, &x, None);
+        e.character = crate::project::Character::Warm;
+        let (warm, _, _) = run(&e, &x, &x, None);
+        let (c3, s3) = (
+            harmonic(&tail(&clean), 500.0, 3.0),
+            harmonic(&tail(&subtle), 500.0, 3.0),
+        );
+        let w2 = harmonic(&tail(&warm), 500.0, 2.0);
+        assert!(c3 < -90.0, "{c3}");
+        // Subtle: odd harmonics; warm: even ones too.
+        assert!(s3 > -60.0, "{s3}");
+        assert!(w2 > -60.0, "{w2}");
+        // Quiet, it hardly colours.
+        let quiet = tone(500.0, 0.005, 24_000);
+        let (soft, _, _) = run(&e, &quiet, &quiet, None);
+        assert!(harmonic(&tail(&soft), 500.0, 2.0) < -60.0);
+    }
+
+    #[test]
+    fn a_dynamic_band_sets_its_own_threshold_and_hears_what_it_is_told() {
+        // Its own threshold: a steady sound settles, a jump in it moves it.
+        let mut b = band(Shape::Bell, 1_000.0, 0.0);
+        b.dynamic = Some(Dynamic {
+            range_db: -9.0,
+            ..Dynamic::default()
+        });
+        let mut x = tone(1_000.0, 0.05, 96_000);
+        for (i, v) in x.iter_mut().enumerate().skip(72_000) {
+            *v = (2.0 * PI * 1_000.0 * i as f64 / RATE).sin() as f32 * 0.4;
+        }
+        let e = eq(&[b]);
+        let (l, _, _) = run(&e, &x, &x, None);
+        let steady = peak_db(&l[60_000..72_000]) - 20.0 * 0.05f64.log10();
+        let jumped = peak_db(&l[74_000..80_000]) - 20.0 * 0.4f64.log10();
+        assert!(steady > -1.0, "{steady}");
+        assert!(jumped < -4.0, "{jumped}");
+        // Listening between two other frequencies, it doesn't hear the band's.
+        let mut b = band(Shape::Bell, 1_000.0, 0.0);
+        b.dynamic = Some(Dynamic {
+            range_db: -6.0,
+            threshold_db: Some(-30.0),
+            trigger: Some([5_000.0, 8_000.0]),
+            ..Dynamic::default()
+        });
+        let loud = tone(1_000.0, 0.4, 24_000);
+        let (l, _, _) = run(&eq(&[b]), &loud, &loud, None);
+        assert!(close(peak_db(&l[12_000..]), 20.0 * 0.4f64.log10(), 0.1));
+        // Listening to the sidechain: a loud one moves it on a quiet sound.
+        let mut b = band(Shape::Bell, 1_000.0, 0.0);
+        b.dynamic = Some(Dynamic {
+            range_db: -6.0,
+            threshold_db: Some(-40.0),
+            external: true,
+            ..Dynamic::default()
+        });
+        let quiet = tone(1_000.0, 0.005, 24_000);
+        let (l, _, _) = run(&eq(&[b]), &quiet, &quiet, Some([&loud, &loud]));
+        assert!(close(
+            peak_db(&l[12_000..]),
+            20.0 * 0.005f64.log10() - 6.0,
+            0.4
+        ));
+    }
+
+    #[test]
     fn steep_cuts_stay_steady() {
         let mut low = band(Shape::LowCut, 20.0, 0.0);
         low.slope = 96;
@@ -1256,7 +1651,7 @@ mod tests {
                 })
                 .collect();
             let mut r = l.clone();
-            p.process(&e, None, &mut l, &mut r, None);
+            p.process(&e, None, &mut l, &mut r, None, None);
             assert!(l.iter().chain(&r).all(|x| x.is_finite() && x.abs() < 50.0));
         }
     }
@@ -1278,7 +1673,7 @@ mod tests {
                     })
                     .collect();
                 let mut r = l.clone();
-                p.process(&e, Some((id, 0.0)), &mut l, &mut r, Some(&tap));
+                p.process(&e, Some((id, 0.0)), &mut l, &mut r, None, Some(&tap));
                 if k > 20 {
                     peak = l.iter().fold(peak, |m, x| m.max(x.abs()));
                 }

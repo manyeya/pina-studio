@@ -31,8 +31,8 @@ use gpui::{
     prelude::*, px, rgb,
 };
 use tempo_engine::{
-    eq::{TAP_LEN, band_sections, response_db, spectrum_db},
-    project::{Bands, Dynamic, Eq, EqBand, MAX_BANDS, Placement, Shape},
+    eq::{TAP_LEN, auto_times, band_sections, response_db, spectrum_db},
+    project::{Bands, Character, Dynamic, Eq, EqBand, EqField, MAX_BANDS, Param, Placement, Shape},
 };
 
 use crate::{
@@ -194,6 +194,8 @@ pub struct EqView {
     pub analysis: Analysis,
     pub popup: Option<Popup>,
     pub solo: Option<Solo>,
+    /// The dynamics' own settings shown, in the band panel.
+    pub dyn_open: bool,
     /// Clicked in last: Delete, ⌘C, ⌘V and ⌘A work on its bands.
     pub focused: bool,
     /// A box being dragged across the plot to pick the bands in it.
@@ -234,6 +236,7 @@ impl EqView {
             analysis: Analysis::default(),
             popup: None,
             solo: None,
+            dyn_open: false,
             focused: true,
             marquee: None,
             start: Vec::new(),
@@ -327,6 +330,24 @@ pub enum EqOp {
     Factory(usize),
     Preset(usize),
     SavePreset,
+    /// The bands picked: gain-Q interaction on or off.
+    GainQ,
+    /// The EQ's character, auto gain, phase, and whether its pan is mid against side.
+    Character(Character),
+    AutoGain,
+    Invert,
+    PanMs(bool),
+    /// The dynamics' settings shown or hidden; the bands picked: dynamics bypassed, cleared,
+    /// listening to the sidechain, or between two frequencies (or to what they cover);
+    /// their threshold their own.
+    DynExpand,
+    DynBypass,
+    DynClear,
+    External,
+    Trigger,
+    AutoThreshold,
+    /// The track the EQ's sidechain is (by id), or none.
+    Sidechain(Option<u64>),
 }
 
 /// A knob (or value) in the EQ window.
@@ -339,13 +360,24 @@ pub enum EqKnob {
     Threshold,
     Scale,
     Output,
+    /// A dynamic band's attack and release (ms), and the two frequencies it listens between.
+    Attack,
+    Release,
+    Low,
+    High,
+    /// The output's balance.
+    Pan,
 }
 
 impl EqKnob {
     /// Where a value sits on the knob, 0 to 1.
     fn pos(self, v: f32) -> f32 {
         match self {
-            EqKnob::Freq => ((v / 10.0).ln() / 3000f32.ln()).clamp(0.0, 1.0),
+            EqKnob::Freq | EqKnob::Low | EqKnob::High => {
+                ((v / 10.0).ln() / 3000f32.ln()).clamp(0.0, 1.0)
+            }
+            EqKnob::Attack | EqKnob::Release => ((v / 0.1).ln() / 10_000f32.ln()).clamp(0.0, 1.0),
+            EqKnob::Pan => (v + 1.0) / 2.0,
             EqKnob::Q => ((v / 0.025).ln() / 1600f32.ln()).clamp(0.0, 1.0),
             EqKnob::Gain | EqKnob::Range => (v + 30.0) / 60.0,
             EqKnob::Threshold => (v + 80.0) / 80.0,
@@ -358,7 +390,9 @@ impl EqKnob {
     fn value(self, pos: f32) -> f32 {
         let p = pos.clamp(0.0, 1.0);
         match self {
-            EqKnob::Freq => 10.0 * 3000f32.powf(p),
+            EqKnob::Freq | EqKnob::Low | EqKnob::High => 10.0 * 3000f32.powf(p),
+            EqKnob::Attack | EqKnob::Release => ((0.1 * 10_000f32.powf(p)) * 10.0).round() / 10.0,
+            EqKnob::Pan => ((p * 2.0 - 1.0) * 100.0).round() / 100.0,
             EqKnob::Q => 0.025 * 1600f32.powf(p),
             EqKnob::Gain | EqKnob::Range => ((p * 60.0 - 30.0) * 100.0).round() / 100.0,
             EqKnob::Threshold => (p * 80.0 - 80.0).round(),
@@ -370,13 +404,22 @@ impl EqKnob {
     fn bipolar(self) -> bool {
         matches!(
             self,
-            EqKnob::Gain | EqKnob::Range | EqKnob::Output | EqKnob::Scale
+            EqKnob::Gain | EqKnob::Range | EqKnob::Output | EqKnob::Scale | EqKnob::Pan
         )
     }
 
     pub fn text(self, v: f32) -> String {
         match self {
-            EqKnob::Freq => hz_text(v),
+            EqKnob::Freq | EqKnob::Low | EqKnob::High => hz_text(v),
+            EqKnob::Attack | EqKnob::Release => match v < 10.0 {
+                true => format!("{v:.1} ms"),
+                false => format!("{v:.0} ms"),
+            },
+            EqKnob::Pan => match (v * 100.0).round() as i32 {
+                0 => "C".into(),
+                p if p < 0 => format!("L {}", -p),
+                p => format!("R {p}"),
+            },
             EqKnob::Q => q_text(v),
             EqKnob::Gain | EqKnob::Range | EqKnob::Output => format!("{} dB", db_text(v)),
             EqKnob::Threshold => format!("{} dB", db_text(v).trim_end_matches(".0")),
@@ -393,6 +436,11 @@ impl EqKnob {
             EqKnob::Threshold => "THRESHOLD",
             EqKnob::Scale => "GAIN SCALE",
             EqKnob::Output => "OUTPUT",
+            EqKnob::Attack => "ATTACK",
+            EqKnob::Release => "RELEASE",
+            EqKnob::Low => "LOW",
+            EqKnob::High => "HIGH",
+            EqKnob::Pan => "PAN",
         }
     }
 
@@ -411,7 +459,14 @@ impl EqKnob {
         }
         let number = |s: &str| s.trim().parse::<f32>().ok();
         let v = match self {
-            EqKnob::Freq => parse_freq(&t)?,
+            EqKnob::Freq | EqKnob::Low | EqKnob::High => parse_freq(&t)?,
+            EqKnob::Attack | EqKnob::Release => number(t.trim_end_matches("ms"))?,
+            EqKnob::Pan => match t.chars().next()? {
+                'c' => 0.0,
+                'l' => -number(&t[1..])? / 100.0,
+                'r' => number(&t[1..])? / 100.0,
+                _ => number(&t)?,
+            },
             EqKnob::Gain | EqKnob::Range | EqKnob::Output | EqKnob::Threshold => {
                 let t = t.trim_end_matches("db").trim();
                 match t.strip_suffix('x') {
@@ -476,6 +531,14 @@ pub fn hz_text(hz: f32) -> String {
         h if h < 1_000.0 => format!("{h:.0} Hz"),
         h if h < 10_000.0 => format!("{:.2} kHz", h / 1_000.0),
         h => format!("{:.1} kHz", h / 1_000.0),
+    }
+}
+
+/// "24 dB/oct", or "Brickwall".
+pub fn slope_text(s: u8) -> String {
+    match s {
+        Shape::BRICKWALL => "Brickwall".into(),
+        s => format!("{s} dB/oct"),
     }
 }
 
@@ -608,7 +671,7 @@ pub fn factory() -> Vec<(&'static str, Eq)> {
     let dynamic = |mut band: EqBand, range: f32, threshold: f32| {
         band.dynamic = Some(Dynamic {
             range_db: range,
-            threshold_db: threshold,
+            threshold_db: Some(threshold),
             ..Dynamic::default()
         });
         band
@@ -757,6 +820,72 @@ impl Workspace {
     fn shown_eq(&self) -> Option<(Channel, Eq)> {
         let ch = self.eq_view.as_ref()?.ch;
         Some((ch, self.strip_dsp(ch).0?))
+    }
+
+    /// The shown EQ as it's heard now: its bands where their automation has them.
+    pub(super) fn eq_as_heard(&self, ch: Channel, mut eq: Eq) -> Eq {
+        let Channel::Track(t) = ch else { return eq };
+        for (i, b) in eq.bands.iter_mut().enumerate() {
+            for field in [EqField::Freq, EqField::Gain, EqField::Q] {
+                if let Some(v) = self.automated(t, Param::Eq(i as u8, field)) {
+                    match field {
+                        EqField::Freq => b.freq = v,
+                        EqField::Gain => b.gain_db = v,
+                        EqField::Q => b.q = v,
+                    }
+                }
+            }
+        }
+        eq
+    }
+
+    /// The bands with `ids` moved by hand: what that does to their automation (recorded in
+    /// Touch, Latch or Write; taken over from it in Read), as any track control.
+    fn eq_moved(&mut self, ids: &[u16], fields: &[EqField]) {
+        let Some((Channel::Track(t), eq)) = self.shown_eq() else {
+            return;
+        };
+        let mut moves = Vec::new();
+        for id in ids {
+            let Some(i) = eq.bands.find(*id) else {
+                continue;
+            };
+            let b = eq.bands[i];
+            for &field in fields {
+                if field == EqField::Gain && !b.shape.has_gain() {
+                    continue;
+                }
+                let v = match field {
+                    EqField::Freq => b.freq,
+                    EqField::Gain => b.gain_db,
+                    EqField::Q => b.q,
+                };
+                moves.push((Param::Eq(i as u8, field), v));
+            }
+        }
+        for (param, v) in moves {
+            self.moved(t, param, v);
+        }
+    }
+
+    /// Let go of the EQ's bands: their automation carries on (or stops recording).
+    pub fn eq_let_go(&mut self) {
+        let Some(Channel::Track(t)) = self.eq_view.as_ref().map(|v| v.ch) else {
+            return;
+        };
+        let Some(id) = self.session.project.tracks.get(t).map(|tr| tr.id) else {
+            return;
+        };
+        let held: Vec<Param> = self
+            .taken
+            .keys()
+            .chain(self.touches.keys())
+            .filter(|(track, p)| *track == id && matches!(p, Param::Eq(..)))
+            .map(|&(_, p)| p)
+            .collect();
+        for p in held {
+            self.let_go(t, p);
+        }
     }
 
     fn eq_band(&self, id: u16) -> Option<(usize, EqBand)> {
@@ -1112,6 +1241,8 @@ impl Workspace {
                 .find(|&r| r as f32 >= widest)
                 .unwrap_or(30);
         }
+        let ids: Vec<u16> = start.iter().map(|b| b.id).collect();
+        self.eq_moved(&ids, &[EqField::Freq, EqField::Gain, EqField::Q]);
         axis
     }
 
@@ -1352,6 +1483,19 @@ impl Workspace {
                 }
             }
         }
+        let field = match knob {
+            EqKnob::Freq => Some(EqField::Freq),
+            EqKnob::Gain => Some(EqField::Gain),
+            EqKnob::Q => Some(EqField::Q),
+            _ => None,
+        };
+        if let Some(field) = field {
+            let mut ids: Vec<u16> = others.iter().map(|b| b.id).collect();
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+            self.eq_moved(&ids, &[field]);
+        }
     }
 
     pub fn set_eq_knob(&mut self, id: u16, knob: EqKnob, v: f32) {
@@ -1359,6 +1503,7 @@ impl Workspace {
         match knob {
             EqKnob::Scale => eq.scale = v.clamp(0.0, 2.0),
             EqKnob::Output => eq.output_db = v.clamp(-36.0, 36.0),
+            EqKnob::Pan => eq.pan = v.clamp(-1.0, 1.0),
             _ => {
                 let Some(i) = eq.bands.find(id) else { return };
                 let b = &mut eq.bands[i];
@@ -1370,7 +1515,19 @@ impl Workspace {
                         b.dynamic.get_or_insert_default().range_db = v.clamp(-30.0, 30.0)
                     }
                     EqKnob::Threshold => {
-                        b.dynamic.get_or_insert_default().threshold_db = v.clamp(-80.0, 0.0)
+                        b.dynamic.get_or_insert_default().threshold_db = Some(v.clamp(-80.0, 0.0))
+                    }
+                    EqKnob::Attack => {
+                        b.dynamic.get_or_insert_default().attack_ms = Some(v.clamp(0.1, 1_000.0))
+                    }
+                    EqKnob::Release => {
+                        b.dynamic.get_or_insert_default().release_ms = Some(v.clamp(1.0, 5_000.0))
+                    }
+                    EqKnob::Low | EqKnob::High => {
+                        let d = b.dynamic.get_or_insert_default();
+                        let mut t = d.trigger.unwrap_or([b.freq / 2.0, b.freq * 2.0]);
+                        t[(knob == EqKnob::High) as usize] = v.clamp(10.0, 30_000.0);
+                        d.trigger = Some(t);
                     }
                     _ => {}
                 }
@@ -1384,14 +1541,21 @@ impl Workspace {
         };
         let b = eq.bands.find(id).map(|i| eq.bands[i]).unwrap_or_default();
         let d = b.dynamic.unwrap_or_default();
+        let (attack, release) = auto_times(b.freq);
+        let trigger = d.trigger.unwrap_or([b.freq / 2.0, b.freq * 2.0]);
         match knob {
             EqKnob::Freq => b.freq,
             EqKnob::Gain => b.gain_db,
             EqKnob::Q => b.q,
             EqKnob::Range => d.range_db,
-            EqKnob::Threshold => d.threshold_db,
+            EqKnob::Threshold => d.threshold_db.unwrap_or(-30.0),
             EqKnob::Scale => eq.scale,
             EqKnob::Output => eq.output_db,
+            EqKnob::Attack => d.attack_ms.unwrap_or(attack as f32),
+            EqKnob::Release => d.release_ms.unwrap_or(release as f32),
+            EqKnob::Low => trigger[0],
+            EqKnob::High => trigger[1],
+            EqKnob::Pan => eq.pan,
         }
     }
 
@@ -1399,13 +1563,30 @@ impl Workspace {
     fn eq_knob_reset(&mut self, id: u16, knob: EqKnob, cx: &mut Context<Self>) {
         let shape = self.eq_band(id).map_or(Shape::Bell, |(_, b)| b.shape);
         let d = Dynamic::default();
+        // A dynamic band's threshold, attack and release go back to its own.
+        if matches!(knob, EqKnob::Threshold | EqKnob::Attack | EqKnob::Release) {
+            return self.edit(cx, |ws| {
+                if let Some(eq) = ws.eq_mut()
+                    && let Some(i) = eq.bands.find(id)
+                    && let Some(d) = eq.bands[i].dynamic.as_mut()
+                {
+                    match knob {
+                        EqKnob::Threshold => d.threshold_db = None,
+                        EqKnob::Attack => d.attack_ms = None,
+                        _ => d.release_ms = None,
+                    }
+                }
+            });
+        }
         let v = match knob {
             EqKnob::Freq => 1_000.0,
-            EqKnob::Gain | EqKnob::Output => 0.0,
+            EqKnob::Gain | EqKnob::Output | EqKnob::Pan => 0.0,
             EqKnob::Q => shape.default_q(),
             EqKnob::Range => d.range_db,
-            EqKnob::Threshold => d.threshold_db,
             EqKnob::Scale => 1.0,
+            EqKnob::Low => 100.0,
+            EqKnob::High => 10_000.0,
+            _ => return,
         };
         self.edit(cx, |ws| ws.set_eq_knob(id, knob, v));
     }
@@ -1437,10 +1618,11 @@ impl Workspace {
     pub fn eq_value_text(&self, id: u16, knob: EqKnob) -> String {
         let v = self.eq_knob_value(id, knob);
         match knob {
-            EqKnob::Freq => match v < 1_000.0 {
+            EqKnob::Freq | EqKnob::Low | EqKnob::High => match v < 1_000.0 {
                 true => format!("{v:.0}"),
                 false => format!("{:.2}k", v / 1_000.0),
             },
+            EqKnob::Pan => EqKnob::Pan.text(v),
             EqKnob::Scale => format!("{:.0}%", v * 100.0),
             EqKnob::Q => q_text(v),
             _ => format!("{v:.1}"),
@@ -1782,6 +1964,93 @@ impl Workspace {
                     }
                 }
             }
+            EqOp::GainQ => {
+                let all = self.picked_bands().iter().all(|b| b.gain_q);
+                self.edit_picked(cx, |b| b.gain_q = !all)
+            }
+            EqOp::Character(c) => self.edit(cx, |ws| {
+                if let Some(eq) = ws.eq_mut() {
+                    eq.character = c;
+                }
+            }),
+            EqOp::AutoGain => self.edit(cx, |ws| {
+                if let Some(eq) = ws.eq_mut() {
+                    eq.auto_gain = !eq.auto_gain;
+                }
+            }),
+            EqOp::Invert => self.edit(cx, |ws| {
+                if let Some(eq) = ws.eq_mut() {
+                    eq.invert = !eq.invert;
+                }
+            }),
+            EqOp::PanMs(ms) => self.edit(cx, |ws| {
+                if let Some(eq) = ws.eq_mut() {
+                    eq.pan_ms = ms;
+                }
+            }),
+            EqOp::DynExpand => {
+                if let Some(v) = self.eq_view.as_mut() {
+                    v.dyn_open = !v.dyn_open;
+                }
+            }
+            EqOp::DynBypass => {
+                let all = self
+                    .picked_bands()
+                    .iter()
+                    .all(|b| b.dynamic.is_some_and(|d| d.bypass));
+                self.edit_picked(cx, |b| {
+                    if let Some(d) = b.dynamic.as_mut() {
+                        d.bypass = !all;
+                    }
+                })
+            }
+            EqOp::DynClear => self.edit_picked(cx, |b| b.dynamic = None),
+            EqOp::External => {
+                let all = self
+                    .picked_bands()
+                    .iter()
+                    .all(|b| b.dynamic.is_some_and(|d| d.external));
+                self.edit_picked(cx, |b| {
+                    if let Some(d) = b.dynamic.as_mut() {
+                        d.external = !all;
+                    }
+                })
+            }
+            EqOp::Trigger => {
+                let free = self
+                    .picked_bands()
+                    .iter()
+                    .all(|b| b.dynamic.is_some_and(|d| d.trigger.is_some()));
+                self.edit_picked(cx, |b| {
+                    let freq = b.freq;
+                    if let Some(d) = b.dynamic.as_mut() {
+                        d.trigger = match free {
+                            true => None,
+                            false => Some([(freq / 2.0).max(10.0), (freq * 2.0).min(30_000.0)]),
+                        };
+                    }
+                })
+            }
+            EqOp::AutoThreshold => self.edit_picked(cx, |b| {
+                if let Some(d) = b.dynamic.as_mut() {
+                    d.threshold_db = None;
+                }
+            }),
+            EqOp::Sidechain(source) => {
+                self.edit(cx, |ws| {
+                    if let Some(eq) = ws.eq_mut() {
+                        eq.sidechain = source;
+                    }
+                });
+                // Picked from a band's dynamics: that band listens to it.
+                if source.is_some() {
+                    self.edit_picked(cx, |b| {
+                        if let Some(d) = b.dynamic.as_mut() {
+                            d.external = true;
+                        }
+                    });
+                }
+            }
             EqOp::SavePreset => {
                 let Some((_, eq)) = self.shown_eq() else {
                     return;
@@ -1869,7 +2138,7 @@ impl Workspace {
             items.push(("Slope".into(), MenuAction::Nothing));
             items.extend(b.shape.slopes().iter().map(|&s| {
                 (
-                    format!("{}{s} dB/oct", tick(s == b.slope)),
+                    format!("{}{}", tick(s == b.slope), slope_text(s)),
                     MenuAction::Eq(EqOp::Slope(s)),
                 )
             }));
@@ -1980,6 +2249,7 @@ impl Workspace {
             }
             return None;
         };
+        let eq = self.eq_as_heard(ch, eq);
         let view = self.eq_view.as_ref()?;
         let (at, size) = (view.at, view.size);
         let head = self.eq_head(ch, &eq, cx);

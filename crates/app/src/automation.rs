@@ -9,7 +9,8 @@ use gpui::{
     canvas, div, fill, linear_color_stop, linear_gradient, point, prelude::*, px, rgb, size,
 };
 use tempo_engine::project::{
-    AutoClip, AutoMode, AutoPoint, AutoShape, PPQ, Param, Project, SILENT_DB, Which, value_at,
+    AutoClip, AutoMode, AutoPoint, AutoShape, EqField, PPQ, Param, Project, SILENT_DB, Which,
+    value_at,
 };
 
 use crate::{
@@ -36,6 +37,7 @@ pub fn to_y(param: Param, value: f32, h: f32) -> f32 {
         Param::Pan => (value.clamp(-1.0, 1.0) + 1.0) / 2.0,
         Param::Mute => value.clamp(0.0, 1.0),
         Param::Plugin(..) => 1.0 - value.clamp(0.0, 1.0),
+        Param::Eq(..) => 1.0 - param.to_unit(value),
     };
     PAD + t * (h - 2.0 * PAD)
 }
@@ -47,6 +49,7 @@ pub fn from_y(param: Param, y: f32, h: f32) -> f32 {
         Param::Pan => t * 2.0 - 1.0,
         Param::Mute => (t > 0.5) as u8 as f32,
         Param::Plugin(..) => 1.0 - t,
+        Param::Eq(..) => param.from_unit(1.0 - t),
     }
 }
 
@@ -81,6 +84,7 @@ fn units(param: Param) -> u8 {
         Param::Pan => 1,
         Param::Mute => 2,
         Param::Plugin(..) => 3,
+        Param::Eq(_, field) => 4 + field as u8,
     }
 }
 
@@ -94,6 +98,8 @@ fn shifted(param: Param, value: f32, by: f32) -> f32 {
         Param::Pan => (value + by).clamp(-1.0, 1.0),
         Param::Mute => value,
         Param::Plugin(..) => (value + by).clamp(0.0, 1.0),
+        // An EQ band's on its own scale: octaves for its frequency and width.
+        Param::Eq(..) => param.from_unit((param.to_unit(value) + by).clamp(0.0, 1.0)),
     }
 }
 
@@ -101,6 +107,7 @@ fn shifted(param: Param, value: f32, by: f32) -> f32 {
 fn apart(param: Param, from: f32, to: f32) -> f32 {
     match param {
         Param::Volume | Param::Send(_) => strip::fader_pos(to) - strip::fader_pos(from),
+        Param::Eq(..) => param.to_unit(to) - param.to_unit(from),
         _ => to - from,
     }
 }
@@ -310,6 +317,20 @@ impl Workspace {
                 items.push(item(param, format!("{name}: {}", p.name)));
             }
         }
+        // The EQ's bands: each one's frequency, gain (if it has one) and width.
+        if let Some(eq) = t.eq.filter(|e| !e.bands.is_empty()) {
+            items.push(("Channel EQ".into(), MenuAction::Nothing));
+            for (b, band) in eq.bands.iter().enumerate() {
+                let fields = [EqField::Freq, EqField::Gain, EqField::Q];
+                for field in fields
+                    .into_iter()
+                    .filter(|&f| f != EqField::Gain || band.shape.has_gain())
+                {
+                    let p = Param::Eq(b as u8, field);
+                    items.push(item(p, self.param_name(track, p)));
+                }
+            }
+        }
         items
     }
 
@@ -333,6 +354,16 @@ impl Workspace {
                 .and_then(|r| r.params.get(&id).copied())
                 .unwrap_or_else(|| self.player.param_value(t.id, which, id))
                 as f32,
+            Param::Eq(band, field) => {
+                let b =
+                    t.eq.and_then(|e| e.bands.get(band as usize).copied())
+                        .unwrap_or_default();
+                match field {
+                    EqField::Freq => b.freq,
+                    EqField::Gain => b.gain_db,
+                    EqField::Q => b.q,
+                }
+            }
         }
     }
 
@@ -350,6 +381,15 @@ impl Workspace {
             Param::Plugin(which, id) => {
                 if let Some(r) = t.plugin_mut(which) {
                     r.params.insert(id, value as f64);
+                }
+            }
+            Param::Eq(band, field) => {
+                if let Some(b) = t.eq.as_mut().and_then(|e| e.bands.get_mut(band as usize)) {
+                    match field {
+                        EqField::Freq => b.freq = value,
+                        EqField::Gain => b.gain_db = value,
+                        EqField::Q => b.q = value,
+                    }
                 }
             }
         }
@@ -389,6 +429,9 @@ impl Workspace {
             Param::Volume | Param::Send(_) => format!("{} dB", db_text(value)),
             Param::Pan => strip::pan_label(value),
             Param::Mute => if value > 0.5 { "Muted" } else { "On" }.into(),
+            Param::Eq(_, EqField::Freq) => crate::eq::hz_text(value),
+            Param::Eq(_, EqField::Gain) => format!("{} dB", db_text(value)),
+            Param::Eq(_, EqField::Q) => format!("Q {value:.2}"),
             Param::Plugin(which, id) => {
                 let id_t = self.session.project.tracks[track].id;
                 let text = self.player.param_text(id_t, which, id, value as f64);
@@ -1458,6 +1501,13 @@ impl Workspace {
                 true => (0.0, 1.0),
                 false => (0.1, 0.9),
             },
+            // A sweep: from 200 Hz to 8 kHz; a gain either way; a width from wide to narrow.
+            Param::Eq(_, EqField::Freq) => (200.0, 8_000.0),
+            Param::Eq(_, EqField::Gain) => match ramp {
+                true => (0.0, 6.0),
+                false => (-6.0, 6.0),
+            },
+            Param::Eq(_, EqField::Q) => (0.5, 4.0),
         }
     }
 
@@ -1693,6 +1743,11 @@ impl Workspace {
                 Param::Pan => vec![(-1.0, "L"), (0.0, "C"), (1.0, "R")],
                 Param::Mute => vec![(0.0, "play"), (1.0, "mute")],
                 Param::Plugin(..) => vec![(1.0, "100"), (0.5, "50"), (0.0, "0")],
+                Param::Eq(_, EqField::Freq) => {
+                    vec![(10_000.0, "10k"), (1_000.0, "1k"), (100.0, "100")]
+                }
+                Param::Eq(_, EqField::Gain) => vec![(12.0, "+12"), (0.0, "0"), (-12.0, "−12")],
+                Param::Eq(_, EqField::Q) => vec![(10.0, "10"), (1.0, "1"), (0.1, "0.1")],
             };
             let scale = marks.into_iter().map(|(v, s)| {
                 div()
@@ -1949,7 +2004,8 @@ impl Workspace {
                                 Param::Volume | Param::Send(_) => Some(0.0),
                                 Param::Pan => Some(0.0),
                                 Param::Plugin(..) => Some(0.5),
-                                Param::Mute => None,
+                                Param::Eq(_, EqField::Gain) => Some(0.0),
+                                Param::Mute | Param::Eq(..) => None,
                             };
                             if let Some(g) = guide {
                                 window.paint_quad(fill(

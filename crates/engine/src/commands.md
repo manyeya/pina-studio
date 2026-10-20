@@ -172,7 +172,9 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   `volume` in dB, `pan`, `mute` (1 muted, 0 not; always steps), `send` (with `"send": i`, which
   of the track's sends, in dB) or `plugin` (with `"plugin": "instrument"` or `{"insert": 0}`, and
   the parameter as `"id"`: its id or its name) from 0 to 1, or as the plugin shows it (a point's
-  `"text"`, like `"2 kHz"`, instead of `"value"`). Lines between points are straight unless the
+  `"text"`, like `"2 kHz"`, instead of `"value"`), or an EQ band's `eq_freq` (Hz), `eq_gain` (dB)
+  or `eq_q` (with the band's place in the EQ as `"id"`): a filter sweep, a boost that grows into
+  the chorus. Lines between points are straight unless the
   point they start from has a `"curve"` (-1 to 1: towards 1 it starts slowly and ends fast,
   towards -1 the other way round), `"ease": true` (an S: slow out of it and slow into the next)
   or `"step": true` (it holds its value, then jumps to the next).
@@ -202,25 +204,38 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   every automated control from where playback starts, over what was there; `off` ignores it.
 - `set_eq` `{"channel": {"track": 1}, "eq": {"bands": [{"shape": "low_cut", "freq": 80, "slope": 24}, {"shape": "bell", "freq": 350, "gain_db": -3, "q": 1.2}, {"shape": "high_shelf", "freq": 10000, "gain_db": 2}]}}`:
   the channel's built-in EQ, before its inserts: up to 24 bands, in order. A band's `shape` is
-  `bell`, `low_shelf`, `low_cut`, `high_shelf`, `high_cut`, `notch`, `band_pass` or
-  `tilt_shelf` (half its gain down below its frequency, half up above); `freq` 10 to 30000 Hz;
-  `gain_db` -30 to 30 (bells, shelves, tilts); `q` 0.025 to 40, the width (a cut's or shelf's
-  bump at its corner, 0.7071 none); `slope` in dB an octave for cuts (6, 12, 18, 24, 30, 36, 48,
-  72, 96) and shelves (6, 12, 18, 24, 36, 48), 12 if left out. `"placement"` puts it on part of
-  the sound: `stereo` (the default), `left`, `right`, `mid` (what both sides share: vocals, bass,
-  kick) or `side` (the edges: a low cut on the side keeps the low end mono).
-  `"dynamic": {"range_db": -4, "threshold_db": -30, "attack_ms": 10, "release_ms": 120}` makes it
-  move with the sound: as what's round its frequency gets louder than the threshold, its gain goes
-  by up to `range_db` more (below 0 down, to tame harshness or boom only when it's there; above 0
-  up). `"off": true` keeps a band but stops it. The EQ's `"scale"` (0 to 2, 1 as set) scales every
-  band's gain; `"output_db"` is its level after them. `bands` replaces them all; to change one,
+  `bell`, `low_shelf`, `low_cut`, `high_shelf`, `high_cut`, `notch`, `band_pass`, `tilt_shelf`
+  (half its gain down below its frequency, half up above), `flat_tilt` (a straight tilt from 20 Hz
+  to 20 kHz, level at its frequency, its gain the difference end to end) or `all_pass` (moves the
+  phase round its frequency, not the level: to line up two takes); `freq` 10 to 30000 Hz;
+  `gain_db` -30 to 30 (bells, shelves, tilts); `q` 0.025 to 40, the width (a cut's or shelf's bump
+  at its corner; left out, its shape's own: none for a cut or shelf); `slope` in dB an octave for
+  cuts (6, 12, 18, 24, 30, 36, 48, 72, 96, or 144: a brickwall) and shelves (6, 12, 18, 24, 36,
+  48), 12 if left out. `"gain_q": true` narrows it as its gain grows, as an analog EQ's bands do.
+  `"placement"` puts it on part of the sound: `stereo` (the default), `left`, `right`, `mid` (what
+  both sides share: vocals, bass, kick) or `side` (the edges: a low cut on the side keeps the low
+  end mono). `"dynamic": {"range_db": -4}` makes it move with the sound (bells, shelves and
+  tilts): as what it covers gets louder than its threshold, its gain goes by up to `range_db` more
+  (below 0 down, to tame harshness or boom only when it's there; above 0 up). It sets its own
+  threshold (a little over what it usually hears, so it moves on what stands out) unless given
+  `"threshold_db"` (-80 to 0), and its own attack and release (by its frequency) unless given
+  `"attack_ms"` and `"release_ms"`; `"trigger": [5000, 8000]` has it listen between two
+  frequencies rather than to what it covers, `"external": true` to the EQ's sidechain, and
+  `"bypass": true` keeps it still. `"off": true` keeps a band but stops it. The EQ's `"scale"` (0
+  to 2, 1 as set) scales every band's gain; `"output_db"` is its level after them, `"auto_gain":
+  true` makes up for how much louder or quieter its bands make it, `"pan"` (-1 to 1) balances
+  left and right (with `"pan_ms": true` mid against side), `"invert": true` turns it upside down;
+  `"character"` is `clean`, `subtle` or `warm` (an analog EQ's saturation, more where it boosts);
+  `"sidechain"` is the id of the track its dynamic bands hear with `external`. `bands` replaces
+  them all; to change one,
   `set_eq_band`. The old names still work, on the first of their kind: `"low_cut": 80` (Hz; 20 or
   less is off), `"low_mid"` and `"high_mid"` (`{"freq", "gain_db", "q"}`, the first and second
   bells) and `"high_shelf"`. Leave out what you don't change; `"bypass": true` keeps it but stops
   it; no `eq` takes it out. `channel` is `{"track": i}`, `{"aux": i}` or `"master"`.
 - `set_eq_band` `{"channel": {"track": 1}, "band": 2, "freq": 3500, "gain_db": -3, "q": 2, "dynamic": {"range_db": -4, "threshold_db": -28}}`:
   one band of the channel's EQ, by its place (0 first): only what's given changes (`shape`,
-  `freq`, `gain_db`, `q`, `slope`, `placement`, `dynamic` (`false` makes it still), `off`). The
+  `freq`, `gain_db`, `q`, `slope`, `placement`, `gain_q`, `dynamic` (`false` makes it still),
+  `off`). The
   place after the last adds a band (a 1 kHz bell unless it says); `"remove": true` takes the band
   out, the ones after moving up. The channel gets an EQ if it hasn't one.
 - `set_comp` `{"channel": {"track": 1}, "comp": {"threshold_db": -18, "ratio": 4, "attack_ms": 10, "release_ms": 120, "makeup_db": 3, "rms": false}}`:
