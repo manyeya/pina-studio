@@ -447,9 +447,26 @@ struct StripDsp {
 
 impl Strip {
     /// Runs a block through the strip as `dsp` has it; returns the compressor's gain reduction,
-    /// in dB.
-    fn run(&mut self, dsp: &StripDsp, l: &mut [f32], r: &mut [f32]) -> f32 {
-        self.process(dsp.eq.as_ref(), dsp.comp.as_ref(), dsp.sat.as_ref(), l, r)
+    /// in dB. The EQ window, if it watches lane `slot`, hears what its EQ does.
+    fn run(
+        &mut self,
+        dsp: &StripDsp,
+        l: &mut [f32],
+        r: &mut [f32],
+        shared: Option<&Shared>,
+        slot: usize,
+    ) -> f32 {
+        let tap = shared
+            .map(|s| &s.eq_tap)
+            .filter(|t| dsp.eq.is_some() && t.watches(slot));
+        self.process(
+            dsp.eq.as_ref(),
+            dsp.comp.as_ref(),
+            dsp.sat.as_ref(),
+            l,
+            r,
+            tap,
+        )
     }
 }
 
@@ -1580,6 +1597,8 @@ pub struct Shared {
     metronome: AtomicBool,
     /// Each lane's modulators' latest values (f32 bits), `MAX_MODS` a lane.
     mods: Vec<AtomicU32>,
+    /// The EQ the EQ window shows: what it hears and plays, for its analyzer.
+    pub eq_tap: crate::eq::Tap,
 }
 
 impl Shared {
@@ -1594,6 +1613,7 @@ impl Shared {
             buffer: AtomicU32::new(0),
             metronome: AtomicBool::new(false),
             mods: (0..SLOTS * MAX_MODS).map(|_| AtomicU32::new(0)).collect(),
+            eq_tap: crate::eq::Tap::new(),
         }
     }
 
@@ -2143,7 +2163,7 @@ impl Engine {
                 }
             }
             let reduction = match moved.strip {
-                false => lane.strip.run(&plan.dsp, l, r),
+                false => lane.strip.run(&plan.dsp, l, r, shared, plan.slot),
                 true => {
                     let mut dsp = StripDsp {
                         eq: plan.dsp.eq,
@@ -2153,7 +2173,7 @@ impl Engine {
                     dsp.eq.iter_mut().for_each(|e| moved.eq(e));
                     dsp.comp.iter_mut().for_each(|c| moved.comp(c));
                     dsp.sat.iter_mut().for_each(|s| moved.sat(s));
-                    lane.strip.run(&dsp, l, r)
+                    lane.strip.run(&dsp, l, r, shared, plan.slot)
                 }
             };
             let sidechains = &arrangement.sidechains;
@@ -2249,7 +2269,7 @@ impl Engine {
             };
             l.copy_from_slice(&arrangement.buses[aux][0][..frames]);
             r.copy_from_slice(&arrangement.buses[aux][1][..frames]);
-            let reduction = lane.strip.run(&plan.dsp, l, r);
+            let reduction = lane.strip.run(&plan.dsp, l, r, shared, plan.slot);
             for (i, p) in lane.inserts.iter_mut().enumerate() {
                 p.set_transport(playing, from, tempo);
                 let sc = sidechain(&arrangement.sidechains, plan.sidechains.get(i), frames);
@@ -2272,6 +2292,8 @@ impl Engine {
             &arrangement.master_strip,
             &mut out_l[..frames],
             &mut out_r[..frames],
+            shared,
+            MASTER,
         );
         if let Some(lane) = arrangement
             .master_lane
@@ -3914,11 +3936,11 @@ mod tests {
         let dry = peak(&render(&project(vec![t.clone()]), Path::new("."), BEAT)[0][BEAT / 2..]);
         let mut boosted = t.clone();
         boosted.eq = Some(Eq {
-            low_mid: crate::project::Band {
-                freq: 440.0,
-                gain_db: 6.0,
-                q: 1.0,
-            },
+            bands: crate::project::Bands::from_slice(&[crate::project::EqBand::new(
+                crate::project::Shape::Bell,
+                440.0,
+                6.0,
+            )]),
             ..Eq::default()
         });
         let louder =

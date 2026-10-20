@@ -202,9 +202,10 @@ pub enum Target {
         track: u64,
         param: u32,
     },
+    /// A channel's EQ's first low cut.
     LowCut(Channel),
-    /// A bell or the shelf of a channel's EQ: 1 the low mid, 2 the high mid, 3 the shelf.
-    Gain(Channel, usize),
+    /// A quick EQ knob: a band of the channel's EQ, found by what it is.
+    Quick(Channel, crate::eq::Quick),
     Comp(Channel, CompField),
     Sat(Channel, SatField),
     /// A setting of a track's built-in sampler (by track index).
@@ -494,10 +495,27 @@ pub enum Drag {
         left: f32,
         width: f32,
     },
-    /// A band's handle on the EQ graph.
-    EqBand {
-        channel: Channel,
-        band: usize,
+    /// A band's dot in the EQ window, from where it was pressed and its frequency, gain and Q
+    /// then; `q` drags its width only.
+    EqNode {
+        id: u16,
+        from: Point<f32>,
+        start: (f32, f32, f32),
+        q: bool,
+    },
+    /// A knob in the EQ window (a band's by id; 0 for the EQ's own), from the y it was pressed
+    /// at and its value then.
+    EqKnob {
+        id: u16,
+        knob: crate::eq::EqKnob,
+        from: f32,
+        start: f32,
+    },
+    /// The EQ window, moved by its title or resized by its corner.
+    EqWindow {
+        from: Point<f32>,
+        start: (f32, f32),
+        resize: bool,
     },
     /// The editor's top edge, from the y and height it had.
     Editor {
@@ -943,7 +961,8 @@ pub struct Workspace {
     /// Where the lanes and the EQ graph were drawn last frame, for turning pointer positions into
     /// ticks and frequencies.
     pub lanes_bounds: Rc<Cell<Bounds<Pixels>>>,
-    pub eq_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// The Channel EQ's window, when it's open.
+    pub eq_view: Option<crate::eq::EqView>,
     /// The window's size, for what fits.
     pub viewport_h: f32,
     pub viewport_w: f32,
@@ -1115,7 +1134,7 @@ impl Workspace {
             smart: HashMap::new(),
             exporting: false,
             lanes_bounds: Rc::new(Cell::new(Bounds::default())),
-            eq_bounds: Rc::new(Cell::new(Bounds::default())),
+            eq_view: None,
             slider_bounds: Rc::new(RefCell::new(HashMap::new())),
             viewport_h: 900.0,
             viewport_w: 1440.0,
@@ -1567,6 +1586,7 @@ impl Workspace {
                 | Drag::SoloHold
                 | Drag::AutoMarquee { .. }
                 | Drag::AutoDraw { .. }
+                | Drag::EqWindow { .. }
         );
         if edits {
             self.session.checkpoint();
@@ -1895,7 +1915,22 @@ impl Workspace {
                     return;
                 }
             }
-            Some(Drag::EqBand { channel, band }) => self.drag_band(channel, band, p),
+            Some(Drag::EqNode { id, from, start, q }) => self.drag_eq_node(id, from, start, q, p),
+            Some(Drag::EqKnob {
+                id,
+                knob,
+                from,
+                start,
+            }) => self.drag_eq_knob(id, knob, from, start, p.y),
+            Some(Drag::EqWindow {
+                from,
+                start,
+                resize,
+            }) => {
+                self.drag_eq_window(from, start, resize, p);
+                cx.notify();
+                return;
+            }
             Some(Drag::Editor { y, height }) => {
                 self.editor_h = height - (p.y - y);
                 self.editor_h = self.editor_height();
@@ -1970,6 +2005,10 @@ impl Workspace {
         match self.drag {
             Some(Drag::ZoomSpan) => self.zoom_release(cx),
             Some(Drag::SoloHold) => self.solo_release(cx),
+            // A dot or knob clicked, not moved: no edit to undo.
+            Some(Drag::EqNode { .. } | Drag::EqKnob { .. }) if self.session.unchanged() => {
+                self.session.cancel()
+            }
             _ => {}
         }
         if let Some(Drag::Modulator { track, index }) = self.drag
@@ -2295,7 +2334,7 @@ impl Workspace {
     }
 
     fn delete(&mut self, cx: &mut Context<Self>) {
-        if self.delete_picked(cx) {
+        if self.delete_eq_band(cx) || self.delete_picked(cx) {
             return;
         }
         let notes_shown = matches!(self.bottom, Some(Bottom::PianoRoll | Bottom::Score));
@@ -2498,15 +2537,10 @@ impl Workspace {
                     .param_value(track, tempo_engine::player::Which::Instrument, param)
                     as f32
             }
-            Target::LowCut(ch) => low_cut_pos(self.strip_dsp(ch).0.map_or(0.0, |e| e.low_cut)),
-            Target::Gain(ch, band) => {
-                let eq = self.strip_dsp(ch).0.unwrap_or_default();
-                eq_gain_pos(match band {
-                    1 => eq.low_mid.gain_db,
-                    2 => eq.high_mid.gain_db,
-                    _ => eq.high_shelf.gain_db,
-                })
+            Target::LowCut(ch) => {
+                low_cut_pos(self.strip_dsp(ch).0.map_or(0.0, |e| crate::eq::low_cut(&e)))
             }
+            Target::Quick(ch, q) => eq_gain_pos(self.strip_dsp(ch).0.map_or(0.0, |e| q.gain(&e))),
             Target::Comp(ch, field) => {
                 crate::strip::comp_pos(field, &self.strip_dsp(ch).1.unwrap_or_default())
             }
@@ -2532,17 +2566,15 @@ impl Workspace {
                     r.params.insert(param, v as f64);
                 }
             }
-            Target::LowCut(ch) => {
-                self.strip_dsp_mut(ch).0.get_or_insert_default().low_cut = low_cut_hz(v)
-            }
-            Target::Gain(ch, band) => {
+            Target::LowCut(ch) => crate::eq::set_low_cut(
+                self.strip_dsp_mut(ch).0.get_or_insert_default(),
+                low_cut_hz(v),
+            ),
+            Target::Quick(ch, q) => {
                 let eq = self.strip_dsp_mut(ch).0.get_or_insert_default();
-                let b = match band {
-                    1 => &mut eq.low_mid,
-                    2 => &mut eq.high_mid,
-                    _ => &mut eq.high_shelf,
-                };
-                b.gain_db = eq_gain_db(v);
+                if let Some(i) = q.band(eq) {
+                    eq.bands[i].gain_db = eq_gain_db(v);
+                }
             }
             Target::Comp(ch, field) => {
                 comp_set(field, self.strip_dsp_mut(ch).1.get_or_insert_default(), v)
@@ -2624,24 +2656,6 @@ impl Workspace {
             cx,
         );
         self.drag_to(p, cx);
-    }
-
-    /// Moves a band's handle on the EQ graph to where the pointer is.
-    fn drag_band(&mut self, ch: Channel, band: usize, p: Point<f32>) {
-        let b = self.eq_bounds.get();
-        let (x, y) = (
-            ((p.x - f32::from(b.origin.x)) / f32::from(b.size.width)).clamp(0.0, 1.0),
-            ((p.y - f32::from(b.origin.y)) / f32::from(b.size.height)).clamp(0.0, 1.0),
-        );
-        let freq = crate::mixer::graph_freq(x);
-        let gain = crate::mixer::graph_gain(y);
-        let eq = self.strip_dsp_mut(ch).0.get_or_insert_default();
-        match band {
-            0 => eq.low_cut = freq.min(1_000.0),
-            1 => (eq.low_mid.freq, eq.low_mid.gain_db) = (freq, gain),
-            2 => (eq.high_mid.freq, eq.high_mid.gain_db) = (freq, gain),
-            _ => (eq.high_shelf.freq, eq.high_shelf.gain_db) = (freq.max(1_000.0), gain),
-        }
     }
 
     pub fn save(&mut self, cx: &mut Context<Self>) -> bool {
@@ -3020,6 +3034,7 @@ impl Render for Workspace {
         }
         self.follow_pattern(cx);
         self.read_meters();
+        self.eq_frame();
         self.capture(cx);
         self.automation_frame(cx);
         self.show_automation_values();
@@ -3038,6 +3053,7 @@ impl Render for Workspace {
             || self.agent_presence().is_some()
             || self.browser.auditioning()
             || self.player.rendering()
+            || self.eq_view.as_ref().is_some_and(|v| playing || v.moving())
             || (self.bottom == Some(Bottom::Modulation)
                 && self
                     .session
@@ -3282,6 +3298,7 @@ impl Render for Workspace {
             .children(self.new_song_view(cx))
             .children(self.panner_view(cx))
             .children(self.mod_ghost())
+            .children(self.eq_window(cx))
             .children(self.menu_view(cx))
             .children(self.adder_view(cx))
             .children(self.export_view(cx))

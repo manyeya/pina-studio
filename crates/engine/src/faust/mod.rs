@@ -1,6 +1,6 @@
-//! The channel strip's effects, written in Faust (`crates/engine/faust/*.dsp`) and compiled to
-//! Rust by `scripts/faust.sh`. The generated code is checked in, so building tempo doesn't need
-//! Faust. Around it, this is what it expects: Faust's DSP and UI traits, as its Rust
+//! The channel strip's compressor and saturator, written in Faust (`crates/engine/faust/*.dsp`)
+//! and compiled to Rust by `scripts/faust.sh`. The generated code is checked in, so building tempo
+//! doesn't need Faust. Around it, this is what it expects: Faust's DSP and UI traits, as its Rust
 //! architecture files define them.
 
 #![allow(
@@ -79,11 +79,6 @@ pub trait UI<T> {
     fn add_horizontal_bargraph(&mut self, label: &str, param: ParamIndex, min: T, max: T);
     fn add_vertical_bargraph(&mut self, label: &str, param: ParamIndex, min: T, max: T);
     fn declare(&mut self, param: Option<ParamIndex>, key: &str, value: &str);
-}
-
-pub mod eq {
-    use super::*;
-    include!("eq.rs");
 }
 
 pub mod comp {

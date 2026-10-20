@@ -7,6 +7,7 @@ pub mod critique;
 pub mod drums;
 pub mod dsp;
 pub mod engine;
+pub mod eq;
 mod faust;
 pub mod look;
 pub mod midi;

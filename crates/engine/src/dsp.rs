@@ -1,15 +1,15 @@
-//! The channel strip's built-in processors, as Logic's Channel EQ and Compressor: a low cut, two
-//! bells and a high shelf; a soft-knee compressor; and a saturator. The sound is Faust's
-//! (`crates/engine/faust/*.dsp`, compiled into `faust/`); this runs it, and works out what the UI
-//! draws: the EQ's curve and the saturator's.
-
-use std::f64::consts::PI;
+//! The channel strip's built-in processors: the EQ (`eq.rs`), a soft-knee compressor and a
+//! saturator. The compressor's and saturator's sound is Faust's (`crates/engine/faust/*.dsp`,
+//! compiled into `faust/`); this runs them, and works out the saturator's curve for the UI.
 
 use crate::{
     engine::MAX_BLOCK,
-    faust::{FaustDsp, ParamIndex, comp::CompDsp, controls, eq::EqDsp, sat::SatDsp},
-    project::{Band, Comp, Eq, Saturator},
+    eq::{Processor, Tap},
+    faust::{FaustDsp, ParamIndex, comp::CompDsp, controls, sat::SatDsp},
+    project::{Comp, Eq, Saturator},
 };
+
+pub use crate::eq::eq_response;
 
 /// The lowest low cut: at or under this, it's off.
 pub const LOW_CUT_OFF: f32 = 20.0;
@@ -18,13 +18,12 @@ pub const LOW_CUT_OFF: f32 = 20.0;
 /// where they're set rather than gliding there.
 const PRIME_BLOCKS: usize = 8;
 
-/// A channel's built-in effects, running: the Faust EQ, compressor and saturator, which keep their
+/// A channel's built-in effects, running: the EQ, compressor and saturator, which keep their
 /// memory through edits.
 pub struct Strip {
-    eq: Box<EqDsp>,
+    eq: Box<Processor>,
     comp: Box<CompDsp>,
     sat: Box<SatDsp>,
-    eq_controls: [ParamIndex; 10],
     comp_controls: [ParamIndex; 6],
     sat_controls: [ParamIndex; 4],
     /// Which ran last block: one coming back starts afresh.
@@ -37,28 +36,12 @@ pub struct Strip {
 
 impl Strip {
     pub fn new(rate: f64) -> Self {
+        let eq = Box::new(Processor::new(rate));
         let rate = rate as i32;
-        let mut eq = Box::new(EqDsp::new());
         let mut comp = Box::new(CompDsp::new());
         let mut sat = Box::new(SatDsp::new());
-        eq.init(rate);
         comp.init(rate);
         sat.init(rate);
-        let eq_controls = controls(
-            &*eq,
-            [
-                "low_cut",
-                "low_mid_freq",
-                "low_mid_gain",
-                "low_mid_q",
-                "high_mid_freq",
-                "high_mid_gain",
-                "high_mid_q",
-                "shelf_freq",
-                "shelf_gain",
-                "shelf_q",
-            ],
-        );
         let comp_controls = controls(
             &*comp,
             ["threshold", "ratio", "attack", "release", "makeup", "rms"],
@@ -69,7 +52,6 @@ impl Strip {
             eq,
             comp,
             sat,
-            eq_controls,
             comp_controls,
             sat_controls,
             on: [false; 3],
@@ -79,8 +61,9 @@ impl Strip {
     }
 
     /// Runs a block (at most `MAX_BLOCK`) through whichever of the EQ, compressor and saturator
-    /// are given, in place; returns the most the compressor turned it down, in dB.
-    /// Allocation-free.
+    /// are given, in place; returns the most the compressor turned it down, in dB. `tap`, when
+    /// the EQ window watches this channel, gets what the EQ heard and played (and says which
+    /// band to hear alone). Allocation-free.
     pub fn process(
         &mut self,
         eq: Option<&Eq>,
@@ -88,31 +71,16 @@ impl Strip {
         sat: Option<&Saturator>,
         l: &mut [f32],
         r: &mut [f32],
+        tap: Option<&Tap>,
     ) -> f32 {
         let n = l.len().min(MAX_BLOCK);
         let (l, r) = (&mut l[..n], &mut r[..n]);
-        if let Some(e) = eq {
-            let values = [
-                e.low_cut,
-                e.low_mid.freq,
-                e.low_mid.gain_db,
-                e.low_mid.q,
-                e.high_mid.freq,
-                e.high_mid.gain_db,
-                e.high_mid.q,
-                e.high_shelf.freq,
-                e.high_shelf.gain_db,
-                e.high_shelf.q,
-            ];
-            set(&mut *self.eq, &self.eq_controls, &values);
-            if !self.on[0] {
-                prime(&mut *self.eq, &mut self.input, &mut self.out);
+        match eq {
+            Some(e) => {
+                let solo = tap.and_then(Tap::solo);
+                self.eq.process(e, solo, l, r, tap);
             }
-            self.input[0][..n].copy_from_slice(l);
-            self.input[1][..n].copy_from_slice(r);
-            let [il, ir] = &self.input;
-            self.eq
-                .compute(n, &[&il[..n], &ir[..n]], &mut [&mut *l, &mut *r]);
+            None => self.eq.rest(),
         }
         let mut most = 0f32;
         if let Some(c) = comp {
@@ -176,105 +144,6 @@ fn prime(dsp: &mut dyn FaustDsp<T = f32>, silence: &mut [Vec<f32>; 2], out: &mut
     }
 }
 
-/// Second-order filter coefficients, normalized so a0 is 1 (RBJ's audio EQ cookbook): the
-/// responses of the Faust EQ's state-variable filters, for drawing its curve.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct Biquad {
-    b0: f64,
-    b1: f64,
-    b2: f64,
-    a1: f64,
-    a2: f64,
-}
-
-impl Biquad {
-    fn new(b: [f64; 3], a: [f64; 3]) -> Self {
-        Biquad {
-            b0: b[0] / a[0],
-            b1: b[1] / a[0],
-            b2: b[2] / a[0],
-            a1: a[1] / a[0],
-            a2: a[2] / a[0],
-        }
-    }
-
-    fn highpass(freq: f64, q: f64, rate: f64) -> Self {
-        let w = 2.0 * PI * freq / rate;
-        let (cos, alpha) = (w.cos(), w.sin() / (2.0 * q));
-        Biquad::new(
-            [(1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0],
-            [1.0 + alpha, -2.0 * cos, 1.0 - alpha],
-        )
-    }
-
-    fn bell(freq: f64, gain_db: f64, q: f64, rate: f64) -> Self {
-        let a = 10f64.powf(gain_db / 40.0);
-        let w = 2.0 * PI * freq / rate;
-        let (cos, alpha) = (w.cos(), w.sin() / (2.0 * q));
-        Biquad::new(
-            [1.0 + alpha * a, -2.0 * cos, 1.0 - alpha * a],
-            [1.0 + alpha / a, -2.0 * cos, 1.0 - alpha / a],
-        )
-    }
-
-    fn high_shelf(freq: f64, gain_db: f64, q: f64, rate: f64) -> Self {
-        let a = 10f64.powf(gain_db / 40.0);
-        let w = 2.0 * PI * freq / rate;
-        let (cos, alpha) = (w.cos(), w.sin() / (2.0 * q));
-        let s = 2.0 * a.sqrt() * alpha;
-        Biquad::new(
-            [
-                a * ((a + 1.0) + (a - 1.0) * cos + s),
-                -2.0 * a * ((a - 1.0) + (a + 1.0) * cos),
-                a * ((a + 1.0) + (a - 1.0) * cos - s),
-            ],
-            [
-                (a + 1.0) - (a - 1.0) * cos + s,
-                2.0 * ((a - 1.0) - (a + 1.0) * cos),
-                (a + 1.0) - (a - 1.0) * cos - s,
-            ],
-        )
-    }
-
-    /// The gain at a frequency, in dB.
-    fn response_db(&self, freq: f64, rate: f64) -> f64 {
-        let w = 2.0 * PI * freq / rate;
-        // H(z) at z = e^jw, as (re, im) of numerator and denominator in z^-1.
-        let (c1, s1, c2, s2) = (w.cos(), -w.sin(), (2.0 * w).cos(), -(2.0 * w).sin());
-        let num = (
-            self.b0 + self.b1 * c1 + self.b2 * c2,
-            self.b1 * s1 + self.b2 * s2,
-        );
-        let den = (
-            1.0 + self.a1 * c1 + self.a2 * c2,
-            self.a1 * s1 + self.a2 * s2,
-        );
-        let mag = (num.0.hypot(num.1) / den.0.hypot(den.1)).max(1e-9);
-        20.0 * mag.log10()
-    }
-}
-
-fn safe(band: &Band, rate: f64) -> (f64, f64, f64) {
-    let freq = (band.freq as f64).clamp(10.0, rate * 0.45);
-    (freq, band.gain_db as f64, (band.q as f64).clamp(0.1, 18.0))
-}
-
-/// What an EQ does at `freq`, in dB: for drawing its curve.
-pub fn eq_response(eq: &Eq, freq: f64, rate: f64) -> f64 {
-    let (f1, g1, q1) = safe(&eq.low_mid, rate);
-    let (f2, g2, q2) = safe(&eq.high_mid, rate);
-    let (f3, g3, q3) = safe(&eq.high_shelf, rate);
-    let mut db = Biquad::bell(f1, g1, q1, rate).response_db(freq, rate)
-        + Biquad::bell(f2, g2, q2, rate).response_db(freq, rate)
-        + Biquad::high_shelf(f3, g3, q3, rate).response_db(freq, rate);
-    if eq.low_cut > LOW_CUT_OFF {
-        let cut = (eq.low_cut as f64).min(rate * 0.45);
-        let q = std::f64::consts::FRAC_1_SQRT_2;
-        db += Biquad::highpass(cut, q, rate).response_db(freq, rate);
-    }
-    db
-}
-
 /// The saturator's curve, what a steady level `x` comes out at, mix and all: for drawing it.
 /// (The Faust code averages the same curve between samples, at twice the rate.)
 pub fn sat_curve(s: &Saturator, x: f32) -> f32 {
@@ -288,6 +157,8 @@ pub fn sat_curve(s: &Saturator, x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::{Bands, EqBand, Shape};
+    use std::f64::consts::PI;
 
     const RATE: f64 = 48_000.0;
 
@@ -315,7 +186,7 @@ mod tests {
         let mut most = 0f32;
         for at in (0..l.len()).step_by(MAX_BLOCK) {
             let end = (at + MAX_BLOCK).min(l.len());
-            most = most.max(strip.process(eq, comp, sat, &mut l[at..end], &mut r[at..end]));
+            most = most.max(strip.process(eq, comp, sat, &mut l[at..end], &mut r[at..end], None));
         }
         assert_eq!(l, r); // both sides alike, as they went in
         (l, most)
@@ -348,19 +219,20 @@ mod tests {
     }
 
     #[test]
-    fn the_curve_drawn_is_what_the_faust_eq_does() {
-        let mut eq = Eq {
-            low_cut: 120.0,
+    fn the_curve_drawn_is_what_the_strip_eq_does() {
+        let mut cut = EqBand::new(Shape::LowCut, 120.0, 0.0);
+        cut.slope = 24;
+        let mut bell = EqBand::new(Shape::Bell, 300.0, -4.0);
+        bell.q = 1.4;
+        let eq = Eq {
+            bands: Bands::from_slice(&[
+                cut,
+                bell,
+                EqBand::new(Shape::Bell, 2_000.0, 6.0),
+                EqBand::new(Shape::HighShelf, 10_000.0, -9.0),
+            ]),
             ..Eq::default()
         };
-        eq.low_mid = Band {
-            freq: 300.0,
-            gain_db: -4.0,
-            q: 1.4,
-        };
-        eq.high_mid.gain_db = 6.0;
-        eq.high_mid.freq = 2_000.0;
-        eq.high_shelf.gain_db = -9.0;
         for freq in [50.0, 120.0, 300.0, 700.0, 2_000.0, 5_000.0, 12_000.0] {
             let (heard, drawn) = (through(&eq, freq), eq_response(&eq, freq, RATE));
             assert!(
@@ -464,7 +336,12 @@ mod cost {
         let mut strip = Strip::new(rate);
         let (eq, comp, sat) = (
             Eq {
-                low_cut: 80.0,
+                bands: crate::project::Bands::from_slice(&[
+                    crate::project::EqBand::new(crate::project::Shape::LowCut, 80.0, 0.0),
+                    crate::project::EqBand::new(crate::project::Shape::Bell, 300.0, -3.0),
+                    crate::project::EqBand::new(crate::project::Shape::Bell, 3_000.0, 2.0),
+                    crate::project::EqBand::new(crate::project::Shape::HighShelf, 10_000.0, 2.0),
+                ]),
                 ..Eq::default()
             },
             Comp::default(),
@@ -478,7 +355,7 @@ mod cost {
         let mut time = |e: Option<&Eq>, c: Option<&Comp>, s: Option<&Saturator>| {
             let began = std::time::Instant::now();
             for _ in 0..(seconds * 48_000) / MAX_BLOCK {
-                strip.process(e, c, s, &mut l, &mut r);
+                strip.process(e, c, s, &mut l, &mut r, None);
             }
             began.elapsed().as_secs_f64() / seconds as f64 * 100.0
         };

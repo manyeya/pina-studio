@@ -200,10 +200,29 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   is let go (touch) or playback stops (latch); `trim` records as touch does but moves the line
   that's there up or down by how far the control is moved, keeping its shape; `write` records
   every automated control from where playback starts, over what was there; `off` ignores it.
-- `set_eq` `{"channel": {"track": 1}, "eq": {"low_cut": 80, "low_mid": {"freq": 400, "gain_db": -2.5, "q": 1}, "high_mid": {"freq": 2500, "gain_db": 3.5, "q": 1}, "high_shelf": {"freq": 10000, "gain_db": 4}}}`:
-  the channel's built-in EQ, before its inserts: a low cut (Hz; 20 or less is off), two bells and
-  a high shelf. Leave out what you don't change; `"bypass": true` keeps it but stops it; no `eq`
-  takes it out. `channel` is `{"track": i}`, `{"aux": i}` or `"master"`.
+- `set_eq` `{"channel": {"track": 1}, "eq": {"bands": [{"shape": "low_cut", "freq": 80, "slope": 24}, {"shape": "bell", "freq": 350, "gain_db": -3, "q": 1.2}, {"shape": "high_shelf", "freq": 10000, "gain_db": 2}]}}`:
+  the channel's built-in EQ, before its inserts: up to 24 bands, in order. A band's `shape` is
+  `bell`, `low_shelf`, `low_cut`, `high_shelf`, `high_cut`, `notch`, `band_pass` or
+  `tilt_shelf` (half its gain down below its frequency, half up above); `freq` 10 to 30000 Hz;
+  `gain_db` -30 to 30 (bells, shelves, tilts); `q` 0.025 to 40, the width (a cut's or shelf's
+  bump at its corner, 0.7071 none); `slope` in dB an octave for cuts (6, 12, 18, 24, 30, 36, 48,
+  72, 96) and shelves (6, 12, 18, 24, 36, 48), 12 if left out. `"placement"` puts it on part of
+  the sound: `stereo` (the default), `left`, `right`, `mid` (what both sides share: vocals, bass,
+  kick) or `side` (the edges: a low cut on the side keeps the low end mono).
+  `"dynamic": {"range_db": -4, "threshold_db": -30, "attack_ms": 10, "release_ms": 120}` makes it
+  move with the sound: as what's round its frequency gets louder than the threshold, its gain goes
+  by up to `range_db` more (below 0 down, to tame harshness or boom only when it's there; above 0
+  up). `"off": true` keeps a band but stops it. The EQ's `"scale"` (0 to 2, 1 as set) scales every
+  band's gain; `"output_db"` is its level after them. `bands` replaces them all; to change one,
+  `set_eq_band`. The old names still work, on the first of their kind: `"low_cut": 80` (Hz; 20 or
+  less is off), `"low_mid"` and `"high_mid"` (`{"freq", "gain_db", "q"}`, the first and second
+  bells) and `"high_shelf"`. Leave out what you don't change; `"bypass": true` keeps it but stops
+  it; no `eq` takes it out. `channel` is `{"track": i}`, `{"aux": i}` or `"master"`.
+- `set_eq_band` `{"channel": {"track": 1}, "band": 2, "freq": 3500, "gain_db": -3, "q": 2, "dynamic": {"range_db": -4, "threshold_db": -28}}`:
+  one band of the channel's EQ, by its place (0 first): only what's given changes (`shape`,
+  `freq`, `gain_db`, `q`, `slope`, `placement`, `dynamic` (`false` makes it still), `off`). The
+  place after the last adds a band (a 1 kHz bell unless it says); `"remove": true` takes the band
+  out, the ones after moving up. The channel gets an EQ if it hasn't one.
 - `set_comp` `{"channel": {"track": 1}, "comp": {"threshold_db": -18, "ratio": 4, "attack_ms": 10, "release_ms": 120, "makeup_db": 3, "rms": false}}`:
   the built-in compressor, after the EQ: a 6 dB soft knee, both sides turned down together.
   `"rms": true` makes it listen to an RMS average over 15 ms rather than the peaks: gentler, more
@@ -295,7 +314,8 @@ chord track; parts are written over it, and the critic checks against it.
   one replaced (its routes kept unless it brings its own); `remove_modulator` `{"track": 1, "index": 0}`.
 - `modulate` `{"track": 1, "modulator": 0, "target": "pan", "depth": 0.8}`: a modulator moving a
   setting by `depth` in its units (0 takes the route off): `"volume"` (dB), `"pan"` (-1 to 1),
-  `{"send": 0}` (dB), `"low_cut"` (octaves), `{"eq_gain": 1}` (2 the high mid, 3 the shelf; dB),
+  `{"send": 0}` (dB), `"low_cut"` (the EQ's first low cut; octaves), `{"eq_gain": 1}` (that EQ
+  band's gain, by its place; dB), `{"eq_freq": 1}` (its frequency; octaves),
   `"comp_threshold"`, `"comp_makeup"`, `"sat_drive"` (dB), `"sat_tone"`, `"sat_mix"`,
   `{"sampler": "cutoff"}` (octaves; also `resonance`, `filter_env`, `transpose` in semitones,
   `volume` in dB, `vibrato` in cents, `lfo_filter`, `tremolo`), or `{"plugin": ["instrument", 12]}`

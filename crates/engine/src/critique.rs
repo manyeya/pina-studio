@@ -544,18 +544,18 @@ pub fn mix(p: &Project, heard: &Heard) -> Vec<Issue> {
             })
             .map(|(t, _)| t);
         let (what, fix) = match (i, off > 0.0) {
-            (0, false) => ("thin: little sub", "a sub or 808 with weight below 60 Hz, louder; don't low_cut the bass".to_string()),
-            (0, true) => ("too much sub: it'll swamp small speakers and eat headroom", "low_cut 30 on the bass, turn the sub down".to_string()),
-            (1, false) => ("no low-end body", "on the bass: set_eq low_mid +3 dB at 100 Hz and set_saturator drive 9 (its harmonics fill 60-250 Hz); a kick with body; mix_role does both".to_string()),
-            (1, true) => ("boomy", "set_eq low_mid -3 dB at 120-200 Hz on the bass or kick, low_cut 120 on everything else".to_string()),
-            (2, true) => ("muddy: the low mids pile up", "set_eq low_mid -3 dB at 300-400 Hz, q 1, on the chords and pads; low_cut 150-200 on them".to_string()),
+            (0, false) => ("thin: little sub", "a sub or 808 with weight below 60 Hz, louder; no low cut on the bass".to_string()),
+            (0, true) => ("too much sub: it'll swamp small speakers and eat headroom", "a low cut at 30 Hz on the bass (set_eq_band), turn the sub down".to_string()),
+            (1, false) => ("no low-end body", "on the bass: a bell +3 dB at 100 Hz (set_eq_band) and set_saturator drive 9 (its harmonics fill 60-250 Hz); a kick with body; mix_role does both".to_string()),
+            (1, true) => ("boomy", "a bell -3 dB at 120-200 Hz on the bass or kick (set_eq_band), a low cut at 120 Hz on everything else".to_string()),
+            (2, true) => ("muddy: the low mids pile up", "a bell -3 dB at 300-400 Hz, q 1, on the chords and pads (set_eq_band); a low cut at 150-200 Hz on them".to_string()),
             (2, false) => ("hollow: thin low mids", "less low cut on the chords".to_string()),
-            (3, true) => ("honky, forward mids", "set_eq high_mid -2 dB at 1-2 kHz on the loudest part".to_string()),
-            (3, false) => ("the mids are scooped: parts lose definition", "set_eq high_mid +2 dB at 2 kHz on the lead".to_string()),
-            (4, true) => ("harsh: too much 4-8 kHz", "set_eq high_mid -3 dB at 4-5 kHz, q 1.5, on the brightest part".to_string()),
-            (4, false) => ("dull: no bite", "set_eq high_mid +2 dB at 5 kHz on the drums and lead".to_string()),
-            (5, true) => ("fizzy, too much air", "set_eq high_shelf -3 dB at 10 kHz".to_string()),
-            _ => ("dark: no air", "set_eq high_shelf +2 dB at 10 kHz on the hats and lead (lo-fi wants it dark: fine there)".to_string()),
+            (3, true) => ("honky, forward mids", "a bell -2 dB at 1-2 kHz on the loudest part (set_eq_band)".to_string()),
+            (3, false) => ("the mids are scooped: parts lose definition", "a bell +2 dB at 2 kHz on the lead (set_eq_band)".to_string()),
+            (4, true) => ("harsh: too much 4-8 kHz", "a dynamic bell at 4-5 kHz, q 1.5, range -4 dB, on the brightest part (set_eq_band with dynamic): it only cuts when it bites".to_string()),
+            (4, false) => ("dull: no bite", "a bell +2 dB at 5 kHz on the drums and lead (set_eq_band)".to_string()),
+            (5, true) => ("fizzy, too much air", "a high shelf -3 dB at 10 kHz (set_eq_band)".to_string()),
+            _ => ("dark: no air", "a high shelf +2 dB at 10 kHz on the hats and lead (set_eq_band; lo-fi wants it dark: fine there)".to_string()),
         };
         out.push(issue(
             if off.abs() > room + 3.0 {
@@ -626,7 +626,7 @@ pub fn mix(p: &Project, heard: &Heard) -> Vec<Issue> {
                         role
                     ),
                     Some(track_name(p, t)),
-                    format!("set_eq low_cut 150 on track {t} (mix_role does it)"),
+                    format!("a low cut at 150 Hz on track {t} (set_eq_band; mix_role does it)"),
                 ));
             }
         }

@@ -188,50 +188,509 @@ pub struct Cycle {
     pub off: bool,
 }
 
-/// One band of an EQ: its frequency (Hz), gain (dB) and width (Q).
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
-pub struct Band {
-    pub freq: f32,
-    #[serde(default)]
-    pub gain_db: f32,
-    #[serde(default = "q")]
-    pub q: f32,
+/// The most bands an EQ has.
+pub const MAX_BANDS: usize = 24;
+
+/// What an EQ band does to the sound.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Shape {
+    #[default]
+    Bell,
+    LowShelf,
+    LowCut,
+    HighShelf,
+    HighCut,
+    Notch,
+    BandPass,
+    /// A shelf that tilts round its frequency: half its gain down below, half up above.
+    TiltShelf,
 }
 
-fn q() -> f32 {
-    1.0
+impl Shape {
+    pub const ALL: [Shape; 8] = [
+        Shape::Bell,
+        Shape::LowShelf,
+        Shape::LowCut,
+        Shape::HighShelf,
+        Shape::HighCut,
+        Shape::Notch,
+        Shape::BandPass,
+        Shape::TiltShelf,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Shape::Bell => "Bell",
+            Shape::LowShelf => "Low Shelf",
+            Shape::LowCut => "Low Cut",
+            Shape::HighShelf => "High Shelf",
+            Shape::HighCut => "High Cut",
+            Shape::Notch => "Notch",
+            Shape::BandPass => "Band Pass",
+            Shape::TiltShelf => "Tilt Shelf",
+        }
+    }
+
+    /// Whether it boosts or cuts by a gain (the others only take away).
+    pub fn has_gain(self) -> bool {
+        matches!(
+            self,
+            Shape::Bell | Shape::LowShelf | Shape::HighShelf | Shape::TiltShelf
+        )
+    }
+
+    /// The slopes it can have, in dB an octave; none for those that have a width (Q) instead.
+    pub fn slopes(self) -> &'static [u8] {
+        match self {
+            Shape::LowCut | Shape::HighCut => &[6, 12, 18, 24, 30, 36, 48, 72, 96],
+            Shape::LowShelf | Shape::HighShelf | Shape::TiltShelf => &[6, 12, 18, 24, 36, 48],
+            _ => &[],
+        }
+    }
+
+    /// The width it starts with: a cut or shelf with no bump, a bell an octave and a half.
+    pub fn default_q(self) -> f32 {
+        match self {
+            Shape::Bell | Shape::BandPass => 1.0,
+            Shape::Notch => 4.0,
+            _ => std::f32::consts::FRAC_1_SQRT_2,
+        }
+    }
 }
 
-/// A channel's built-in EQ, as Logic's Channel EQ: a low cut, two bells and a high shelf.
-/// Anything left out of its JSON is as `Eq::default()` has it: flat.
+/// Which part of a stereo sound a band works on.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Placement {
+    #[default]
+    Stereo,
+    Left,
+    Right,
+    /// What's the same on both sides: the middle.
+    Mid,
+    /// What differs: the edges.
+    Side,
+}
+
+impl Placement {
+    pub const ALL: [Placement; 5] = [
+        Placement::Stereo,
+        Placement::Left,
+        Placement::Right,
+        Placement::Mid,
+        Placement::Side,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Placement::Stereo => "Stereo",
+            Placement::Left => "Left",
+            Placement::Right => "Right",
+            Placement::Mid => "Mid",
+            Placement::Side => "Side",
+        }
+    }
+
+    fn is_stereo(&self) -> bool {
+        *self == Placement::Stereo
+    }
+}
+
+/// A band that moves with the sound: as what it covers gets louder than `threshold_db`, its gain
+/// goes by up to `range_db` more (below 0 down, as a compressor would; above, up).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(default)]
-pub struct Eq {
-    /// The low cut's corner, in Hz; 20 or less is off.
-    #[serde(default)]
-    pub low_cut: f32,
-    pub low_mid: Band,
-    pub high_mid: Band,
-    pub high_shelf: Band,
+pub struct Dynamic {
+    pub range_db: f32,
+    pub threshold_db: f32,
+    pub attack_ms: f32,
+    pub release_ms: f32,
+}
+
+impl Default for Dynamic {
+    fn default() -> Self {
+        Dynamic {
+            range_db: -6.0,
+            threshold_db: -30.0,
+            attack_ms: 10.0,
+            release_ms: 120.0,
+        }
+    }
+}
+
+/// One band of an EQ: its shape at a frequency (Hz), its gain (dB) and width (Q), or for a cut
+/// or shelf its slope (dB an octave); the part of the sound it works on; and whether it moves
+/// with the sound.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(from = "BandJson")]
+pub struct EqBand {
+    pub shape: Shape,
+    pub freq: f32,
+    #[serde(skip_serializing_if = "zero_f32")]
+    pub gain_db: f32,
+    pub q: f32,
+    #[serde(skip_serializing_if = "is_twelve")]
+    pub slope: u8,
+    #[serde(skip_serializing_if = "Placement::is_stereo")]
+    pub placement: Placement,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dynamic: Option<Dynamic>,
     /// Kept but not heard.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub off: bool,
+    /// Which band it is while the song's open, so the engine keeps its sound through edits (a
+    /// band taken out before it fades rather than clicking). Not saved.
+    #[serde(skip)]
+    pub id: u16,
+}
+
+fn zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
+
+/// A band as JSON has it: anything left out as a 1 kHz bell has it, but its width, which is
+/// its shape's (a cut's or shelf's with no bump).
+#[derive(Deserialize)]
+#[serde(default)]
+struct BandJson {
+    shape: Shape,
+    freq: f32,
+    gain_db: f32,
+    q: Option<f32>,
+    slope: u8,
+    placement: Placement,
+    dynamic: Option<Dynamic>,
+    off: bool,
+}
+
+impl Default for BandJson {
+    fn default() -> Self {
+        let b = EqBand::default();
+        BandJson {
+            shape: b.shape,
+            freq: b.freq,
+            gain_db: b.gain_db,
+            q: None,
+            slope: b.slope,
+            placement: b.placement,
+            dynamic: None,
+            off: false,
+        }
+    }
+}
+
+impl From<BandJson> for EqBand {
+    fn from(j: BandJson) -> Self {
+        EqBand {
+            shape: j.shape,
+            freq: j.freq,
+            gain_db: j.gain_db,
+            q: j.q.unwrap_or(j.shape.default_q()),
+            slope: j.slope,
+            placement: j.placement,
+            dynamic: j.dynamic,
+            off: j.off,
+            id: 0,
+        }
+    }
+}
+
+fn is_twelve(v: &u8) -> bool {
+    *v == 12
+}
+
+impl Default for EqBand {
+    fn default() -> Self {
+        EqBand::new(Shape::Bell, 1_000.0, 0.0)
+    }
+}
+
+impl EqBand {
+    pub fn new(shape: Shape, freq: f32, gain_db: f32) -> Self {
+        EqBand {
+            shape,
+            freq,
+            gain_db,
+            q: shape.default_q(),
+            slope: 12,
+            placement: Placement::Stereo,
+            dynamic: None,
+            off: false,
+            id: 0,
+        }
+    }
+
+    /// Its gain as heard, with the EQ's gain scale: none for a shape that has none.
+    pub fn gain(&self, scale: f32) -> f32 {
+        match self.shape.has_gain() {
+            true => self.gain_db * scale,
+            false => 0.0,
+        }
+    }
+}
+
+/// An EQ's bands, at most `MAX_BANDS`, kept in place so an EQ copies without allocating (the
+/// audio thread copies it to modulate it). In JSON, a list.
+#[derive(Clone, Copy, PartialEq)]
+pub struct Bands {
+    n: u8,
+    list: [EqBand; MAX_BANDS],
+}
+
+impl Default for Bands {
+    fn default() -> Self {
+        Bands {
+            n: 0,
+            list: [EqBand::default(); MAX_BANDS],
+        }
+    }
+}
+
+impl std::ops::Deref for Bands {
+    type Target = [EqBand];
+
+    fn deref(&self) -> &[EqBand] {
+        &self.list[..self.n as usize]
+    }
+}
+
+impl std::ops::DerefMut for Bands {
+    fn deref_mut(&mut self) -> &mut [EqBand] {
+        &mut self.list[..self.n as usize]
+    }
+}
+
+impl std::fmt::Debug for Bands {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl Bands {
+    pub fn from_slice(bands: &[EqBand]) -> Self {
+        let mut out = Bands::default();
+        for b in bands {
+            out.push(*b);
+        }
+        out
+    }
+
+    /// Adds a band at the end, giving it an id of its own if it hasn't one: where it went, or
+    /// None if the EQ is full.
+    pub fn push(&mut self, band: EqBand) -> Option<usize> {
+        self.insert(self.n as usize, band)
+    }
+
+    pub fn insert(&mut self, at: usize, mut band: EqBand) -> Option<usize> {
+        let n = self.n as usize;
+        if n == MAX_BANDS {
+            return None;
+        }
+        if band.id == 0 || self.iter().any(|b| b.id == band.id) {
+            band.id = self.iter().map(|b| b.id).max().unwrap_or(0) + 1;
+        }
+        let at = at.min(n);
+        self.list.copy_within(at..n, at + 1);
+        self.list[at] = band;
+        self.n += 1;
+        Some(at)
+    }
+
+    pub fn remove(&mut self, at: usize) -> Option<EqBand> {
+        let n = self.n as usize;
+        if at >= n {
+            return None;
+        }
+        let band = self.list[at];
+        self.list.copy_within(at + 1..n, at);
+        self.n -= 1;
+        Some(band)
+    }
+
+    /// Where the band with this id is.
+    pub fn find(&self, id: u16) -> Option<usize> {
+        self.iter().position(|b| b.id == id)
+    }
+}
+
+impl Serialize for Bands {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(self.iter())
+    }
+}
+
+impl<'de> Deserialize<'de> for Bands {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let list = Vec::<EqBand>::deserialize(d)?;
+        if list.len() > MAX_BANDS {
+            return Err(serde::de::Error::custom(format!(
+                "an EQ has at most {MAX_BANDS} bands"
+            )));
+        }
+        // Ids afresh: they're the song's while it's open, not the file's.
+        let mut out = Bands::default();
+        for b in list {
+            out.push(EqBand { id: 0, ..b });
+        }
+        Ok(out)
+    }
+}
+
+/// A channel's built-in EQ: up to 24 bands, each a bell, shelf, cut, notch, band pass or tilt
+/// over the whole sound or a part of it (left, right, mid, side), still or moving with the sound;
+/// then a gain scale for them all and the output level. Anything left out of its JSON is as
+/// `Eq::default()` has it: no bands, flat.
+///
+/// It reads the EQ tempo had before too (a low cut, two bells and a high shelf, by name), and
+/// takes those names in `set_eq`: `low_cut` is its first low cut, `low_mid` and `high_mid` its
+/// first and second bells, `high_shelf` its first high shelf, each added if missing.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(from = "EqJson")]
+pub struct Eq {
+    pub bands: Bands,
+    /// How much of each band's gain is heard: 1 as set, 0 none, 2 twice.
+    #[serde(skip_serializing_if = "one_f32")]
+    pub scale: f32,
+    #[serde(skip_serializing_if = "zero_f32")]
+    pub output_db: f32,
+    /// Kept but not heard.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub bypass: bool,
+}
+
+fn one_f32(v: &f32) -> bool {
+    *v == 1.0
 }
 
 impl Default for Eq {
     fn default() -> Self {
-        let band = |freq, q| Band {
-            freq,
-            gain_db: 0.0,
-            q,
-        };
         Eq {
-            low_cut: 0.0,
-            low_mid: band(400.0, 1.0),
-            high_mid: band(2_500.0, 1.0),
-            high_shelf: band(10_000.0, std::f32::consts::FRAC_1_SQRT_2),
+            bands: Bands::default(),
+            scale: 1.0,
+            output_db: 0.0,
             bypass: false,
         }
+    }
+}
+
+impl Eq {
+    /// The EQ tempo had before, flat: a low cut (off), bells at 400 Hz and 2.5 kHz and a high
+    /// shelf at 10 kHz. Songs made with it open with these four, in this order, so what moved
+    /// them by number (modulators) still does.
+    pub fn classic() -> Self {
+        let mut cut = EqBand::new(Shape::LowCut, 20.0, 0.0);
+        cut.off = true;
+        Eq {
+            bands: Bands::from_slice(&[
+                cut,
+                EqBand::new(Shape::Bell, 400.0, 0.0),
+                EqBand::new(Shape::Bell, 2_500.0, 0.0),
+                EqBand::new(Shape::HighShelf, 10_000.0, 0.0),
+            ]),
+            ..Eq::default()
+        }
+    }
+
+    /// Where the `nth` band of a shape is.
+    pub fn nth(&self, shape: Shape, nth: usize) -> Option<usize> {
+        self.bands
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.shape == shape)
+            .nth(nth)
+            .map(|(i, _)| i)
+    }
+
+    /// The `nth` band of a shape, added (as `new`) if there are fewer.
+    fn nth_or_add(&mut self, shape: Shape, nth: usize, new: EqBand) -> Option<usize> {
+        match self.nth(shape, nth) {
+            Some(i) => Some(i),
+            None => self.bands.push(new),
+        }
+    }
+
+    /// The old EQ's names onto this one's bands.
+    fn apply_classic(&mut self, j: &EqJson) {
+        if let Some(hz) = j.low_cut {
+            let on = hz > 20.0;
+            match self.nth(Shape::LowCut, 0) {
+                Some(i) => {
+                    let b = &mut self.bands[i];
+                    (b.freq, b.off) = (hz.max(20.0), !on);
+                }
+                None if on => {
+                    self.bands.insert(0, EqBand::new(Shape::LowCut, hz, 0.0));
+                }
+                None => {}
+            }
+        }
+        let named = [
+            (&j.low_mid, Shape::Bell, 0, 400.0),
+            (&j.high_mid, Shape::Bell, 1, 2_500.0),
+            (&j.high_shelf, Shape::HighShelf, 0, 10_000.0),
+        ];
+        for (band, shape, nth, freq) in named {
+            let Some(c) = band else { continue };
+            let Some(i) = self.nth_or_add(shape, nth, EqBand::new(shape, freq, 0.0)) else {
+                continue;
+            };
+            let b = &mut self.bands[i];
+            b.freq = c.freq.unwrap_or(b.freq);
+            b.gain_db = c.gain_db.unwrap_or(b.gain_db);
+            b.q = c.q.unwrap_or(b.q);
+        }
+    }
+}
+
+/// An EQ as JSON has it: its bands, or the old EQ's names, or both (`set_eq` with the old names
+/// on an EQ that has bands).
+#[derive(Deserialize)]
+struct EqJson {
+    bands: Option<Bands>,
+    #[serde(default = "unity")]
+    scale: f32,
+    #[serde(default)]
+    output_db: f32,
+    #[serde(default)]
+    bypass: bool,
+    low_cut: Option<f32>,
+    low_mid: Option<ClassicBand>,
+    high_mid: Option<ClassicBand>,
+    high_shelf: Option<ClassicBand>,
+}
+
+fn unity() -> f32 {
+    1.0
+}
+
+/// One of the old EQ's bands, as much of it as was given.
+#[derive(Deserialize)]
+struct ClassicBand {
+    freq: Option<f32>,
+    gain_db: Option<f32>,
+    q: Option<f32>,
+}
+
+impl From<EqJson> for Eq {
+    fn from(j: EqJson) -> Self {
+        let classic = j.low_cut.is_some()
+            || j.low_mid.is_some()
+            || j.high_mid.is_some()
+            || j.high_shelf.is_some();
+        let mut eq = match (j.bands, classic) {
+            (Some(bands), _) => Eq {
+                bands,
+                ..Eq::default()
+            },
+            (None, true) => Eq::classic(),
+            (None, false) => Eq::default(),
+        };
+        eq.apply_classic(&j);
+        eq.scale = j.scale.clamp(0.0, 2.0);
+        eq.output_db = j.output_db;
+        eq.bypass = j.bypass;
+        eq
     }
 }
 

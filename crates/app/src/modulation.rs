@@ -138,7 +138,11 @@ impl Workspace {
                 (t, ModTarget::Plugin(Which::Instrument, param))
             }
             Target::LowCut(ch) => (track(ch)?, ModTarget::LowCut),
-            Target::Gain(ch, band) => (track(ch)?, ModTarget::EqGain(band as u8)),
+            // A quick knob moves its band once it has one.
+            Target::Quick(ch, q) => {
+                let eq = self.strip_dsp(ch).0?;
+                (track(ch)?, ModTarget::EqGain(q.find(&eq)? as u8))
+            }
             Target::Comp(ch, CompField::Threshold) => (track(ch)?, ModTarget::CompThreshold),
             Target::Comp(ch, CompField::Makeup) => (track(ch)?, ModTarget::CompMakeup),
             Target::Comp(..) => return None,
@@ -164,16 +168,21 @@ impl Workspace {
             ModTarget::Send(i) => track.sends.get(i).map_or(0.0, |s| {
                 strip::fader_pos(modulate::apply_volume(s.level_db, by))
             }),
-            ModTarget::LowCut | ModTarget::EqGain(_) => {
+            ModTarget::LowCut | ModTarget::EqGain(_) | ModTarget::EqFreq(_) => {
                 let mut e = eq;
                 modulate::apply_eq(&mut e, mt, by);
                 match mt {
-                    ModTarget::LowCut => {
-                        strip::low_cut_pos(if by == 0.0 { eq.low_cut } else { e.low_cut })
+                    ModTarget::LowCut => strip::low_cut_pos(crate::eq::low_cut(match by {
+                        0.0 => &eq,
+                        _ => &e,
+                    })),
+                    ModTarget::EqGain(i) => {
+                        strip::eq_gain_pos(e.bands.get(i as usize).map_or(0.0, |b| b.gain_db))
                     }
-                    ModTarget::EqGain(1) => strip::eq_gain_pos(e.low_mid.gain_db),
-                    ModTarget::EqGain(2) => strip::eq_gain_pos(e.high_mid.gain_db),
-                    _ => strip::eq_gain_pos(e.high_shelf.gain_db),
+                    ModTarget::EqFreq(i) => e.bands.get(i as usize).map_or(0.0, |b| {
+                        ((b.freq / 10.0).ln() / 3000f32.ln()).clamp(0.0, 1.0)
+                    }),
+                    _ => 0.0,
                 }
             }
             ModTarget::CompThreshold | ModTarget::CompMakeup => {
@@ -348,9 +357,25 @@ impl Workspace {
                 format!("Send to {}", aux.map_or("its aux", |a| a.name.as_str()))
             }
             ModTarget::LowCut => "Low cut".into(),
-            ModTarget::EqGain(1) => "Low mid".into(),
-            ModTarget::EqGain(2) => "Presence".into(),
-            ModTarget::EqGain(_) => "Air".into(),
+            ModTarget::EqGain(i) | ModTarget::EqFreq(i) => {
+                let band = track
+                    .and_then(|tr| tr.eq)
+                    .and_then(|e| e.bands.get(i as usize).copied());
+                let what = if matches!(mt, ModTarget::EqGain(_)) {
+                    "gain"
+                } else {
+                    "frequency"
+                };
+                match band {
+                    Some(b) => format!(
+                        "EQ {} {what} ({} {})",
+                        i + 1,
+                        b.shape.name().to_lowercase(),
+                        crate::eq::hz_text(b.freq)
+                    ),
+                    None => format!("EQ band {} {what}", i + 1),
+                }
+            }
             ModTarget::CompThreshold => "Threshold".into(),
             ModTarget::CompMakeup => "Makeup".into(),
             ModTarget::SatDrive => "Drive".into(),
@@ -458,17 +483,21 @@ impl Workspace {
         group(
             &mut items,
             "Channel EQ, compressor, saturator",
-            vec![
-                ModTarget::LowCut,
-                ModTarget::EqGain(1),
-                ModTarget::EqGain(2),
-                ModTarget::EqGain(3),
-                ModTarget::CompThreshold,
-                ModTarget::CompMakeup,
-                ModTarget::SatDrive,
-                ModTarget::SatTone,
-                ModTarget::SatMix,
-            ],
+            std::iter::once(ModTarget::LowCut)
+                .chain(track.eq.iter().flat_map(|e| {
+                    e.bands.iter().enumerate().flat_map(|(i, b)| {
+                        let gain = b.shape.has_gain().then_some(ModTarget::EqGain(i as u8));
+                        gain.into_iter().chain([ModTarget::EqFreq(i as u8)])
+                    })
+                }))
+                .chain([
+                    ModTarget::CompThreshold,
+                    ModTarget::CompMakeup,
+                    ModTarget::SatDrive,
+                    ModTarget::SatTone,
+                    ModTarget::SatMix,
+                ])
+                .collect(),
         );
         if matches!(track.instrument, Some(Instrument::Sampler(_))) {
             group(

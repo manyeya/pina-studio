@@ -1,7 +1,8 @@
 #!/bin/sh
-# Compiles the channel strip's Faust effects (crates/engine/faust/*.dsp) to Rust, into
-# crates/engine/src/faust/. The generated code is checked in, so building tempo doesn't need
-# Faust: run this after changing a .dsp (brew install faust).
+# Compiles the channel strip's Faust effects, the compressor and saturator
+# (crates/engine/faust/*.dsp), to Rust, into crates/engine/src/faust/. The generated code is
+# checked in, so building tempo doesn't need Faust: run this after changing a .dsp
+# (brew install faust).
 set -e
 cd "$(dirname "$0")/.."
 FAUST=${FAUST:-$(command -v faust || echo "$HOME/.local/faust/bin/faust")}

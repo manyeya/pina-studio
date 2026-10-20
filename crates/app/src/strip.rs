@@ -223,11 +223,6 @@ fn trim(v: f32) -> String {
     }
 }
 
-/// An EQ's gain at a frequency, in dB.
-pub fn eq_curve_at(eq: &Eq, freq: f32, rate: f64) -> f32 {
-    eq_response(eq, freq as f64, rate) as f32
-}
-
 /// An EQ's curve across `width` points, as gains in dB from 20 Hz to 20 kHz.
 pub fn eq_curve(eq: &Eq, rate: f64, width: usize) -> Vec<f32> {
     (0..width)
@@ -805,10 +800,7 @@ pub fn eq_thumbnail(
             MouseButton::Left,
             cx.listener(move |ws, _, _, cx| {
                 cx.stop_propagation();
-                if ws.strip_dsp(ch).0.is_none() {
-                    ws.edit(cx, |ws| *ws.strip_dsp_mut(ch).0 = Some(Eq::default()));
-                }
-                ws.show_channel(ch, cx);
+                ws.open_eq(ch, cx);
             }),
         )
 }

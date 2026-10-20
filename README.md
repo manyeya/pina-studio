@@ -10,9 +10,9 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   `vst3/`, `clap.rs`, `vst2.rs` and `au.rs` behind it).
 - `crates/engine` also has the live `player.rs` (keeps the engine in step with edits) and
   `session.rs` (an open project and its undo history).
-- `crates/engine` also has the built-in drum kit (`drums.rs`), the channel EQ, compressor and
-  saturator (written in Faust, in `faust/*.dsp`, compiled to Rust in `src/faust/` and run by
-  `dsp.rs`), keys, scales and note edits like quantize and legato (`music.rs`), MIDI input
+- `crates/engine` also has the built-in drum kit (`drums.rs`), the channel EQ (`eq.rs`), the
+  compressor and saturator (written in Faust, in `faust/*.dsp`, compiled to Rust in `src/faust/`;
+  `dsp.rs` runs the three), keys, scales and note edits like quantize and legato (`music.rs`), MIDI input
   (`midi.rs`), audio recording (`record.rs`), the plugin scan (`scan.rs`), edits as data
   (`commands.rs`, described in `commands.md`) and measuring audio (`analysis.rs`).
 - `crates/engine` also writes music for agents: `theory.rs` (chords from symbols and numerals,
@@ -315,7 +315,7 @@ In the app, mostly as in Logic:
   level (sidechain pumping and ducking: the bass under the kick), Random (stepped or smooth) and
   a Macro to turn by hand. Drag a card's ↗ Map onto any knob or fader of its track to have it
   move it: the header's volume and pan, the strip's pan and sends, Smart Controls, the EQ's low
-  cut and gains, the compressor's threshold and makeup, the saturator's drive, tone and mix, the
+  cut and each band's gain and frequency (from the card's menu), the compressor's threshold and makeup, the saturator's drive, tone and mix, the
   Sampler's cutoff, resonance, filter envelope, transpose, level, vibrato, LFO filter and
   tremolo, and a plugin's parameters. A modulated knob wears a ring in the modulator's colour,
   its range, and a dot where it has it now. Each card lists where it goes: drag a route sideways
@@ -340,11 +340,27 @@ In the app, mostly as in Logic:
   into, its name shown on the track. A strip's "→" row routes a track into any stack or aux, or
   back to Stereo Out.
 - On a channel strip, click a plugin to open its editor; click an empty slot, or right-click any,
-  to choose a plugin or the built-in Channel EQ (low cut, two bells, high shelf), Compressor and
-  Saturator (drive, tone, mix, output). The master takes plugins too, after its built-ins. Click a
-  strip's EQ curve to shape it in the mixer, where the selected channel's chain shows on the
-  right: drag the EQ's handles (double-click one to flatten it), turn the compressor's knobs and
-  watch its gain reduction, drive the saturator and see its curve. "Send" sends the track to a
+  to choose a plugin or the built-in Channel EQ, Compressor and Saturator (drive, tone, mix,
+  output). The master takes plugins too, after its built-ins. In the mixer the selected channel's
+  chain shows on the right: the EQ's curve, the compressor's knobs and gain reduction, the
+  saturator's drive and curve.
+- The Channel EQ is a Pro-Q style EQ in a window of its own (click a strip's EQ curve, or the
+  mixer's): up to 24 bands, each a bell, low or high shelf, low or high cut (6 to 96 dB an
+  octave), notch, band pass or tilt shelf, on the whole sound or its left, right, mid or side, and
+  still or dynamic (it moves with the sound: past a threshold it turns by up to its range, to tame
+  harshness or boom only when it's there). A live analyzer shows what goes in and comes out
+  (Pre + Post, either, or off). Double-click the display to add a band where you click (a cut at
+  either end, a bell between), drag its dot (⇧ fine), ⌘-drag or scroll on it for its width,
+  ⌥-click it to switch it off, double-click it or press Delete to take it out, right-click it for
+  its shape, slope, side and the rest. The band picked shows its controls along the bottom: shape,
+  slope, side, dynamic, frequency, gain and width (and the dynamic range and threshold), Solo to
+  hear just that band, on/off and delete. Along the window's bottom: the analyzer, the display's
+  range (±3 to ±30 dB), a gain scale for all the bands and the output level; its title moves it,
+  its corner resizes it. Its filters are matched to their analog shapes, so a bell or shelf near
+  the top keeps its shape rather than cramping; bands glide and fade in and out without clicks,
+  and cost nothing while flat. Songs made before open with their EQ as it was (a low cut, two
+  bells and a high shelf, as bands). The Inspector's Low Cut, Presence and Air knobs turn the
+  first low cut, a bell round 3 kHz and the high shelf, adding them when first turned. "Send" sends the track to a
   bus, making an aux for a new one; drag a send for its level, right-click it to switch it before
   the fader (amber) or after, or to remove it. Meters are stereo, with peak holds.
 
@@ -377,9 +393,8 @@ and how on time its hits come out.
 
 Builds need only the Command Line Tools: gpui compiles its Metal shaders at launch.
 
-The channel EQ, compressor and saturator are Faust (`crates/engine/faust/*.dsp`), using its
-libraries: Andy Simper's state-variable filters for the EQ, its soft-knee compressor gain computer,
-and antiderivative antialiasing for the saturator, which also runs at twice the sample rate (a
+The compressor and saturator are Faust (`crates/engine/faust/*.dsp`), using its libraries: its
+soft-knee compressor gain computer, and antiderivative antialiasing for the saturator, which also runs at twice the sample rate (a
 half-band filter designed by `scripts/halfband.py`). The Rust Faust makes of them is checked in
 under `crates/engine/src/faust/`, so building tempo doesn't need Faust; after changing a .dsp, run
 `scripts/faust.sh` (with `faust` on the path, or in `~/.local/faust/bin`).

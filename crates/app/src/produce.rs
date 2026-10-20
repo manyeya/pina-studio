@@ -710,7 +710,10 @@ fn reverb_bus(dir: &Path, p: &Project, first: usize) -> Result<u32, String> {
         param(ch, Which::Insert(0), "High Freq Decay Time", "1.0"),
         Command::SetEq {
             channel: ch,
-            eq: Some(json!({ "low_cut": 250, "high_shelf": { "freq": 8000, "gain_db": -3 } })),
+            eq: Some(json!({ "bands": [
+                { "shape": "low_cut", "freq": 250 },
+                { "shape": "high_shelf", "freq": 8000, "gain_db": -3 },
+            ] })),
         },
     ];
     for e in edits {
@@ -759,16 +762,25 @@ pub fn mix_role(
         } else {
             s.shelf.1
         };
+        // The part's EQ in place of what was there: its low cut, bells and shelf, the flat
+        // ones left out.
+        let mut bands = Vec::new();
+        if s.low_cut > 20.0 {
+            bands.push(json!({ "shape": "low_cut", "freq": s.low_cut }));
+        }
+        for (freq, gain, q) in [s.low_mid, s.high_mid] {
+            if gain != 0.0 {
+                bands.push(json!({ "shape": "bell", "freq": freq, "gain_db": gain, "q": q }));
+            }
+        }
+        if shelf != 0.0 {
+            bands.push(json!({ "shape": "high_shelf", "freq": s.shelf.0, "gain_db": shelf }));
+        }
         cli::edit_with(
             dir,
             Command::SetEq {
                 channel: ch,
-                eq: Some(json!({
-                    "low_cut": s.low_cut,
-                    "low_mid": { "freq": s.low_mid.0, "gain_db": s.low_mid.1, "q": s.low_mid.2 },
-                    "high_mid": { "freq": s.high_mid.0, "gain_db": s.high_mid.1, "q": s.high_mid.2 },
-                    "high_shelf": { "freq": s.shelf.0, "gain_db": shelf },
-                })),
+                eq: Some(json!({ "bands": bands })),
             },
         )?;
         cli::edit_with(dir, Command::SetComp { channel: ch, comp: s.comp.map(|(threshold, ratio, attack, release)| json!({

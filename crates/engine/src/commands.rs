@@ -13,9 +13,9 @@ use crate::{
     plugin::{PluginApi, PluginParam, value_from_text},
     project::{
         AUDIO_DIR, AutoMode, AutoPoint, AutoShape, AuxSend, BEAT_UNITS, Cell, Comp, Content,
-        ControlPoint, Cycle, Eq, Flex, Input, Instrument, Marker, Note, PPQ, PaletteDevice,
-        PaletteSound, PanLaw, PanMode, Param, PatternRow, Place, PluginRef, Preset, PresetSource,
-        Project, Region, Saturator, Track, Which,
+        ControlPoint, Cycle, Dynamic, Eq, Flex, Input, Instrument, Marker, Note, PPQ,
+        PaletteDevice, PaletteSound, PanLaw, PanMode, Param, PatternRow, Place, PluginRef, Preset,
+        PresetSource, Project, Region, Saturator, Track, Which,
     },
 };
 
@@ -420,12 +420,41 @@ pub enum Command {
         #[serde(default = "yes")]
         on: bool,
     },
-    /// A channel's built-in EQ (low cut, two bells, high shelf); without `eq`, takes it out.
-    /// Only the fields given change (see `set_effect`).
+    /// A channel's built-in EQ (its bands, gain scale and output); without `eq`, takes it out.
+    /// Only the fields given change (see `set_effect`): `bands` replaces them all. The old EQ's
+    /// names (`low_cut`, `low_mid`, `high_mid`, `high_shelf`) still work, on its first low cut,
+    /// bells and high shelf.
     SetEq {
         channel: ChannelRef,
         #[serde(default)]
         eq: Option<Value>,
+    },
+    /// One band of a channel's EQ, by its place: only what's given changes. A place one past the
+    /// last adds a band (a 1 kHz bell unless it says); `remove` takes the band out. The channel
+    /// gets an EQ if it hasn't one.
+    SetEqBand {
+        channel: ChannelRef,
+        band: usize,
+        #[serde(default)]
+        shape: Option<crate::project::Shape>,
+        #[serde(default)]
+        freq: Option<f32>,
+        #[serde(default)]
+        gain_db: Option<f32>,
+        #[serde(default)]
+        q: Option<f32>,
+        #[serde(default)]
+        slope: Option<u8>,
+        #[serde(default)]
+        placement: Option<crate::project::Placement>,
+        /// `false` makes it still; an object (any of range_db, threshold_db, attack_ms,
+        /// release_ms) makes it move with the sound.
+        #[serde(default)]
+        dynamic: Option<Value>,
+        #[serde(default)]
+        off: Option<bool>,
+        #[serde(default)]
+        remove: bool,
     },
     /// A channel's built-in compressor, after its EQ; without `comp`, takes it out.
     SetComp {
@@ -1639,7 +1668,72 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                 off: !on,
             });
         }
-        Command::SetEq { channel, eq } => set_effect(strip(p, channel)?.eq, eq)?,
+        Command::SetEq { channel, eq } => {
+            let slot = strip(p, channel)?.eq;
+            let mut new = *slot;
+            set_effect(&mut new, eq)?;
+            if let Some(e) = &new {
+                check_eq(e)?;
+            }
+            *slot = new;
+        }
+        Command::SetEqBand {
+            channel,
+            band: i,
+            shape,
+            freq,
+            gain_db,
+            q,
+            slope,
+            placement,
+            dynamic,
+            off,
+            remove,
+        } => {
+            let slot = strip(p, channel)?.eq;
+            let mut eq = slot.unwrap_or_default();
+            let n = eq.bands.len();
+            if i > n || (remove && i == n) {
+                return Err(format!("no band {i}: the EQ has {n} (band {n} adds one)"));
+            }
+            if remove {
+                eq.bands.remove(i);
+            } else {
+                let mut b = eq.bands.get(i).copied().unwrap_or_default();
+                if let Some(shape) = shape {
+                    // A new shape starts with its own width, unless one's given.
+                    if shape != b.shape && q.is_none() {
+                        b.q = shape.default_q();
+                    }
+                    b.shape = shape;
+                }
+                b.freq = freq.unwrap_or(b.freq);
+                b.gain_db = gain_db.unwrap_or(b.gain_db);
+                b.q = q.unwrap_or(b.q);
+                b.slope = slope.unwrap_or(b.slope);
+                b.placement = placement.unwrap_or(b.placement);
+                b.off = off.unwrap_or(b.off);
+                match dynamic {
+                    None => {}
+                    Some(Value::Bool(false)) | Some(Value::Null) => b.dynamic = None,
+                    Some(changes) => {
+                        let d = b.dynamic.unwrap_or_default();
+                        let mut v = serde_json::to_value(d).map_err(|e| e.to_string())?;
+                        overlay(&mut v, changes);
+                        let d = serde_json::from_value::<Dynamic>(v).map_err(|e| e.to_string())?;
+                        b.dynamic = Some(d);
+                    }
+                }
+                match i == n {
+                    true => {
+                        eq.bands.push(b).ok_or("an EQ has at most 24 bands")?;
+                    }
+                    false => eq.bands[i] = b,
+                }
+            }
+            check_eq(&eq)?;
+            *slot = Some(eq);
+        }
         Command::SetComp { channel, comp } => set_effect(strip(p, channel)?.comp, comp)?,
         Command::SetSaturator { channel, sat } => set_effect(strip(p, channel)?.sat, sat)?,
         Command::EditNotes {
@@ -1745,20 +1839,55 @@ where
         *slot = None;
         return Ok(());
     };
-    fn overlay(base: &mut Value, changes: Value) {
-        match (base, changes) {
-            (Value::Object(base), Value::Object(changes)) => {
-                for (k, v) in changes {
-                    overlay(base.entry(k).or_insert(Value::Null), v);
-                }
-            }
-            (base, changes) => *base = changes,
-        }
-    }
     let current = slot.clone().unwrap_or_default();
     let mut value = serde_json::to_value(current).map_err(|e| e.to_string())?;
     overlay(&mut value, changes);
     *slot = Some(serde_json::from_value(value).map_err(|e| e.to_string())?);
+    Ok(())
+}
+
+/// JSON changes laid over JSON: objects merge, anything else replaces.
+fn overlay(base: &mut Value, changes: Value) {
+    match (base, changes) {
+        (Value::Object(base), Value::Object(changes)) => {
+            for (k, v) in changes {
+                overlay(base.entry(k).or_insert(Value::Null), v);
+            }
+        }
+        (base, changes) => *base = changes,
+    }
+}
+
+/// An EQ's bands in their ranges: each says which is out and what it can be.
+fn check_eq(eq: &Eq) -> Result<(), String> {
+    for (i, b) in eq.bands.iter().enumerate() {
+        let fail = |what: String| Err(format!("band {i}: {what}"));
+        if !(10.0..=30_000.0).contains(&b.freq) {
+            return fail(format!("freq {} Hz: it's 10 to 30000", b.freq));
+        }
+        if !(-30.0..=30.0).contains(&b.gain_db) {
+            return fail(format!("gain_db {}: it's -30 to 30", b.gain_db));
+        }
+        if !(0.025..=40.0).contains(&b.q) {
+            return fail(format!("q {}: it's 0.025 to 40", b.q));
+        }
+        let slopes = b.shape.slopes();
+        if !slopes.is_empty() && !slopes.contains(&b.slope) {
+            return fail(format!(
+                "slope {} dB an octave: a {} takes {slopes:?}",
+                b.slope,
+                b.shape.name().to_lowercase()
+            ));
+        }
+        if let Some(d) = b.dynamic
+            && (!(-30.0..=30.0).contains(&d.range_db) || !(-80.0..=0.0).contains(&d.threshold_db))
+        {
+            return fail("dynamic: range_db is -30 to 30, threshold_db -80 to 0".into());
+        }
+    }
+    if !(0.0..=2.0).contains(&eq.scale) {
+        return Err(format!("scale {}: it's 0 to 2", eq.scale));
+    }
     Ok(())
 }
 
@@ -2137,11 +2266,65 @@ mod tests {
             &format!(r#"{{"op": "set_eq", {ch}, "eq": {shelf}}}"#),
         )
         .unwrap();
+        // The old EQ's names: a low cut and a shelf, the shelf at its frequency and Q.
         let eq = p.tracks[0].eq.unwrap();
-        assert_eq!(eq.low_cut, 150.0);
-        // The shelf keeps its frequency and Q.
-        assert_eq!((eq.high_shelf.freq, eq.high_shelf.gain_db), (10_000.0, 2.5));
-        assert_eq!(eq.high_shelf.q, Eq::default().high_shelf.q);
+        let shapes: Vec<_> = eq
+            .bands
+            .iter()
+            .map(|b| (b.shape, b.freq, b.gain_db))
+            .collect();
+        assert_eq!(
+            shapes,
+            [
+                (crate::project::Shape::LowCut, 150.0, 0.0),
+                (crate::project::Shape::HighShelf, 10_000.0, 2.5)
+            ]
+        );
+        assert_eq!(eq.bands[1].q, std::f32::consts::FRAC_1_SQRT_2);
+        // Bands by place: one changed, one added, a dynamic one, one taken out.
+        let band = |b: &str| format!(r#"{{"op": "set_eq_band", {ch}, {b}}}"#);
+        run(&mut p, &band(r#""band": 0, "slope": 24"#)).unwrap();
+        run(
+            &mut p,
+            &band(r#""band": 2, "freq": 300, "gain_db": -3, "q": 1.5, "placement": "mid""#),
+        )
+        .unwrap();
+        run(
+            &mut p,
+            &band(r#""band": 2, "dynamic": {"range_db": -4, "threshold_db": -24}"#),
+        )
+        .unwrap();
+        let eq = p.tracks[0].eq.unwrap();
+        assert_eq!(eq.bands[0].slope, 24);
+        let b = eq.bands[2];
+        assert_eq!((b.freq, b.gain_db, b.q), (300.0, -3.0, 1.5));
+        assert_eq!(b.placement, crate::project::Placement::Mid);
+        assert_eq!(b.dynamic.unwrap().range_db, -4.0);
+        assert_eq!(b.dynamic.unwrap().attack_ms, 10.0);
+        let wrong = run(&mut p, &band(r#""band": 0, "slope": 20"#)).unwrap_err();
+        assert!(wrong.contains("band 0: slope 20"), "{wrong}");
+        assert!(
+            run(&mut p, &band(r#""band": 5"#))
+                .unwrap_err()
+                .contains("no band 5")
+        );
+        run(&mut p, &band(r#""band": 1, "remove": true"#)).unwrap();
+        assert_eq!(p.tracks[0].eq.unwrap().bands.len(), 2);
+        // The whole list at once.
+        run(
+            &mut p,
+            &format!(
+                r#"{{"op": "set_eq", {ch}, "eq": {{"bands": [{{"shape": "high_cut", "freq": 9000, "slope": 48}}], "output_db": -2}}}}"#
+            ),
+        )
+        .unwrap();
+        let eq = p.tracks[0].eq.unwrap();
+        assert_eq!(
+            (eq.bands.len(), eq.bands[0].slope, eq.output_db),
+            (1, 48, -2.0)
+        );
+        // A cut written without a width has a cut's: no bump at its corner.
+        assert_eq!(eq.bands[0].q, std::f32::consts::FRAC_1_SQRT_2);
         let comp = r#"{"threshold_db": -9, "ratio": 2, "rms": true}"#;
         run(
             &mut p,
@@ -2390,6 +2573,7 @@ mod tests {
             "set_key",
             "set_cycle",
             "set_eq",
+            "set_eq_band",
             "set_comp",
             "set_saturator",
             "edit_notes",

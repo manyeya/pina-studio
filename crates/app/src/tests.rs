@@ -13,13 +13,14 @@ use gpui::{
 };
 use tempo_engine::{
     player::Player,
-    project::{AuxSend, Content, PPQ},
+    project::{AuxSend, Content, PPQ, Shape},
     scan::PluginInfo,
     session::Session,
 };
 
 use crate::{
     pianoroll::KEY_H,
+    strip::Channel,
     theme::{CONTROL_BAR_H, LANE_H, MARKERS_H, RULER_H, STATUS_H},
     workspace::*,
 };
@@ -1886,14 +1887,23 @@ fn the_mixer_shapes_a_channel_with_its_eq_and_compressor(cx: &mut TestAppContext
     let (ws, cx) = open(cx);
     cx.simulate_keystrokes("x");
     assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Mixer);
-    // The Keys strip's EQ: clicking the thumbnail adds one, shown in the panel.
+    // The Keys strip's EQ: clicking the thumbnail adds one and opens its window.
     click_on(cx, "eq-Track(0)", Modifiers::none(), MouseButton::Left);
-    assert!(ws.read_with(cx, |ws, _| ws.session.project.tracks[0].eq.is_some()));
-    // Drag the second band's handle up: a boost.
-    let handle = cx.debug_bounds("eq-band-2").unwrap().center();
-    drag(cx, handle, handle - point(px(0.), px(20.)));
+    assert!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[0].eq.is_some()
+            && ws.eq_view.is_some())
+    );
+    // A band where the display's double-clicked, dragged up: a boost.
+    let display = cx.debug_bounds("eq-display").unwrap();
+    double_click(cx, display.center());
+    let dot = cx.debug_bounds("eq-band-0").unwrap().center();
+    drag(cx, dot, dot - point(px(0.), px(80.)));
     let eq = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].eq.unwrap());
-    assert!(eq.high_mid.gain_db > 3.0, "{eq:?}");
+    assert_eq!(eq.bands.len(), 1);
+    let b = eq.bands[0];
+    assert!(b.shape == Shape::Bell && b.gain_db > 3.0, "{b:?}");
+    click_on(cx, "eq-close", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.eq_view.is_none()));
     // A compressor from the add-effect menu, then its threshold turned down.
     click_on(cx, "add-effect", Modifiers::none(), MouseButton::Left);
     let items = ws.read_with(cx, |ws, _| ws.menu.as_ref().unwrap().items.clone());
@@ -1918,7 +1928,7 @@ fn the_mixer_shapes_a_channel_with_its_eq_and_compressor(cx: &mut TestAppContext
     );
     assert!(ws.read_with(cx, |ws, _| ws.session.project.tracks[0].comp.unwrap().rms));
     // All of it undoes as edits.
-    cx.simulate_keystrokes("cmd-z cmd-z cmd-z cmd-z cmd-z");
+    cx.simulate_keystrokes("cmd-z cmd-z cmd-z cmd-z cmd-z cmd-z");
     let (eq, comp) = ws.read_with(cx, |ws, _| {
         (
             ws.session.project.tracks[0].eq,
@@ -1934,8 +1944,105 @@ fn smart_controls_turn_the_channel_eq_on_a_built_in_instrument(cx: &mut TestAppC
     // Keys plays the built-in synth, so its Smart Controls are its channel's: Low Cut first.
     let knob = cx.debug_bounds("smart-0").unwrap().center();
     drag(cx, knob, knob - point(px(0.), px(60.)));
-    let cut = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].eq.unwrap().low_cut);
+    let cut = ws.read_with(cx, |ws, _| {
+        crate::eq::low_cut(&ws.session.project.tracks[0].eq.unwrap())
+    });
     assert!(cut > 40.0, "{cut}");
+}
+
+#[gpui::test]
+fn the_eq_window_adds_shapes_moves_and_takes_out_bands(cx: &mut TestAppContext) {
+    use crate::eq::Analyzer;
+    use tempo_engine::project::Placement;
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| ws.open_eq(Channel::Track(0), cx));
+    cx.run_until_parked();
+    let eq =
+        |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.session.project.tracks[0].eq.unwrap());
+    let display = cx.debug_bounds("eq-display").unwrap();
+    let at = |x: f32, y: f32| {
+        point(
+            display.origin.x + display.size.width * x,
+            display.origin.y + display.size.height * y,
+        )
+    };
+    // Double-clicks: a cut at the far left, one at the far right, a bell between (up: a boost).
+    double_click(cx, at(0.03, 0.5));
+    double_click(cx, at(0.97, 0.5));
+    double_click(cx, at(0.6, 0.3));
+    let shapes: Vec<Shape> = eq(cx).bands.iter().map(|b| b.shape).collect();
+    assert_eq!(shapes, [Shape::LowCut, Shape::HighCut, Shape::Bell]);
+    let bell = eq(cx).bands[2];
+    assert!(
+        bell.gain_db > 3.0 && (500.0..3_000.0).contains(&bell.freq),
+        "{bell:?}"
+    );
+    // Picked, its controls show: a low shelf now, 24 dB an octave, on the middle only.
+    assert!(cx.debug_bounds("eq-panel").is_some());
+    click_on(cx, "eq-shape", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Low Shelf");
+    click_on(cx, "eq-slope", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "24 dB/oct");
+    click_on(cx, "eq-place", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Mid");
+    let b = eq(cx).bands[2];
+    assert_eq!(
+        (b.shape, b.slope, b.placement),
+        (Shape::LowShelf, 24, Placement::Mid)
+    );
+    // Dynamic: its range and threshold, the range turned further down.
+    click_on(cx, "eq-dynamic", Modifiers::none(), MouseButton::Left);
+    let knob = cx.debug_bounds("eq-knob-range").unwrap().center();
+    drag(cx, knob, knob + point(px(0.), px(40.)));
+    let d = eq(cx).bands[2].dynamic.expect("dynamic");
+    assert!(d.range_db < -8.0, "{d:?}");
+    // The knobs: its frequency up, double-clicked back.
+    let freq = cx.debug_bounds("eq-knob-freq").unwrap().center();
+    drag(cx, freq, freq - point(px(0.), px(30.)));
+    assert!(eq(cx).bands[2].freq > bell.freq * 1.5);
+    double_click(cx, freq);
+    assert_eq!(eq(cx).bands[2].freq, 1_000.0);
+    // Heard alone; ⌥-click switches a band off; the wheel narrows one.
+    click_on(cx, "eq-solo", Modifiers::none(), MouseButton::Left);
+    let solo = ws.read_with(cx, |ws, _| ws.eq_view.as_ref().unwrap().solo);
+    assert_eq!(solo, Some(eq(cx).bands[2].id));
+    click_on(cx, "eq-band-0", Modifiers::alt(), MouseButton::Left);
+    assert!(eq(cx).bands[0].off);
+    // A band's menu: a notch, then gone; and Delete takes out the one picked.
+    click_on(cx, "eq-band-1", Modifiers::none(), MouseButton::Right);
+    pick(cx, &ws, "Notch");
+    assert_eq!(eq(cx).bands[1].shape, Shape::Notch);
+    click_on(cx, "eq-band-1", Modifiers::none(), MouseButton::Right);
+    pick(cx, &ws, "Delete band");
+    assert_eq!(eq(cx).bands.len(), 2);
+    click_on(cx, "eq-band-1", Modifiers::none(), MouseButton::Left);
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(eq(cx).bands.len(), 1);
+    // The window's own: the analyzer off, the range wider, the output up.
+    click_on(cx, "eq-analyzer", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Off");
+    click_on(cx, "eq-range", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "± 30 dB");
+    let view = ws.read_with(cx, |ws, _| {
+        let v = ws.eq_view.as_ref().unwrap();
+        (v.analyzer, v.range)
+    });
+    assert_eq!(view, (Analyzer::Off, 30));
+    let out = cx.debug_bounds("eq-output").unwrap().center();
+    drag(cx, out, out - point(px(0.), px(20.)));
+    assert!(eq(cx).output_db > 1.0);
+    // Moved by its title.
+    let from = ws.read_with(cx, |ws, _| ws.eq_view.as_ref().unwrap().at);
+    let title = cx.debug_bounds("eq-title").unwrap().center();
+    drag(cx, title, title + point(px(-60.), px(30.)));
+    let to = ws.read_with(cx, |ws, _| ws.eq_view.as_ref().unwrap().at);
+    assert_eq!((to.0 - from.0, to.1 - from.1), (-60.0, 30.0));
+    // Every edit undoes: back to the three bands as they were made.
+    for _ in 0..12 {
+        cx.simulate_keystrokes("cmd-z");
+    }
+    assert_eq!(eq(cx).bands.len(), 3);
+    assert_eq!(eq(cx).bands[2].shape, Shape::Bell);
 }
 
 #[gpui::test]
@@ -5133,6 +5240,47 @@ fn shots() {
                     ws.tool = Tool::Fade;
                     ws.status = Some(Tool::Fade.hint().into());
                     ws.tool_menu(point(px(ws.side_w() + 14.), px(96.)), cx);
+                }
+                // The Channel EQ's window: a mix's bands, the analyzer as if playing.
+                "eq" | "eq-picked" | "eq-menu" | "eq-mixer" => {
+                    use tempo_engine::project::{Bands, Dynamic, Eq, EqBand, Placement, Shape};
+                    let mut cut = EqBand::new(Shape::LowCut, 32.0, 0.0);
+                    cut.slope = 24;
+                    let mut side = EqBand::new(Shape::LowCut, 160.0, 0.0);
+                    side.placement = Placement::Side;
+                    let mut mud = EqBand::new(Shape::Bell, 320.0, -3.5);
+                    mud.q = 1.4;
+                    let mut harsh = EqBand::new(Shape::Bell, 3_400.0, 1.5);
+                    harsh.q = 2.2;
+                    harsh.dynamic = Some(Dynamic {
+                        range_db: -4.0,
+                        threshold_db: -28.0,
+                        ..Dynamic::default()
+                    });
+                    let notch = EqBand::new(Shape::Notch, 1_150.0, 0.0);
+                    let air = EqBand::new(Shape::HighShelf, 11_000.0, 3.0);
+                    let eq = Eq {
+                        bands: Bands::from_slice(&[cut, side, mud, notch, harsh, air]),
+                        ..Eq::default()
+                    };
+                    ws.session.project.tracks[0].eq = Some(eq);
+                    ws.channel = Channel::Track(0);
+                    if page == "eq-mixer" {
+                        ws.view = View::Mixer;
+                    } else {
+                        ws.open_eq(Channel::Track(0), cx);
+                        let rate = ws.session.project.sample_rate as f64;
+                        let v = ws.eq_view.as_mut().unwrap();
+                        v.pretend(&eq, rate);
+                        if page != "eq" {
+                            v.picked = Some(eq.bands[4].id);
+                        }
+                        if page == "eq-menu" {
+                            let id = eq.bands[4].id;
+                            ws.band_menu(id, point(px(900.), px(300.)), cx);
+                        }
+                    }
+                    cx.notify();
                 }
                 "tracks" | "track-menu" | "pan-menu" | "region-menu" | "lane-menu" | "panner" => {
                     use tempo_engine::project::PanMode;

@@ -59,6 +59,11 @@ impl Session {
         self.kept = false;
     }
 
+    /// Whether nothing's changed since the last checkpoint.
+    pub fn unchanged(&self) -> bool {
+        self.undo.last() == Some(&self.project)
+    }
+
     /// Forgets the last checkpoint, for an edit that turned out to change nothing.
     pub fn cancel(&mut self) {
         self.undo.pop();

@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::project::{Comp, Eq, SamplerVoice, Saturator, Which};
+use crate::project::{Comp, Eq, MAX_BANDS, SamplerVoice, Saturator, Shape, Which};
 
 /// The most modulators a track has.
 pub const MAX_MODS: usize = 8;
@@ -103,10 +103,13 @@ pub enum ModTarget {
     Pan,
     /// A send's level, by index: dB.
     Send(usize),
-    /// The EQ's low cut: octaves; a bell's or the shelf's gain (1 the low mid, 2 the high mid, 3
-    /// the shelf): dB.
+    /// The EQ's first low cut's frequency: octaves (from off, it sweeps up from 20 Hz).
     LowCut,
+    /// An EQ band's gain (dB) and frequency (octaves), by its place in the EQ. (A song made with
+    /// the EQ tempo had before opens with its low cut, two bells and shelf as bands 0 to 3, so
+    /// `EqGain` 1 to 3 still move what they did.)
     EqGain(u8),
+    EqFreq(u8),
     /// The compressor's threshold and makeup: dB.
     CompThreshold,
     CompMakeup,
@@ -494,7 +497,8 @@ pub struct Offsets {
     pub pan: f32,
     pub sends: [f32; 8],
     pub low_cut: f32,
-    pub eq_gain: [f32; 3],
+    pub eq_gain: [f32; MAX_BANDS],
+    pub eq_freq: [f32; MAX_BANDS],
     pub comp: [f32; 2],
     pub sat: [f32; 3],
     pub sampler: [f32; 8],
@@ -512,7 +516,8 @@ impl Default for Offsets {
             pan: 0.0,
             sends: [0.0; 8],
             low_cut: 0.0,
-            eq_gain: [0.0; 3],
+            eq_gain: [0.0; MAX_BANDS],
+            eq_freq: [0.0; MAX_BANDS],
             comp: [0.0; 2],
             sat: [0.0; 3],
             sampler: [0.0; 8],
@@ -554,8 +559,13 @@ impl Offsets {
             }
             ModTarget::LowCut => (self.low_cut, self.strip) = (self.low_cut + amount, true),
             ModTarget::EqGain(b) => {
-                if let Some(g) = self.eq_gain.get_mut((b as usize).wrapping_sub(1)) {
+                if let Some(g) = self.eq_gain.get_mut(b as usize) {
                     (*g, self.strip) = (*g + amount, true);
+                }
+            }
+            ModTarget::EqFreq(b) => {
+                if let Some(f) = self.eq_freq.get_mut(b as usize) {
+                    (*f, self.strip) = (*f + amount, true);
                 }
             }
             ModTarget::CompThreshold => (self.comp[0], self.strip) = (self.comp[0] + amount, true),
@@ -595,8 +605,9 @@ impl Offsets {
 
     pub fn eq(&self, eq: &mut Eq) {
         apply_eq(eq, ModTarget::LowCut, self.low_cut);
-        for b in 1..=3u8 {
-            apply_eq(eq, ModTarget::EqGain(b), self.eq_gain[b as usize - 1]);
+        for b in 0..eq.bands.len() {
+            apply_eq(eq, ModTarget::EqGain(b as u8), self.eq_gain[b]);
+            apply_eq(eq, ModTarget::EqFreq(b as u8), self.eq_freq[b]);
         }
     }
 
@@ -639,12 +650,22 @@ pub fn apply_eq(eq: &mut Eq, target: ModTarget, by: f32) {
     match target {
         // From off, a modulated low cut sweeps up from 20 Hz.
         ModTarget::LowCut => {
-            eq.low_cut = (eq.low_cut.max(20.0) * 2f32.powf(by)).clamp(20.0, 2000.0)
+            if let Some(i) = eq.nth(Shape::LowCut, 0) {
+                let b = &mut eq.bands[i];
+                let from = if b.off { 20.0 } else { b.freq.max(20.0) };
+                b.freq = (from * 2f32.powf(by)).clamp(20.0, 2000.0);
+                b.off = false;
+            }
         }
-        ModTarget::EqGain(1) => eq.low_mid.gain_db = (eq.low_mid.gain_db + by).clamp(-24.0, 24.0),
-        ModTarget::EqGain(2) => eq.high_mid.gain_db = (eq.high_mid.gain_db + by).clamp(-24.0, 24.0),
-        ModTarget::EqGain(3) => {
-            eq.high_shelf.gain_db = (eq.high_shelf.gain_db + by).clamp(-24.0, 24.0)
+        ModTarget::EqGain(i) => {
+            if let Some(b) = eq.bands.get_mut(i as usize) {
+                b.gain_db = (b.gain_db + by).clamp(-30.0, 30.0);
+            }
+        }
+        ModTarget::EqFreq(i) => {
+            if let Some(b) = eq.bands.get_mut(i as usize) {
+                b.freq = (b.freq * 2f32.powf(by)).clamp(10.0, 30_000.0);
+            }
         }
         _ => {}
     }
@@ -690,6 +711,7 @@ pub fn default_depth(target: ModTarget) -> f32 {
         ModTarget::Pan | ModTarget::SatTone => 0.8,
         ModTarget::LowCut => 3.0,
         ModTarget::EqGain(_) => 6.0,
+        ModTarget::EqFreq(_) => 1.0,
         ModTarget::CompThreshold => -12.0,
         ModTarget::CompMakeup | ModTarget::SatDrive => 9.0,
         ModTarget::SatMix => 0.5,
@@ -711,7 +733,7 @@ pub fn depth_range(target: ModTarget) -> f32 {
     match target {
         ModTarget::Volume | ModTarget::Send(_) | ModTarget::CompThreshold => 48.0,
         ModTarget::Pan | ModTarget::SatTone => 2.0,
-        ModTarget::LowCut => 6.0,
+        ModTarget::LowCut | ModTarget::EqFreq(_) => 6.0,
         ModTarget::EqGain(_) | ModTarget::CompMakeup | ModTarget::SatDrive => 24.0,
         ModTarget::SatMix | ModTarget::Plugin(..) => 1.0,
         ModTarget::Sampler(SamplerParam::Cutoff | SamplerParam::FilterEnv) => 8.0,
@@ -745,6 +767,7 @@ pub fn depth_text(target: ModTarget, depth: f32) -> String {
         | ModTarget::SatDrive
         | ModTarget::Sampler(SamplerParam::Volume) => format!("{sign}{d:.1} dB"),
         ModTarget::LowCut
+        | ModTarget::EqFreq(_)
         | ModTarget::Sampler(
             SamplerParam::Cutoff | SamplerParam::FilterEnv | SamplerParam::LfoFilter,
         ) => {
@@ -858,9 +881,12 @@ mod tests {
         o.voice(&mut v);
         assert_eq!(v.cutoff_hz, 4000.0); // two octaves up
         assert_eq!(o.plugin(Which::Insert(0), 7), Some(0.25));
-        let mut eq = Eq::default();
+        o.add(ModTarget::LowCut, 2.0);
+        let mut eq = Eq::classic();
         o.eq(&mut eq);
-        assert_eq!(eq.high_mid.gain_db, 24.0);
+        // The old EQ's high mid, band 2; and its low cut, off, swept up from 20 Hz.
+        assert_eq!(eq.bands[2].gain_db, 30.0);
+        assert_eq!((eq.bands[0].freq, eq.bands[0].off), (80.0, false));
         assert_eq!(apply_pan(0.8, 0.5), 1.0);
         assert_eq!(depth_text(ModTarget::Volume, -12.0), "−12.0 dB");
     }

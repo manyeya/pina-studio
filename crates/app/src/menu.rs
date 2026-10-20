@@ -167,6 +167,8 @@ pub enum MenuAction {
     Auto(u64, crate::automation::AutoOp),
     /// A sound picked for the agent: its part, out, or all of them.
     Palette(crate::palette::PaletteOp),
+    /// Something in the EQ window: a band's shape, slope, placement; the analyzer.
+    Eq(crate::eq::EqOp),
     /// What an audio track records.
     Input {
         track: usize,
@@ -330,7 +332,10 @@ impl Workspace {
                     Builtin::Comp => comp.is_some(),
                     Builtin::Sat => self.sat(channel).is_some(),
                 };
-                if has {
+                if builtin == Builtin::Eq {
+                    // The EQ shows its window, added or not, as a plugin does.
+                    self.open_eq(channel, cx);
+                } else if has {
                     self.show_channel(channel, cx);
                 } else {
                     self.edit(cx, |ws| match builtin {
@@ -437,6 +442,7 @@ impl Workspace {
             }),
             MenuAction::Auto(track, op) => self.auto_op(track, op, cx),
             MenuAction::Palette(op) => self.palette_op(op, cx),
+            MenuAction::Eq(op) => self.eq_op(op, cx),
             MenuAction::NameMarker(i, name) => self.edit(cx, |ws| {
                 if let Some(m) = ws.session.project.markers.get_mut(i) {
                     m.name = name;

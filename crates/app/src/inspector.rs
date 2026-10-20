@@ -13,6 +13,7 @@ use tempo_engine::{
 };
 
 use crate::{
+    eq::Quick,
     menu::{Menu, MenuAction},
     strip::{self, Channel, Layout},
     theme::*,
@@ -537,21 +538,20 @@ impl Workspace {
                     knob(
                         Target::LowCut(ch),
                         "Low Cut",
-                        if eq.low_cut <= 20.0 {
-                            "Off".into()
-                        } else {
-                            strip::hz(eq.low_cut)
+                        match crate::eq::low_cut(&eq) {
+                            0.0 => "Off".into(),
+                            hz => strip::hz(hz),
                         },
                     ),
                     knob(
-                        Target::Gain(ch, 2),
+                        Target::Quick(ch, Quick::Presence),
                         "Presence",
-                        format!("{} dB", db_text(eq.high_mid.gain_db)),
+                        format!("{} dB", db_text(Quick::Presence.gain(&eq))),
                     ),
                     knob(
-                        Target::Gain(ch, 3),
+                        Target::Quick(ch, Quick::Air),
                         "Air",
-                        format!("{} dB", db_text(eq.high_shelf.gain_db)),
+                        format!("{} dB", db_text(Quick::Air.gain(&eq))),
                     ),
                     knob(
                         Target::Comp(ch, CompField::Threshold),

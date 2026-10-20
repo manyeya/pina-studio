@@ -8,6 +8,7 @@ mod chat;
 mod cli;
 mod context;
 mod editor;
+mod eq;
 mod export;
 mod genres;
 mod inspector;

@@ -20,23 +20,13 @@ use crate::{
 };
 
 /// The EQ graph's range: 20 Hz to 20 kHz across, ±18 dB up and down.
-pub fn graph_freq(x: f32) -> f32 {
-    (20.0 * 1000f32.powf(x.clamp(0.0, 1.0))).round()
-}
-
 pub fn graph_x(freq: f32) -> f32 {
     (freq.max(20.0) / 20.0).log10() / 3.0
-}
-
-pub fn graph_gain(y: f32) -> f32 {
-    ((0.5 - y.clamp(0.0, 1.0)) * 36.0 * 2.0).round() / 2.0
 }
 
 pub fn graph_y(db: f32) -> f32 {
     0.5 - db.clamp(-18.0, 18.0) / 36.0
 }
-
-const BAND_COLORS: [u32; 4] = [CORAL, AMBER, MINT, VIOLET];
 
 impl Workspace {
     pub fn mixer_view(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -546,10 +536,9 @@ impl Workspace {
         let rate = self.session.project.sample_rate as f64;
         let curve = strip::eq_curve(&eq, rate, 160);
         let color = self.channel_look(ch).1;
-        let bounds = self.eq_bounds.clone();
         let on = !eq.bypass;
         let graph = canvas(
-            move |b, _, _| bounds.set(b),
+            |_, _, _| {},
             move |b, _, window, _| {
                 let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
                 let line = |window: &mut gpui::Window, x: f32, y: f32, ww: f32, hh: f32, c: u32| {
@@ -598,61 +587,30 @@ impl Workspace {
             },
         )
         .size_full();
-        // The four handles, where each band is.
-        let handles: Vec<(f32, f32)> = vec![
-            (
-                graph_x(eq.low_cut.max(20.0)),
-                graph_y(strip::eq_curve_at(&eq, eq.low_cut.max(20.0), rate)),
-            ),
-            (graph_x(eq.low_mid.freq), graph_y(eq.low_mid.gain_db)),
-            (graph_x(eq.high_mid.freq), graph_y(eq.high_mid.gain_db)),
-            (graph_x(eq.high_shelf.freq), graph_y(eq.high_shelf.gain_db)),
-        ];
+        // A dot where each band is; the graph opens the EQ's window to work on them.
         let width = PANEL_W - 32.0 - 22.0;
         let height = 120.0;
-        let dots = handles
-            .into_iter()
+        let dots = eq
+            .bands
+            .iter()
             .enumerate()
-            .map(|(band, (x, y))| {
+            .map(|(i, band)| {
+                let db = match band.shape.has_gain() {
+                    true => band.gain(eq.scale),
+                    false => 0.0,
+                };
                 div()
                     .absolute()
-                    .left(px(x * width - 8.0))
-                    .top(px(y * height - 8.0))
-                    .size(px(16.))
-                    .rounded(px(8.))
-                    .bg(rgb(BAND_COLORS[band]))
-                    .border_2()
-                    .border_color(rgb(WELL))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .font_family(MONO)
-                    .text_size(px(9.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(BG))
-                    .cursor_move()
-                    .child(format!("{}", band + 1))
-                    .debug_selector(move || format!("eq-band-{band}"))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            if e.click_count == 2 {
-                                // Double-click a band to flatten it.
-                                ws.edit(cx, |ws| {
-                                    let eq = ws.strip_dsp_mut(ch).0.get_or_insert_default();
-                                    match band {
-                                        0 => eq.low_cut = 0.0,
-                                        1 => eq.low_mid.gain_db = 0.0,
-                                        2 => eq.high_mid.gain_db = 0.0,
-                                        _ => eq.high_shelf.gain_db = 0.0,
-                                    }
-                                });
-                                return;
-                            }
-                            ws.begin_drag(Drag::EqBand { channel: ch, band }, cx);
-                        }),
-                    )
+                    .left(px(graph_x(band.freq) * width - 6.0))
+                    .top(px(graph_y(db) * height - 6.0))
+                    .size(px(12.))
+                    .rounded(px(6.))
+                    .when(!band.off, |d| d.bg(rgb(crate::eq::band_color(i))))
+                    .when(band.off, |d| {
+                        d.border_1()
+                            .border_color(alpha(crate::eq::band_color(i), 0.6))
+                    })
+                    .debug_selector(move || format!("eq-card-band-{i}"))
             })
             .collect::<Vec<_>>();
         let labels = [
@@ -675,19 +633,27 @@ impl Workspace {
                 .text_color(rgb(TEXT_3))
                 .child(label)
         });
-        let readout = format!(
-            "Cut {} · {} {} · {} {} · Shelf {}",
-            if eq.low_cut <= 20.0 {
-                "off".into()
-            } else {
-                strip::hz(eq.low_cut)
-            },
-            strip::hz(eq.low_mid.freq),
-            db_text(eq.low_mid.gain_db),
-            strip::hz(eq.high_mid.freq),
-            db_text(eq.high_mid.gain_db),
-            db_text(eq.high_shelf.gain_db),
-        );
+        let n = eq.bands.len();
+        let readout = match n {
+            0 => "No bands yet · click to open the EQ".to_string(),
+            _ => {
+                let shapes: Vec<String> = eq
+                    .bands
+                    .iter()
+                    .take(4)
+                    .map(|b| match b.shape.has_gain() {
+                        true => format!("{} {}", strip::hz(b.freq), db_text(b.gain_db)),
+                        false => format!("{} {}", b.shape.name(), strip::hz(b.freq)),
+                    })
+                    .collect();
+                let more = if n > 4 {
+                    format!(" · +{}", n - 4)
+                } else {
+                    String::new()
+                };
+                format!("{}{more}", shapes.join(" · "))
+            }
+        };
         card()
             .gap(px(10.))
             .child(self.card_header("Channel EQ", ch, Builtin::Eq, on, cx))
@@ -697,8 +663,17 @@ impl Workspace {
                     .h(px(height))
                     .rounded(px(8.))
                     .bg(rgb(WELL))
+                    .cursor_pointer()
+                    .debug_selector(|| "eq-card".into())
                     .child(graph)
-                    .children(dots),
+                    .children(dots)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            ws.open_eq(ch, cx);
+                        }),
+                    ),
             )
             .child(div().relative().h(px(10.)).mt(px(-4.)).children(labels))
             .child(
@@ -708,6 +683,7 @@ impl Workspace {
                     .text_color(rgb(TEXT_3))
                     .whitespace_nowrap()
                     .overflow_hidden()
+                    .text_ellipsis()
                     .child(readout),
             )
     }

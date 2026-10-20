@@ -544,6 +544,34 @@ impl Player {
             })
     }
 
+    /// The channel whose EQ the EQ window shows, so the engine taps it: a track's or aux's by
+    /// id, the master's with `Some(None)`; or none.
+    pub fn watch_eq(&self, channel: Option<Option<u64>>) {
+        let slot = match channel {
+            None => usize::MAX,
+            Some(None) => MASTER,
+            Some(Some(id)) => self.lanes.get(&id).map_or(usize::MAX, |s| s.slot),
+        };
+        self.shared
+            .eq_tap
+            .slot
+            .store(slot, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A band of the watched EQ heard alone (by id), or none.
+    pub fn solo_band(&self, band: Option<u16>) {
+        let id = band.map_or(0, u32::from);
+        self.shared
+            .eq_tap
+            .solo
+            .store(id, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// What the watched EQ hears and plays.
+    pub fn eq_tap(&self) -> &crate::eq::Tap {
+        &self.shared.eq_tap
+    }
+
     /// The master's peak level since the last call, left and right.
     pub fn master_meter(&self) -> [f32; 2] {
         self.shared.take_meter(MASTER)
