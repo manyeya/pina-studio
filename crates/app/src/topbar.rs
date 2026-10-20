@@ -2,9 +2,10 @@
 //! who's here (you, and an agent when one is editing), and export.
 
 use gpui::{Context, Div, FontWeight, MouseButton, MouseDownEvent, div, prelude::*, px, rgb};
-use pina_engine::{music::Key, project::PPQ};
+use pina_engine::{look::Family, music::Key, project::PPQ};
 
 use crate::{
+    looks::family_shade,
     menu::{Menu, MenuAction},
     theme::*,
     workspace::{Bottom, Drag, View, Workspace, pt},
@@ -527,23 +528,45 @@ impl Workspace {
     }
 }
 
-/// Pina Studio's mark: the app icon's metronome, on the accent.
+/// Pina Studio's mark, as its app icon (scripts/icon.py): steps spelling p, a row a track, each in
+/// its family's colour.
 fn logo() -> impl IntoElement {
+    const P: [[bool; 4]; 5] = [
+        [true, true, true, true],
+        [true, false, false, true],
+        [true, true, true, true],
+        [true, false, false, false],
+        [true, false, false, false],
+    ];
+    let rows = [
+        Family::Drums,
+        Family::Percussion,
+        Family::Bass,
+        Family::Keys,
+        Family::Synth,
+    ];
     div()
         .size(px(24.))
         .flex_none()
         .rounded(px(7.))
-        .bg(rgb(ACCENT))
+        .bg(rgb(0x0c0c0f))
+        .border_1()
+        .border_color(rgb(LINE_STRONG))
         .flex()
+        .flex_col()
         .items_center()
         .justify_center()
-        .child(
-            gpui::svg()
-                .data(LOGO)
-                .size(px(24.))
-                .text_color(rgb(0xffffff)),
-        )
+        .gap(px(1.))
+        .children(P.iter().zip(rows).map(|(steps, family)| {
+            div()
+                .flex()
+                .gap(px(1.))
+                .children(steps.iter().map(move |&on| {
+                    div().size(px(3.)).rounded(px(0.75)).bg(rgb(if on {
+                        family_shade(family, 0)
+                    } else {
+                        0x1c1c23
+                    }))
+                }))
+        }))
 }
-
-/// The app icon's metronome, in one color: its body, and its arm swung from the pivot.
-const LOGO: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10.3 5h3.4l3.5 13.6H6.8z" fill="none" stroke="#000" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 15.6l3.3-8.1" stroke="#000" stroke-width="2" stroke-linecap="round"/><rect x="13.1" y="9" width="3.4" height="2.4" rx="0.8" transform="rotate(22 14.8 10.2)" fill="#000"/><circle cx="12" cy="15.6" r="1.5" fill="#000"/></svg>"##;
