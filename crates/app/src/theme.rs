@@ -159,6 +159,20 @@ pub enum Icon {
     Zoom,
     Fade,
     Flex,
+    Power,
+    Trash,
+    Pulse,
+    /// The EQ's band shapes, drawn as their curves.
+    Bell,
+    LowShelf,
+    LowCut,
+    HighShelf,
+    HighCut,
+    Notch,
+    BandPass,
+    TiltShelf,
+    FlatTilt,
+    AllPass,
 }
 
 impl Icon {
@@ -219,6 +233,23 @@ impl Icon {
             }
             Icon::Fade => r##"<path d="M3 20C10 20 14 13 21 4"/><path d="M3 20h18"/>"##,
             Icon::Flex => r##"<path d="m18 8 4 4-4 4M6 8l-4 4 4 4M2 12h20"/>"##,
+            Icon::Power => r##"<path d="M12 3v8M6.3 7.3a8 8 0 1 0 11.4 0"/>"##,
+            Icon::Trash => r##"<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>"##,
+            Icon::Pulse => r##"<path d="M3 12h3l3-7 4 14 3-7h5"/>"##,
+            Icon::Bell => r##"<path d="M2 16C7 16 9 8 12 8C15 8 17 16 22 16"/>"##,
+            Icon::LowShelf => r##"<path d="M2 8H7C10 8 12 16 15 16H22"/>"##,
+            Icon::LowCut => r##"<path d="M3 18C5 11 8 8 12 8H22"/>"##,
+            Icon::HighShelf => r##"<path d="M2 16H9C12 16 14 8 17 8H22"/>"##,
+            Icon::HighCut => r##"<path d="M2 8H12C16 8 19 11 21 18"/>"##,
+            Icon::Notch => r##"<path d="M2 9H8C10 9 11 18 12 18C13 18 14 9 16 9H22"/>"##,
+            Icon::BandPass => r##"<path d="M3 18C8 18 9 8 12 8C15 8 16 18 21 18"/>"##,
+            Icon::TiltShelf => {
+                r##"<path stroke-opacity=".4" stroke-dasharray="2 2" d="M2 12H22"/><path d="M2 16H6C10 16 14 8 18 8H22"/>"##
+            }
+            Icon::FlatTilt => r##"<path d="M2 17L22 7"/>"##,
+            Icon::AllPass => {
+                r##"<path d="M2 9H22"/><path stroke-opacity=".5" d="M4 16C6 13 8 13 10 16C12 19 14 19 16 16C18 13 20 13 21 15"/>"##
+            }
             Icon::Settings => {
                 r##"<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>"##
             }
@@ -272,7 +303,7 @@ impl Icon {
     fn svg(self) -> &'static [u8] {
         // Built once per icon and kept: the SVG renderer caches by the bytes' hash.
         use std::sync::OnceLock;
-        static CACHE: [OnceLock<Vec<u8>>; 64] = [const { OnceLock::new() }; 64];
+        static CACHE: [OnceLock<Vec<u8>>; 96] = [const { OnceLock::new() }; 96];
         CACHE[self as usize].get_or_init(|| {
             format!(
                 r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">{}</svg>"##,

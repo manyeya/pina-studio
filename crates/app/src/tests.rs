@@ -2169,6 +2169,33 @@ fn smart_controls_turn_the_channel_eq_on_a_built_in_instrument(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn the_band_panel_never_hides_the_band_it_is_for(cx: &mut TestAppContext) {
+    use tempo_engine::project::{Bands, Eq, EqBand};
+    let (ws, cx) = open(cx);
+    cx.simulate_resize(gpui::size(px(1500.), px(1000.)));
+    // A band high up: the panel at the bottom, under it. Low down, where the panel would
+    // hide it: the panel at the top, over it.
+    for (gain, below) in [(9.0, true), (-11.0, false)] {
+        ws.update(cx, |ws, cx| {
+            ws.session.project.tracks[0].eq = Some(Eq {
+                bands: Bands::from_slice(&[EqBand::new(Shape::Bell, 1_000.0, gain)]),
+                ..Eq::default()
+            });
+            ws.changed(cx);
+            ws.open_eq(Channel::Track(0), cx);
+        });
+        cx.run_until_parked();
+        click_on(cx, "eq-band-0", Modifiers::none(), MouseButton::Left);
+        let dot = cx.debug_bounds("eq-band-0").unwrap();
+        let panel = cx.debug_bounds("eq-panel").unwrap();
+        match below {
+            true => assert!(panel.origin.y > dot.origin.y + dot.size.height),
+            false => assert!(panel.origin.y + panel.size.height < dot.origin.y),
+        }
+    }
+}
+
+#[gpui::test]
 fn the_eq_window_adds_shapes_moves_and_takes_out_bands(cx: &mut TestAppContext) {
     use tempo_engine::project::Placement;
     let (ws, cx) = open(cx);
@@ -2204,12 +2231,15 @@ fn the_eq_window_adds_shapes_moves_and_takes_out_bands(cx: &mut TestAppContext) 
     );
     // Picked, its panel shows: a low shelf now, 24 dB an octave, on the middle only.
     assert!(cx.debug_bounds("eq-panel").is_some());
-    click_on(cx, "eq-shape", Modifiers::none(), MouseButton::Left);
-    pick(cx, &ws, "Low Shelf");
+    click_on(
+        cx,
+        "eq-shape-low-shelf",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
     click_on(cx, "eq-slope", Modifiers::none(), MouseButton::Left);
     pick(cx, &ws, "24 dB/oct");
-    click_on(cx, "eq-place", Modifiers::none(), MouseButton::Left);
-    pick(cx, &ws, "Mid");
+    click_on(cx, "eq-place-mid", Modifiers::none(), MouseButton::Left);
     let b = eq(cx).bands[2];
     assert_eq!(
         (b.shape, b.slope, b.placement),

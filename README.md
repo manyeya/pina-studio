@@ -366,9 +366,12 @@ In the app, mostly as in Logic:
   ⌘⌥-click changes its shape, ⌥⇧-click its slope; double-click it to type its frequency ("2k",
   "A4", "C#2+13"), gain ("2x") or width; right-click it, or the background, for the rest (split
   into left and right or mid and side, copy and paste, select all). The bands picked show their
-  panel under them: shape, slope, frequency, gain with its dynamic range a ring round it, width,
-  part of the sound, solo (hold it to hear what the band works on; drag it to move the band, up
-  and down for the level), dynamic and its own settings, on/off and delete. The display's range
+  panel under them (over them, if it would hide the band), pointing at it: the shapes as their
+  curves along the top with the slope; frequency and width as dials either side of gain, the big
+  one, its dynamic range a ring round it; the part of the sound, gain-Q and solo (hold it to hear
+  what the band works on; drag it to move the band, up and down for the level) on one side,
+  dynamic, on/off and delete on the other; and a dynamic band's own settings in a tray under
+  them (threshold, attack, release, whole band or spectral, what it listens to). The display's range
   grows as a band's dragged past it; the frequency scale zooms (drag it up and down), pans and
   shows notes (the piano, which snaps bands to them). Along the top: presets (tempo's, and yours
   to save), undo, A/B and full screen; along the bottom: EQ Sketch (draw a curve, get its bands),
