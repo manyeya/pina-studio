@@ -5656,6 +5656,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-apple",
  "gpui-pre-platform",
+ "objc2-foundation 0.3.2",
  "resvg",
  "serde",
  "serde_json",
@@ -5686,6 +5687,16 @@ dependencies = [
  "signalsmith-stretch",
  "symphonia",
  "vst3",
+]
+
+[[package]]
+name = "tempo-installer"
+version = "0.1.0"
+dependencies = [
+ "gpui-pre",
+ "gpui-pre-apple",
+ "gpui-pre-platform",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

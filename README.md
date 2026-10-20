@@ -10,6 +10,8 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
   `vst3/`, `clap.rs`, `vst2.rs` and `au.rs` behind it).
 - `crates/engine` also has the live `player.rs` (keeps the engine in step with edits) and
   `session.rs` (an open project and its undo history).
+- `crates/installer`: Install tempo, the app on tempo's disk image (`install.rs` what it does,
+  `ui.rs` its window).
 - `crates/engine` also has the built-in drum kit (`drums.rs`), the channel EQ (`eq.rs`; its
   linear phase in `eq_linear.rs`, its spectral dynamics in `eq_spectral.rs`), the
   compressor and saturator (written in Faust, in `faust/*.dsp`, compiled to Rust in `src/faust/`;
@@ -59,8 +61,23 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
 `play` sets the output device to the project's sample rate, as Logic does. `play_vst` loads a
 plugin, opens its editor and plays an arpeggio through it.
 
-`scripts/bundle.sh` builds `tempo.app` (the release binary, its icon, an Info.plist that asks for
-the microphone to record, signed ad hoc) and installs it in `/Applications`, or the folder given.
+`scripts/bundle.sh` builds `tempo.app` (`scripts/mac-app.sh`: the release binary, its icon, an
+Info.plist that asks for the microphone to record, the entitlements a plugin host needs under the
+hardened runtime) and installs it in `/Applications`, or the folder given.
+
+`scripts/release-mac.sh` makes the installer to give people, `dist/tempo-<version>.dmg`: tempo
+built for Apple silicon and Intel, inside "Install tempo" (`crates/installer`, a gpui app of
+tempo's own look), on a disk image whose window is drawn for it (`scripts/dmg-background.py`,
+laid out by dmgbuild from `scripts/dmg-settings.py`). Install tempo puts tempo in Applications (or
+updates or reinstalls the one there, swapping the whole app in at once, and waiting while tempo's
+open so you can save), adds the `tempo` command to `/usr/local/bin` (macOS asks for your password
+if it has to) and the example songs to `~/Music/tempo`, then opens tempo and puts the disk image
+away; or takes tempo out, its settings too if you like, never your songs. It animates all the way:
+tempo's EQ curve draws itself in and breathes, steps tick themselves off, and when it's done the
+notes float up. `TEMPO_SIGN_ID` (a Developer ID Application identity) signs everything with the
+hardened runtime and `TEMPO_NOTARY_PROFILE` (from `xcrun notarytool store-credentials`) notarizes
+and staples the disk image; without them it's signed ad hoc, and the window says how to open it
+anyway. `TEMPO_SHOT=<dir> cargo test -p tempo-installer shots -- --ignored` draws its screens.
 The icon, a metronome on a dark squircle on Apple's grid, is drawn by `scripts/icon.py`
 (`crates/app/icon/tempo.svg`) and packed into `tempo.icns` by `cargo run -p tempo --example
 icon`; macOS 26 draws it in its own glass, not in a gray box.
