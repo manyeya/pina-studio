@@ -5436,7 +5436,8 @@ fn shots() {
                 }
                 // The Channel EQ's window: a mix's bands, the analyzer as if playing.
                 "eq" | "eq-picked" | "eq-menu" | "eq-mixer" | "eq-hover" | "eq-multi"
-                | "eq-piano" | "eq-analyzer" | "eq-empty" | "eq-dynamics" | "eq-output" => {
+                | "eq-piano" | "eq-analyzer" | "eq-empty" | "eq-dynamics" | "eq-output"
+                | "eq-list" | "eq-match" | "eq-sketch" | "eq-grab" | "eq-compare" => {
                     use tempo_engine::project::{Bands, Dynamic, Eq, EqBand, Placement, Shape};
                     let mut cut = EqBand::new(Shape::LowCut, 32.0, 0.0);
                     cut.slope = 24;
@@ -5494,6 +5495,14 @@ fn shots() {
                                 v.popup = Some(crate::eq::Popup::Analyzer);
                             }
                             "eq-dynamics" => v.dyn_open = true,
+                            "eq-list" | "eq-match" | "eq-sketch" | "eq-grab" => {
+                                v.picked.clear();
+                                v.pretend_tool(&page[3..], rate);
+                            }
+                            "eq-compare" => {
+                                v.picked.clear();
+                                v.ext = Some(ws.session.project.tracks[1].id);
+                            }
                             "eq-output" => {
                                 v.picked.clear();
                                 v.popup = Some(crate::eq::Popup::Output);

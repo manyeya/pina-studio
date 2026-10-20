@@ -214,7 +214,8 @@ pub fn sketch_bands(points: &[(f64, f32)], range: f32) -> Vec<EqBand> {
 }
 
 /// The peaks of a spectrum worth a band (dB at each of `freqs`): standing 4 dB over what's
-/// round them, the loudest six, low to high.
+/// round them, the loudest six (none within a fortieth of the spectrum of a louder one), low to
+/// high.
 pub fn peaks(spec: &[f32], floor: f32) -> Vec<usize> {
     let n = spec.len();
     let k = (n / 60).max(2);
@@ -230,9 +231,15 @@ pub fn peaks(spec: &[f32], floor: f32) -> Vec<usize> {
         })
         .collect();
     found.sort_by(|&a, &b| spec[b].total_cmp(&spec[a]));
-    found.truncate(6);
-    found.sort();
-    found
+    let apart = (n / 40).max(1);
+    let mut kept: Vec<usize> = Vec::new();
+    for i in found {
+        if kept.len() < 6 && kept.iter().all(|&k| k.abs_diff(i) >= apart) {
+            kept.push(i);
+        }
+    }
+    kept.sort();
+    kept
 }
 
 impl Workspace {
@@ -368,7 +375,7 @@ impl Workspace {
                                 .left(px(0.))
                                 .top(px(0.))
                                 .h(px(6.))
-                                .w(px(180.0 * share))
+                                .w(gpui::relative(share))
                                 .rounded(px(3.))
                                 .bg(rgb(if share >= 1.0 { MINT } else { ACCENT })),
                         ),

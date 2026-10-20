@@ -2499,6 +2499,62 @@ impl EqView {
             .collect();
         self.meter = [-9.5, -10.2];
         self.peak = -6.8;
+        // Another track, for comparing: a bass's sound, loud low down.
+        self.ext_spec = self
+            .columns
+            .iter()
+            .map(|&f| {
+                let octave = (f / 1_000.0).log2() as f32;
+                let low = 14.0 * (-((f / 110.0).log2().powi(2) as f32) / 1.2).exp();
+                -44.0 - 9.0 * octave.max(0.0) + low + tilt * octave
+            })
+            .collect();
+    }
+
+    /// A stage of a tool, for pictures: the instance list, EQ Match fitted, a sketch drawn,
+    /// the spectrum grabbed.
+    pub fn pretend_tool(&mut self, tool: &str, rate: f64) {
+        let g = self.geo(rate);
+        match tool {
+            "list" => self.list = true,
+            "match" => {
+                let mut m = Match::new(tools::MatchSource::None);
+                let freqs = m.freqs().to_vec();
+                let input: Vec<f32> = freqs.iter().map(|_| -40.0).collect();
+                let reference: Vec<f32> = freqs
+                    .iter()
+                    .map(|&f| {
+                        let bump = |c: f64, w: f64, g: f32| {
+                            g * (-((f / c).log2().powi(2)) / w).exp() as f32
+                        };
+                        -40.0
+                            + bump(3_000.0, 0.5, 5.0)
+                            + bump(250.0, 0.8, -4.0)
+                            + bump(9_000.0, 1.5, 3.0)
+                    })
+                    .collect();
+                m.pretend(&input, &reference);
+                m.run(rate);
+                self.matching = Some(m);
+            }
+            "sketch" => {
+                self.sketching = true;
+                self.stroke = (0..80)
+                    .map(|i| {
+                        let x = i as f32 / 79.0 * g.w * 0.7;
+                        let o = x / g.w;
+                        let db = 6.0 * (-((o - 0.12).powi(2)) / 0.004).exp()
+                            - 5.0 * (-((o - 0.45).powi(2)) / 0.006).exp();
+                        (x, g.y(db))
+                    })
+                    .collect();
+            }
+            "grab" => {
+                self.grabbing = Some(self.post.clone());
+                self.pointer = Some((g.w * 0.3, g.h * 0.5));
+            }
+            _ => {}
+        }
     }
 }
 

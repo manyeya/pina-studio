@@ -404,8 +404,8 @@ impl Workspace {
                                     ),
                                     linear_gradient(
                                         180.,
-                                        linear_color_stop(alpha(RECORD, 0.35 * c), 0.),
-                                        linear_color_stop(alpha(RECORD, 0.02), 1.),
+                                        linear_color_stop(alpha(RECORD, 0.7 * c), 0.),
+                                        linear_color_stop(alpha(RECORD, 0.08 * c), 1.),
                                     ),
                                 ));
                             }
