@@ -558,13 +558,13 @@ impl Player {
             .store(slot, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// A band of the watched EQ heard alone (by id), or none.
-    pub fn solo_band(&self, band: Option<u16>) {
-        let id = band.map_or(0, u32::from);
-        self.shared
-            .eq_tap
-            .solo
-            .store(id, std::sync::atomic::Ordering::Relaxed);
+    /// A band of the watched EQ heard alone (by id) at a listening level (dB), or none.
+    pub fn solo_band(&self, band: Option<(u16, f32)>) {
+        let tap = &self.shared.eq_tap;
+        let (id, db) = band.map_or((0, 0.0), |(id, db)| (u32::from(id), db));
+        tap.solo_db
+            .store(db.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        tap.solo.store(id, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// What the watched EQ hears and plays.

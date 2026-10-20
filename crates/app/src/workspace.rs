@@ -64,6 +64,8 @@ actions!(
         ZoomIn,
         ZoomOut,
         SelectAllNotes,
+        EqSelectAll,
+        EqDeselect,
         CopyNotes,
         CutNotes,
         PasteNotes,
@@ -160,6 +162,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-r", RepeatRegion, Some("Arrange && !Roll")),
         KeyBinding::new("ctrl-m", MuteRegion, Some("Arrange && !Roll")),
         KeyBinding::new("cmd-a", SelectAllNotes, Some("Roll")),
+        KeyBinding::new("cmd-a", EqSelectAll, Some("Eq")),
+        KeyBinding::new("escape", EqDeselect, Some("Eq")),
         KeyBinding::new("cmd-c", CopyNotes, Some("Roll")),
         KeyBinding::new("cmd-x", CutNotes, Some("Roll")),
         KeyBinding::new("cmd-v", PasteNotes, Some("Roll")),
@@ -495,13 +499,36 @@ pub enum Drag {
         left: f32,
         width: f32,
     },
-    /// A band's dot in the EQ window, from where it was pressed and its frequency, gain and Q
-    /// then; `q` drags its width only.
+    /// A band's dot in the EQ window (the bands picked, from where they were), from where it
+    /// was pressed: `q` drags their widths, `alt` keeps to one way (`axis`: 0 not yet, 1
+    /// across, 2 up and down; without moving, it switches the band off); `deselect` lets it go
+    /// if it isn't moved.
     EqNode {
         id: u16,
         from: Point<f32>,
-        start: (f32, f32, f32),
         q: bool,
+        alt: bool,
+        axis: u8,
+        moved: bool,
+        deselect: bool,
+    },
+    /// The EQ's plot pressed where there's no dot: a click, a pull of the curve, or a box.
+    EqPress {
+        from: Point<f32>,
+        on_curve: bool,
+        alt: bool,
+        moved: bool,
+    },
+    /// A band's solo held: sideways moves it, up and down sets the level it's heard at.
+    EqSolo {
+        id: u16,
+        from: Point<f32>,
+        freq: f32,
+    },
+    /// The EQ's frequency scale dragged, from the frequencies it showed: zoom and pan.
+    EqScale {
+        from: Point<f32>,
+        span: (f64, f64),
     },
     /// A knob in the EQ window (a band's by id; 0 for the EQ's own), from the y it was pressed
     /// at and its value then.
@@ -593,6 +620,8 @@ pub enum Name {
     /// A track's volume or pan, typed: "-6", "L30", "C".
     Volume(usize),
     Pan(usize),
+    /// A value of the EQ window's: a band's (by id; 0 the EQ's own), typed.
+    Eq(u16, crate::eq::EqKnob),
 }
 
 /// A name being typed, in a text field where the name shows.
@@ -961,8 +990,9 @@ pub struct Workspace {
     /// Where the lanes and the EQ graph were drawn last frame, for turning pointer positions into
     /// ticks and frequencies.
     pub lanes_bounds: Rc<Cell<Bounds<Pixels>>>,
-    /// The Channel EQ's window, when it's open.
+    /// The Channel EQ's window, when it's open; and bands copied from it.
     pub eq_view: Option<crate::eq::EqView>,
+    pub eq_clipboard: Vec<tempo_engine::project::EqBand>,
     /// The window's size, for what fits.
     pub viewport_h: f32,
     pub viewport_w: f32,
@@ -1135,6 +1165,7 @@ impl Workspace {
             exporting: false,
             lanes_bounds: Rc::new(Cell::new(Bounds::default())),
             eq_view: None,
+            eq_clipboard: Vec::new(),
             slider_bounds: Rc::new(RefCell::new(HashMap::new())),
             viewport_h: 900.0,
             viewport_w: 1440.0,
@@ -1432,6 +1463,7 @@ impl Workspace {
                 false => format!("{:.1}", t.volume_db),
             }),
             Name::Pan(i) => p.tracks.get(i).map(|t| strip::pan_label(t.pan)),
+            Name::Eq(id, knob) => Some(self.eq_value_text(id, knob)),
         }
         .unwrap_or_default()
     }
@@ -1474,6 +1506,11 @@ impl Workspace {
         self.refocus = true;
         let what = naming.what;
         let text = text.filter(|t| *t != self.name_of(what));
+        if let (Name::Eq(id, knob), Some(text)) = (what, &text) {
+            self.eq_value_typed(id, knob, text, cx);
+            cx.notify();
+            return;
+        }
         // A volume or pan typed: set if it reads as one.
         if let (Name::Volume(i) | Name::Pan(i), Some(text)) = (what, &text) {
             match (what, strip::parse_db(text), strip::parse_pan(text)) {
@@ -1501,7 +1538,7 @@ impl Workspace {
                     Name::Aux(i) => p.auxes[i].name = text,
                     Name::Marker(i) => p.markers[i].name = text,
                     Name::Region(at) => p.tracks[at.0].regions[at.1].name = text,
-                    Name::Volume(_) | Name::Pan(_) => {}
+                    Name::Volume(_) | Name::Pan(_) | Name::Eq(..) => {}
                 }
             });
         }
@@ -1587,6 +1624,8 @@ impl Workspace {
                 | Drag::AutoMarquee { .. }
                 | Drag::AutoDraw { .. }
                 | Drag::EqWindow { .. }
+                | Drag::EqPress { .. }
+                | Drag::EqScale { .. }
         );
         if edits {
             self.session.checkpoint();
@@ -1915,7 +1954,39 @@ impl Workspace {
                     return;
                 }
             }
-            Some(Drag::EqNode { id, from, start, q }) => self.drag_eq_node(id, from, start, q, p),
+            Some(Drag::EqNode {
+                id,
+                from,
+                q,
+                alt,
+                axis,
+                ..
+            }) => {
+                let axis = self.drag_eq_node(id, from, q, alt, axis, p);
+                if let Some(Drag::EqNode { axis: a, moved, .. }) = &mut self.drag {
+                    *a = axis;
+                    *moved |= (p.x - from.x).hypot(p.y - from.y) > 2.0;
+                }
+            }
+            Some(Drag::EqPress {
+                from,
+                on_curve,
+                alt,
+                ..
+            }) => {
+                if let Some(Drag::EqPress { moved, .. }) = &mut self.drag {
+                    *moved |= (p.x - from.x).hypot(p.y - from.y) > 3.0;
+                }
+                self.drag_eq_press(from, on_curve, alt, p, cx);
+                cx.notify();
+                return;
+            }
+            Some(Drag::EqSolo { id, from, freq }) => self.drag_eq_solo(id, from, freq, p),
+            Some(Drag::EqScale { from, span }) => {
+                self.drag_eq_scale(from, span, p);
+                cx.notify();
+                return;
+            }
             Some(Drag::EqKnob {
                 id,
                 knob,
@@ -2005,9 +2076,31 @@ impl Workspace {
         match self.drag {
             Some(Drag::ZoomSpan) => self.zoom_release(cx),
             Some(Drag::SoloHold) => self.solo_release(cx),
-            // A dot or knob clicked, not moved: no edit to undo.
-            Some(Drag::EqNode { .. } | Drag::EqKnob { .. }) if self.session.unchanged() => {
-                self.session.cancel()
+            // A dot or knob clicked, not moved: no edit to undo; a dot's click may do something.
+            Some(d @ (Drag::EqNode { .. } | Drag::EqKnob { .. } | Drag::EqSolo { .. })) => {
+                if self.session.unchanged() {
+                    self.session.cancel();
+                }
+                if let Some(v) = self.eq_view.as_mut() {
+                    v.solo = None;
+                }
+                if let Drag::EqNode {
+                    id,
+                    alt,
+                    moved: false,
+                    deselect,
+                    ..
+                } = d
+                {
+                    self.drag = None;
+                    self.release_eq_node(id, alt, deselect, cx);
+                }
+            }
+            Some(Drag::EqPress {
+                from, moved, alt, ..
+            }) => {
+                self.drag = None;
+                self.release_eq_press(from, moved, alt, cx);
             }
             _ => {}
         }
@@ -2321,13 +2414,13 @@ impl Workspace {
         self.locate_tick(start + into % length, cx);
     }
 
-    fn undo(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn undo(&mut self, cx: &mut Context<Self>) {
         if self.session.undo() {
             self.changed(cx);
         }
     }
 
-    fn redo(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn redo(&mut self, cx: &mut Context<Self>) {
         if self.session.redo() {
             self.changed(cx);
         }
@@ -3112,10 +3205,14 @@ impl Render for Workspace {
                     _ => "Workspace Arrange",
                 };
                 // Up and down pick sounds while the browser shows.
-                let context = match self.browser_open() {
+                let mut context = match self.browser_open() {
                     true => format!("{context} Samples"),
                     false => context.to_string(),
                 };
+                // The EQ window clicked in last: ⌘A and Escape are its bands'.
+                if self.naming.is_none() && self.eq_view.as_ref().is_some_and(|v| v.focused) {
+                    context += " Eq";
+                }
                 gpui::KeyContext::parse(&context).unwrap_or_default()
             })
             .on_key_down(cx.listener(|ws, e: &KeyDownEvent, window, cx| ws.type_key(e, window, cx)))
@@ -3154,11 +3251,23 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &PlayStop, _, cx| ws.play_stop(cx)))
             .on_action(cx.listener(|ws, _: &GoToStart, _, cx| ws.go_to_start(cx)))
             .on_action(cx.listener(|ws, _: &Undo, _, cx| ws.undo(cx)))
+            .on_action(cx.listener(|ws, _: &EqSelectAll, _, cx| {
+                ws.eq_key(crate::eq::EqOp::SelectAll, cx);
+            }))
+            .on_action(cx.listener(|ws, _: &EqDeselect, _, cx| {
+                if let Some(v) = ws.eq_view.as_mut() {
+                    v.picked.clear();
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|ws, _: &Redo, _, cx| ws.redo(cx)))
             .on_action(cx.listener(|ws, _: &Delete, _, cx| ws.delete(cx)))
             .on_action(cx.listener(|ws, _: &DeleteTrack, _, cx| ws.delete_track(cx)))
             .on_action(cx.listener(|ws, _: &Split, _, cx| ws.split(cx)))
             .on_action(cx.listener(|ws, _: &CopyRegion, _, cx| {
+                if ws.eq_key(crate::eq::EqOp::Copy, cx) {
+                    return;
+                }
                 if !ws.copy_picked(cx) {
                     ws.auto_clip = None;
                     ws.region_key(RegionOp::Copy, cx)
@@ -3173,6 +3282,9 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|ws, _: &PasteRegion, _, cx| {
+                if ws.eq_key(crate::eq::EqOp::Paste, cx) {
+                    return;
+                }
                 if !ws.paste_points(cx) {
                     ws.paste_key(cx)
                 }

@@ -541,11 +541,12 @@ impl Processor {
     }
 
     /// Runs a block (at most `MAX_BLOCK`) through the EQ in place. `solo` is a band to hear
-    /// alone, by id; `tap` gets what went in and came out, and the dynamic bands' moves.
+    /// alone, by id, and its listening level; `tap` gets what went in and came out, and the
+    /// dynamic bands' moves.
     pub fn process(
         &mut self,
         eq: &Eq,
-        solo: Option<u16>,
+        solo: Option<(u16, f32)>,
         l: &mut [f32],
         r: &mut [f32],
         tap: Option<&Tap>,
@@ -720,32 +721,41 @@ impl Processor {
         }
     }
 
-    /// A band heard alone: what's going in, through a band pass where the band is.
-    fn hear_alone(&mut self, eq: &Eq, solo: Option<u16>, l: &mut [f32], r: &mut [f32]) {
-        let Some(band) = solo.and_then(|id| eq.bands.iter().find(|b| b.id == id)) else {
+    /// A band heard alone, at a listening level (dB): what it works on of what's going in. A
+    /// bell's, notch's or band pass's stretch round its frequency; a shelf's side of it; for a
+    /// cut, what it takes away, so you hear whether it's cutting the right thing.
+    fn hear_alone(&mut self, eq: &Eq, solo: Option<(u16, f32)>, l: &mut [f32], r: &mut [f32]) {
+        let Some((band, level)) =
+            solo.and_then(|(id, db)| eq.bands.iter().find(|b| b.id == id).map(|b| (b, db)))
+        else {
             self.solo.0 = 0;
             return;
         };
-        let q = match band.shape {
-            Shape::Bell | Shape::Notch | Shape::BandPass => (band.q as f64).clamp(0.3, 40.0),
-            _ => FRAC_1_SQRT_2,
-        };
         let w = 2.0 * PI * (band.freq as f64).clamp(10.0, 0.49 * self.rate);
-        let filter = matched2(w, q, w, self.rate, &bandpass2(w, q));
+        let q = (band.q as f64).clamp(0.3, 40.0);
+        let r2 = FRAC_1_SQRT_2;
+        let filter = match band.shape {
+            Shape::LowCut | Shape::LowShelf => matched2(w, r2, w, self.rate, &lowpass2(w, r2)),
+            Shape::HighCut | Shape::HighShelf | Shape::TiltShelf => {
+                matched2(w, r2, w, self.rate, &highpass2(w, r2))
+            }
+            _ => matched2(w, q, w, self.rate, &bandpass2(w, q)),
+        };
         if self.solo.0 != band.id {
             self.solo.2 = [[0.0; 2]; 2];
         }
         self.solo.0 = band.id;
         self.solo.1 = filter;
+        let gain = 10f64.powf(level as f64 / 20.0);
         let frames = l.len();
         for (lane, out) in [l, r].into_iter().enumerate() {
             for (i, o) in out.iter_mut().enumerate().take(frames) {
                 let x = self.input[lane][i] as f64;
-                *o = cascade(
+                *o = (cascade(
                     std::slice::from_ref(&filter),
                     std::slice::from_mut(&mut self.solo.2[lane]),
                     x,
-                ) as f32;
+                ) * gain) as f32;
             }
         }
     }
@@ -755,15 +765,16 @@ impl Processor {
 pub const TAP_LEN: usize = 8192;
 
 /// What the EQ window watches, shared with the audio thread: which lane's EQ, a band to hear
-/// alone, and that EQ's latest sound going in and coming out (mono), and its dynamic bands'
-/// moves.
+/// alone and how loud, and that EQ's latest sound going in (mono) and coming out (each side),
+/// and its dynamic bands' moves.
 pub struct Tap {
     /// The lane watched (`usize::MAX`: none).
     pub slot: AtomicUsize,
-    /// A band of it heard alone, by id (0: none).
+    /// A band of it heard alone, by id (0: none), and the level it's heard at (dB, f32 bits).
     pub solo: AtomicU32,
+    pub solo_db: AtomicU32,
     pre: Vec<AtomicU32>,
-    post: Vec<AtomicU32>,
+    post: [Vec<AtomicU32>; 2],
     /// Samples written, ever: where the next goes.
     written: AtomicUsize,
     /// Each band's dynamic move now, dB (f32 bits), by its place in the EQ.
@@ -782,8 +793,9 @@ impl Tap {
         Tap {
             slot: AtomicUsize::new(usize::MAX),
             solo: AtomicU32::new(0),
+            solo_db: AtomicU32::new(0),
             pre: ring(),
-            post: ring(),
+            post: [ring(), ring()],
             written: AtomicUsize::new(0),
             moved: (0..MAX_BANDS).map(|_| AtomicU32::new(0)).collect(),
         }
@@ -794,10 +806,14 @@ impl Tap {
         self.slot.load(Ordering::Relaxed) == slot
     }
 
-    pub fn solo(&self) -> Option<u16> {
+    /// The band heard alone, and its level.
+    pub fn solo(&self) -> Option<(u16, f32)> {
         match self.solo.load(Ordering::Relaxed) {
             0 => None,
-            id => Some(id as u16),
+            id => Some((
+                id as u16,
+                f32::from_bits(self.solo_db.load(Ordering::Relaxed)),
+            )),
         }
     }
 
@@ -807,20 +823,27 @@ impl Tap {
             let k = at % TAP_LEN;
             let pre = 0.5 * (pre_l[i] + pre_r[i]);
             self.pre[k].store(pre.to_bits(), Ordering::Relaxed);
-            self.post[k].store((0.5 * (l[i] + r[i])).to_bits(), Ordering::Relaxed);
+            self.post[0][k].store(l[i].to_bits(), Ordering::Relaxed);
+            self.post[1][k].store(r[i].to_bits(), Ordering::Relaxed);
             at += 1;
         }
         self.written.store(at, Ordering::Release);
     }
 
-    /// The latest `TAP_LEN` samples going in and coming out, oldest first; and how many have
-    /// been written ever (unchanged: nothing new).
-    pub fn read(&self, pre: &mut [f32; TAP_LEN], post: &mut [f32; TAP_LEN]) -> usize {
+    /// The latest `TAP_LEN` samples going in, and coming out on each side, oldest first; and
+    /// how many have been written ever (unchanged: nothing new).
+    pub fn read(
+        &self,
+        pre: &mut [f32; TAP_LEN],
+        left: &mut [f32; TAP_LEN],
+        right: &mut [f32; TAP_LEN],
+    ) -> usize {
         let at = self.written.load(Ordering::Acquire);
         for i in 0..TAP_LEN {
             let k = (at + i) % TAP_LEN;
             pre[i] = f32::from_bits(self.pre[k].load(Ordering::Relaxed));
-            post[i] = f32::from_bits(self.post[k].load(Ordering::Relaxed));
+            left[i] = f32::from_bits(self.post[0][k].load(Ordering::Relaxed));
+            right[i] = f32::from_bits(self.post[1][k].load(Ordering::Relaxed));
         }
         at
     }
@@ -1255,13 +1278,14 @@ mod tests {
                     })
                     .collect();
                 let mut r = l.clone();
-                p.process(&e, Some(id), &mut l, &mut r, Some(&tap));
+                p.process(&e, Some((id, 0.0)), &mut l, &mut r, Some(&tap));
                 if k > 20 {
                     peak = l.iter().fold(peak, |m, x| m.max(x.abs()));
                 }
             }
-            let (mut pre, mut post) = ([0f32; TAP_LEN], [0f32; TAP_LEN]);
-            let written = tap.read(&mut pre, &mut post);
+            let (mut pre, mut post, mut right) =
+                ([0f32; TAP_LEN], [0f32; TAP_LEN], [0f32; TAP_LEN]);
+            let written = tap.read(&mut pre, &mut post, &mut right);
             assert_eq!(written, 40 * MAX_BLOCK);
             let loudest = |s: &[f32]| s.iter().fold(0f32, |m, x| m.max(x.abs()));
             assert!(close(loudest(&pre) as f64, 0.5, 0.01), "{}", loudest(&pre));

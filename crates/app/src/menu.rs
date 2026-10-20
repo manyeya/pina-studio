@@ -169,6 +169,8 @@ pub enum MenuAction {
     Palette(crate::palette::PaletteOp),
     /// Something in the EQ window: a band's shape, slope, placement; the analyzer.
     Eq(crate::eq::EqOp),
+    /// A channel's EQ, in the EQ window.
+    OpenEq(Channel),
     /// What an audio track records.
     Input {
         track: usize,
@@ -443,6 +445,7 @@ impl Workspace {
             MenuAction::Auto(track, op) => self.auto_op(track, op, cx),
             MenuAction::Palette(op) => self.palette_op(op, cx),
             MenuAction::Eq(op) => self.eq_op(op, cx),
+            MenuAction::OpenEq(ch) => self.open_eq(ch, cx),
             MenuAction::NameMarker(i, name) => self.edit(cx, |ws| {
                 if let Some(m) = ws.session.project.markers.get_mut(i) {
                     m.name = name;
