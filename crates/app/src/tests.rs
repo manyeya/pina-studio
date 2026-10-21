@@ -509,6 +509,72 @@ fn modulators_are_added_mapped_by_dragging_and_their_depth_set(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn a_modulator_learns_the_plugin_parameter_turned_next_and_lists_every_one(
+    cx: &mut TestAppContext,
+) {
+    use pina_engine::{
+        commands::{ChannelRef, Command},
+        modulate::{ModKind, ModTarget},
+        project::{Format, PluginRef, Which},
+    };
+    let (ws, cx) = open(cx);
+    // Apple's low-pass filter, on every Mac, in the first track's first insert.
+    ws.update(cx, |ws, cx| {
+        ws.select_track(0);
+        ws.edit(cx, |ws| {
+            let insert = Command::SetInsert {
+                channel: ChannelRef::Track(0),
+                index: 0,
+                plugin: Some(PluginRef {
+                    format: Format::Au,
+                    class: "AULowpass".into(),
+                    uid: Some("aufx lpas appl".into()),
+                    ..Default::default()
+                }),
+            };
+            let dir = ws.session.dir.clone();
+            pina_engine::commands::apply(&mut ws.session.project, &dir, insert).unwrap();
+        });
+        ws.show_bottom(Bottom::Modulation, cx);
+    });
+    cx.run_until_parked();
+    click_on(cx, "add-mod-LFO", Modifiers::none(), MouseButton::Left);
+    // Every one of its parameters is offered, named with its plugin.
+    let menu = ws.read_with(cx, |ws, _| ws.target_menu(0, 0));
+    assert!(
+        menu.iter()
+            .any(|(label, _)| label == "AULowpass · Cutoff Frequency"),
+        "{:?}",
+        menu.iter().map(|m| &m.0).collect::<Vec<_>>()
+    );
+    // Learning: its cutoff turned as if in the plugin's own window, and that's where it goes.
+    click_on(cx, "mod-0-learn", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.mod_learn.is_some()));
+    let id = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].id);
+    ws.update(cx, |ws, _| {
+        let now = ws.player.param_value(id, Which::Insert(0), 0);
+        ws.player
+            .set_param(id, Which::Insert(0), 0, if now > 0.5 { 0.2 } else { 0.8 });
+    });
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+    let routes: Vec<ModTarget> = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[0].modulators[0]
+            .routes
+            .iter()
+            .map(|r| r.target)
+            .collect()
+    });
+    assert_eq!(routes, [ModTarget::Plugin(Which::Insert(0), 0)]);
+    assert!(ws.read_with(cx, |ws, _| ws.mod_learn.is_none()));
+    let kind = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[0].modulators[0].kind.clone()
+    });
+    assert!(matches!(kind, ModKind::Lfo { .. }));
+}
+
+#[gpui::test]
 fn settings_hide_editor_tabs_and_their_shortcuts_still_open_them(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| ws.show_bottom(Bottom::PianoRoll, cx));

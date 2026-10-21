@@ -897,6 +897,8 @@ pub struct Workspace {
     pub mod_steps: crate::modulation::StepsAt,
     pub mod_drag_at: Option<Point<f32>>,
     pub mod_edit: Option<(usize, usize)>,
+    /// A modulator waiting to be mapped to whatever's turned next in a plugin's own window.
+    pub mod_learn: Option<crate::modulation::Learn>,
     pub mod_clock: Instant,
     /// The Zoom tool's drag, where it began and is now (window x); what the Solo tool's hold
     /// changed, to put back (pattern mode, its region, playing, the selection).
@@ -1104,6 +1106,7 @@ impl Workspace {
             mod_steps: Default::default(),
             mod_drag_at: None,
             mod_edit: None,
+            mod_learn: None,
             mod_clock: Instant::now(),
             zoom_span: None,
             solo_restore: None,

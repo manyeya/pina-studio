@@ -35,6 +35,18 @@ pub type StepsAt =
 /// Each modulator's colour, by its place on its track.
 pub const MOD_COLORS: [u32; MAX_MODS] = [VIOLET, AMBER, TEAL, PINK, SKY, MINT, CORAL, SLATE];
 
+/// A modulator learning its target: the track's plugin parameters as they were when it began
+/// (those already moved by a route or automation left out, as they move on their own), the
+/// first to change being what it maps to.
+pub struct Learn {
+    pub track: usize,
+    pub index: usize,
+    base: Vec<(Which, u32, f64)>,
+}
+
+/// How far a parameter must move to count as turned, of its 0 to 1.
+const TURNED: f64 = 0.004;
+
 /// How many of a modulator's values a card keeps to draw its trace.
 const TRACE: usize = 96;
 
@@ -392,15 +404,22 @@ impl Workspace {
                 SamplerParam::Tremolo => "Tremolo",
             }
             .into(),
-            ModTarget::Plugin(which, id) => track
-                .and_then(|tr| {
-                    self.player
-                        .params(tr.id, which)
-                        .into_iter()
-                        .find(|p| p.id == id)
-                        .map(|p| p.name)
-                })
-                .unwrap_or_else(|| format!("Parameter {id}")),
+            ModTarget::Plugin(which, id) => {
+                let name = track
+                    .and_then(|tr| {
+                        self.player
+                            .params(tr.id, which)
+                            .into_iter()
+                            .find(|p| p.id == id)
+                            .map(|p| p.name)
+                    })
+                    .unwrap_or_else(|| format!("Parameter {id}"));
+                // An effect's, by its plugin: two can both have a Cutoff.
+                match (which, track.and_then(|tr| tr.plugin(which))) {
+                    (Which::Insert(_), Some(r)) => format!("{} · {name}", r.class),
+                    _ => name,
+                }
+            }
             ModTarget::Sound(r, param) => {
                 let sound = self
                     .sound_name(t, r)
@@ -506,15 +525,147 @@ impl Workspace {
                 SamplerParam::ALL.map(ModTarget::Sampler).to_vec(),
             );
         }
-        let params: Vec<ModTarget> = self
-            .player
-            .params(track.id, Which::Instrument)
-            .into_iter()
-            .take(24)
-            .map(|p| ModTarget::Plugin(Which::Instrument, p.id))
-            .collect();
-        group(&mut items, "Instrument", params);
+        // Every parameter of its plugins: the instrument's, then each insert's (type to find).
+        for which in self.plugin_slots(t) {
+            let params: Vec<ModTarget> = self
+                .player
+                .params(track.id, which)
+                .into_iter()
+                .map(|p| ModTarget::Plugin(which, p.id))
+                .collect();
+            let title = match which {
+                Which::Instrument => "Instrument".to_string(),
+                Which::Insert(i) => format!(
+                    "Insert {}: {}",
+                    i + 1,
+                    track.inserts.get(i).map_or("", |r| r.class.as_str())
+                ),
+            };
+            group(&mut items, &title, params);
+        }
         items
+    }
+
+    /// The plugins on track `t`: its instrument, if it's one, and its inserts.
+    fn plugin_slots(&self, t: usize) -> Vec<Which> {
+        let Some(track) = self.session.project.tracks.get(t) else {
+            return Vec::new();
+        };
+        let instrument =
+            matches!(track.instrument, Some(Instrument::Plugin(_))).then_some(Which::Instrument);
+        instrument
+            .into_iter()
+            .chain((0..track.inserts.len()).map(Which::Insert))
+            .collect()
+    }
+
+    /// Modulator `k` of track `t` learning its target (again: stops): the next parameter turned
+    /// in one of the track's plugins' own windows. Opens the instrument's window if none is.
+    pub fn learn(&mut self, t: usize, k: usize, cx: &mut Context<Self>) {
+        if self
+            .mod_learn
+            .as_ref()
+            .is_some_and(|l| (l.track, l.index) == (t, k))
+        {
+            self.mod_learn = None;
+            self.status = Some("Stopped learning.".into());
+            cx.notify();
+            return;
+        }
+        let Some(track) = self.session.project.tracks.get(t) else {
+            return;
+        };
+        let id = track.id;
+        // What moves on its own (a route, automation) can't be told from a turn.
+        let moved = |which: Which, param: u32| {
+            track.modulators.iter().any(|m| {
+                m.routes
+                    .iter()
+                    .any(|r| r.target == ModTarget::Plugin(which, param))
+            }) || track
+                .automation
+                .plugins
+                .iter()
+                .any(|a| a.plugin == which && a.param == param)
+        };
+        let slots = self.plugin_slots(t);
+        let base: Vec<(Which, u32, f64)> = slots
+            .iter()
+            .flat_map(|&which| {
+                self.player
+                    .params(id, which)
+                    .into_iter()
+                    .filter(move |p| !moved(which, p.id))
+                    .map(move |p| (which, p.id, p.value))
+            })
+            .collect();
+        if base.is_empty() {
+            self.status = Some(
+                "No plugin on this track to learn from: give it a plugin instrument or effect."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
+        // Its window, to turn something in (not in tests: no windows on the screen).
+        if let Some(&first) = slots.first().filter(|_| !cfg!(test)) {
+            let _ = self.player.open_editor(id, first);
+        }
+        self.mod_learn = Some(Learn {
+            track: t,
+            index: k,
+            base,
+        });
+        self.status = Some(format!(
+            "{}: turn a control in the plugin's window to map it there (Learn again stops).",
+            self.mod_name(t, k)
+        ));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(120))
+                    .await;
+                match this.update(cx, |ws, cx| ws.learn_tick(cx)) {
+                    Ok(false) => {}
+                    _ => break,
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Whether learning's done: the first parameter turned since it began, mapped.
+    fn learn_tick(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(l) = &self.mod_learn else {
+            return true;
+        };
+        let (t, k) = (l.track, l.index);
+        let Some(id) = self
+            .session
+            .project
+            .tracks
+            .get(t)
+            .filter(|tr| k < tr.modulators.len())
+            .map(|tr| tr.id)
+        else {
+            self.mod_learn = None;
+            return true;
+        };
+        let turned = l
+            .base
+            .iter()
+            .find(|&&(which, param, was)| {
+                (self.player.param_value(id, which, param) - was).abs() > TURNED
+            })
+            .map(|&(which, param, _)| ModTarget::Plugin(which, param));
+        let Some(mt) = turned else {
+            return false;
+        };
+        self.mod_learn = None;
+        self.map_modulator(t, k, mt, cx);
+        cx.notify();
+        true
     }
 
     /// Edits a track's modulators as one undo step, and the engine hears.
@@ -1474,6 +1625,37 @@ impl Workspace {
                                 }),
                             ),
                     )
+                    // Or learn it: whatever's turned next in a plugin's own window.
+                    .child({
+                        let learning = self
+                            .mod_learn
+                            .as_ref()
+                            .is_some_and(|l| (l.track, l.index) == (t, k));
+                        div()
+                            .h(px(22.))
+                            .px(px(7.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(6.))
+                            .bg(if learning {
+                                alpha(color, 0.45)
+                            } else {
+                                rgb(FIELD).into()
+                            })
+                            .text_size(px(10.))
+                            .text_color(rgb(if learning { TEXT } else { TEXT_2 }))
+                            .cursor_pointer()
+                            .hover(|d| d.bg(rgb(RAISED)))
+                            .debug_selector(move || format!("mod-{k}-learn"))
+                            .child(if learning { "Learning…" } else { "Learn" })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    cx.stop_propagation();
+                                    ws.learn(t, k, cx);
+                                }),
+                            )
+                    })
                     // Or pick where from a list.
                     .child({
                         let items = self.target_menu(t, k);
@@ -1493,11 +1675,7 @@ impl Workspace {
                                 MouseButton::Left,
                                 cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                                     cx.stop_propagation();
-                                    ws.menu = Some(Menu {
-                                        at: e.position,
-                                        items: items.clone(),
-                                        ..Default::default()
-                                    });
+                                    ws.menu = Some(Menu::search(e.position, items.clone()));
                                     cx.notify();
                                 }),
                             )
