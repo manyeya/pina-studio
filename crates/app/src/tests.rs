@@ -575,6 +575,82 @@ fn a_modulator_learns_the_plugin_parameter_turned_next_and_lists_every_one(
 }
 
 #[gpui::test]
+fn tracks_picked_with_cmd_and_shift_go_into_one_stack(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let picked = |cx: &mut VisualTestContext| ws.read_with(cx, |ws, _| ws.picked_tracks());
+    let shift = Modifiers {
+        shift: true,
+        ..Modifiers::none()
+    };
+    // Its header's top corner, clear of its knobs and buttons.
+    let header = |cx: &mut VisualTestContext, i: usize, m: Modifiers, button: MouseButton| {
+        let name = ["header-0", "header-1", "header-2"][i];
+        let at = cx.debug_bounds(name).unwrap().origin + point(px(6.), px(3.));
+        cx.simulate_mouse_down(at, button, m);
+        cx.simulate_mouse_up(at, button, m);
+        cx.run_until_parked();
+    };
+    header(cx, 0, Modifiers::none(), MouseButton::Left);
+    header(cx, 2, Modifiers::command(), MouseButton::Left);
+    assert_eq!(picked(cx), [0, 2]);
+    // ⇧: everything from the selected track (the last ⌘-clicked) to it.
+    header(cx, 0, shift, MouseButton::Left);
+    assert_eq!(picked(cx), [0, 1, 2]);
+    header(cx, 1, Modifiers::command(), MouseButton::Left);
+    assert_eq!(picked(cx), [0, 2]);
+    // The menu of a picked track offers to stack them all; ⇧⌘D does it.
+    header(cx, 2, Modifiers::none(), MouseButton::Right);
+    assert_eq!(picked(cx), [0, 2]);
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("cmd-shift-d");
+    let outputs = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        let stack = p.auxes.iter().find(|a| a.stack).map(|a| a.bus);
+        (stack, p.tracks.iter().map(|t| t.output).collect::<Vec<_>>())
+    });
+    let stack = outputs.0.expect("a stack");
+    assert_eq!(outputs.1, [Some(stack), None, Some(stack)]);
+    // A plain click picks one again.
+    header(cx, 1, Modifiers::none(), MouseButton::Left);
+    assert_eq!(picked(cx), [1]);
+}
+
+#[gpui::test]
+fn a_stacks_shared_modulator_is_on_every_track_in_it(cx: &mut TestAppContext) {
+    use crate::modulation::ModField;
+    use pina_engine::modulate::ModKind;
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| {
+        ws.edit(cx, |ws| {
+            ws.session.project.add_stack(&[0, 2]);
+        });
+        ws.select_track(0);
+        ws.show_bottom(Bottom::Modulation, cx);
+    });
+    cx.run_until_parked();
+    click_on(cx, "add-mod-shared", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "New Macro");
+    let shared = ModKind::Shared { modulator: 0 };
+    ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        assert_eq!(p.tracks[0].modulators[0].kind, shared);
+        assert_eq!(p.tracks[2].modulators[0].kind, shared);
+        assert!(p.tracks[1].modulators.is_empty(), "not in the stack");
+        assert_eq!(ws.mod_name(2, 0), "Stack 1 · Macro 1");
+    });
+    // Turned on one track, it's turned on every one.
+    ws.update(cx, |ws, _| ws.set_mod_field(0, 0, ModField::Value, 0.7));
+    assert!((ws.read_with(cx, |ws, _| ws.mod_field(2, 0, ModField::Value)) - 0.7).abs() < 1e-4);
+    // Taken off one track's card: off the stack, and every track in it.
+    ws.update(cx, |ws, cx| ws.remove_modulator(2, 0, cx));
+    ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        assert!(p.auxes.iter().all(|a| a.modulators.is_empty()));
+        assert!(p.tracks.iter().all(|t| t.modulators.is_empty()));
+    });
+}
+
+#[gpui::test]
 fn a_modulators_knob_is_automated_from_its_right_click(cx: &mut TestAppContext) {
     use pina_engine::{
         modulate::ModParam,
@@ -5662,6 +5738,42 @@ fn shots() {
                     ws.mod_edit = Some((0, 0));
                     ws.editor_h = 330.0;
                     ws.show_bottom(Bottom::Modulation, cx);
+                }
+                // A stack of the keys and lead, both picked, sharing an LFO and a macro.
+                "stack-shared" | "stack-shared-menu" => {
+                    use pina_engine::modulate::{ModKind, ModRoute, ModTarget};
+                    let p = &mut ws.session.project;
+                    let bus = p.add_stack(&[0, 1]);
+                    p.add_shared(bus, ModKind::lfo());
+                    p.add_shared(bus, ModKind::Macro { value: 0.35 });
+                    p.tracks[0].modulators[0].routes = vec![ModRoute {
+                        target: ModTarget::Pan,
+                        depth: 0.6,
+                    }];
+                    p.tracks[0].modulators[1].routes = vec![ModRoute {
+                        target: ModTarget::Volume,
+                        depth: -9.0,
+                    }];
+                    p.tracks[0]
+                        .modulators
+                        .push(pina_engine::modulate::Modulator {
+                            kind: ModKind::random(),
+                            routes: vec![],
+                        });
+                    let ids: Vec<u64> = p.tracks.iter().map(|t| t.id).collect();
+                    ws.tracks_picked = vec![ids[0], ids[1]];
+                    ws.mod_values
+                        .insert(ids[0], [0.6, 0.35, -0.3, 0.0, 0.0, 0.0, 0.0, 0.0]);
+                    ws.track = 0;
+                    ws.editor_h = 330.0;
+                    ws.show_bottom(Bottom::Modulation, cx);
+                    if page == "stack-shared-menu" {
+                        ws.menu = Some(crate::menu::Menu {
+                            at: gpui::point(px(1180.), px(560.)),
+                            items: ws.shared_menu(0).unwrap(),
+                            ..Default::default()
+                        });
+                    }
                 }
                 // The console headers: a stereo pan, a binaural one, a tall track, a muted region;
                 // and each right-click menu.

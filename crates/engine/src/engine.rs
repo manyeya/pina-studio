@@ -389,6 +389,8 @@ pub struct Arrangement {
     master: f32,
     plans: Vec<Plan>,
     auxes: Vec<AuxPlan>,
+    /// Each stack's shared modulators' values this block, by aux.
+    stack_mods: Vec<[f32; MAX_MODS]>,
     /// What tracks send to each aux, this block.
     buses: Vec<[Vec<f32>; 2]>,
     /// How far ahead of what's heard the engine reads, so plugins' latency doesn't make it late.
@@ -416,6 +418,7 @@ impl Arrangement {
             master: 1.0,
             plans: Vec::new(),
             auxes: Vec::new(),
+            stack_mods: Vec::new(),
             buses: Vec::new(),
             lookahead: 0,
             master_strip: StripDsp::default(),
@@ -632,6 +635,11 @@ fn gather(
 /// An aux: it plays its bus through its inserts into the master.
 struct AuxPlan {
     slot: usize,
+    /// A stack's shared modulators, the lane each follower hears, and their settings'
+    /// automation (from the first track in it with a lane for one).
+    mods: Vec<ModKind>,
+    follow: [usize; MAX_MODS],
+    mod_auto: Vec<(u8, ModParam, Vec<AutoPoint>)>,
     gain: [f32; 2],
     dsp: StripDsp,
     /// Delay compensation after its inserts.
@@ -1141,8 +1149,19 @@ pub fn compile(
         .map(|a| with_eq(&a.inserts, &a.eq))
         .collect();
     let master_sidechains = with_eq(&project.master_inserts, &project.master_eq);
+    // The lane a follower hears.
+    let follows = |kind: Option<&ModKind>| match kind {
+        Some(ModKind::Follower { source, .. }) => project
+            .tracks
+            .iter()
+            .position(|o| o.id == *source)
+            .map_or(usize::MAX, |j| tracks[j].0),
+        _ => usize::MAX,
+    };
     for (i, (t, &(slot, _))) in project.tracks.iter().zip(tracks).enumerate() {
         let (mut clips, mut events, mut controls) = (Vec::new(), Vec::new(), Vec::new());
+        // Its modulators as patterns' sounds hear them: shared ones as the stack's.
+        let ahead = project.mods_of(i);
         for (r, region) in t.regions.iter().enumerate().filter(|(_, r)| !r.mute) {
             // A looped region plays again from each multiple of its length, the last time cut
             // short where the loop stops.
@@ -1162,7 +1181,7 @@ pub fn compile(
                     project,
                     rate,
                     &pass,
-                    &t.modulators,
+                    &ahead,
                     files,
                     (&mut events, &mut controls),
                     &mut clips,
@@ -1185,7 +1204,7 @@ pub fn compile(
                     project,
                     rate,
                     &region,
-                    &t.modulators,
+                    &ahead,
                     files,
                     (&mut events, &mut controls),
                     &mut clips,
@@ -1263,14 +1282,7 @@ pub fn compile(
                         .collect(),
                 })
                 .collect(),
-            follow: std::array::from_fn(|k| match t.modulators.get(k).map(|m| &m.kind) {
-                Some(ModKind::Follower { source, .. }) => project
-                    .tracks
-                    .iter()
-                    .position(|o| o.id == *source)
-                    .map_or(usize::MAX, |j| tracks[j].0),
-                _ => usize::MAX,
-            }),
+            follow: std::array::from_fn(|k| follows(t.modulators.get(k).map(|m| &m.kind))),
             param_base: {
                 let refs = match &t.instrument {
                     Some(Instrument::Plugin(r)) => vec![(Which::Instrument, r)],
@@ -1346,8 +1358,45 @@ pub fn compile(
         .zip(aux_sidechains)
         .map(|(((a, &(slot, _)), &delay), sidechains)| {
             let g = if a.mute { 0.0 } else { db(a.volume_db) };
+            let mods: Vec<ModKind> = match a.stack {
+                true => a
+                    .modulators
+                    .iter()
+                    .take(MAX_MODS)
+                    .map(|m| m.kind.clone())
+                    .collect(),
+                false => Vec::new(),
+            };
+            // A shared modulator's settings as a track in it automates them.
+            let mut mod_auto: Vec<(u8, ModParam, Vec<AutoPoint>)> = Vec::new();
+            let members = project.tracks.iter().filter(|t| {
+                !mods.is_empty() && t.output == Some(a.bus) && t.automation.mode != AutoMode::Off
+            });
+            for t in members {
+                for m in t.automation.mods.iter().filter(|m| !m.points.is_empty()) {
+                    let Some(ModKind::Shared { modulator: s }) =
+                        t.modulators.get(m.modulator as usize).map(|m| &m.kind)
+                    else {
+                        continue;
+                    };
+                    if !mod_auto.iter().any(|(k, f, _)| k == s && *f == m.field) {
+                        let points = m
+                            .points
+                            .iter()
+                            .map(|p| AutoPoint {
+                                tick: project.samples(p.tick, rate),
+                                ..*p
+                            })
+                            .collect();
+                        mod_auto.push((*s, m.field, points));
+                    }
+                }
+            }
             AuxPlan {
                 slot,
+                follow: std::array::from_fn(|k| follows(mods.get(k))),
+                mods,
+                mod_auto,
                 gain: balance(g, a.pan),
                 dsp: strip_dsp(a.eq.as_ref(), a.comp.as_ref(), a.sat.as_ref(), rate),
                 delay,
@@ -1372,6 +1421,7 @@ pub fn compile(
         master_sidechains,
         order,
         plans,
+        stack_mods: vec![[0.0; MAX_MODS]; auxes.len()],
         buses: (0..auxes.len())
             .map(|_| [vec![0.0; MAX_BLOCK], vec![0.0; MAX_BLOCK]])
             .collect(),
@@ -2087,6 +2137,31 @@ impl Engine {
             bus[0][..frames].fill(0.0);
             bus[1][..frames].fill(0.0);
         }
+        // Stacks' shared modulators, before the tracks they move. With no notes of their own,
+        // an envelope on a stack never starts.
+        for (aux, plan) in arrangement.auxes.iter().enumerate() {
+            let Some(lane) = self.lanes[plan.slot].as_deref_mut() else {
+                continue;
+            };
+            for (k, kind) in plan.mods.iter().enumerate() {
+                let input = ModInput {
+                    beats: playing.then(|| from as f64 * tempo / (60.0 * self.rate)),
+                    seconds: frames as f64 / self.rate,
+                    tempo,
+                    trigger: false,
+                    gate: false,
+                    follow: self.peaks.get(plan.follow[k]).copied().unwrap_or(0.0),
+                };
+                let mut over = ModOver::default();
+                for (_, field, points) in plan.mod_auto.iter().filter(|a| a.0 as usize == k) {
+                    if let Some(v) = value_at(points, from as f64) {
+                        over.set(*field, v);
+                    }
+                }
+                arrangement.stack_mods[aux][k] =
+                    modulate::step_over(kind, &mut lane.mods[k], &input, &over);
+            }
+        }
 
         for &t in &arrangement.order {
             let plan = &arrangement.plans[t];
@@ -2198,7 +2273,16 @@ impl Engine {
                             over.set(*field, v);
                         }
                     }
-                    let v = modulate::step_over(&m.kind, &mut lane.mods[k], &input, &over);
+                    let v = match m.kind {
+                        // Its stack's, as worked out this block.
+                        ModKind::Shared { modulator } => plan
+                            .output
+                            .and_then(|aux| arrangement.stack_mods.get(aux))
+                            .and_then(|v| v.get(modulator as usize))
+                            .copied()
+                            .unwrap_or(0.0),
+                        _ => modulate::step_over(&m.kind, &mut lane.mods[k], &input, &over),
+                    };
                     if let Some(s) = shared {
                         s.report_mod(plan.slot, k, v);
                     }
@@ -3003,6 +3087,53 @@ mod tests {
         let (ducked, later) = both(&pad);
         assert!(ducked < plain * 0.5, "{ducked} {plain}");
         assert!(later > ducked * 2.0, "{later} {ducked}");
+    }
+
+    #[test]
+    fn a_stacks_shared_lfo_moves_each_track_in_it_as_it_routes_it() {
+        use crate::modulate::{LfoShape, ModRate};
+        // Two tracks in a stack, one square LFO on the stack: each routes it to its own volume,
+        // one down, the other not at all.
+        let mut p = project(vec![
+            synth_track("a", vec![note(0, PPQ * 4, 60)], PPQ * 4),
+            synth_track("b", vec![note(0, PPQ * 4, 67)], PPQ * 4),
+        ]);
+        p.assign_ids();
+        let bus = p.add_stack(&[0, 1]);
+        let lfo = ModKind::Lfo {
+            shape: LfoShape::Square,
+            rate: ModRate::Beats(1.0),
+            phase: 0.0,
+            unipolar: false,
+        };
+        assert_eq!(p.add_shared(bus, lfo.clone()), Some(0));
+        assert_eq!(
+            p.tracks[1].modulators[0].kind,
+            ModKind::Shared { modulator: 0 }
+        );
+        assert_eq!(p.mod_kind(1, 0), Some(&lfo));
+        let swing = |p: &Project| {
+            let [l, _] = render(p, Path::new("."), BEAT * 2);
+            let (low, high) = (
+                peak(&l[BEAT + 3000..BEAT + 9000]),
+                peak(&l[BEAT + 15000..BEAT + 21000]),
+            );
+            high / low.max(1e-9)
+        };
+        assert!(swing(&p) < 1.5, "unrouted, it moves nothing");
+        p.tracks[0].modulators[0].routes.push(ModRoute {
+            target: ModTarget::Volume,
+            depth: -24.0,
+        });
+        p.tracks[1].modulators[0].routes.push(ModRoute {
+            target: ModTarget::Volume,
+            depth: -24.0,
+        });
+        assert!(swing(&p) > 10.0, "{}", swing(&p));
+        // Off the stack, it goes from every track in it.
+        p.remove_shared(bus, 0);
+        assert!(p.tracks.iter().all(|t| t.modulators.is_empty()));
+        assert!(swing(&p) < 1.5);
     }
 
     #[test]

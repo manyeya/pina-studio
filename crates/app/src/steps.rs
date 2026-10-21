@@ -1041,7 +1041,7 @@ impl Workspace {
                 let targets = self.mod_targets.clone();
                 let param = mode.sound_param();
                 let target = param.map(|p| ModTarget::Sound(r, p));
-                let mods = self.session.project.tracks[at.0].modulators.clone();
+                let mods = self.session.project.mods_of(at.0);
                 let tempo = self.session.project.tempo;
                 // Each modulator moving this lane: its colour, depth and kind.
                 let moving: Vec<(usize, u32, f32, ModKind)> = mods
@@ -1344,7 +1344,7 @@ impl Workspace {
         // its parameter rows (steps modulators, as Logic's automation rows), painted in time with
         // the pattern.
         let t = at.0;
-        let track_mods = self.session.project.tracks[t].modulators.clone();
+        let track_mods = self.session.project.mods_of(t);
         let mod_chips: Vec<Div> = track_mods
             .iter()
             .enumerate()

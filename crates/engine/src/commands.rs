@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::{
     arrange::{self, Arrangement, Transition},
     compose::{self, BassPart, ChordPart, DrumPart, MelodyPart},
-    modulate::ModParam,
+    modulate::{ModKind, ModParam},
     music::{Key, NoteEdit},
     plugin::{PluginApi, PluginParam, value_from_text},
     project::{
@@ -552,6 +552,16 @@ pub enum Command {
         track: usize,
         index: usize,
     },
+    /// A modulator a stack shares: every track in it gets a `shared` modulator playing it, to
+    /// route as it likes; or one taken off the stack, and off every track in it.
+    ShareModulator {
+        aux: usize,
+        modulator: crate::modulate::Modulator,
+    },
+    UnshareModulator {
+        aux: usize,
+        index: usize,
+    },
     /// A modulator moving a setting by `depth` in its units; 0 takes the route off.
     Modulate {
         track: usize,
@@ -885,15 +895,16 @@ fn mod_param(
                 .into(),
         );
     };
-    let m = modulator_at(p, t, k)?;
-    if setting.get(&m.kind).is_none() {
-        let has: Vec<&str> = ModParam::of(&m.kind)
-            .into_iter()
-            .map(ModParam::name)
-            .collect();
+    modulator_at(p, t, k)?;
+    // One its stack shares: the stack's settings.
+    let kind = p
+        .mod_kind(t, k)
+        .ok_or_else(|| format!("track {t}'s modulator {k} is one its stack no longer shares"))?;
+    if setting.get(kind).is_none() {
+        let has: Vec<&str> = ModParam::of(kind).into_iter().map(ModParam::name).collect();
         return Err(format!(
             "track {t}'s modulator {k} ({}) has no {}: it has {}",
-            m.kind.name(),
+            kind.name(),
             setting.name().to_lowercase(),
             match has.is_empty() {
                 true => "none to automate".to_string(),
@@ -1894,6 +1905,19 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             track: t,
             modulator,
         } => {
+            track(p, t)?;
+            if let ModKind::Shared { modulator: s } = modulator.kind {
+                let Some(stack) = p.stack_of(t) else {
+                    return Err(format!("track {t} isn't in a stack"));
+                };
+                if s as usize >= stack.modulators.len() {
+                    return Err(format!(
+                        "{} shares {} modulators: no {s}",
+                        stack.name,
+                        stack.modulators.len()
+                    ));
+                }
+            }
             let t = track(p, t)?;
             if t.modulators.len() >= crate::modulate::MAX_MODS {
                 return Err(format!(
@@ -1909,11 +1933,48 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             modulator,
         } => {
             let m = modulator_at(p, t, index)?;
+            // One its stack shares, given settings: the stack's, for every track in it.
+            if matches!(m.kind, ModKind::Shared { .. })
+                && !matches!(modulator.kind, ModKind::Shared { .. })
+            {
+                if !modulator.routes.is_empty() {
+                    m.routes = modulator.routes;
+                }
+                *p.mod_kind_mut(t, index).ok_or_else(|| {
+                    format!("track {t}'s modulator {index} is one its stack no longer shares")
+                })? = modulator.kind;
+                return Ok(Value::Null);
+            }
             let routes = std::mem::take(&mut m.routes);
             *m = modulator;
             if m.routes.is_empty() {
                 m.routes = routes;
             }
+        }
+        Command::ShareModulator { aux: a, modulator } => {
+            let stack = aux(p, a)?;
+            if !stack.stack {
+                return Err(format!("aux {a} ({}) isn't a stack", stack.name));
+            }
+            if matches!(modulator.kind, ModKind::Shared { .. }) {
+                return Err("a stack shares an lfo, steps, a follower, random or a macro".into());
+            }
+            let bus = stack.bus;
+            let index = p.add_shared(bus, modulator.kind).ok_or_else(|| {
+                format!(
+                    "a stack shares {} modulators at most",
+                    crate::modulate::MAX_MODS
+                )
+            })?;
+            return Ok(json!({ "index": index }));
+        }
+        Command::UnshareModulator { aux: a, index } => {
+            let stack = aux(p, a)?;
+            let (bus, n) = (stack.bus, stack.modulators.len());
+            if index >= n {
+                return Err(format!("no shared modulator {index}: aux {a} shares {n}"));
+            }
+            p.remove_shared(bus, index);
         }
         Command::RemoveModulator { track: t, index } => {
             modulator_at(p, t, index)?;
@@ -2627,6 +2688,71 @@ mod tests {
     }
 
     #[test]
+    fn a_stack_shares_a_modulator_with_every_track_in_it() {
+        use crate::modulate::{ModKind, ModParam};
+        let mut p = Project::new(48_000);
+        for name in ["Bass", "Pad", "Lead"] {
+            run(
+                &mut p,
+                &format!(r#"{{"op": "add_track", "name": "{name}", "instrument": "synth"}}"#),
+            )
+            .unwrap();
+        }
+        run(
+            &mut p,
+            r#"{"op": "add_stack", "tracks": [0, 1], "name": "Keys"}"#,
+        )
+        .unwrap();
+        let a = p.auxes.iter().position(|a| a.stack).unwrap();
+        let made = run(
+            &mut p,
+            &format!(
+                r#"{{"op": "share_modulator", "aux": {a}, "modulator": {{"type": "macro"}}}}"#
+            ),
+        )
+        .unwrap();
+        assert_eq!(made["index"], 0);
+        let shared = ModKind::Shared { modulator: 0 };
+        assert_eq!(p.tracks[0].modulators[0].kind, shared);
+        assert_eq!(p.tracks[1].modulators[0].kind, shared);
+        assert!(p.tracks[2].modulators.is_empty(), "the lead isn't in it");
+        // Routed on each, set (and automated) once for all.
+        run(
+            &mut p,
+            r#"{"op": "modulate", "track": 1, "modulator": 0, "target": "volume", "depth": -12}"#,
+        )
+        .unwrap();
+        run(&mut p, r#"{"op": "set_modulator", "track": 1, "index": 0, "modulator": {"type": "macro", "value": 0.5}}"#).unwrap();
+        assert_eq!(p.mod_kind(0, 0), Some(&ModKind::Macro { value: 0.5 }));
+        assert_eq!(p.tracks[1].modulators[0].kind, shared);
+        assert_eq!(p.tracks[1].modulators[0].routes.len(), 1);
+        run(&mut p, r#"{"op": "set_automation", "track": 0, "param": "modulator", "modulator": 0, "setting": "value", "points": [{"tick": 0, "value": 1}]}"#).unwrap();
+        assert!(
+            !p.tracks[0]
+                .automation
+                .points(Param::Mod(0, ModParam::Value))
+                .is_empty()
+        );
+        // A track outside the stack can't play it.
+        let e = run(&mut p, r#"{"op": "add_modulator", "track": 2, "modulator": {"type": "shared", "modulator": 0}}"#).unwrap_err();
+        assert!(e.contains("isn't in a stack"), "{e}");
+        // Saved and read back, as it was.
+        let back: Project =
+            serde_json::from_str(&serde_json::to_string(&p.portable()).unwrap()).unwrap();
+        assert_eq!(back.auxes[a].modulators, p.auxes[a].modulators);
+        assert_eq!(back.tracks[1].modulators, p.tracks[1].modulators);
+        // Off the stack: off every track in it, its lanes too.
+        run(
+            &mut p,
+            &format!(r#"{{"op": "unshare_modulator", "aux": {a}, "index": 0}}"#),
+        )
+        .unwrap();
+        assert!(p.auxes[a].modulators.is_empty());
+        assert!(p.tracks.iter().all(|t| t.modulators.is_empty()));
+        assert!(p.tracks[0].automation.mods.is_empty());
+    }
+
+    #[test]
     fn a_modulators_settings_are_automated_and_go_with_it() {
         use crate::modulate::ModParam;
         let mut p = Project::new(48_000);
@@ -2821,6 +2947,8 @@ mod tests {
             "transition",
             "set_reference",
             "add_modulator",
+            "share_modulator",
+            "unshare_modulator",
             "set_modulator",
             "remove_modulator",
             "modulate",

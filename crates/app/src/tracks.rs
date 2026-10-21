@@ -558,7 +558,7 @@ impl Workspace {
         let mut rows: Vec<Div> = Vec::new();
         for i in 0..self.session.project.tracks.len() {
             let t = &self.session.project.tracks[i];
-            let selected = i == self.track;
+            let selected = self.is_picked(i);
             let color = self.color(i);
             let glyph = self.shown(i).look.icon;
             let picking = self.picker.as_ref().is_some_and(|p| p.track == i);
@@ -1234,14 +1234,25 @@ impl Workspace {
                 MouseButton::Right,
                 cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    ws.select_track(i);
+                    // Within the selection, it stays selected: the menu acts on all of it.
+                    match ws.is_picked(i) {
+                        true => {
+                            ws.track = i;
+                            ws.channel = Channel::Track(i);
+                        }
+                        false => ws.select_track(i),
+                    }
                     ws.track_menu(i, e.position, cx);
                 }),
             )
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |ws, _, _, cx| {
-                    ws.select_track(i);
+                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                    let m = e.modifiers;
+                    match m.platform || m.shift {
+                        true => ws.pick_track(i, m.shift),
+                        false => ws.select_track(i),
+                    }
                     ws.region = None;
                     cx.notify();
                 }),
@@ -1253,7 +1264,7 @@ impl Workspace {
         let p = &self.session.project;
         let (beat_ticks, per_bar, bar_ticks) = (p.beat(), p.beats_per_bar(), p.bar());
         let tracks = self.session.project.tracks.len();
-        let selected = self.track;
+        let selected: Vec<usize> = self.picked_tracks();
         let automation = self.show_automation;
         // Each row's top and its lane's height, for the grid.
         let rows_at: Vec<(f32, f32, f32)> = (0..tracks)
@@ -1308,7 +1319,7 @@ impl Workspace {
                     );
                 }
                 for (i, &(y, lh, ah)) in rows_at.iter().enumerate() {
-                    if i == selected {
+                    if selected.contains(&i) {
                         quad(window, 0.0, y, w, lh, alpha(0xffffff, 0.025));
                     }
                     let row_h = lh + ah;

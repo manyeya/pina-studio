@@ -193,7 +193,15 @@ impl Workspace {
                 true => op("Move Down".into(), TrackOp::Move(t, 1)),
                 false => ("Move Down".into(), MenuAction::Nothing),
             },
-            op("Create Track Stack\t⇧⌘D".into(), TrackOp::Stack(t)),
+            op(
+                match self.picked_tracks().len() {
+                    n @ 2.. if self.is_picked(t) => {
+                        format!("Create Track Stack of {n} Tracks\t⇧⌘D")
+                    }
+                    _ => "Create Track Stack\t⇧⌘D".into(),
+                },
+                TrackOp::Stack(t),
+            ),
             rule(),
             op("Modulation…".into(), TrackOp::Modulation(t)),
             ("Bounce in Place".to_string(), MenuAction::BounceInPlace(t)),
@@ -381,9 +389,15 @@ impl Workspace {
                     });
                 }
             }
-            TrackOp::Stack(t) if t < n => self.edit(cx, |ws| {
-                ws.session.project.add_stack(&[t]);
-            }),
+            TrackOp::Stack(t) if t < n => {
+                let tracks = match self.is_picked(t) {
+                    true => self.picked_tracks(),
+                    false => vec![t],
+                };
+                self.edit(cx, |ws| {
+                    ws.session.project.add_stack(&tracks);
+                });
+            }
             TrackOp::Look(t, at) if t < n => self.pending_look = Some((t, at)),
             TrackOp::Automation => self.show_automation ^= true,
             TrackOp::NewRegion(t, tick) if t < n => {

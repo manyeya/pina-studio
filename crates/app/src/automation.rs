@@ -324,12 +324,11 @@ impl Workspace {
             }
         }
         // Its modulators' settings: a macro turned, an LFO's phase, an envelope's times.
-        let settings: Vec<Param> = t
-            .modulators
-            .iter()
-            .enumerate()
-            .flat_map(|(k, m)| {
-                pina_engine::modulate::ModParam::of(&m.kind)
+        let project = &self.session.project;
+        let settings: Vec<Param> = (0..t.modulators.len())
+            .filter_map(|k| Some((k, project.mod_kind(track, k)?)))
+            .flat_map(|(k, kind)| {
+                pina_engine::modulate::ModParam::of(kind)
                     .into_iter()
                     .map(move |s| Param::Mod(k as u8, s))
             })
@@ -389,10 +388,11 @@ impl Workspace {
                     EqField::Q => b.q,
                 }
             }
-            Param::Mod(k, setting) => t
-                .modulators
-                .get(k as usize)
-                .and_then(|m| setting.get(&m.kind))
+            Param::Mod(k, setting) => self
+                .session
+                .project
+                .mod_kind(track, k as usize)
+                .and_then(|kind| setting.get(kind))
                 .unwrap_or(0.0),
         }
     }
@@ -423,8 +423,8 @@ impl Workspace {
                 }
             }
             Param::Mod(k, setting) => {
-                if let Some(m) = t.modulators.get_mut(k as usize) {
-                    setting.set(&mut m.kind, value);
+                if let Some(kind) = self.session.project.mod_kind_mut(track, k as usize) {
+                    setting.set(kind, value);
                 }
             }
         }

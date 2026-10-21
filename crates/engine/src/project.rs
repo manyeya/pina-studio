@@ -11,6 +11,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::modulate::{MAX_MODS, ModKind, Modulator};
+
 pub use crate::stretch::Flex;
 
 /// Ticks per quarter note, as in Logic.
@@ -1281,6 +1283,10 @@ pub struct Aux {
     /// A summing stack: the channel its member tracks play into, shown with them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stack: bool,
+    /// A stack's shared modulators: each runs once, and a track in the stack moves its own
+    /// settings by one through a `Shared` modulator of its own, its routes its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modulators: Vec<crate::modulate::Modulator>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -3362,6 +3368,105 @@ impl Project {
             self.tracks[t].output = Some(bus);
         }
         bus
+    }
+
+    /// The stack a track plays into, if it plays into one.
+    pub fn stack_of(&self, t: usize) -> Option<&Aux> {
+        let bus = self.tracks.get(t)?.output?;
+        self.auxes.iter().find(|a| a.bus == bus && a.stack)
+    }
+
+    /// A track's modulator's kind; for one its stack shares, the stack's (none if the track has
+    /// left the stack, or the stack the modulator).
+    pub fn mod_kind(&self, t: usize, k: usize) -> Option<&ModKind> {
+        match &self.tracks.get(t)?.modulators.get(k)?.kind {
+            ModKind::Shared { modulator } => {
+                Some(&self.stack_of(t)?.modulators.get(*modulator as usize)?.kind)
+            }
+            kind => Some(kind),
+        }
+    }
+
+    pub fn mod_kind_mut(&mut self, t: usize, k: usize) -> Option<&mut ModKind> {
+        let shared = match self.tracks.get(t)?.modulators.get(k)?.kind {
+            ModKind::Shared { modulator } => Some(modulator as usize),
+            _ => None,
+        };
+        match shared {
+            Some(s) => {
+                let bus = self.stack_of(t)?.bus;
+                let aux = self.auxes.iter_mut().find(|a| a.bus == bus)?;
+                Some(&mut aux.modulators.get_mut(s)?.kind)
+            }
+            None => Some(&mut self.tracks[t].modulators[k].kind),
+        }
+    }
+
+    /// A track's modulators as they move what's worked out ahead (a pattern's sounds): any its
+    /// stack shares as the stack's, with the track's own routes.
+    pub fn mods_of(&self, t: usize) -> Vec<Modulator> {
+        let Some(track) = self.tracks.get(t) else {
+            return Vec::new();
+        };
+        (0..track.modulators.len())
+            .map(|k| Modulator {
+                kind: self
+                    .mod_kind(t, k)
+                    .unwrap_or(&track.modulators[k].kind)
+                    .clone(),
+                routes: track.modulators[k].routes.clone(),
+            })
+            .collect()
+    }
+
+    /// A modulator shared by the stack on `bus`, which every track in it gets (to route as it
+    /// likes); returns its place on the stack.
+    pub fn add_shared(&mut self, bus: u32, kind: ModKind) -> Option<usize> {
+        let aux = self.auxes.iter_mut().find(|a| a.bus == bus && a.stack)?;
+        if aux.modulators.len() >= MAX_MODS {
+            return None;
+        }
+        aux.modulators.push(Modulator {
+            kind,
+            routes: Vec::new(),
+        });
+        let s = aux.modulators.len() - 1;
+        for t in self.tracks.iter_mut().filter(|t| t.output == Some(bus)) {
+            if t.modulators.len() < MAX_MODS {
+                t.modulators.push(Modulator {
+                    kind: ModKind::Shared { modulator: s as u8 },
+                    routes: Vec::new(),
+                });
+            }
+        }
+        Some(s)
+    }
+
+    /// Takes a shared modulator off its stack, and off every track sharing it (their lanes for it
+    /// too); those after it move down a place.
+    pub fn remove_shared(&mut self, bus: u32, s: usize) {
+        let Some(aux) = self.auxes.iter_mut().find(|a| a.bus == bus) else {
+            return;
+        };
+        if s >= aux.modulators.len() {
+            return;
+        }
+        aux.modulators.remove(s);
+        for t in self.tracks.iter_mut().filter(|t| t.output == Some(bus)) {
+            let mut k = 0;
+            while k < t.modulators.len() {
+                match &mut t.modulators[k].kind {
+                    ModKind::Shared { modulator } if *modulator as usize == s => {
+                        t.modulators.remove(k);
+                        t.automation.modulator_removed(k);
+                        continue;
+                    }
+                    ModKind::Shared { modulator } if *modulator as usize > s => *modulator -= 1,
+                    _ => {}
+                }
+                k += 1;
+            }
+        }
     }
 
     pub fn add_aux(&mut self) -> u32 {

@@ -68,6 +68,9 @@ pub enum ModKind {
         #[serde(default)]
         value: f32,
     },
+    /// One of the modulators of the stack the track plays into (by its place there): one
+    /// modulator every track in the stack shares, each moving its own settings by it.
+    Shared { modulator: u8 },
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -217,6 +220,7 @@ impl ModKind {
             ModKind::Follower { .. } => "Follower",
             ModKind::Random { .. } => "Random",
             ModKind::Macro { .. } => "Macro",
+            ModKind::Shared { .. } => "Shared",
         }
     }
 
@@ -338,7 +342,8 @@ pub fn value_at(kind: &ModKind, beats: f64, tempo: f64) -> Option<f32> {
             })
         }
         ModKind::Macro { value } => Some(value.clamp(0.0, 1.0)),
-        ModKind::Envelope { .. } | ModKind::Follower { .. } => None,
+        // Its stack's modulator's, found by whoever knows the stack.
+        ModKind::Envelope { .. } | ModKind::Follower { .. } | ModKind::Shared { .. } => None,
     }
 }
 
@@ -609,6 +614,8 @@ pub fn step_over(kind: &ModKind, state: &mut ModState, input: &ModInput, over: &
             }
         }
         ModKind::Macro { value } => over.or(ModParam::Value, *value).clamp(0.0, 1.0),
+        // The engine plays the stack's.
+        ModKind::Shared { .. } => state.value,
     };
     state.value = value;
     value

@@ -807,6 +807,8 @@ pub struct Workspace {
     focus: FocusHandle,
     /// The selected track, and region.
     pub track: usize,
+    /// When ⌘- or ⇧-clicks picked several tracks, all of them by id (the selected one too).
+    pub tracks_picked: Vec<u64>,
     pub region: Option<At>,
     /// Horizontal zoom, and scroll in pixels.
     pub px_per_beat: f32,
@@ -1068,6 +1070,7 @@ impl Workspace {
             player,
             focus,
             track: 0,
+            tracks_picked: Vec::new(),
             region: None,
             px_per_beat: 48.0,
             scroll_x: 0.0,
@@ -1617,6 +1620,58 @@ impl Workspace {
     pub fn select_track(&mut self, i: usize) {
         self.track = i;
         self.channel = Channel::Track(i);
+        self.tracks_picked.clear();
+    }
+
+    /// ⌘-click: a track into the selection, or out of it; ⇧-click: every track from the selected
+    /// one to it.
+    pub fn pick_track(&mut self, i: usize, range: bool) {
+        let ids: Vec<u64> = self.session.project.tracks.iter().map(|t| t.id).collect();
+        if i >= ids.len() || self.track >= ids.len() {
+            return;
+        }
+        if range {
+            // The selected track stays where the range starts, for the next ⇧-click.
+            let (a, b) = (self.track.min(i), self.track.max(i));
+            self.tracks_picked = ids[a..=b].to_vec();
+            return;
+        }
+        if self.tracks_picked.is_empty() {
+            self.tracks_picked.push(ids[self.track]);
+        }
+        match self.tracks_picked.iter().position(|&id| id == ids[i]) {
+            None => {
+                self.tracks_picked.push(ids[i]);
+                self.track = i;
+            }
+            // The last one stays.
+            Some(_) if self.tracks_picked.len() == 1 => {}
+            Some(at) => {
+                self.tracks_picked.remove(at);
+                if i == self.track {
+                    let next = self.tracks_picked[0];
+                    self.track = ids.iter().position(|&id| id == next).unwrap_or(i);
+                }
+            }
+        }
+        self.channel = Channel::Track(self.track);
+    }
+
+    pub fn is_picked(&self, i: usize) -> bool {
+        i == self.track
+            || self
+                .session
+                .project
+                .tracks
+                .get(i)
+                .is_some_and(|t| self.tracks_picked.contains(&t.id))
+    }
+
+    /// The selected tracks, top to bottom: the ⌘- or ⇧-clicked ones, or the one.
+    pub fn picked_tracks(&self) -> Vec<usize> {
+        (0..self.session.project.tracks.len())
+            .filter(|&i| self.is_picked(i))
+            .collect()
     }
 
     pub fn begin_drag(&mut self, drag: Drag, cx: &mut Context<Self>) {
@@ -3324,11 +3379,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &PreviousSample, _, cx| ws.step_sample(-1, cx)))
             .on_action(cx.listener(|ws, _: &NextSample, _, cx| ws.step_sample(1, cx)))
             .on_action(cx.listener(|ws, _: &CreateStack, _, cx| {
-                // A summing stack of the selected track, as Logic's ⇧⌘D makes of the selection.
-                if ws.track < ws.session.project.tracks.len() {
-                    let t = ws.track;
+                // A summing stack of the selected tracks, as Logic's ⇧⌘D makes of the selection.
+                let tracks = ws.picked_tracks();
+                if !tracks.is_empty() {
                     ws.edit(cx, |ws| {
-                        ws.session.project.add_stack(&[t]);
+                        ws.session.project.add_stack(&tracks);
                     });
                 }
             }))

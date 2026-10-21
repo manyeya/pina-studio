@@ -263,7 +263,12 @@ impl Workspace {
             .iter()
             .enumerate()
             .flat_map(|(k, m)| {
-                let low = if m.kind.bipolar() { -1.0 } else { 0.0 };
+                let bipolar = self
+                    .session
+                    .project
+                    .mod_kind(t, k)
+                    .is_some_and(|k| k.bipolar());
+                let low = if bipolar { -1.0 } else { 0.0 };
                 m.routes
                     .iter()
                     .filter(move |r| r.target == mt)
@@ -353,21 +358,25 @@ impl Workspace {
 
     /// A modulator's name on its track: LFO 1, Steps 2.
     pub fn mod_name(&self, t: usize, k: usize) -> String {
-        let Some(m) = self
-            .session
-            .project
-            .tracks
-            .get(t)
-            .and_then(|t| t.modulators.get(k))
-        else {
+        let p = &self.session.project;
+        let Some(m) = p.tracks.get(t).and_then(|t| t.modulators.get(k)) else {
             return String::new();
         };
-        let kind = m.kind.name();
-        let n = self.session.project.tracks[t].modulators[..=k]
-            .iter()
-            .filter(|o| o.kind.name() == kind)
-            .count();
-        format!("{kind} {n}")
+        // One its stack shares by the stack's name, numbered among the stack's.
+        let (list, at, from) = match m.kind {
+            ModKind::Shared { modulator } => match p.stack_of(t) {
+                Some(aux) if (modulator as usize) < aux.modulators.len() => (
+                    &aux.modulators[..],
+                    modulator as usize,
+                    format!("{} · ", aux.name),
+                ),
+                _ => return "Shared".into(),
+            },
+            _ => (&p.tracks[t].modulators[..], k, String::new()),
+        };
+        let kind = list[at].kind.name();
+        let n = list[..=at].iter().filter(|o| o.kind.name() == kind).count();
+        format!("{from}{kind} {n}")
     }
 
     /// What a route moves, as people say it.
@@ -474,7 +483,7 @@ impl Workspace {
             return Vec::new();
         };
         let ahead = !matches!(
-            track.modulators.get(k).map(|m| &m.kind),
+            self.session.project.mod_kind(t, k),
             Some(ModKind::Envelope { .. } | ModKind::Follower { .. })
         );
         let mut items: Vec<(String, MenuAction)> = Vec::new();
@@ -712,37 +721,92 @@ impl Workspace {
         ));
     }
 
-    pub fn remove_modulator(&mut self, t: usize, k: usize, cx: &mut Context<Self>) {
-        let routes = self
-            .session
-            .project
-            .tracks
-            .get(t)
-            .and_then(|tr| tr.modulators.get(k))
-            .map(|m| m.routes.clone())
-            .unwrap_or_default();
+    /// A modulator for every track in `t`'s stack: the stack's, each track routing it as it
+    /// likes.
+    pub fn share_modulator(&mut self, t: usize, kind: ModKind, cx: &mut Context<Self>) {
+        let Some(aux) = self.session.project.stack_of(t) else {
+            return;
+        };
+        if aux.modulators.len() >= MAX_MODS {
+            self.status = Some(format!("A stack shares {MAX_MODS} modulators at most."));
+            cx.notify();
+            return;
+        }
+        let (bus, stack) = (aux.bus, aux.name.clone());
         self.edit(cx, |ws| {
-            let track = &mut ws.session.project.tracks[t];
-            if k < track.modulators.len() {
+            ws.session.project.add_shared(bus, kind);
+        });
+        let k = self.session.project.tracks[t]
+            .modulators
+            .len()
+            .saturating_sub(1);
+        self.status = Some(format!(
+            "{}: every track in {stack} has it; drag its ↗ onto a knob of each to have it move it",
+            self.mod_name(t, k)
+        ));
+    }
+
+    pub fn remove_modulator(&mut self, t: usize, k: usize, cx: &mut Context<Self>) {
+        let p = &self.session.project;
+        let Some(m) = p.tracks.get(t).and_then(|tr| tr.modulators.get(k)) else {
+            return;
+        };
+        // One the stack shares goes from the stack and every track in it; else, this one.
+        let shared = match m.kind {
+            ModKind::Shared { modulator } if p.mod_kind(t, k).is_some() => {
+                p.stack_of(t).map(|a| (a.bus, modulator as usize))
+            }
+            _ => None,
+        };
+        let gone: Vec<(usize, usize)> = match shared {
+            Some((bus, s)) => p
+                .tracks
+                .iter()
+                .enumerate()
+                .filter(|(_, tr)| tr.output == Some(bus))
+                .filter_map(|(i, tr)| {
+                    let at = tr.modulators.iter().position(
+                        |m| matches!(m.kind, ModKind::Shared { modulator } if modulator as usize == s),
+                    )?;
+                    Some((i, at))
+                })
+                .collect(),
+            None => vec![(t, k)],
+        };
+        let routes: Vec<(usize, ModRoute)> = gone
+            .iter()
+            .flat_map(|&(i, at)| {
+                p.tracks[i].modulators[at]
+                    .routes
+                    .iter()
+                    .map(move |r| (i, *r))
+            })
+            .collect();
+        self.edit(cx, |ws| match shared {
+            Some((bus, s)) => ws.session.project.remove_shared(bus, s),
+            None => {
+                let track = &mut ws.session.project.tracks[t];
                 track.modulators.remove(k);
                 // Its settings' automation goes with it; the ones after it move up a place.
                 track.automation.modulator_removed(k);
             }
         });
-        if let Some(id) = self.session.project.tracks.get(t).map(|tr| tr.id)
-            && let Some(lanes) = self.auto_lanes.get_mut(&id)
-        {
-            lanes.retain(|p| !matches!(p, Param::Mod(m, _) if *m as usize == k));
-            for p in lanes.iter_mut() {
-                if let Param::Mod(m, s) = *p
-                    && m as usize > k
-                {
-                    *p = Param::Mod(m - 1, s);
+        for (i, k) in gone {
+            if let Some(id) = self.session.project.tracks.get(i).map(|tr| tr.id)
+                && let Some(lanes) = self.auto_lanes.get_mut(&id)
+            {
+                lanes.retain(|p| !matches!(p, Param::Mod(m, _) if *m as usize == k));
+                for p in lanes.iter_mut() {
+                    if let Param::Mod(m, s) = *p
+                        && m as usize > k
+                    {
+                        *p = Param::Mod(m - 1, s);
+                    }
                 }
             }
         }
-        for r in routes {
-            self.settle(t, r.target);
+        for (i, r) in routes {
+            self.settle(i, r.target);
         }
         self.mod_edit = None;
     }
@@ -772,7 +836,7 @@ impl Workspace {
         };
         // A pattern's steps are worked out ahead: an envelope or follower can't be known then.
         if let (ModTarget::Sound(..), Some(ModKind::Envelope { .. } | ModKind::Follower { .. })) =
-            (mt, track.modulators.get(k).map(|m| &m.kind))
+            (mt, self.session.project.mod_kind(t, k))
         {
             self.status = Some(
                 "A sound's steps are worked out ahead: an LFO, steps, random or a macro can move them, not an envelope or a follower.".into(),
@@ -916,17 +980,11 @@ impl Workspace {
 
     /// A card's knob turned (0 to 1).
     pub fn set_mod_field(&mut self, t: usize, k: usize, field: ModField, v: f32) {
-        let Some(m) = self
-            .session
-            .project
-            .tracks
-            .get_mut(t)
-            .and_then(|tr| tr.modulators.get_mut(k))
-        else {
+        let Some(kind) = self.session.project.mod_kind_mut(t, k) else {
             return;
         };
         let v = v.clamp(0.0, 1.0);
-        match (&mut m.kind, field) {
+        match (kind, field) {
             (ModKind::Lfo { phase, .. }, ModField::Phase) => *phase = (v * 100.0).round() / 100.0,
             (ModKind::Steps { glide, .. }, ModField::Glide) => *glide = (v * 100.0).round() / 100.0,
             (ModKind::Envelope { attack_ms, .. }, ModField::Attack)
@@ -943,25 +1001,19 @@ impl Workspace {
     }
 
     pub fn mod_field(&self, t: usize, k: usize, field: ModField) -> f32 {
-        let Some(m) = self
-            .session
-            .project
-            .tracks
-            .get(t)
-            .and_then(|tr| tr.modulators.get(k))
-        else {
+        let Some(kind) = self.session.project.mod_kind(t, k) else {
             return 0.0;
         };
         // Where its automation has it now, while that plays it.
         if let Some(s) = setting_of(field)
-            && let Some(v) = self.automated(t, Param::Mod(k as u8, s))
+            && let Some(v) = self.mod_automated(t, k, s)
         {
             return match s {
                 ModParam::Attack | ModParam::Decay | ModParam::Release => ms_pos(v),
                 _ => v,
             };
         }
-        match (&m.kind, field) {
+        match (kind, field) {
             (ModKind::Lfo { phase, .. }, ModField::Phase) => *phase,
             (ModKind::Steps { glide, .. }, ModField::Glide) => *glide,
             (ModKind::Envelope { attack_ms, .. }, ModField::Attack)
@@ -975,14 +1027,48 @@ impl Workspace {
         }
     }
 
+    /// A setting's automation where it plays now; for one the stack shares, the first track in
+    /// it with a lane for it (as the engine plays it).
+    fn mod_automated(&self, t: usize, k: usize, s: ModParam) -> Option<f32> {
+        let p = &self.session.project;
+        let own = self.automated(t, Param::Mod(k as u8, s));
+        let (Some(ModKind::Shared { modulator }), Some(bus)) = (
+            p.tracks.get(t)?.modulators.get(k).map(|m| &m.kind),
+            p.tracks[t].output,
+        ) else {
+            return own;
+        };
+        p.tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, tr)| tr.output == Some(bus))
+            .flat_map(|(i, tr)| {
+                let links = tr.modulators.iter().enumerate();
+                links
+                    .filter(|(_, m)| {
+                        m.kind
+                            == ModKind::Shared {
+                                modulator: *modulator,
+                            }
+                    })
+                    .map(move |(j, _)| (i, j))
+            })
+            .find_map(|(i, j)| self.automated(i, Param::Mod(j as u8, s)))
+    }
+
     /// A card's menu choice.
     pub fn mod_change(&mut self, t: usize, k: usize, change: ModChange, cx: &mut Context<Self>) {
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(7, |d| d.as_nanos() as u64);
-        self.mods_edit(t, cx, |mods| {
-            let Some(m) = mods.get_mut(k) else { return };
-            match (&mut m.kind, change) {
+        if t >= self.session.project.tracks.len() {
+            return;
+        }
+        self.edit(cx, |ws| {
+            let Some(kind) = ws.session.project.mod_kind_mut(t, k) else {
+                return;
+            };
+            match (kind, change) {
                 (ModKind::Lfo { shape, .. }, ModChange::Shape(s)) => *shape = s,
                 (ModKind::Lfo { rate, .. }, ModChange::Rate(r))
                 | (ModKind::Steps { rate, .. }, ModChange::Rate(r))
@@ -1017,14 +1103,7 @@ impl Workspace {
         };
         let (x, y) = (p.x - f32::from(b.origin.x), p.y - f32::from(b.origin.y));
         let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
-        if let Some(ModKind::Steps { values, .. }) = self
-            .session
-            .project
-            .tracks
-            .get_mut(t)
-            .and_then(|tr| tr.modulators.get_mut(k))
-            .map(|m| &mut m.kind)
-        {
+        if let Some(ModKind::Steps { values, .. }) = self.session.project.mod_kind_mut(t, k) {
             let n = values.len();
             if n == 0 || w <= 0.0 {
                 return;
@@ -1124,7 +1203,38 @@ impl Workspace {
             .child(add("Envelope", ModKind::envelope(), cx))
             .child(add("Follower", ModKind::follower(source), cx))
             .child(add("Random", ModKind::random(), cx))
-            .child(add("Macro", ModKind::mac(), cx));
+            .child(add("Macro", ModKind::mac(), cx))
+            .when_some(self.shared_menu(t), |d, items| {
+                d.child(
+                    div()
+                        .h(px(22.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(7.))
+                        .border_1()
+                        .border_color(rgb(LINE))
+                        .bg(rgb(CARD))
+                        .text_size(px(11.))
+                        .text_color(rgb(TEXT_2))
+                        .cursor_pointer()
+                        .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+                        .debug_selector(|| "add-mod-shared".into())
+                        .child("+ Shared ▾")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                ws.menu = Some(Menu {
+                                    at: e.position,
+                                    items: items.clone(),
+                                    ..Default::default()
+                                });
+                                cx.notify();
+                            }),
+                        ),
+                )
+            });
         let hint = match (count, self.mod_edit) {
             (0, _) => "Add a modulator, then drag its ↗ Map onto any knob or fader of this track: its volume and pan, Smart Controls, EQ, compressor, saturator, Sampler, a send".to_string(),
             (_, Some((tt, k))) if tt == t => format!(
@@ -1178,11 +1288,32 @@ impl Workspace {
 
     fn mod_card(&self, t: usize, k: usize, cx: &mut Context<Self>) -> Div {
         let track = &self.session.project.tracks[t];
-        let m = track.modulators[k].clone();
+        // One its stack shares: the stack's, with this track's routes.
+        let m = Modulator {
+            kind: self
+                .session
+                .project
+                .mod_kind(t, k)
+                .unwrap_or(&track.modulators[k].kind)
+                .clone(),
+            routes: track.modulators[k].routes.clone(),
+        };
         let color = MOD_COLORS[k % MAX_MODS];
         let picked = self.mod_edit == Some((t, k));
         let value = self.mod_values.get(&track.id).map_or(0.0, |v| v[k]);
         let name = self.mod_name(t, k);
+        // One its stack shares: named as the stack's in its title, the stack on its picture.
+        let stack = match track.modulators[k].kind {
+            ModKind::Shared { .. } => self.session.project.stack_of(t).map(|a| a.name.clone()),
+            _ => None,
+        };
+        let name = match &stack {
+            Some(s) => name
+                .strip_prefix(&format!("{s} · "))
+                .unwrap_or(&name)
+                .to_string(),
+            None => name,
+        };
         let menu = |label: String,
                     items: Vec<(String, MenuAction)>,
                     name: String,
@@ -1522,6 +1653,11 @@ impl Workspace {
                     format!("{:.0}%", value * 100.0),
                     cx,
                 )),
+            // The track left its stack, or the stack the modulator.
+            ModKind::Shared { .. } => div()
+                .text_size(px(10.5))
+                .text_color(rgb(TEXT_3))
+                .child("Its stack no longer shares this: it moves nothing"),
         };
         // Where it goes: each route's depth dragged sideways (⇧ finer), × to take it off.
         let routes: Vec<Div> = m
@@ -1650,21 +1786,21 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(7.))
-                    .child(div().size(px(9.)).rounded(px(5.)).bg(rgb(color)))
                     .child(
                         div()
+                            .flex_none()
+                            .size(px(9.))
+                            .rounded(px(5.))
+                            .bg(rgb(color)),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
                             .text_size(px(12.5))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(name),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .font_family(MONO)
-                            .text_size(px(10.))
-                            .text_color(rgb(TEXT_3))
-                            .child(format!("{value:+.2}")),
-                    )
+                    .child(div().flex_1())
                     // Its handle: drag it onto a knob.
                     .child(
                         div()
@@ -1769,7 +1905,39 @@ impl Workspace {
                             ),
                     ),
             )
-            .child(self.mod_visual(t, k, &m.kind, color, cx))
+            .child(
+                div()
+                    .relative()
+                    .child(self.mod_visual(t, k, &m.kind, color, cx))
+                    // Where it is now.
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(6.))
+                            .right(px(8.))
+                            .font_family(MONO)
+                            .text_size(px(10.))
+                            .text_color(rgb(TEXT_3))
+                            .child(format!("{value:+.2}")),
+                    )
+                    .when_some(stack, |d, s| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .top(px(6.))
+                                .left(px(8.))
+                                .px(px(6.))
+                                .h(px(16.))
+                                .flex()
+                                .items_center()
+                                .rounded(px(4.))
+                                .bg(alpha(color, 0.18))
+                                .text_size(px(9.5))
+                                .text_color(rgb(TEXT_2))
+                                .child(format!("Shared · {s}")),
+                        )
+                    }),
+            )
             .child(controls.flex_none())
             .child(
                 div()
@@ -1798,6 +1966,56 @@ impl Workspace {
                         )
                     }),
             )
+    }
+
+    /// For a track in a stack: a modulator to share with every track in it, or one the stack
+    /// shares that this track hasn't.
+    pub fn shared_menu(&self, t: usize) -> Option<Vec<(String, MenuAction)>> {
+        let p = &self.session.project;
+        let aux = p.stack_of(t)?;
+        let mut items = vec![(format!("Shared by {}", aux.name), MenuAction::Nothing)];
+        // A follower starts on the kick, or else the first track outside the stack.
+        let source = p
+            .tracks
+            .iter()
+            .find(|o| o.name.to_lowercase().contains("kick"))
+            .or_else(|| p.tracks.iter().find(|o| o.output != Some(aux.bus)))
+            .map_or(p.tracks[t].id, |o| o.id);
+        // An envelope hears notes, and a stack plays none of its own.
+        for kind in [
+            ModKind::lfo(),
+            ModKind::steps(),
+            ModKind::follower(source),
+            ModKind::random(),
+            ModKind::mac(),
+        ] {
+            items.push((
+                format!("New {}", kind.name()),
+                MenuAction::ShareMod(t, kind),
+            ));
+        }
+        let has = |s: usize| {
+            p.tracks[t]
+                .modulators
+                .iter()
+                .any(|m| matches!(m.kind, ModKind::Shared { modulator } if modulator as usize == s))
+        };
+        let missing: Vec<usize> = (0..aux.modulators.len()).filter(|&s| !has(s)).collect();
+        if !missing.is_empty() {
+            items.push((String::new(), MenuAction::Nothing));
+        }
+        for s in missing {
+            let kind = aux.modulators[s].kind.name();
+            let n = aux.modulators[..=s]
+                .iter()
+                .filter(|o| o.kind.name() == kind)
+                .count();
+            items.push((
+                format!("{} · {kind} {n}", aux.name),
+                MenuAction::LinkMod(t, s as u8),
+            ));
+        }
+        Some(items)
     }
 
     /// A card's picture of its modulator, moving: the wave and where it is, the steps (paint
@@ -1841,6 +2059,7 @@ impl Workspace {
             ModKind::Follower { .. } => Visual::Trace(trace, false),
             ModKind::Random { .. } => Visual::Trace(trace, true),
             ModKind::Macro { value } => Visual::Level(*value),
+            ModKind::Shared { .. } => Visual::Level(0.0),
         };
         let steps = matches!(kind, ModKind::Steps { .. });
         let bounds = self.mod_steps.clone();

@@ -890,7 +890,13 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
     let volume = ws.volume(ch);
     let level = ws.levels.get(&id).copied().unwrap_or_default();
     let pos = fader_pos(volume);
-    let selected = if mixer { ws.channel == ch } else { false };
+    let selected = mixer
+        && match ch {
+            Channel::Track(t) => {
+                ws.channel == ch || (ws.is_picked(t) && ws.tracks_picked.len() > 1)
+            }
+            _ => ws.channel == ch,
+        };
     let slot_h = 22.;
 
     // The instrument, or what feeds the strip.
@@ -1540,10 +1546,13 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
         .border_color(rgb(if selected { 0x3a3a44 } else { 0x1e1e24 }))
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |ws, _, _, cx| {
-                ws.channel = ch;
-                if let Channel::Track(i) = ch {
-                    ws.track = i;
+            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                let m = e.modifiers;
+                match ch {
+                    // ⌘ or ⇧: more tracks into the selection, as in the headers.
+                    Channel::Track(i) if m.platform || m.shift => ws.pick_track(i, m.shift),
+                    Channel::Track(i) => ws.select_track(i),
+                    _ => ws.channel = ch,
                 }
                 cx.notify();
             }),

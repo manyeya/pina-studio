@@ -199,6 +199,10 @@ pub enum MenuAction {
     ExportStem(usize),
     /// A modulator's setting, from its card (track, modulator); a modulator mapped to a setting.
     Mod(usize, usize, crate::modulation::ModChange),
+    /// A modulator a track's stack shares with every track in it, new; or one it shares, on
+    /// this track too.
+    ShareMod(usize, pina_engine::modulate::ModKind),
+    LinkMod(usize, u8),
     Map(usize, usize, pina_engine::modulate::ModTarget),
     /// A tool in hand.
     Tool(crate::workspace::Tool),
@@ -474,6 +478,11 @@ impl Workspace {
             MenuAction::ExportStem(t) => self.export_stem(t, cx),
             MenuAction::Track(op) => self.track_op(op, cx),
             MenuAction::Mod(t, k, change) => self.mod_change(t, k, change, cx),
+            MenuAction::ShareMod(t, kind) => self.share_modulator(t, kind, cx),
+            MenuAction::LinkMod(t, s) => {
+                let kind = pina_engine::modulate::ModKind::Shared { modulator: s };
+                self.add_modulator(t, kind, cx)
+            }
             MenuAction::Map(t, k, target) => self.map_modulator(t, k, target, cx),
             MenuAction::Tool(t) => self.tool = t,
             MenuAction::Region(at, op) => self.region_op(at, op, cx),

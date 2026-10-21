@@ -345,6 +345,12 @@ chord track; parts are written over it, and the critic checks against it.
   (`"value"` 0 to 1).
 - `set_modulator` `{"track": 1, "index": 0, "modulator": {"type": "lfo", "shape": "square", "rate": {"beats": 0.25}}}`:
   one replaced (its routes kept unless it brings its own); `remove_modulator` `{"track": 1, "index": 0}`.
+- `share_modulator` `{"aux": 2, "modulator": {"type": "macro"}}`: a modulator a stack shares (an
+  lfo, steps, a follower, random or a macro; eight at most), answering `{"index": 0}`: every track
+  in the stack gets a `{"type": "shared", "modulator": 0}` modulator that plays it, which
+  `modulate` routes to that track's own settings, so one macro or LFO moves the whole stack.
+  `set_modulator` on a shared one changes the stack's for every track; `unshare_modulator`
+  `{"aux": 2, "index": 0}` takes it off the stack and every track in it.
 - `modulate` `{"track": 1, "modulator": 0, "target": "pan", "depth": 0.8}`: a modulator moving a
   setting by `depth` in its units (0 takes the route off): `"volume"` (dB), `"pan"` (-1 to 1),
   `{"send": 0}` (dB), `"low_cut"` (the EQ's first low cut; octaves), `{"eq_gain": 1}` (that EQ
