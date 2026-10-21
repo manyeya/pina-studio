@@ -13,9 +13,10 @@ use gpui::{
 };
 use pina_engine::{
     modulate::{
-        self, LfoShape, MAX_MODS, ModKind, ModRate, ModRoute, ModTarget, Modulator, SamplerParam,
+        self, LfoShape, MAX_MODS, ModKind, ModParam, ModRate, ModRoute, ModTarget, Modulator,
+        SamplerParam,
     },
-    project::{Instrument, Sampler, Which},
+    project::{Instrument, Param, Sampler, Which},
 };
 
 use crate::{
@@ -125,6 +126,19 @@ fn field_of(p: SamplerParam) -> Field {
 
 fn param_of(f: Field) -> Option<SamplerParam> {
     SamplerParam::ALL.into_iter().find(|&p| field_of(p) == f)
+}
+
+/// The setting a card's knob turns, as automation names it.
+pub fn setting_of(f: ModField) -> Option<ModParam> {
+    Some(match f {
+        ModField::Phase => ModParam::Phase,
+        ModField::Glide => ModParam::Glide,
+        ModField::Attack => ModParam::Attack,
+        ModField::Decay => ModParam::Decay,
+        ModField::Sustain => ModParam::Sustain,
+        ModField::Release => ModParam::Release,
+        ModField::Value => ModParam::Value,
+    })
 }
 
 /// The knob's angle (degrees, clockwise from three o'clock) for a position, as `knob` draws it.
@@ -707,11 +721,26 @@ impl Workspace {
             .and_then(|tr| tr.modulators.get(k))
             .map(|m| m.routes.clone())
             .unwrap_or_default();
-        self.mods_edit(t, cx, |mods| {
-            if k < mods.len() {
-                mods.remove(k);
+        self.edit(cx, |ws| {
+            let track = &mut ws.session.project.tracks[t];
+            if k < track.modulators.len() {
+                track.modulators.remove(k);
+                // Its settings' automation goes with it; the ones after it move up a place.
+                track.automation.modulator_removed(k);
             }
         });
+        if let Some(id) = self.session.project.tracks.get(t).map(|tr| tr.id)
+            && let Some(lanes) = self.auto_lanes.get_mut(&id)
+        {
+            lanes.retain(|p| !matches!(p, Param::Mod(m, _) if *m as usize == k));
+            for p in lanes.iter_mut() {
+                if let Param::Mod(m, s) = *p
+                    && m as usize > k
+                {
+                    *p = Param::Mod(m - 1, s);
+                }
+            }
+        }
         for r in routes {
             self.settle(t, r.target);
         }
@@ -923,6 +952,15 @@ impl Workspace {
         else {
             return 0.0;
         };
+        // Where its automation has it now, while that plays it.
+        if let Some(s) = setting_of(field)
+            && let Some(v) = self.automated(t, Param::Mod(k as u8, s))
+        {
+            return match s {
+                ModParam::Attack | ModParam::Decay | ModParam::Release => ms_pos(v),
+                _ => v,
+            };
+        }
         match (&m.kind, field) {
             (ModKind::Lfo { phase, .. }, ModField::Phase) => *phase,
             (ModKind::Steps { glide, .. }, ModField::Glide) => *glide,
@@ -1217,6 +1255,35 @@ impl Workspace {
                         .text_size(px(9.5))
                         .text_color(rgb(TEXT_2))
                         .child(text),
+                )
+                // Right-click: automate it.
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        let Some(s) = setting_of(field) else {
+                            return;
+                        };
+                        let param = Param::Mod(k as u8, s);
+                        let id = ws.session.project.tracks[t].id;
+                        let has = !ws.session.project.tracks[t]
+                            .automation
+                            .points(param)
+                            .is_empty();
+                        let label = match has {
+                            true => format!("Show {}'s automation", s.name()),
+                            false => format!("Automate {}", s.name()),
+                        };
+                        ws.menu = Some(Menu {
+                            at: e.position,
+                            items: vec![(
+                                label,
+                                MenuAction::Auto(id, crate::automation::AutoOp::Automate(param)),
+                            )],
+                            ..Default::default()
+                        });
+                        cx.notify();
+                    }),
                 )
                 .on_mouse_down(
                     MouseButton::Left,

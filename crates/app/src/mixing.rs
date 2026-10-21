@@ -906,6 +906,8 @@ pub fn mix(
                         plugin: None,
                         id: None,
                         name: None,
+                        modulator: None,
+                        setting: None,
                         points,
                     },
                 )?;

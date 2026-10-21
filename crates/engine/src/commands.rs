@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use crate::{
     arrange::{self, Arrangement, Transition},
     compose::{self, BassPart, ChordPart, DrumPart, MelodyPart},
+    modulate::ModParam,
     music::{Key, NoteEdit},
     plugin::{PluginApi, PluginParam, value_from_text},
     project::{
@@ -309,6 +310,11 @@ pub enum Command {
         id: Option<ParamRef>,
         #[serde(default)]
         name: Option<String>,
+        /// For a modulator's setting: which modulator, and which of its settings.
+        #[serde(default)]
+        modulator: Option<usize>,
+        #[serde(default)]
+        setting: Option<ModParam>,
         points: Vec<PointIn>,
     },
     /// The sounds the person picked for the song (each file with what it's for), and whether
@@ -333,6 +339,10 @@ pub enum Command {
         #[serde(default)]
         id: Option<u32>,
         #[serde(default)]
+        modulator: Option<usize>,
+        #[serde(default)]
+        setting: Option<ModParam>,
+        #[serde(default)]
         from: Option<u64>,
         #[serde(default)]
         to: Option<u64>,
@@ -350,6 +360,10 @@ pub enum Command {
         plugin: Option<Which>,
         #[serde(default)]
         id: Option<u32>,
+        #[serde(default)]
+        modulator: Option<usize>,
+        #[serde(default)]
+        setting: Option<ModParam>,
         shape: AutoShape,
         from: u64,
         to: u64,
@@ -648,6 +662,8 @@ pub fn resolve(
             plugin: Some(which),
             id: Some(id),
             name,
+            modulator,
+            setting,
             points,
         } if matches!(id, ParamRef::Name(_)) || points.iter().any(|p| p.text.is_some()) => {
             let found = plugins.plugin(p, ChannelRef::Track(track), which)?;
@@ -672,6 +688,8 @@ pub fn resolve(
                 plugin: Some(which),
                 id: Some(ParamRef::Id(info.id)),
                 name: name.or(Some(info.name)),
+                modulator,
+                setting,
                 points,
             }
         }
@@ -796,6 +814,9 @@ pub enum AutoParam {
     EqFreq,
     EqGain,
     EqQ,
+    /// One of a modulator's settings: the modulator's place as `modulator`, the setting as
+    /// `setting`.
+    Modulator,
 }
 
 /// An EQ band's setting, as automation names it: its place in the track's EQ.
@@ -821,6 +842,7 @@ fn eq_param(
 }
 
 /// The parameter a command's automation is of.
+#[allow(clippy::too_many_arguments)]
 fn auto_param(
     p: &mut Project,
     t: usize,
@@ -828,6 +850,8 @@ fn auto_param(
     send: Option<usize>,
     plugin: Option<Which>,
     id: Option<u32>,
+    modulator: Option<usize>,
+    setting: Option<ModParam>,
 ) -> Result<Param, String> {
     Ok(match param {
         AutoParam::Volume => Param::Volume,
@@ -844,7 +868,40 @@ fn auto_param(
             Param::Plugin(plugin, id)
         }
         AutoParam::EqFreq | AutoParam::EqGain | AutoParam::EqQ => eq_param(p, t, param, id)?,
+        AutoParam::Modulator => mod_param(p, t, modulator, setting)?,
     })
+}
+
+/// A modulator's setting, as automation names it: the modulator's place, and a setting it has.
+fn mod_param(
+    p: &mut Project,
+    t: usize,
+    modulator: Option<usize>,
+    setting: Option<ModParam>,
+) -> Result<Param, String> {
+    let (Some(k), Some(setting)) = (modulator, setting) else {
+        return Err(
+            "a modulator's automation needs `modulator` (its place) and `setting` (value, phase, glide, attack, decay, sustain or release)"
+                .into(),
+        );
+    };
+    let m = modulator_at(p, t, k)?;
+    if setting.get(&m.kind).is_none() {
+        let has: Vec<&str> = ModParam::of(&m.kind)
+            .into_iter()
+            .map(ModParam::name)
+            .collect();
+        return Err(format!(
+            "track {t}'s modulator {k} ({}) has no {}: it has {}",
+            m.kind.name(),
+            setting.name().to_lowercase(),
+            match has.is_empty() {
+                true => "none to automate".to_string(),
+                false => has.join(", ").to_lowercase(),
+            }
+        ));
+    }
+    Ok(Param::Mod(k as u8, setting))
 }
 
 /// A track's send, as its automation names it: by the bus it sends to.
@@ -1472,6 +1529,8 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             plugin,
             id,
             name,
+            modulator,
+            setting,
             points,
         } => {
             let mut points = points
@@ -1520,6 +1579,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                     };
                     eq_param(p, t, param, band)?
                 }
+                AutoParam::Modulator => mod_param(p, t, modulator, setting)?,
             };
             let (lo, hi) = param.range();
             for pt in &mut points {
@@ -1565,11 +1625,13 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             send,
             plugin,
             id,
+            modulator,
+            setting,
             from,
             to,
             width,
         } => {
-            let param = auto_param(p, t, param, send, plugin, id)?;
+            let param = auto_param(p, t, param, send, plugin, id, modulator, setting)?;
             let a = &mut track(p, t)?.automation;
             let points = a.points(param);
             let (Some(first), Some(last)) = (points.first(), points.last()) else {
@@ -1587,6 +1649,8 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             send,
             plugin,
             id,
+            modulator,
+            setting,
             shape,
             from,
             to,
@@ -1594,7 +1658,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             low,
             high,
         } => {
-            let param = auto_param(p, t, param, send, plugin, id)?;
+            let param = auto_param(p, t, param, send, plugin, id, modulator, setting)?;
             if to <= from {
                 return Err("`to` must be after `from`".into());
             }
@@ -1854,6 +1918,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         Command::RemoveModulator { track: t, index } => {
             modulator_at(p, t, index)?;
             p.tracks[t].modulators.remove(index);
+            p.tracks[t].automation.modulator_removed(index);
         }
         Command::Modulate {
             track: t,
@@ -2559,6 +2624,62 @@ mod tests {
         );
         assert!(err.unwrap_err().contains("audio"));
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_modulators_settings_are_automated_and_go_with_it() {
+        use crate::modulate::ModParam;
+        let mut p = Project::new(48_000);
+        run(
+            &mut p,
+            r#"{"op": "add_track", "name": "Pad", "instrument": "synth"}"#,
+        )
+        .unwrap();
+        for m in [
+            r#"{"type": "lfo", "shape": "sine", "rate": {"beats": 1}}"#,
+            r#"{"type": "macro"}"#,
+        ] {
+            run(
+                &mut p,
+                &format!(r#"{{"op": "add_modulator", "track": 0, "modulator": {m}}}"#),
+            )
+            .unwrap();
+        }
+        run(&mut p, r#"{"op": "set_automation", "track": 0, "param": "modulator", "modulator": 1, "setting": "value", "points": [{"tick": 0, "value": 0}, {"tick": 3840, "value": 2}]}"#).unwrap();
+        let lane = p.tracks[0]
+            .automation
+            .points(Param::Mod(1, ModParam::Value));
+        // Kept to its range: a macro's value is 0 to 1.
+        assert_eq!(lane.iter().map(|x| x.value).collect::<Vec<_>>(), [0.0, 1.0]);
+        // A setting it hasn't: said, with what it has.
+        let e = run(&mut p, r#"{"op": "set_automation", "track": 0, "param": "modulator", "modulator": 1, "setting": "attack", "points": []}"#).unwrap_err();
+        assert!(e.contains("has value"), "{e}");
+        run(&mut p, r#"{"op": "shape_automation", "track": 0, "param": "modulator", "modulator": 0, "setting": "phase", "shape": "ramp_up", "from": 0, "to": 3840, "low": 0, "high": 1}"#).unwrap();
+        assert!(
+            !p.tracks[0]
+                .automation
+                .points(Param::Mod(0, ModParam::Phase))
+                .is_empty()
+        );
+        // The LFO taken off: its lane goes, and the macro's moves up a place with it.
+        run(
+            &mut p,
+            r#"{"op": "remove_modulator", "track": 0, "index": 0}"#,
+        )
+        .unwrap();
+        assert!(
+            p.tracks[0]
+                .automation
+                .points(Param::Mod(0, ModParam::Phase))
+                .is_empty()
+        );
+        assert_eq!(
+            p.tracks[0]
+                .automation
+                .points(Param::Mod(0, ModParam::Value))
+                .len(),
+            2
+        );
     }
 
     #[test]

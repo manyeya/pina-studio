@@ -63,8 +63,11 @@ pub enum ModKind {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         smooth: bool,
     },
-    /// A value, 0 to 1, set by hand (or automated, or by an agent).
-    Macro { value: f32 },
+    /// A value, 0 to 1, set by hand (or automated, or by an agent); 0 if not given.
+    Macro {
+        #[serde(default)]
+        value: f32,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -394,6 +397,122 @@ fn noise(n: i64) -> f32 {
 /// A modulator's value this block. While the song plays, those in time with it follow its
 /// position (a bounce sounds as playing did); otherwise they run on their own.
 pub fn step(kind: &ModKind, state: &mut ModState, input: &ModInput) -> f32 {
+    step_over(kind, state, input, &ModOver::default())
+}
+
+/// A modulator's setting automation can move: a macro's value, an LFO's phase, steps' glide, an
+/// envelope's (or follower's) times and sustain.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ModParam {
+    Value,
+    Phase,
+    Glide,
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+}
+
+impl ModParam {
+    pub const ALL: [ModParam; 7] = [
+        ModParam::Value,
+        ModParam::Phase,
+        ModParam::Glide,
+        ModParam::Attack,
+        ModParam::Decay,
+        ModParam::Sustain,
+        ModParam::Release,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ModParam::Value => "Value",
+            ModParam::Phase => "Phase",
+            ModParam::Glide => "Glide",
+            ModParam::Attack => "Attack",
+            ModParam::Decay => "Decay",
+            ModParam::Sustain => "Sustain",
+            ModParam::Release => "Release",
+        }
+    }
+
+    /// By its name, as a command gives it ("value", "Attack").
+    pub fn parse(s: &str) -> Option<ModParam> {
+        ModParam::ALL
+            .into_iter()
+            .find(|p| p.name().eq_ignore_ascii_case(s.trim()))
+    }
+
+    /// Its lowest and highest: milliseconds for times, else 0 to 1.
+    pub fn range(self) -> (f32, f32) {
+        match self {
+            ModParam::Attack | ModParam::Decay | ModParam::Release => (1.0, 10_000.0),
+            _ => (0.0, 1.0),
+        }
+    }
+
+    /// Its value on a modulator, if the modulator has it.
+    pub fn get(self, kind: &ModKind) -> Option<f32> {
+        Some(match (self, kind) {
+            (ModParam::Value, ModKind::Macro { value }) => *value,
+            (ModParam::Phase, ModKind::Lfo { phase, .. }) => *phase,
+            (ModParam::Glide, ModKind::Steps { glide, .. }) => *glide,
+            (ModParam::Attack, ModKind::Envelope { attack_ms, .. })
+            | (ModParam::Attack, ModKind::Follower { attack_ms, .. }) => *attack_ms,
+            (ModParam::Decay, ModKind::Envelope { decay_ms, .. }) => *decay_ms,
+            (ModParam::Sustain, ModKind::Envelope { sustain, .. }) => *sustain,
+            (ModParam::Release, ModKind::Envelope { release_ms, .. })
+            | (ModParam::Release, ModKind::Follower { release_ms, .. }) => *release_ms,
+            _ => return None,
+        })
+    }
+
+    /// Sets it on a modulator that has it, kept in its range.
+    pub fn set(self, kind: &mut ModKind, v: f32) {
+        let (lo, hi) = self.range();
+        let v = v.clamp(lo, hi);
+        match (self, kind) {
+            (ModParam::Value, ModKind::Macro { value }) => *value = v,
+            (ModParam::Phase, ModKind::Lfo { phase, .. }) => *phase = v,
+            (ModParam::Glide, ModKind::Steps { glide, .. }) => *glide = v,
+            (ModParam::Attack, ModKind::Envelope { attack_ms, .. })
+            | (ModParam::Attack, ModKind::Follower { attack_ms, .. }) => *attack_ms = v,
+            (ModParam::Decay, ModKind::Envelope { decay_ms, .. }) => *decay_ms = v,
+            (ModParam::Sustain, ModKind::Envelope { sustain, .. }) => *sustain = v,
+            (ModParam::Release, ModKind::Envelope { release_ms, .. })
+            | (ModParam::Release, ModKind::Follower { release_ms, .. }) => *release_ms = v,
+            _ => {}
+        }
+    }
+
+    /// The settings a modulator has that automation can move.
+    pub fn of(kind: &ModKind) -> Vec<ModParam> {
+        ModParam::ALL
+            .into_iter()
+            .filter(|p| p.get(kind).is_some())
+            .collect()
+    }
+}
+
+/// What automation has a modulator's settings at this block, over its own: copied, so working
+/// it out allocates nothing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ModOver([Option<f32>; 7]);
+
+impl ModOver {
+    pub fn set(&mut self, p: ModParam, v: f32) {
+        let (lo, hi) = p.range();
+        self.0[p as usize] = Some(v.clamp(lo, hi));
+    }
+
+    fn or(&self, p: ModParam, own: f32) -> f32 {
+        self.0[p as usize].unwrap_or(own)
+    }
+}
+
+/// `step`, with any settings automation has moved (`over`) in place of the modulator's own.
+pub fn step_over(kind: &ModKind, state: &mut ModState, input: &ModInput, over: &ModOver) -> f32 {
     let ms = |t: f32| (input.seconds * 1000.0 / t.max(0.1) as f64) as f32;
     let advance = |state: &mut ModState, rate: ModRate| match (rate, input.beats) {
         (ModRate::Beats(b), Some(beats)) => state.phase = beats / b.max(1e-3) as f64,
@@ -407,7 +526,7 @@ pub fn step(kind: &ModKind, state: &mut ModState, input: &ModInput) -> f32 {
             unipolar,
         } => {
             advance(state, *rate);
-            let v = shape.at(state.phase + *phase as f64);
+            let v = shape.at(state.phase + over.or(ModParam::Phase, *phase) as f64);
             if *unipolar { 0.5 + 0.5 * v } else { v }
         }
         ModKind::Steps {
@@ -421,7 +540,7 @@ pub fn step(kind: &ModKind, state: &mut ModState, input: &ModInput) -> f32 {
                 n => values[(state.phase.floor() as i64).rem_euclid(n as i64) as usize],
             };
             // Glide: a share of the way each block, slower the more it glides.
-            let keep = (glide.clamp(0.0, 1.0) * 0.95).powf(0.5);
+            let keep = (over.or(ModParam::Glide, *glide).clamp(0.0, 1.0) * 0.95).powf(0.5);
             state.value + (to - state.value) * (1.0 - keep)
         }
         ModKind::Envelope {
@@ -435,19 +554,24 @@ pub fn step(kind: &ModKind, state: &mut ModState, input: &ModInput) -> f32 {
             } else if !input.gate && state.stage != Stage::Idle {
                 state.stage = Stage::Release;
             }
-            let sustain = sustain.clamp(0.0, 1.0);
+            let sustain = over.or(ModParam::Sustain, *sustain).clamp(0.0, 1.0);
+            let (attack_ms, decay_ms, release_ms) = (
+                over.or(ModParam::Attack, *attack_ms),
+                over.or(ModParam::Decay, *decay_ms),
+                over.or(ModParam::Release, *release_ms),
+            );
             match state.stage {
                 Stage::Attack => {
-                    state.level += ms(*attack_ms);
+                    state.level += ms(attack_ms);
                     if state.level >= 1.0 {
                         (state.level, state.stage) = (1.0, Stage::Decay);
                     }
                 }
                 Stage::Decay => {
-                    state.level = (state.level - ms(*decay_ms) * (1.0 - sustain)).max(sustain);
+                    state.level = (state.level - ms(decay_ms) * (1.0 - sustain)).max(sustain);
                 }
                 Stage::Release => {
-                    state.level -= ms(*release_ms);
+                    state.level -= ms(release_ms);
                     if state.level <= 0.0 {
                         (state.level, state.stage) = (0.0, Stage::Idle);
                     }
@@ -464,9 +588,9 @@ pub fn step(kind: &ModKind, state: &mut ModState, input: &ModInput) -> f32 {
             let db = 20.0 * input.follow.max(1e-6).log10();
             let to = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
             let t = if to > state.level {
-                attack_ms
+                over.or(ModParam::Attack, *attack_ms)
             } else {
-                release_ms
+                over.or(ModParam::Release, *release_ms)
             };
             let k = 1.0 - (-(input.seconds * 1000.0) as f32 / t.max(0.1)).exp();
             state.level += (to - state.level) * k;
@@ -484,7 +608,7 @@ pub fn step(kind: &ModKind, state: &mut ModState, input: &ModInput) -> f32 {
                 }
             }
         }
-        ModKind::Macro { value } => value.clamp(0.0, 1.0),
+        ModKind::Macro { value } => over.or(ModParam::Value, *value).clamp(0.0, 1.0),
     };
     state.value = value;
     value
@@ -889,5 +1013,28 @@ mod tests {
         assert_eq!((eq.bands[0].freq, eq.bands[0].off), (80.0, false));
         assert_eq!(apply_pan(0.8, 0.5), 1.0);
         assert_eq!(depth_text(ModTarget::Volume, -12.0), "−12.0 dB");
+    }
+
+    #[test]
+    fn automation_moves_a_modulators_settings_over_its_own() {
+        // A macro set at 0, automated to 0.75: it gives 0.75.
+        let mac = ModKind::Macro { value: 0.0 };
+        let mut over = ModOver::default();
+        over.set(ModParam::Value, 0.75);
+        let mut s = ModState::default();
+        assert_eq!(step_over(&mac, &mut s, &input(None), &over), 0.75);
+        assert_eq!(step(&mac, &mut s, &input(None)), 0.0);
+        // An LFO's phase turned a quarter: a sine at its start reads 1, not 0.
+        let lfo = ModKind::lfo();
+        let mut over = ModOver::default();
+        over.set(ModParam::Phase, 0.25);
+        let at_start = step_over(&lfo, &mut ModState::default(), &input(Some(0.0)), &over);
+        assert!((at_start - 1.0).abs() < 1e-3, "{at_start}");
+        // Out of range, kept in it; a setting it hasn't, none to get or set.
+        over.set(ModParam::Value, 3.0);
+        assert_eq!(step_over(&mac, &mut s, &input(None), &over), 1.0);
+        assert_eq!(ModParam::Attack.get(&mac), None);
+        assert_eq!(ModParam::of(&lfo), [ModParam::Phase]);
+        assert_eq!(ModParam::parse("Release"), Some(ModParam::Release));
     }
 }

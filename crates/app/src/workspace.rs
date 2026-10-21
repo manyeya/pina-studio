@@ -1421,6 +1421,9 @@ impl Workspace {
                         .unwrap_or("Band");
                 format!("EQ {} {shape}: {what}", band + 1)
             }
+            Param::Mod(k, setting) => {
+                format!("{}: {}", self.mod_name(track, k as usize), setting.name())
+            }
             Param::Plugin(which, id) => t
                 .automation
                 .plugins
@@ -1869,6 +1872,12 @@ impl Workspace {
             }) => {
                 let fine = if self.fine { 0.2 } else { 1.0 };
                 self.set_mod_field(track, index, field, value + (y - p.y) / 150.0 * fine);
+                // Turned while its automation records, it's recorded.
+                if let Some(setting) = crate::modulation::setting_of(field) {
+                    let param = pina_engine::project::Param::Mod(index as u8, setting);
+                    let now = self.own_value(track, param);
+                    self.moved(track, param, now);
+                }
             }
             Some(Drag::ModSteps { track, index }) => self.paint_mod_step(track, index, p),
             Some(Drag::ZoomSpan) => {
@@ -2204,6 +2213,12 @@ impl Workspace {
                 let bus = self.session.project.tracks[track].sends[index].bus;
                 Some((track, Param::Send(bus)))
             }
+            Some(Drag::ModValue {
+                track,
+                index,
+                field,
+                ..
+            }) => crate::modulation::setting_of(field).map(|s| (track, Param::Mod(index as u8, s))),
             _ => None,
         };
         // A hand on a control lets go with the mouse: the engine hears its automation again.

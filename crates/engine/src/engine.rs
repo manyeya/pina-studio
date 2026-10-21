@@ -20,7 +20,8 @@ use std::{
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::modulate::{
-    self, MAX_MODS, ModInput, ModKind, ModRoute, ModState, ModTarget, Modulator, Offsets,
+    self, MAX_MODS, ModInput, ModKind, ModOver, ModParam, ModRoute, ModState, ModTarget, Modulator,
+    Offsets,
 };
 use crate::{
     drums::Drums,
@@ -853,6 +854,8 @@ struct Plan {
     params: Vec<(Which, u32, Vec<AutoPoint>)>,
     /// The EQ's bands' automation, in samples: Hz, dB, Q.
     eq_auto: Vec<(u8, EqField, Vec<AutoPoint>)>,
+    /// Its modulators' settings' automation, in samples: (modulator, setting, points).
+    mod_auto: Vec<(u8, ModParam, Vec<AutoPoint>)>,
     /// Aux index, level, and whether it's taken before the fader.
     sends: Vec<(usize, f32, bool)>,
     /// Controller moves, sorted by time.
@@ -1305,6 +1308,13 @@ pub fn compile(
                 .iter()
                 .filter(|a| !a.points.is_empty())
                 .map(|a| (a.band, a.field, in_samples(&a.points)))
+                .collect(),
+            mod_auto: auto
+                .map(|a| &a.mods[..])
+                .unwrap_or_default()
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| (a.modulator, a.field, in_samples(&a.points)))
                 .collect(),
             cells,
             sends: t
@@ -2181,7 +2191,14 @@ impl Engine {
                         follow: heard,
                         ..input
                     };
-                    let v = modulate::step(&m.kind, &mut lane.mods[k], &input);
+                    // Its settings where their automation has them at the block's start.
+                    let mut over = ModOver::default();
+                    for (_, field, points) in plan.mod_auto.iter().filter(|a| a.0 as usize == k) {
+                        if let Some(v) = value_at(points, from as f64) {
+                            over.set(*field, v);
+                        }
+                    }
+                    let v = modulate::step_over(&m.kind, &mut lane.mods[k], &input, &over);
                     if let Some(s) = shared {
                         s.report_mod(plan.slot, k, v);
                     }

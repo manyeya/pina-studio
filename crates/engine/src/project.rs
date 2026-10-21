@@ -1303,6 +1303,9 @@ pub struct Automation {
     /// The EQ's bands' frequencies, gains and widths over time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub eq: Vec<EqAuto>,
+    /// Its modulators' settings over time: a macro turned, an LFO's phase.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mods: Vec<ModAuto>,
     #[serde(default, skip_serializing_if = "AutoMode::is_read")]
     pub mode: AutoMode,
 }
@@ -1312,6 +1315,14 @@ pub struct Automation {
 pub struct EqAuto {
     pub band: u8,
     pub field: EqField,
+    pub points: Vec<AutoPoint>,
+}
+
+/// A modulator's setting over time: the modulator by its place on the track.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ModAuto {
+    pub modulator: u8,
+    pub field: crate::modulate::ModParam,
     pub points: Vec<AutoPoint>,
 }
 
@@ -1450,6 +1461,8 @@ pub enum Param {
     Send(u32),
     Plugin(Which, u32),
     Eq(u8, EqField),
+    /// A modulator's setting, by the modulator's place on the track.
+    Mod(u8, crate::modulate::ModParam),
 }
 
 impl Param {
@@ -1462,12 +1475,18 @@ impl Param {
             Param::Eq(_, EqField::Freq) => (10.0, 30_000.0),
             Param::Eq(_, EqField::Gain) => (-30.0, 30.0),
             Param::Eq(_, EqField::Q) => (0.025, 40.0),
+            Param::Mod(_, p) => p.range(),
         }
     }
 
-    /// Whether its scale is octaves (frequencies, widths) rather than steps.
+    /// Whether its scale is octaves (frequencies, widths, times) rather than steps.
     fn logarithmic(self) -> bool {
-        matches!(self, Param::Eq(_, EqField::Freq | EqField::Q))
+        use crate::modulate::ModParam;
+        matches!(
+            self,
+            Param::Eq(_, EqField::Freq | EqField::Q)
+                | Param::Mod(_, ModParam::Attack | ModParam::Decay | ModParam::Release)
+        )
     }
 
     /// Whether it only ever jumps from value to value.
@@ -1642,6 +1661,7 @@ impl Automation {
             && self.sends.is_empty()
             && self.plugins.is_empty()
             && self.eq.is_empty()
+            && self.mods.is_empty()
             && self.mode == AutoMode::Read
     }
 
@@ -1664,6 +1684,11 @@ impl Automation {
                 .eq
                 .iter()
                 .find(|a| a.band == band && a.field == field)
+                .map_or(&[], |a| &a.points),
+            Param::Mod(k, field) => self
+                .mods
+                .iter()
+                .find(|a| a.modulator == k && a.field == field)
                 .map_or(&[], |a| &a.points),
         }
     }
@@ -1724,6 +1749,35 @@ impl Automation {
                 };
                 &mut self.eq[i].points
             }
+            Param::Mod(modulator, field) => {
+                let i = match self
+                    .mods
+                    .iter()
+                    .position(|a| a.modulator == modulator && a.field == field)
+                {
+                    Some(i) => i,
+                    None => {
+                        self.mods.push(ModAuto {
+                            modulator,
+                            field,
+                            points: Vec::new(),
+                        });
+                        self.mods.len() - 1
+                    }
+                };
+                &mut self.mods[i].points
+            }
+        }
+    }
+
+    /// A modulator taken off the track: its lanes go, and those of the ones after it follow
+    /// it down a place.
+    pub fn modulator_removed(&mut self, k: usize) {
+        self.mods.retain(|a| a.modulator as usize != k);
+        for a in &mut self.mods {
+            if a.modulator as usize > k {
+                a.modulator -= 1;
+            }
         }
     }
 
@@ -1739,11 +1793,12 @@ impl Automation {
         }
     }
 
-    /// Drops plugin, send and EQ lanes left without points.
+    /// Drops plugin, send, EQ and modulator lanes left without points.
     pub fn tidy(&mut self) {
         self.plugins.retain(|a| !a.points.is_empty());
         self.sends.retain(|a| !a.points.is_empty());
         self.eq.retain(|a| !a.points.is_empty());
+        self.mods.retain(|a| !a.points.is_empty());
     }
 
     /// Every parameter with points, faders first.
@@ -1775,6 +1830,12 @@ impl Automation {
                 .iter()
                 .filter(|a| !a.points.is_empty())
                 .map(|a| Param::Eq(a.band, a.field)),
+        );
+        out.extend(
+            self.mods
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| Param::Mod(a.modulator, a.field)),
         );
         out
     }

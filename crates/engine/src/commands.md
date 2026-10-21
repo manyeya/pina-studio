@@ -174,7 +174,10 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   the parameter as `"id"`: its id or its name) from 0 to 1, or as the plugin shows it (a point's
   `"text"`, like `"2 kHz"`, instead of `"value"`), or an EQ band's `eq_freq` (Hz), `eq_gain` (dB)
   or `eq_q` (with the band's place in the EQ as `"id"`): a filter sweep, a boost that grows into
-  the chorus. Lines between points are straight unless the
+  the chorus; or `modulator`, one of a modulator's settings (`"modulator"`, its place, and
+  `"setting"`: a macro's `value`, an LFO's `phase`, steps' `glide`, an envelope's `attack`,
+  `decay`, `sustain` and `release`, a follower's `attack` and `release`; times in ms): a macro
+  swept through the build. Lines between points are straight unless the
   point they start from has a `"curve"` (-1 to 1: towards 1 it starts slowly and ends fast,
   towards -1 the other way round), `"ease": true` (an S: slow out of it and slow into the next)
   or `"step": true` (it holds its value, then jumps to the next).

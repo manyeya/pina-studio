@@ -37,7 +37,7 @@ pub fn to_y(param: Param, value: f32, h: f32) -> f32 {
         Param::Pan => (value.clamp(-1.0, 1.0) + 1.0) / 2.0,
         Param::Mute => value.clamp(0.0, 1.0),
         Param::Plugin(..) => 1.0 - value.clamp(0.0, 1.0),
-        Param::Eq(..) => 1.0 - param.to_unit(value),
+        Param::Eq(..) | Param::Mod(..) => 1.0 - param.to_unit(value),
     };
     PAD + t * (h - 2.0 * PAD)
 }
@@ -49,7 +49,7 @@ pub fn from_y(param: Param, y: f32, h: f32) -> f32 {
         Param::Pan => t * 2.0 - 1.0,
         Param::Mute => (t > 0.5) as u8 as f32,
         Param::Plugin(..) => 1.0 - t,
-        Param::Eq(..) => param.from_unit(1.0 - t),
+        Param::Eq(..) | Param::Mod(..) => param.from_unit(1.0 - t),
     }
 }
 
@@ -85,6 +85,7 @@ fn units(param: Param) -> u8 {
         Param::Mute => 2,
         Param::Plugin(..) => 3,
         Param::Eq(_, field) => 4 + field as u8,
+        Param::Mod(_, setting) => 7 + setting as u8,
     }
 }
 
@@ -98,8 +99,11 @@ fn shifted(param: Param, value: f32, by: f32) -> f32 {
         Param::Pan => (value + by).clamp(-1.0, 1.0),
         Param::Mute => value,
         Param::Plugin(..) => (value + by).clamp(0.0, 1.0),
-        // An EQ band's on its own scale: octaves for its frequency and width.
-        Param::Eq(..) => param.from_unit((param.to_unit(value) + by).clamp(0.0, 1.0)),
+        // An EQ band's on its own scale: octaves for its frequency and width; a modulator's
+        // times in octaves too.
+        Param::Eq(..) | Param::Mod(..) => {
+            param.from_unit((param.to_unit(value) + by).clamp(0.0, 1.0))
+        }
     }
 }
 
@@ -107,7 +111,7 @@ fn shifted(param: Param, value: f32, by: f32) -> f32 {
 fn apart(param: Param, from: f32, to: f32) -> f32 {
     match param {
         Param::Volume | Param::Send(_) => strip::fader_pos(to) - strip::fader_pos(from),
-        Param::Eq(..) => param.to_unit(to) - param.to_unit(from),
+        Param::Eq(..) | Param::Mod(..) => param.to_unit(to) - param.to_unit(from),
         _ => to - from,
     }
 }
@@ -192,6 +196,8 @@ pub enum AutoOp {
     Clear,
     /// A shape from tick to tick, a cycle every so many.
     Shape(AutoShape, u64, u64, u64),
+    /// A setting automated from now on: its lane shown, a point where it is if it has none.
+    Automate(Param),
 }
 
 impl Workspace {
@@ -317,6 +323,25 @@ impl Workspace {
                 items.push(item(param, format!("{name}: {}", p.name)));
             }
         }
+        // Its modulators' settings: a macro turned, an LFO's phase, an envelope's times.
+        let settings: Vec<Param> = t
+            .modulators
+            .iter()
+            .enumerate()
+            .flat_map(|(k, m)| {
+                pina_engine::modulate::ModParam::of(&m.kind)
+                    .into_iter()
+                    .map(move |s| Param::Mod(k as u8, s))
+            })
+            .collect();
+        if !settings.is_empty() {
+            items.push(("Modulators".into(), MenuAction::Nothing));
+            items.extend(
+                settings
+                    .into_iter()
+                    .map(|p| item(p, self.param_name(track, p))),
+            );
+        }
         // The EQ's bands: each one's frequency, gain (if it has one) and width.
         if let Some(eq) = t.eq.filter(|e| !e.bands.is_empty()) {
             items.push(("Channel EQ".into(), MenuAction::Nothing));
@@ -364,6 +389,11 @@ impl Workspace {
                     EqField::Q => b.q,
                 }
             }
+            Param::Mod(k, setting) => t
+                .modulators
+                .get(k as usize)
+                .and_then(|m| setting.get(&m.kind))
+                .unwrap_or(0.0),
         }
     }
 
@@ -390,6 +420,11 @@ impl Workspace {
                         EqField::Gain => b.gain_db = value,
                         EqField::Q => b.q = value,
                     }
+                }
+            }
+            Param::Mod(k, setting) => {
+                if let Some(m) = t.modulators.get_mut(k as usize) {
+                    setting.set(&mut m.kind, value);
                 }
             }
         }
@@ -432,6 +467,19 @@ impl Workspace {
             Param::Eq(_, EqField::Freq) => crate::eq::hz_text(value),
             Param::Eq(_, EqField::Gain) => format!("{} dB", db_text(value)),
             Param::Eq(_, EqField::Q) => format!("Q {value:.2}"),
+            Param::Mod(_, setting) => {
+                use pina_engine::modulate::ModParam;
+                match setting {
+                    ModParam::Attack | ModParam::Decay | ModParam::Release if value >= 1000.0 => {
+                        format!("{:.1} s", value / 1000.0)
+                    }
+                    ModParam::Attack | ModParam::Decay | ModParam::Release => {
+                        format!("{value:.0} ms")
+                    }
+                    ModParam::Phase => format!("{:.0}°", value * 360.0),
+                    _ => format!("{:.0}%", value * 100.0),
+                }
+            }
             Param::Plugin(which, id) => {
                 let id_t = self.session.project.tracks[track].id;
                 let text = self.player.param_text(id_t, which, id, value as f64);
@@ -1368,6 +1416,24 @@ impl Workspace {
                 self.auto_focus = Some((id, p));
             }
             AutoOp::AddLane => self.add_lane(track),
+            AutoOp::Automate(param) => {
+                if self.session.project.tracks[track]
+                    .automation
+                    .points(param)
+                    .is_empty()
+                {
+                    let value = self.own_value(track, param);
+                    self.edit(cx, |ws| {
+                        ws.session.project.tracks[track]
+                            .automation
+                            .points_mut(param)
+                            .push(AutoPoint::new(0, value));
+                    });
+                }
+                self.select_track(track);
+                self.show_lane(track, param);
+                self.show_automation = true;
+            }
             AutoOp::RemoveLane(k) => self.remove_lane(track, k),
             AutoOp::Mode(mode) => self.edit(cx, |ws| {
                 ws.session.project.tracks[track].automation.mode = mode;
@@ -1508,6 +1574,10 @@ impl Workspace {
                 false => (-6.0, 6.0),
             },
             Param::Eq(_, EqField::Q) => (0.5, 4.0),
+            Param::Mod(..) => match ramp {
+                true => (param.from_unit(0.0), param.from_unit(1.0)),
+                false => (param.from_unit(0.1), param.from_unit(0.9)),
+            },
         }
     }
 
@@ -1748,6 +1818,10 @@ impl Workspace {
                 }
                 Param::Eq(_, EqField::Gain) => vec![(12.0, "+12"), (0.0, "0"), (-12.0, "−12")],
                 Param::Eq(_, EqField::Q) => vec![(10.0, "10"), (1.0, "1"), (0.1, "0.1")],
+                Param::Mod(_, s) if s.range().1 > 1.0 => {
+                    vec![(5_000.0, "5s"), (100.0, "100ms"), (2.0, "2ms")]
+                }
+                Param::Mod(..) => vec![(1.0, "100"), (0.5, "50"), (0.0, "0")],
             };
             let scale = marks.into_iter().map(|(v, s)| {
                 div()
@@ -2005,7 +2079,7 @@ impl Workspace {
                                 Param::Pan => Some(0.0),
                                 Param::Plugin(..) => Some(0.5),
                                 Param::Eq(_, EqField::Gain) => Some(0.0),
-                                Param::Mute | Param::Eq(..) => None,
+                                Param::Mute | Param::Eq(..) | Param::Mod(..) => None,
                             };
                             if let Some(g) = guide {
                                 window.paint_quad(fill(

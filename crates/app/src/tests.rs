@@ -575,6 +575,52 @@ fn a_modulator_learns_the_plugin_parameter_turned_next_and_lists_every_one(
 }
 
 #[gpui::test]
+fn a_modulators_knob_is_automated_from_its_right_click(cx: &mut TestAppContext) {
+    use pina_engine::{
+        modulate::ModParam,
+        project::{AutoPoint, Param},
+    };
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| {
+        ws.select_track(0);
+        ws.show_bottom(Bottom::Modulation, cx);
+    });
+    cx.run_until_parked();
+    click_on(cx, "add-mod-Macro", Modifiers::none(), MouseButton::Left);
+    // Right-click its value: Automate it. A lane, a point where it is, and the lane showing.
+    click_on(cx, "mod-0-Value", Modifiers::none(), MouseButton::Right);
+    pick(cx, &ws, "Automate Value");
+    let param = Param::Mod(0, ModParam::Value);
+    let (points, lanes, shown) = ws.read_with(cx, |ws, _| {
+        (
+            ws.session.project.tracks[0]
+                .automation
+                .points(param)
+                .to_vec(),
+            ws.auto_lanes(0),
+            ws.show_automation,
+        )
+    });
+    assert_eq!(points.len(), 1);
+    assert!(lanes.contains(&param) && shown, "{lanes:?}");
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.param_name(0, param)),
+        "Macro 1: Value"
+    );
+    // Where its automation has it, its knob shows it.
+    ws.update(cx, |ws, cx| {
+        ws.edit(cx, |ws| {
+            *ws.session.project.tracks[0].automation.points_mut(param) =
+                vec![AutoPoint::new(0, 0.6)];
+        })
+    });
+    let shown = ws.read_with(cx, |ws, _| {
+        ws.mod_field(0, 0, crate::modulation::ModField::Value)
+    });
+    assert!((shown - 0.6).abs() < 1e-4, "{shown}");
+}
+
+#[gpui::test]
 fn settings_hide_editor_tabs_and_their_shortcuts_still_open_them(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| ws.show_bottom(Bottom::PianoRoll, cx));
