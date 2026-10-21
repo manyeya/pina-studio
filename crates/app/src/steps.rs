@@ -1437,7 +1437,6 @@ impl Workspace {
                     ),
                     None => "Map to…".to_string(),
                 };
-                let items = self.target_menu(t, k);
                 let id = self.session.project.tracks[t].id;
                 let live = self.mod_values.get(&id).map_or(0.0, |v| v[k]);
                 let now_step = now;
@@ -1498,7 +1497,7 @@ impl Workspace {
                                             cx.stop_propagation();
                                             ws.menu = Some(Menu {
                                                 at: e.position,
-                                                items: items.clone(),
+                                                items: ws.target_menu(t, k),
                                                 ..Default::default()
                                             });
                                             cx.notify();

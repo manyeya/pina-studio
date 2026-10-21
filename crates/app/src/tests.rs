@@ -547,6 +547,15 @@ fn a_modulator_learns_the_plugin_parameter_turned_next_and_lists_every_one(
         "{:?}",
         menu.iter().map(|m| &m.0).collect::<Vec<_>>()
     );
+    // Its names are asked of it once, not each frame (an Audio Unit answers one call each).
+    ws.read_with(cx, |ws, _| {
+        let id = ws.session.project.tracks[0].id;
+        let (a, b) = (
+            ws.param_names(id, Which::Insert(0)),
+            ws.param_names(id, Which::Insert(0)),
+        );
+        assert!(!a.is_empty() && std::rc::Rc::ptr_eq(&a, &b));
+    });
     // Learning: its cutoff turned as if in the plugin's own window, and that's where it goes.
     click_on(cx, "mod-0-learn", Modifiers::none(), MouseButton::Left);
     assert!(ws.read_with(cx, |ws, _| ws.mod_learn.is_some()));

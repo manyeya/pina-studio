@@ -1973,7 +1973,6 @@ impl Workspace {
                     )
                 });
             let targets = self.mod_targets.clone();
-            let title = self.param_name(i, param);
             out.push(
                 div()
                     .absolute()
@@ -2009,7 +2008,8 @@ impl Workspace {
                             MouseButton::Right,
                             cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                                 cx.stop_propagation();
-                                let items = ws.lane_mod_menu(i, mt, title.clone());
+                                let title = ws.param_name(i, param);
+                                let items = ws.lane_mod_menu(i, mt, title);
                                 ws.menu = Some(Menu {
                                     at: e.position,
                                     items,

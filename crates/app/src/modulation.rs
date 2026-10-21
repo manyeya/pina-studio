@@ -430,11 +430,8 @@ impl Workspace {
             ModTarget::Plugin(which, id) => {
                 let name = track
                     .and_then(|tr| {
-                        self.player
-                            .params(tr.id, which)
-                            .into_iter()
-                            .find(|p| p.id == id)
-                            .map(|p| p.name)
+                        let names = self.param_names(tr.id, which);
+                        names.iter().find(|p| p.0 == id).map(|p| p.1.clone())
                     })
                     .unwrap_or_else(|| format!("Parameter {id}"));
                 // An effect's, by its plugin: two can both have a Cutoff.
@@ -550,21 +547,35 @@ impl Workspace {
         }
         // Every parameter of its plugins: the instrument's, then each insert's (type to find).
         for which in self.plugin_slots(t) {
-            let params: Vec<ModTarget> = self
-                .player
-                .params(track.id, which)
-                .into_iter()
-                .map(|p| ModTarget::Plugin(which, p.id))
-                .collect();
-            let title = match which {
-                Which::Instrument => "Instrument".to_string(),
-                Which::Insert(i) => format!(
-                    "Insert {}: {}",
-                    i + 1,
-                    track.inserts.get(i).map_or("", |r| r.class.as_str())
-                ),
+            let names = self.param_names(track.id, which);
+            if names.is_empty() {
+                continue;
+            }
+            items.push((String::new(), MenuAction::Nothing));
+            items.push((
+                match which {
+                    Which::Instrument => "Instrument".to_string(),
+                    Which::Insert(i) => format!(
+                        "Insert {}: {}",
+                        i + 1,
+                        track.inserts.get(i).map_or("", |r| r.class.as_str())
+                    ),
+                },
+                MenuAction::Nothing,
+            ));
+            // Named from the one list (asking a plugin for one parameter's name asks it for
+            // all); an effect's by its plugin too, as `target_name` says them.
+            let class = match which {
+                Which::Insert(i) => track.inserts.get(i).map(|r| r.class.as_str()),
+                Which::Instrument => None,
             };
-            group(&mut items, &title, params);
+            items.extend(names.iter().map(|(id, name)| {
+                let label = match class {
+                    Some(c) => format!("{c} · {name}"),
+                    None => name.clone(),
+                };
+                (label, MenuAction::Map(t, k, ModTarget::Plugin(which, *id)))
+            }));
         }
         items
     }
@@ -1861,7 +1872,6 @@ impl Workspace {
                     })
                     // Or pick where from a list.
                     .child({
-                        let items = self.target_menu(t, k);
                         div()
                             .size(px(22.))
                             .flex()
@@ -1878,7 +1888,10 @@ impl Workspace {
                                 MouseButton::Left,
                                 cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                                     cx.stop_propagation();
-                                    ws.menu = Some(Menu::search(e.position, items.clone()));
+                                    // Made when asked for: it names every parameter of the
+                                    // track's plugins.
+                                    let items = ws.target_menu(t, k);
+                                    ws.menu = Some(Menu::search(e.position, items));
                                     cx.notify();
                                 }),
                             )

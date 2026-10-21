@@ -619,6 +619,9 @@ pub enum View {
     Settings,
 }
 
+/// A plugin's parameters: their ids and names.
+pub type ParamNames = Rc<Vec<(u32, String)>>;
+
 /// What a name being typed is for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Name {
@@ -896,6 +899,8 @@ pub struct Workspace {
     pub mod_values: HashMap<u64, [f32; pina_engine::modulate::MAX_MODS]>,
     pub mod_trace: HashMap<(u64, usize), std::collections::VecDeque<f32>>,
     pub mod_targets: crate::modulation::DropTargets,
+    /// Plugins' parameter names, by track and plugin (`param_names`).
+    param_names: RefCell<HashMap<(u64, Which), (std::time::Instant, ParamNames)>>,
     pub mod_steps: crate::modulation::StepsAt,
     pub mod_drag_at: Option<Point<f32>>,
     pub mod_edit: Option<(usize, usize)>,
@@ -1106,6 +1111,7 @@ impl Workspace {
             mod_values: HashMap::new(),
             mod_trace: HashMap::new(),
             mod_targets: Default::default(),
+            param_names: Default::default(),
             mod_steps: Default::default(),
             mod_drag_at: None,
             mod_edit: None,
@@ -1384,8 +1390,33 @@ impl Workspace {
     }
 
     /// After an edit (or undo): keeps the selection valid and brings the engine up to date.
+    /// A plugin's parameters' ids and names, asked of it now and then (an Audio Unit answers
+    /// one call a parameter): kept until an edit, or two seconds, for a plugin swapped or loaded.
+    pub fn param_names(&self, track: u64, which: Which) -> ParamNames {
+        if let Some((at, names)) = self.param_names.borrow().get(&(track, which))
+            && at.elapsed() < std::time::Duration::from_secs(2)
+        {
+            return names.clone();
+        }
+        let names: ParamNames = Rc::new(
+            self.player
+                .params(track, which)
+                .into_iter()
+                .map(|p| (p.id, p.name))
+                .collect(),
+        );
+        // A plugin still loading has none yet: asked again next time.
+        if !names.is_empty() {
+            self.param_names
+                .borrow_mut()
+                .insert((track, which), (std::time::Instant::now(), names.clone()));
+        }
+        names
+    }
+
     pub fn changed(&mut self, cx: &mut Context<Self>) {
         self.edits += 1;
+        self.param_names.borrow_mut().clear();
         // Aliases of whatever changed change with it.
         self.session.project.sync_links(&mut self.links);
         let tracks = &self.session.project.tracks;
@@ -1461,8 +1492,8 @@ impl Workspace {
                 .find(|a| a.plugin == which && a.param == id && !a.name.is_empty())
                 .map(|a| a.name.clone())
                 .or_else(|| {
-                    let params = self.player.params(t.id, which);
-                    params.into_iter().find(|p| p.id == id).map(|p| p.name)
+                    let names = self.param_names(t.id, which);
+                    names.iter().find(|p| p.0 == id).map(|p| p.1.clone())
                 })
                 .unwrap_or_else(|| format!("Parameter {id}")),
         }
