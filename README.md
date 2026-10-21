@@ -5,50 +5,47 @@ first-class collaborators. macOS first, Windows next.
 
 ## Layout
 
-- `crates/engine`: no UI. The project model (`project.rs`), the engine that plays and bounces it
-  (`engine.rs`), the built-in synth, and plugin hosting (`plugin/`: one interface, with
-  `vst3/`, `clap.rs`, `vst2.rs` and `au.rs` behind it).
-- `crates/engine` also has the live `player.rs` (keeps the engine in step with edits) and
-  `session.rs` (an open project and its undo history).
-- `crates/installer`: Install Pina Studio, the app on Pina Studio's disk image (`install.rs` what it does,
-  `ui.rs` its window).
-- `crates/engine` also has the built-in drum kit (`drums.rs`), the channel EQ (`eq.rs`; its
-  linear phase in `eq_linear.rs`, its spectral dynamics in `eq_spectral.rs`), the
-  compressor and saturator (written in Faust, in `faust/*.dsp`, compiled to Rust in `src/faust/`;
-  `dsp.rs` runs the three), keys, scales and note edits like quantize and legato (`music.rs`), MIDI input
-  (`midi.rs`), audio recording (`record.rs`), the plugin scan (`scan.rs`), edits as data
-  (`commands.rs`, described in `commands.md`) and measuring audio (`analysis.rs`).
-- `crates/engine` also writes music for agents: `theory.rs` (chords from symbols and numerals,
-  progressions by genre and mood, voice-leading, basslines, melodies, genre grooves),
-  `compose.rs` (the song's chord track, and the parts written on it), `arrange.rs` (a loop made
-  into a song, copied bars, transitions with their sounds synthesized), `playbook.rs` (genres:
-  tempo, swing, parts, sounds, sections, mix targets measured from released songs) and
-  `critique.rs` (a producer's notes, from the notes and from a render).
-- `crates/engine` also takes finished songs apart (`study/`): frames of onsets, pitch classes
-  and timbre (`features.rs`), tempo and beats (`beats.rs`), key and chords (`harmony.rs`),
-  sections and their names (`form.rs`), the drums' groove (`groove.rs`) and lyrics' rhymes,
-  syllables and hooks (`words.rs`); `examples/study_eval.rs` measures its tempo and key against
-  labelled loops.
-- `crates/app`: the gpui UI and the `pina` binary: `workspace.rs` (the window, shortcuts, drags),
-  `topbar.rs` (transport and display), `inspector.rs` (the Inspector, left of the tracks),
-  `chat.rs` (the Agent panel) with `agent.rs` (the agents, run headless for it and `pina ask`),
-  `palette.rs` (sounds, instruments and effects picked for the agent)
-  and `producer.rs` (its song strip, producer's path, critic, undo for a turn and selection),
-  `sampler.rs` (the Sampler editor), `genres.rs` (the Playbooks page, where genres are read and changed), `study.rs` (the Song
-  Study page) with `study_cli.rs` (studies kept, and lyrics, year and genre looked up),
-  `looks.rs` (track colours and icons, and their picker), `catalog.rs` (the Browser's devices; `browser.rs` the panel itself and its sounds),
-  `projects.rs` (songs: the Songs page, where Pina Studio starts; making, opening, closing and trashing them),
-  `tracks.rs` (tools, markers, ruler, headers, regions), `automation.rs` (automation: its lanes,
-  and what moving an automated control does), `editor.rs` (the
-  editor under the tracks) with `pianoroll.rs`, `steps.rs` (the step sequencer), `score.rs`,
-  `takes.rs` (take folders), `liveloops.rs` and `browser.rs` (the sample browser, a page of
-  its own (⇧F) and a compact list beside the tracks to drag from (F): search, filters, the sound
-  map, kits, adding samples to the song); `mixer.rs`, `strip.rs` (channel strips),
-  `record.rs` (recording takes), `menu.rs`, `text.rs` (the text field names are typed in),
-  `theme.rs` (colors, Geist, icons, controls),
-  `server.rs` (the project's socket), `cli.rs` (the commands for agents), `produce.rs` (the
-  critic, playbooks, chords, references, sounds, mixing and mastering for agents), `mcp.rs`, and
-  `tests.rs`, which drives the window headless with simulated mouse and keys.
+Three crates, each organised by feature: a folder for each part of the app, a file for each piece
+of it.
+
+- `crates/engine`, no UI:
+  - `song/`: the project model (`project.rs`), an open song and its undo history
+    (`session.rs`), and edits as data (`commands.rs`, described for agents in `commands.md`).
+  - `audio/`: the engine that plays a song (`engine.rs`), the live player that keeps it in step
+    with edits (`player.rs`), recording, MIDI input, bouncing, waveform peaks and time-stretching.
+  - `dsp/`: the built-in synth, drum kit and sampler, the channel EQ (with its linear-phase and
+    spectral modes), modulation, and the compressor and saturator (written in Faust, in
+    `crates/engine/faust/*.dsp`, compiled to Rust in `dsp/faust/`).
+  - `music/`: keys, scales and note edits (`mod.rs`), theory (chords, progressions,
+    voice-leading, basslines, melodies, grooves), writing parts (`compose.rs`) and songs
+    (`arrange.rs`), genre playbooks, the critic, track looks and audio analysis.
+  - `plugin/`: hosting VST3, CLAP, VST2 and Audio Units behind one interface, and the scan.
+  - `samples/`: the sample library: analysis, the index, search, kits and the sound map.
+  - `study/`: finished songs taken apart: beats, harmony, form, groove and words.
+  - `paths.rs`: where Pina Studio keeps its files.
+- `crates/app`, the gpui UI and the `pina` command:
+  - `ui/`: the theme (colours, Geist, icons, controls), the text field, pop-up menus, and how
+    tracks look.
+  - `workspace/`: the window (`mod.rs`: its state, shortcuts and drags), the top bar, the
+    right-click menus, tools, recording, the Inspector and the editor pane under the tracks.
+  - `arrange/`: the tracks (headers, ruler, markers, regions, stacks), automation, take folders,
+    Live Loops and the New Track palette.
+  - `editors/`: the piano roll, step sequencer, score, sampler, modulation and binaural panner.
+  - `mix/`: the mixer, channel strips, the Channel EQ (`eq/`) and the Bounce sheet.
+  - `sounds/`: the sample browser, the Browser's catalog of instruments and effects, the palette
+    picked for the agent, and preset auditions.
+  - `pages/`: the Songs, Playbooks, Song Study and Settings pages.
+  - `agent/`: the agents (`mod.rs`, run headless for the Agent panel and `pina ask`), the Agent
+    panel (`chat.rs`, `producer.rs`), the MCP server, producer tools, mixing by measurement and
+    listening.
+  - `cli/`: the `pina` commands for agents and scripts, the socket a running app serves its song
+    on, and the sample and study commands.
+  - `tests.rs` drives the window headless with simulated mouse and keys.
+- `crates/installer`: Install Pina Studio, the app on Pina Studio's disk image (`install.rs` what
+  it does, `ui.rs` its window).
+
+`docs/branches.md` says how work moves from a branch to a release; `CHANGELOG.md` says what each
+release changed.
 
 ## Run
 
@@ -454,7 +451,7 @@ Builds need only the Command Line Tools: gpui compiles its Metal shaders at laun
 The compressor and saturator are Faust (`crates/engine/faust/*.dsp`), using its libraries: its
 soft-knee compressor gain computer, and antiderivative antialiasing for the saturator, which also runs at twice the sample rate (a
 half-band filter designed by `scripts/halfband.py`). The Rust Faust makes of them is checked in
-under `crates/engine/src/faust/`, so building Pina Studio doesn't need Faust; after changing a .dsp, run
+under `crates/engine/src/dsp/faust/`, so building Pina Studio doesn't need Faust; after changing a .dsp, run
 `scripts/faust.sh` (with `faust` on the path, or in `~/.local/faust/bin`).
 
 ## Agents
