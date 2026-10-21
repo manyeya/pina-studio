@@ -1,49 +1,13 @@
-mod adder;
 mod agent;
-mod audition;
-mod automation;
-mod binaural;
-mod browser;
-mod catalog;
-mod chat;
+mod arrange;
 mod cli;
-mod context;
-mod editor;
-mod eq;
-mod export;
-mod genres;
-mod inspector;
-mod listen;
-mod liveloops;
-mod looks;
-mod mcp;
-mod menu;
-mod mixer;
-mod mixing;
-mod modulation;
-mod palette;
-mod pianoroll;
-mod produce;
-mod producer;
-mod projects;
-mod record;
-mod sampler;
-mod samples_cli;
-mod score;
-mod server;
-mod settings;
-mod steps;
-mod strip;
-mod study;
-mod study_cli;
-mod takes;
+mod editors;
+mod mix;
+mod pages;
+mod sounds;
 #[cfg(test)]
 mod tests;
-mod text;
-mod theme;
-mod tools;
-mod topbar;
-mod tracks;
+mod ui;
 mod workspace;
 
 use std::{
@@ -53,11 +17,11 @@ use std::{
     time::Duration,
 };
 
+use cli::server::Request;
 use gpui::{App, AppContext, Bounds, Menu, MenuItem, WindowBounds, WindowOptions, px, size};
 use pina_engine::{engine::Engine, player::Player, project::Project, session::Session};
 use serde_json::Value;
-use server::Request;
-use topbar::MIN_W;
+use workspace::topbar::MIN_W;
 use workspace::*;
 
 const USAGE: &str = "usage:
@@ -173,7 +137,7 @@ fn main() {
                 }
             }
             match ok {
-                true => print(listen::listen(p(dir), track, bars)),
+                true => print(agent::listen::listen(p(dir), track, bars)),
                 false => Err(USAGE.to_string()),
             }
         }
@@ -186,7 +150,7 @@ fn main() {
             Some(r) => print(cli::render(p(dir), p(out), Some(r))),
             None => Err(USAGE.to_string()),
         },
-        ["play", dir] => match server::ask(p(dir), &Request::Play) {
+        ["play", dir] => match cli::server::ask(p(dir), &Request::Play) {
             Some(reply) => print(reply),
             None => play(p(dir)),
         },
@@ -222,23 +186,23 @@ fn main() {
                 (None, _) => Err(USAGE.to_string()),
             }
         }
-        ["samples", rest @ ..] => print(samples_cli::command(rest)),
+        ["samples", rest @ ..] => print(cli::samples::command(rest)),
         ["critique", dir, rest @ ..] => {
             let quick = rest.contains(&"--quick");
             match rest.iter().position(|a| *a == "--bars") {
                 Some(i) => match rest.get(i + 1).and_then(|r| bar_range(r)) {
-                    Some(range) => print(produce::critique(p(dir), quick, Some(range))),
+                    Some(range) => print(agent::produce::critique(p(dir), quick, Some(range))),
                     None => Err(USAGE.to_string()),
                 },
-                None => print(produce::critique(p(dir), quick, None)),
+                None => print(agent::produce::critique(p(dir), quick, None)),
             }
         }
         ["study", file, rest @ ..] => {
             let online = !rest.contains(&"--offline");
-            match study_cli::study(p(file), online) {
+            match cli::study::study(p(file), online) {
                 Err(e) => Err(e),
                 Ok(s) if rest.contains(&"--summary") => {
-                    println!("{}", study_cli::summary(&s));
+                    println!("{}", cli::study::summary(&s));
                     Ok(())
                 }
                 Ok(s) if rest.contains(&"--playbook") => {
@@ -247,14 +211,14 @@ fn main() {
                     pina_engine::playbook::save(&book)
                         .map(|f| println!("{} ({}): {}", book.name, book.id, f.display()))
                 }
-                Ok(s) => print(Ok(study_cli::for_agent(&s))),
+                Ok(s) => print(Ok(cli::study::for_agent(&s))),
             }
         }
-        ["playbook"] => print(produce::playbook(None)),
-        ["playbook", "--edit"] => produce::edit_playbooks(None),
-        ["playbook", "--edit", genre] => produce::edit_playbooks(Some(genre)),
+        ["playbook"] => print(agent::produce::playbook(None)),
+        ["playbook", "--edit"] => agent::produce::edit_playbooks(None),
+        ["playbook", "--edit", genre] => agent::produce::edit_playbooks(Some(genre)),
         // An instrument's presets, listed by loading it alone: run by `pina sounds`.
-        ["__audition", plugin, part, presets] => audition::command(plugin, part, presets),
+        ["__audition", plugin, part, presets] => sounds::audition::command(plugin, part, presets),
         ["__presets", plugin] => serde_json::from_str::<pina_engine::project::PluginRef>(plugin)
             .map_err(|e| e.to_string())
             .and_then(|r| {
@@ -263,36 +227,42 @@ fn main() {
                 println!("{}", serde_json::to_string(&plugin.presets()).unwrap());
                 Ok(())
             }),
-        ["playbook", genre @ ..] => print(produce::playbook(Some(&genre.join(" ")))),
-        ["theory", key, words @ ..] => print(produce::theory(key, &words.join(" "))),
-        ["reference", file] => print(produce::reference(p(file), None)),
-        ["reference", file, dir] => print(produce::reference(p(file), Some(p(dir)))),
+        ["playbook", genre @ ..] => print(agent::produce::playbook(Some(&genre.join(" ")))),
+        ["theory", key, words @ ..] => print(agent::produce::theory(key, &words.join(" "))),
+        ["reference", file] => print(agent::produce::reference(p(file), None)),
+        ["reference", file, dir] => print(agent::produce::reference(p(file), Some(p(dir)))),
         ["sounds", role, rest @ ..] => {
             let (genre, words) = match rest {
                 ["--genre", g, words @ ..] => (Some(*g), words),
                 words => (None, words),
             };
-            print(produce::sounds(role, genre, &words.join(" "), None, None))
+            print(agent::produce::sounds(
+                role,
+                genre,
+                &words.join(" "),
+                None,
+                None,
+            ))
         }
         ["mix", dir, rest @ ..] => {
             let levels = !rest.contains(&"--no-levels");
             match rest {
                 ["--track", t, ..] => match t.parse() {
-                    Ok(t) => print(produce::mix_role(p(dir), Some(t), None, levels)),
+                    Ok(t) => print(agent::produce::mix_role(p(dir), Some(t), None, levels)),
                     Err(_) => Err(USAGE.to_string()),
                 },
-                _ => print(produce::mix_role(p(dir), None, None, levels)),
+                _ => print(agent::produce::mix_role(p(dir), None, None, levels)),
             }
         }
-        ["master", dir] => print(produce::master(p(dir), None)),
+        ["master", dir] => print(agent::produce::master(p(dir), None)),
         ["master", dir, "--lufs", lufs] => match lufs.parse() {
-            Ok(l) => print(produce::master(p(dir), Some(l))),
+            Ok(l) => print(agent::produce::master(p(dir), Some(l))),
             Err(_) => Err(USAGE.to_string()),
         },
-        ["mcp"] => mcp::serve(),
-        ["projects"] => print(Ok(serde_json::to_value(projects::list(
-            &projects::root(),
-            &projects::recent(),
+        ["mcp"] => agent::mcp::serve(),
+        ["projects"] => print(Ok(serde_json::to_value(pages::projects::list(
+            &pages::projects::root(),
+            &pages::projects::recent(),
         ))
         .unwrap())),
         ["new", name, rest @ ..] => new_song(name, rest),
@@ -422,17 +392,17 @@ fn print(result: Result<Value, String>) -> Result<(), String> {
 
 /// With no song named: a new one, not made yet, so the window opens on the Songs page.
 fn default_project() -> PathBuf {
-    projects::scratch()
+    pages::projects::scratch()
 }
 
 fn open(dir: &Path) -> Result<(), String> {
     let session = Session::open(dir)?;
     if session.on_disk {
-        projects::opened(dir);
+        pages::projects::opened(dir);
     }
     let player = Player::start(&session.project, dir)?;
     gpui_platform::application().run(move |cx: &mut App| {
-        if let Err(e) = cx.text_system().add_fonts(theme::fonts()) {
+        if let Err(e) = cx.text_system().add_fonts(ui::theme::fonts()) {
             eprintln!("fonts: {e}");
         }
         bind_keys(cx);
@@ -503,7 +473,7 @@ fn open(dir: &Path) -> Result<(), String> {
                 ws.start_scan(cx);
                 ws.load_library(cx);
                 ws.offer_kept(window, cx);
-                server::serve(cx.entity().downgrade(), &dir, cx);
+                cli::server::serve(cx.entity().downgrade(), &dir, cx);
                 ws
             })
         })
@@ -519,7 +489,7 @@ fn new_song(name: &str, rest: &[&str]) -> Result<(), String> {
     let mut tempo = 120.0;
     let mut key = None;
     let mut time = [4, 4];
-    let mut template = projects::Template::Empty;
+    let mut template = pages::projects::Template::Empty;
     let mut it = rest.iter();
     while let Some(&flag) = it.next() {
         let value = it.next().copied().ok_or(format!("{flag} takes a value"))?;
@@ -542,14 +512,14 @@ fn new_song(name: &str, rest: &[&str]) -> Result<(), String> {
                 ];
             }
             "--template" => {
-                template = projects::Template::from_name(value).ok_or(format!(
+                template = pages::projects::Template::from_name(value).ok_or(format!(
                     "no template {value}: empty, beat, band, lofi, electronic"
                 ))?
             }
             _ => return Err(USAGE.to_string()),
         }
     }
-    let dir = projects::create(&projects::root(), name, tempo, key, time, template)?;
+    let dir = pages::projects::create(&pages::projects::root(), name, tempo, key, time, template)?;
     println!("{}", dir.display());
     Ok(())
 }

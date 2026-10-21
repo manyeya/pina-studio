@@ -19,9 +19,9 @@ use pina_engine::{
 };
 
 use crate::{
-    pianoroll::KEY_H,
-    strip::Channel,
-    theme::{CONTROL_BAR_H, LANE_H, MARKERS_H, RULER_H, STATUS_H},
+    editors::pianoroll::KEY_H,
+    mix::strip::Channel,
+    ui::theme::{CONTROL_BAR_H, LANE_H, MARKERS_H, RULER_H, STATUS_H},
     workspace::*,
 };
 
@@ -377,7 +377,7 @@ fn a_headers_fader_and_pan_drag_finely_type_and_reset(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_binaural_panner_places_a_sound_round_the_head(cx: &mut TestAppContext) {
-    use crate::binaural::Camera;
+    use crate::editors::binaural::Camera;
     use pina_engine::project::{PanMode, Place};
     let (ws, cx) = open(cx);
     // Binaural, from the pan knob's menu: the panner opens.
@@ -394,7 +394,7 @@ fn the_binaural_panner_places_a_sound_round_the_head(cx: &mut TestAppContext) {
     let corner = view.origin + point(px(20.), px(20.));
     drag(cx, corner, corner + point(px(50.), px(10.)));
     let orbit = ws.read_with(cx, |ws, _| ws.orbit);
-    assert_ne!(orbit, crate::binaural::ORBIT);
+    assert_ne!(orbit, crate::editors::binaural::ORBIT);
     assert_eq!(place(cx).azimuth, 0.0);
     // The sound, dragged to a spot 1.5 m to the right of the head on the floor, goes there.
     let camera = Camera::new(orbit);
@@ -697,7 +697,7 @@ fn an_automation_lane_takes_a_modulator(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn a_stacks_shared_modulator_is_on_every_track_in_it(cx: &mut TestAppContext) {
-    use crate::modulation::ModField;
+    use crate::editors::modulation::ModField;
     use pina_engine::modulate::ModKind;
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
@@ -772,7 +772,7 @@ fn a_modulators_knob_is_automated_from_its_right_click(cx: &mut TestAppContext) 
         })
     });
     let shown = ws.read_with(cx, |ws, _| {
-        ws.mod_field(0, 0, crate::modulation::ModField::Value)
+        ws.mod_field(0, 0, crate::editors::modulation::ModField::Value)
     });
     assert!((shown - 0.6).abs() < 1e-4, "{shown}");
 }
@@ -1294,7 +1294,7 @@ fn the_pencil_writes_chords_in_key_paints_on_and_the_lane_draws(cx: &mut TestApp
     cx.run_until_parked();
     ws.update(cx, |ws, cx| {
         ws.session.project.key = Some("C major".into());
-        ws.roll.stamp = crate::pianoroll::Stamp::Triad;
+        ws.roll.stamp = crate::editors::pianoroll::Stamp::Triad;
         ws.roll.length = PPQ;
         ws.tool = Tool::Pencil;
         cx.notify();
@@ -1407,7 +1407,11 @@ fn automation_points_are_added_dragged_and_deleted(cx: &mut TestAppContext) {
     let at = point(
         top.x,
         px(lane_top
-            + crate::automation::to_y(pina_engine::project::Param::Volume, points[0].value, 64.0)),
+            + crate::arrange::automation::to_y(
+                pina_engine::project::Param::Volume,
+                points[0].value,
+                64.0,
+            )),
     );
     drag(cx, at, at + point(px(0.), px(30.)));
     let moved = volume(cx)[0];
@@ -1418,7 +1422,11 @@ fn automation_points_are_added_dragged_and_deleted(cx: &mut TestAppContext) {
     let at = point(
         top.x,
         px(lane_top
-            + crate::automation::to_y(pina_engine::project::Param::Volume, moved.value, 64.0)),
+            + crate::arrange::automation::to_y(
+                pina_engine::project::Param::Volume,
+                moved.value,
+                64.0,
+            )),
     );
     cx.simulate_click(
         at,
@@ -1610,7 +1618,7 @@ fn agents_edit_the_open_project_through_its_socket(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let (ws, cx) = open_at(cx, &dir);
     let weak = ws.downgrade();
-    cx.update(|_, cx| crate::server::serve(weak, &dir, cx));
+    cx.update(|_, cx| crate::cli::server::serve(weak, &dir, cx));
 
     // Ask from another thread, as `pina do` would from another process.
     let ask = |cx: &mut VisualTestContext, command: &'static str| {
@@ -1777,8 +1785,8 @@ fn the_step_sequencer_paints_accents_mutes_fills_and_converts(cx: &mut TestAppCo
     assert!(rows(cx)[2].mute);
     ws.update(cx, |ws, cx| {
         let at = ws.pattern().unwrap();
-        ws.row_op(at, 2, crate::steps::RowOp::Fill(2), cx);
-        ws.row_op(at, 4, crate::steps::RowOp::Length(3), cx);
+        ws.row_op(at, 2, crate::editors::steps::RowOp::Fill(2), cx);
+        ws.row_op(at, 4, crate::editors::steps::RowOp::Length(3), cx);
     });
     let r = rows(cx);
     assert_eq!(&r[2].cells[..4], [100, 0, 100, 0]);
@@ -2431,7 +2439,7 @@ fn smart_controls_turn_the_channel_eq_on_a_built_in_instrument(cx: &mut TestAppC
     let knob = cx.debug_bounds("smart-0").unwrap().center();
     drag(cx, knob, knob - point(px(0.), px(60.)));
     let cut = ws.read_with(cx, |ws, _| {
-        crate::eq::low_cut(&ws.session.project.tracks[0].eq.unwrap())
+        crate::mix::eq::low_cut(&ws.session.project.tracks[0].eq.unwrap())
     });
     assert!(cut > 40.0, "{cut}");
 }
@@ -2642,7 +2650,7 @@ fn the_eq_window_adds_shapes_moves_and_takes_out_bands(cx: &mut TestAppContext) 
     let a = eq(cx);
     click_on(cx, "eq-b", Modifiers::none(), MouseButton::Left);
     assert_eq!(eq(cx), a);
-    ws.update(cx, |ws, cx| ws.eq_op(crate::eq::EqOp::Clear, cx));
+    ws.update(cx, |ws, cx| ws.eq_op(crate::mix::eq::EqOp::Clear, cx));
     assert!(eq(cx).bands.is_empty());
     click_on(cx, "eq-a", Modifiers::none(), MouseButton::Left);
     assert_eq!(eq(cx).bands.len(), a.bands.len());
@@ -2808,13 +2816,13 @@ fn tracks_regions_and_buses_are_renamed_where_their_names_show(cx: &mut TestAppC
     // A bus, in the mixer: double-click its name plate. Clicking away keeps what's typed.
     ws.update(cx, |ws, cx| {
         ws.choose(
-            crate::menu::MenuAction::Send {
+            crate::ui::menu::MenuAction::Send {
                 track: 0,
                 bus: None,
             },
             cx,
         );
-        ws.show_channel(crate::strip::Channel::Aux(0), cx);
+        ws.show_channel(crate::mix::strip::Channel::Aux(0), cx);
     });
     cx.run_until_parked();
     let plate = cx.debug_bounds("plate-Aux(0)").unwrap().center();
@@ -2935,7 +2943,7 @@ fn latch_records_the_fader_while_playing_until_stop(cx: &mut TestAppContext) {
     });
     assert_eq!(last.unwrap().value, held);
     // While the automation plays, the fader shows it rather than its own setting.
-    let shown = ws.read_with(cx, |ws, _| ws.volume(crate::strip::Channel::Track(0)));
+    let shown = ws.read_with(cx, |ws, _| ws.volume(crate::mix::strip::Channel::Track(0)));
     assert!((shown - held).abs() < 0.01 || shown < 0.0, "{shown}");
 }
 
@@ -2976,14 +2984,14 @@ fn lane_spot(
         let param = ws.auto_lanes(track)[k];
         let y = f32::from(ws.lanes_bounds.get().origin.y)
             + ws.lane_top(track, k)
-            + crate::automation::to_y(param, value, ws.auto_h());
+            + crate::arrange::automation::to_y(param, value, ws.auto_h());
         point(x, px(y))
     })
 }
 
 #[gpui::test]
 fn controls_show_their_automation_and_moved_while_stopped_move_its_line(cx: &mut TestAppContext) {
-    use crate::{automation::Stopped, strip::Channel};
+    use crate::{arrange::automation::Stopped, mix::strip::Channel};
     use pina_engine::project::{AutoPoint, Param, value_at};
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
@@ -3366,8 +3374,8 @@ fn automation_moves_with_regions_when_set(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_saturator_goes_on_from_the_browser_and_turns_in_the_mixer(cx: &mut TestAppContext) {
     use crate::{
-        menu::MenuAction,
-        strip::{Builtin, Channel},
+        mix::strip::{Builtin, Channel},
+        ui::menu::MenuAction,
     };
     let (ws, cx) = open(cx);
     let add = MenuAction::AddBuiltin {
@@ -3442,13 +3450,13 @@ fn sends_switch_between_pre_and_post_fader(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
         ws.choose(
-            crate::menu::MenuAction::Send {
+            crate::ui::menu::MenuAction::Send {
                 track: 0,
                 bus: None,
             },
             cx,
         );
-        ws.show_channel(crate::strip::Channel::Track(0), cx);
+        ws.show_channel(crate::mix::strip::Channel::Track(0), cx);
     });
     cx.run_until_parked();
     click_on(cx, "send-pre-0", Modifiers::none(), MouseButton::Left);
@@ -3462,7 +3470,7 @@ fn sends_switch_between_pre_and_post_fader(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_master_takes_plugins_and_audio_tracks_pick_an_input(cx: &mut TestAppContext) {
-    use crate::{menu::MenuAction, strip::Channel};
+    use crate::{mix::strip::Channel, ui::menu::MenuAction};
     let (ws, cx) = open(cx);
     let plugin = pina_engine::project::PluginRef {
         path: "/nonexistent/Missing.vst3".into(),
@@ -3546,12 +3554,12 @@ fn the_editor_is_resized_by_its_top_edge(cx: &mut TestAppContext) {
     cx.simulate_click(spot(&ws, cx, PPQ, 0), Modifiers::none());
     cx.simulate_keystrokes("p");
     let height = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.editor_height());
-    assert_eq!(height(cx), crate::theme::EDITOR_H);
+    assert_eq!(height(cx), crate::ui::theme::EDITOR_H);
     // Up 80: taller by 80, the lanes shorter.
     let lanes = ws.read_with(cx, |ws, _| ws.lanes_bounds.get().size.height);
     let edge = cx.debug_bounds("editor-edge").unwrap().center();
     drag(cx, edge, edge - point(px(0.), px(80.)));
-    assert_eq!(height(cx), crate::theme::EDITOR_H + 80.0);
+    assert_eq!(height(cx), crate::ui::theme::EDITOR_H + 80.0);
     let shorter = ws.read_with(cx, |ws, _| ws.lanes_bounds.get().size.height);
     assert_eq!(shorter, lanes - px(80.));
     // Not past what leaves the tracks room, nor shorter than its tools.
@@ -3563,11 +3571,11 @@ fn the_editor_is_resized_by_its_top_edge(cx: &mut TestAppContext) {
     assert_eq!(height(cx), tallest);
     let edge = cx.debug_bounds("editor-edge").unwrap().center();
     drag(cx, edge, edge + point(px(0.), px(5000.)));
-    assert_eq!(height(cx), crate::theme::EDITOR_MIN_H);
+    assert_eq!(height(cx), crate::ui::theme::EDITOR_MIN_H);
     // Double-click: back to its usual height. None of it is an edit.
     let edge = cx.debug_bounds("editor-edge").unwrap().center();
     double_click(cx, edge);
-    assert_eq!(height(cx), crate::theme::EDITOR_H);
+    assert_eq!(height(cx), crate::ui::theme::EDITOR_H);
     assert!(!ws.read_with(cx, |ws, _| ws.session.edited));
 }
 
@@ -3577,12 +3585,12 @@ fn the_compact_browser_is_resized_by_its_left_edge(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("f");
     cx.simulate_keystrokes("escape");
     let width = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.panel_width());
-    assert_eq!(width(cx), crate::browser::PANEL_W);
+    assert_eq!(width(cx), crate::sounds::browser::PANEL_W);
     // Left 100: wider by 100, the lanes narrower.
     let lanes = ws.read_with(cx, |ws, _| ws.lanes_bounds.get().size.width);
     let edge = cx.debug_bounds("panel-edge").unwrap().center();
     drag(cx, edge, edge - point(px(100.), px(0.)));
-    assert_eq!(width(cx), crate::browser::PANEL_W + 100.0);
+    assert_eq!(width(cx), crate::sounds::browser::PANEL_W + 100.0);
     let narrower = ws.read_with(cx, |ws, _| ws.lanes_bounds.get().size.width);
     assert_eq!(narrower, lanes - px(100.));
     // Not past what leaves the lanes room, nor narrower than its controls.
@@ -3598,7 +3606,7 @@ fn the_compact_browser_is_resized_by_its_left_edge(cx: &mut TestAppContext) {
     // Double-click: back to its usual width. None of it is an edit.
     let edge = cx.debug_bounds("panel-edge").unwrap().center();
     double_click(cx, edge);
-    assert_eq!(width(cx), crate::browser::PANEL_W);
+    assert_eq!(width(cx), crate::sounds::browser::PANEL_W);
     assert!(!ws.read_with(cx, |ws, _| ws.session.edited));
 }
 
@@ -3859,7 +3867,7 @@ fn the_sample_browser_searches_filters_and_hears(cx: &mut TestAppContext) {
     // way, and in tune.
     ws.update(cx, |ws, cx| {
         ws.set_sample_key(
-            crate::browser::KeyFilter::Key(pina_engine::music::Key {
+            crate::sounds::browser::KeyFilter::Key(pina_engine::music::Key {
                 root: 0,
                 minor: true,
             }),
@@ -4209,7 +4217,7 @@ fn the_sound_map_boxes_in_samples_and_similar_weighs_aspects(cx: &mut TestAppCon
 
 #[gpui::test]
 fn the_agent_panel_shows_claude_working_as_it_goes(cx: &mut TestAppContext) {
-    use crate::chat::{Item, Step};
+    use crate::agent::chat::{Item, Step};
     // A stand-in for Claude Code: it takes the question and answers as Claude does, an edit and
     // a sentence, then waits to be let go.
     let dir = std::env::temp_dir().join(format!("pina-test-claude-{}", std::process::id()));
@@ -4272,8 +4280,8 @@ cat > /dev/null
 #[gpui::test]
 fn an_agent_that_isnt_signed_in_says_how_rather_than_starting(cx: &mut TestAppContext) {
     use crate::{
+        agent::chat::Item,
         agent::{Kind, Readiness},
-        chat::Item,
     };
     let (ws, cx) = open(cx);
     // Not signed in when last asked: it's asked again first, then (still not) says how.
@@ -4413,13 +4421,13 @@ fn songs_start_from_the_songs_page_open_here_and_go_to_the_trash(cx: &mut TestAp
     let root = std::env::temp_dir().join(format!("pina-test-window-songs-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    let other = crate::projects::create(
+    let other = crate::pages::projects::create(
         &root,
         "Other",
         96.0,
         pina_engine::music::Key::parse("D minor"),
         [3, 4],
-        crate::projects::Template::Band,
+        crate::pages::projects::Template::Band,
     )
     .unwrap();
     let (ws, cx) = open(cx);
@@ -4465,7 +4473,7 @@ fn songs_start_from_the_songs_page_open_here_and_go_to_the_trash(cx: &mut TestAp
     // The song open, to the Trash (asked first): it closes, and the window is the Songs page
     // alone, nothing to play.
     ws.update(cx, |ws, cx| {
-        ws.song_pending = Some(crate::menu::MenuAction::TrashSong(root.join("Rain")));
+        ws.song_pending = Some(crate::ui::menu::MenuAction::TrashSong(root.join("Rain")));
         cx.notify();
     });
     cx.run_until_parked();
@@ -4475,17 +4483,17 @@ fn songs_start_from_the_songs_page_open_here_and_go_to_the_trash(cx: &mut TestAp
     assert!(ws.read_with(cx, |ws, _| ws.home_alone()));
     assert!(cx.debug_bounds("play").is_none());
     // Two picked with ⌘-click, Delete: both to the Trash, asked once.
-    let third = crate::projects::create(
+    let third = crate::pages::projects::create(
         &root,
         "Third",
         100.0,
         None,
         [4, 4],
-        crate::projects::Template::Empty,
+        crate::pages::projects::Template::Empty,
     )
     .unwrap();
     ws.update(cx, |ws, cx| {
-        ws.songs = crate::projects::list(&root, &[]);
+        ws.songs = crate::pages::projects::list(&root, &[]);
         cx.notify();
     });
     cx.run_until_parked();
@@ -4760,7 +4768,7 @@ fn the_cycle_is_swept_in_the_rulers_top_half_and_c_follows_the_selection(cx: &mu
 
 #[gpui::test]
 fn the_browser_names_new_tracks_and_puts_effects_on_them(cx: &mut TestAppContext) {
-    use crate::catalog::Target;
+    use crate::sounds::catalog::Target;
     let dir = demo_copy("browser-new-track");
     let (ws, cx) = open_at(cx, &dir);
     let device = |cx: &VisualTestContext, name: &str| {
@@ -4929,7 +4937,7 @@ fn sounds_are_picked_for_the_agent_given_parts_and_told_it(cx: &mut TestAppConte
     );
     let (picking, browser, scope) =
         ws.read_with(cx, |ws, _| (ws.picking, ws.show_browser, ws.catalog.scope));
-    assert!(picking && browser && scope == crate::catalog::Scope::Sounds);
+    assert!(picking && browser && scope == crate::sounds::catalog::Scope::Sounds);
     assert!(cx.debug_bounds("picking-done").is_some());
     // A sound given (the library's ＋ does this), then back to the agent with Done.
     let drums = dir.join("Audio Files/drums.wav");
@@ -4974,7 +4982,7 @@ fn sounds_are_picked_for_the_agent_given_parts_and_told_it(cx: &mut TestAppConte
     click_on(cx, "palette-more", Modifiers::none(), MouseButton::Left);
     pick(cx, &ws, "Instruments…");
     assert!(ws.read_with(cx, |ws, _| ws.picking
-        && ws.catalog.scope == crate::catalog::Scope::Instruments));
+        && ws.catalog.scope == crate::sounds::catalog::Scope::Instruments));
     click_on(
         cx,
         "give-agent-own:synth",
@@ -5018,7 +5026,7 @@ fn sounds_are_picked_for_the_agent_given_parts_and_told_it(cx: &mut TestAppConte
 
 #[gpui::test]
 fn the_agent_panel_knows_the_song_and_its_critic(cx: &mut TestAppContext) {
-    use crate::{chat::Item, producer::Stage};
+    use crate::{agent::chat::Item, agent::producer::Stage};
     let dir = demo_copy("agent-producer");
     let (ws, cx) = open_at(cx, &dir);
     cx.simulate_resize(gpui::size(px(1600.), px(1200.)));
@@ -5031,7 +5039,7 @@ fn the_agent_panel_knows_the_song_and_its_critic(cx: &mut TestAppContext) {
     // The stages: the demo has a loop, its keys playing chords, but no genre or mix; a new
     // conversation offers what it hasn't had, the genre first.
     let done: Vec<bool> = ws.read_with(cx, |ws, _| {
-        crate::producer::STAGES
+        crate::agent::producer::STAGES
             .iter()
             .map(|s| s.done(&ws.session.project))
             .collect()
@@ -5218,7 +5226,7 @@ fn a_song_studied_shows_its_form_and_becomes_the_mix_reference(cx: &mut TestAppC
         .collect();
     let song = dir.join("Someone - A Test.wav");
     pina_engine::analysis::write_wav(&song, &l, &l, rate).unwrap();
-    let studied = crate::study_cli::study(&song, false).unwrap();
+    let studied = crate::cli::study::study(&song, false).unwrap();
     assert_eq!(studied.identity.title, "A Test");
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| ws.open_study(cx));
@@ -5315,7 +5323,7 @@ fn the_sampler_takes_samples_slices_them_and_its_knobs_and_marks_turn(cx: &mut T
     );
     // Sliced at its hits: four of them, on C1 up.
     ws.update(cx, |ws, cx| {
-        ws.slice_zone(crate::sampler::Slicing::Hits(8), cx)
+        ws.slice_zone(crate::editors::sampler::Slicing::Hits(8), cx)
     });
     let s = sampler(cx);
     assert_eq!(
@@ -5453,7 +5461,9 @@ fn shots() {
         },
     );
     cx.update(|cx| {
-        cx.text_system().add_fonts(crate::theme::fonts()).unwrap();
+        cx.text_system()
+            .add_fonts(crate::ui::theme::fonts())
+            .unwrap();
         bind_keys(cx);
     });
     let session = Session::open(&demo()).unwrap();
@@ -5499,7 +5509,7 @@ fn shots() {
                     ws.picked = vec![0, 1, 2, 3];
                     ws.roll.by_velocity = true;
                     ws.roll.in_key = true;
-                    ws.roll.stamp = crate::pianoroll::Stamp::Triad;
+                    ws.roll.stamp = crate::editors::pianoroll::Stamp::Triad;
                     if let Some(notes) = ws.session.project.notes_mut((0, 0)) {
                         for (i, n) in notes.iter_mut().enumerate() {
                             n.velocity = (40 + i * 6).min(127) as u8;
@@ -5572,7 +5582,7 @@ fn shots() {
                 }
                 "bounce" => {
                     ws.open_export(cx);
-                    ws.choose(crate::menu::MenuAction::Nothing, cx);
+                    ws.choose(crate::ui::menu::MenuAction::Nothing, cx);
                 }
                 "bounce-stems" => {
                     ws.export_stem(0, cx);
@@ -5689,7 +5699,7 @@ fn shots() {
                     ws.show_browser = page != "beside-agent";
                     ws.show_agent = page == "beside-agent";
                     if page == "beside-sounds" {
-                        ws.catalog.scope = crate::catalog::Scope::Sounds;
+                        ws.catalog.scope = crate::sounds::catalog::Scope::Sounds;
                     }
                     ws.track = 1;
                     ws.show_bottom(Bottom::PianoRoll, cx);
@@ -5727,7 +5737,7 @@ fn shots() {
                         if let Some(s) = lib.iter().find(|s| s.analysis.category == want) {
                             sounds.push(PaletteSound {
                                 path: s.path.clone(),
-                                role: crate::palette::role_for(want).map(str::to_string),
+                                role: crate::sounds::palette::role_for(want).map(str::to_string),
                             });
                         }
                     }
@@ -5739,13 +5749,13 @@ fn shots() {
                     ws.session.project.palette.devices = ["own:synth", "own:comp"]
                         .iter()
                         .filter_map(|k| ws.catalog.device(k))
-                        .map(|d| crate::palette::palette_device(&ws.catalog.devices[d]))
+                        .map(|d| crate::sounds::palette::palette_device(&ws.catalog.devices[d]))
                         .collect();
                     ws.session.project.palette.devices[0].role = Some("lead".into());
                     ws.session.project.palette.only = true;
                     ws.show_agent = true;
                     if page == "palette-pick" {
-                        ws.pick_for_agent(crate::catalog::Scope::Instruments, cx);
+                        ws.pick_for_agent(crate::sounds::catalog::Scope::Instruments, cx);
                     }
                     if page == "palette-start" {
                         ws.session.project.palette = Default::default();
@@ -5753,7 +5763,7 @@ fn shots() {
                     cx.notify();
                 }
                 "settings-auto" => {
-                    ws.settings_section = crate::settings::Section::Automation;
+                    ws.settings_section = crate::pages::settings::Section::Automation;
                     ws.open_settings(cx);
                 }
                 "settings" => {
@@ -5868,7 +5878,7 @@ fn shots() {
                     ws.editor_h = 330.0;
                     ws.show_bottom(Bottom::Modulation, cx);
                     if page == "stack-shared-menu" {
-                        ws.menu = Some(crate::menu::Menu {
+                        ws.menu = Some(crate::ui::menu::Menu {
                             at: gpui::point(px(1180.), px(560.)),
                             items: ws.shared_menu(0).unwrap(),
                             ..Default::default()
@@ -5922,7 +5932,7 @@ fn shots() {
                     tracks[2].automation.mode = AutoMode::Touch;
                     ws.auto_lanes
                         .insert(ids[0], vec![Param::Volume, Param::Pan]);
-                    ws.auto_picked = Some(crate::automation::Picked {
+                    ws.auto_picked = Some(crate::arrange::automation::Picked {
                         track: ids[0],
                         param: Param::Volume,
                         points: vec![2, 3],
@@ -5968,7 +5978,7 @@ fn shots() {
                 }
                 // The Songs page: as Pina Studio opens with no song ("home"), or with one open.
                 "home" | "songs" => {
-                    let demo = crate::projects::summary(&demo()).unwrap();
+                    let demo = crate::pages::projects::summary(&demo()).unwrap();
                     let names = [
                         ("Night Drive", 92.0, 0),
                         ("Rain on Glass", 74.0, 3_600),
@@ -5979,7 +5989,7 @@ fn shots() {
                     ];
                     ws.songs = names
                         .iter()
-                        .map(|&(name, tempo, ago)| crate::projects::Song {
+                        .map(|&(name, tempo, ago)| crate::pages::projects::Song {
                             dir: std::path::PathBuf::from(format!("/songs/{name}")),
                             name: name.to_string(),
                             modified: std::time::SystemTime::now()
@@ -6089,7 +6099,7 @@ fn shots() {
                             }
                             "eq-analyzer" => {
                                 v.picked.clear();
-                                v.popup = Some(crate::eq::Popup::Analyzer);
+                                v.popup = Some(crate::mix::eq::Popup::Analyzer);
                             }
                             "eq-dynamics" | "eq-spectral" => v.dyn_open = true,
                             "eq-list" | "eq-match" | "eq-sketch" | "eq-grab" => {
@@ -6108,7 +6118,7 @@ fn shots() {
                             }
                             "eq-output" => {
                                 v.picked.clear();
-                                v.popup = Some(crate::eq::Popup::Output);
+                                v.popup = Some(crate::mix::eq::Popup::Output);
                             }
                             _ => {}
                         }
