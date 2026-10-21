@@ -43,6 +43,9 @@ pub fn role(t: &Track) -> &'static str {
                 "shaker",
                 "tamb",
                 "cowbell",
+                "taiko",
+                "timpani",
+                "toms",
             ],
         ),
         (

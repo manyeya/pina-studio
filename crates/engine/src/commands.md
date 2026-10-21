@@ -373,6 +373,16 @@ tonal energy, with the key they fit best and how well (`key_fit`, above 0.7 is c
 project's analysis also has each section, marker to marker, so a hook can be compared with a
 verse. `pina render <project> <out.wav>` bounces it to listen to.
 
+`pina listen <project> [--track N] [--bars 9-16]` (MCP: `listen`) hears each track alone, as
+the sample library hears a sample: what it sounds like (the model's guess: `pad 70% · strings
+20%`), its character (dark, punchy, wide, distorted, lo-fi…), attack and decay, brightness,
+spectrum, width, loudness and key, against the part it plays; with what's wrong: a plugin left on
+its default patch, a sound unlike its name or part (strings that sound like a synth, a bass for
+low strings), a slow-attack patch on a part that wants its notes on time, a fader doing the
+sound's job, rumble under a part, a wide low end, a loop in another key. `pina sounds <role>
+[--genre g] [words]` finds presets by auditioning them, so check a sound with `listen` after
+choosing it.
+
 `pina params` and `pina presets` answer from the app when it has the project open, and
 otherwise load the one plugin asked about.
 

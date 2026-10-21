@@ -27,6 +27,18 @@ pub fn analyze(channels: &[Vec<f32>], rate: f64, hint: &str) -> Analysis {
     describe(channels, &f, &x, kind, category, confidence)
 }
 
+/// What audio sounds like by its sound alone, no name to go by (a track rendered, a preset
+/// played): its analysis, and every category it could be, likeliest first.
+pub fn hear(channels: &[Vec<f32>], rate: f64) -> (Analysis, Vec<(Category, f32)>) {
+    let hints = classify::hints("");
+    let f = features::extract(channels, rate, None);
+    let x = classify::vector(&f);
+    let kind = classify::kind(&f, &x, &hints);
+    let all = classify::categories(&x, &hints, kind);
+    let (category, confidence) = all[0];
+    (describe(channels, &f, &x, kind, category, confidence), all)
+}
+
 /// An analysis from what was measured and what it was found to be.
 pub fn describe(
     channels: &[Vec<f32>],

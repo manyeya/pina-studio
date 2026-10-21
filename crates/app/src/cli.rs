@@ -141,7 +141,11 @@ pub fn bars(p: &Project, first: u64, last: u64) -> Result<(u64, u64), String> {
 
 /// `p` rendered from tick `from` to `to` (the whole song and its tail by default), a bar played
 /// first and dropped so effects are going.
-fn rendered(p: &Project, dir: &Path, range: Option<(u64, u64)>) -> Result<[Vec<f32>; 2], String> {
+pub fn rendered(
+    p: &Project,
+    dir: &Path,
+    range: Option<(u64, u64)>,
+) -> Result<[Vec<f32>; 2], String> {
     let Some((from, to)) = range else {
         return mixed(p, dir, length(p));
     };
@@ -154,6 +158,34 @@ fn rendered(p: &Project, dir: &Path, range: Option<(u64, u64)>) -> Result<[Vec<f
     l.drain(..lead as usize);
     r.drain(..lead as usize);
     Ok([l, r])
+}
+
+/// `p` with only track `i` playing, through the auxes and master it plays into. The others stay
+/// as silent placeholders (their regions empty, so the song ends and loops run as before), so
+/// their plugins and audio don't run for nothing.
+pub fn alone(p: &Project, i: usize) -> Project {
+    let mut alone = p.clone();
+    for (j, other) in alone.tracks.iter_mut().enumerate() {
+        if j == i {
+            other.solo = false;
+            other.mute = false;
+            continue;
+        }
+        *other = Track {
+            id: other.id,
+            mute: true,
+            regions: other
+                .regions
+                .iter()
+                .map(|r| Region {
+                    content: Content::default(),
+                    ..r.clone()
+                })
+                .collect(),
+            ..Track::default()
+        };
+    }
+    alone
 }
 
 /// Measures a project (as the app has it, if open) over `range` (ticks; all of it by default):
@@ -188,30 +220,7 @@ pub fn report(
         .collect();
     let mut tracks = Vec::new();
     for i in (0..p.tracks.len()).filter(|_| solo) {
-        // The others stay as silent placeholders (their regions empty, so the song ends and
-        // loops run as before), so their plugins and audio don't run for nothing.
-        let mut alone = p.clone();
-        for (j, other) in alone.tracks.iter_mut().enumerate() {
-            if j == i {
-                other.solo = false;
-                other.mute = false;
-                continue;
-            }
-            *other = Track {
-                id: other.id,
-                mute: true,
-                regions: other
-                    .regions
-                    .iter()
-                    .map(|r| Region {
-                        content: Content::default(),
-                        ..r.clone()
-                    })
-                    .collect(),
-                ..Track::default()
-            };
-        }
-        let [l, r] = rendered(&alone, dir, range)?;
+        let [l, r] = rendered(&alone(p, i), dir, range)?;
         tracks.push(analysis::analyze(&l, &r, rate));
     }
     Ok(Report {

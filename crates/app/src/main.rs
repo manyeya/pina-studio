@@ -1,5 +1,6 @@
 mod adder;
 mod agent;
+mod audition;
 mod automation;
 mod binaural;
 mod browser;
@@ -12,6 +13,7 @@ mod eq;
 mod export;
 mod genres;
 mod inspector;
+mod listen;
 mod liveloops;
 mod looks;
 mod mcp;
@@ -64,6 +66,10 @@ const USAGE: &str = "usage:
   pina do <project> <command>     apply a command (JSON); live in the app if it's open there
   pina analyze <project|audio file> [--bars 9-16]
                                    loudness, peaks and balance, of the mix and each track
+  pina listen <project> [--track N] [--bars 9-16]
+                                   what each track sounds like alone (the sample library's
+                                   model's guess, its character, brightness, width, key)
+                                   against its part, and what's wrong with it
   pina render <project> <out> [--bars 9-16]
   pina bounce <project> [--stems [--tracks 0,2] [--master] | --sections] [--formats wav,mp3,flac,aiff,aac,alac,midi]
                          [--bits 16|24|32] [--rate 48000] [--lufs -14 [--ceiling -1] | --peak -1] [--kbps 320]
@@ -144,6 +150,32 @@ fn main() {
             Some(r) => print(cli::analyze(p(path), Some(r))),
             None => Err(USAGE.to_string()),
         },
+        ["listen", dir, rest @ ..] => {
+            let mut track = None;
+            let mut bars = None;
+            let mut ok = true;
+            for pair in rest.chunks(2) {
+                match pair {
+                    ["--track", t] => {
+                        track = t.parse().ok().or_else(|| {
+                            ok = false;
+                            None
+                        })
+                    }
+                    ["--bars", r] => {
+                        bars = bar_range(r).or_else(|| {
+                            ok = false;
+                            None
+                        })
+                    }
+                    _ => ok = false,
+                }
+            }
+            match ok {
+                true => print(listen::listen(p(dir), track, bars)),
+                false => Err(USAGE.to_string()),
+            }
+        }
         ["bounce", dir, rest @ ..] => match bounce_args(rest) {
             Some(spec) => print(cli::bounce_spec(p(dir), &spec)),
             None => Err(USAGE.to_string()),
@@ -221,6 +253,7 @@ fn main() {
         ["playbook", "--edit"] => produce::edit_playbooks(None),
         ["playbook", "--edit", genre] => produce::edit_playbooks(Some(genre)),
         // An instrument's presets, listed by loading it alone: run by `pina sounds`.
+        ["__audition", plugin, part, presets] => audition::command(plugin, part, presets),
         ["__presets", plugin] => serde_json::from_str::<pina_engine::project::PluginRef>(plugin)
             .map_err(|e| e.to_string())
             .and_then(|r| {

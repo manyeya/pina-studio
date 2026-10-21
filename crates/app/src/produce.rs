@@ -249,22 +249,59 @@ pub fn reference(file: &Path, dir: Option<&Path>) -> Result<Value, String> {
 /// them ("Basses/", "Pads/", "KEY Rhodes", "LD Saw").
 fn role_words(role: &str) -> &'static [&'static str] {
     match role {
-        "bass" => &["bass", "808", "sub", "reese", "bs "],
+        "bass" => &["bass", "808", "sub", "reese", "bs ", "contrabass"],
         "chords" => &[
-            "key", "piano", "ep ", "rhodes", "wurli", "organ", "chord", "poly", "guitar", "stab",
+            "key",
+            "piano",
+            "ep ",
+            "rhodes",
+            "wurli",
+            "organ",
+            "chord",
+            "poly",
+            "guitar",
+            "stab",
             "clav",
+            "harpsichord",
+            "accordion",
         ],
         "pad" => &[
-            "pad", "atmo", "ambient", "string", "choir", "drone", "swell", "texture",
+            "pad", "atmo", "ambient", "string", "choir", "drone", "swell", "texture", "ensemble",
+            "aahs", "oohs",
         ],
         "lead" => &[
             "lead", "ld ", "pluck", "bell", "brass", "horn", "flute", "wind", "sax", "whistle",
-            "solo",
+            "solo", "trumpet", "trombone", "clarinet", "oboe", "violin", "cello", "ocarina",
         ],
-        "counter" | "arp" => &["arp", "seq", "pluck", "bell", "mallet", "marimba", "rhythm"],
+        "counter" | "arp" => &[
+            "arp",
+            "seq",
+            "pluck",
+            "bell",
+            "mallet",
+            "marimba",
+            "rhythm",
+            "vibraphone",
+            "celesta",
+            "kalimba",
+            "harp",
+            "pizzicato",
+        ],
         "fx" => &["fx", "sfx", "riser", "noise", "sweep", "impact"],
         "texture" => &["atmo", "texture", "noise", "drone", "ambient"],
-        "drums" | "perc" => &["drum", "kit", "perc", "kick", "snare", "hat", "tom"],
+        "drums" | "perc" => &[
+            "drum",
+            "kit",
+            "perc",
+            "kick",
+            "snare",
+            "hat",
+            "tom",
+            "timpani",
+            "taiko",
+            "agogo",
+            "woodblock",
+        ],
         "vocals" => &["vox", "vocal", "choir", "voice", "vocoder"],
         _ => &[],
     }
@@ -292,6 +329,18 @@ fn fit(preset: &Preset, role: &str, wanted: &[String]) -> usize {
     part * 3 + asked
 }
 
+/// Where an instrument's presets are kept in the cache. The `2|` is how they're listed: the
+/// General MIDI synth's programs came in with it, so what was kept before is listed again.
+fn preset_key(p: &scan::PluginInfo) -> String {
+    format!(
+        "2|{:?}|{}|{}|{}",
+        p.format,
+        p.path.display(),
+        p.class,
+        p.uid.as_deref().unwrap_or("")
+    )
+}
+
 fn presets_cache() -> PathBuf {
     pina_engine::paths::caches().join("presets.json")
 }
@@ -310,13 +359,7 @@ pub fn presets_of(plugins: &[scan::PluginInfo], ask: bool) -> Vec<Vec<Preset>> {
         .map(|p| match ask {
             true => instrument_presets(p, &mut cache),
             false => {
-                let key = format!(
-                    "{:?}|{}|{}|{}",
-                    p.format,
-                    p.path.display(),
-                    p.class,
-                    p.uid.as_deref().unwrap_or("")
-                );
+                let key = preset_key(p);
                 cache
                     .get(&key)
                     .and_then(|k| serde_json::from_value(k["presets"].clone()).ok())
@@ -338,13 +381,7 @@ fn instrument_presets(
     p: &scan::PluginInfo,
     cache: &mut serde_json::Map<String, Value>,
 ) -> Vec<Preset> {
-    let key = format!(
-        "{:?}|{}|{}|{}",
-        p.format,
-        p.path.display(),
-        p.class,
-        p.uid.as_deref().unwrap_or("")
-    );
+    let key = preset_key(p);
     let modified = std::fs::metadata(&p.path)
         .and_then(|m| m.modified())
         .map_or(0, |t| {
@@ -389,9 +426,10 @@ fn instrument_presets(
     listed
 }
 
-/// Sounds for a part: every installed instrument's presets that suit it, a few from each, and
-/// samples from the library, for `role` in `genre`, matching `words`; with `track`, the
-/// commands are for it.
+/// Sounds for a part: every installed instrument's presets that might suit it, auditioned (each
+/// played a phrase for the part and heard, so they're ranked by how they sound, not what they're
+/// called; what's heard is kept), and samples from the library, for `role` in `genre`, matching
+/// `words`; with `track`, the commands are for it.
 pub fn sounds(
     role_name: &str,
     genre: Option<&str>,
@@ -410,61 +448,134 @@ pub fn sounds(
         .filter(|w| !w.is_empty())
         .map(str::to_string)
         .collect();
+    // The character asked for, as the library names it (dark, warm, punchy, wide…), and any
+    // instrument named ("rhodes", "brass", "strings").
+    let (asked_sounds, asked) = pina_engine::samples::search::named(words);
+    // The words that name an instrument: a preset called by one ("Rhodes Mk1") is likelier it.
+    let naming: Vec<String> = words
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 2 && !pina_engine::samples::search::named(w).0.is_empty())
+        .map(str::to_string)
+        .collect();
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let plugins = scan::scan(&exe, &scan::everything(), &scan::cache_file());
-    // Each instrument once, in the format it plays best in here.
     let rank = |f: Format| match f {
         Format::Clap => 0,
         Format::Vst3 => 1,
         Format::Au => 2,
         Format::Vst2 => 3,
     };
-    let mut chosen: Vec<&scan::PluginInfo> = Vec::new();
-    for p in plugins.iter().filter(|p| p.instrument) {
-        match chosen.iter_mut().find(|c| c.class == p.class) {
-            Some(c) if rank(p.format) < rank(c.format) => *c = p,
-            Some(_) => {}
-            None => chosen.push(p),
-        }
-    }
     let file = presets_cache();
     let mut cache: serde_json::Map<String, Value> = std::fs::read(&file)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
-    let t = track.unwrap_or(0);
-    let mut instruments: Vec<(usize, Value)> = chosen
-        .iter()
-        .map(|p| {
-            let all = instrument_presets(p, &mut cache);
-            let mut fitting: Vec<(usize, &Preset)> = all
-                .iter()
-                .map(|x| (fit(x, role_name, &wanted), x))
-                .filter(|(f, _)| *f > 0)
-                .collect();
-            fitting.sort_by_key(|(f, _)| std::cmp::Reverse(*f));
-            let best = fitting.first().map_or(0, |f| f.0);
-            // A few from each, so no one instrument's library crowds out the rest.
-            let presets: Vec<Value> = fitting
-                .iter()
-                .take(6)
-                .map(|(_, x)| json!({ "name": x.name, "load": { "op": "set_preset", "channel": { "track": t }, "plugin": "instrument", "preset": x.source } }))
-                .collect();
-            let v = json!({
-                "name": p.class,
-                "vendor": p.vendor,
-                "presets_in_all": all.len(),
-                "set_instrument": { "op": "set_instrument", "track": t, "instrument": Instrument::Plugin(p.plugin_ref()) },
-                "presets": presets,
-            });
-            (best, v)
-        })
-        .collect();
-    instruments.sort_by_key(|(best, _)| std::cmp::Reverse(*best));
+    // Each instrument once, in the format that lists its presets (a CLAP build may list none
+    // where its Audio Unit lists its every program), else the one it plays best in.
+    let mut classes: Vec<(&scan::PluginInfo, Vec<Preset>)> = Vec::new();
+    for p in plugins.iter().filter(|p| p.instrument) {
+        let presets = instrument_presets(p, &mut cache);
+        match classes.iter_mut().find(|(c, _)| c.class == p.class) {
+            Some((c, kept))
+                if presets.len() > kept.len()
+                    || presets.len() == kept.len() && rank(p.format) < rank(c.format) =>
+            {
+                *c = p;
+                *kept = presets;
+            }
+            Some(_) => {}
+            None => classes.push((p, presets)),
+        }
+    }
     if let Some(parent) = file.parent() {
         let _ = std::fs::create_dir_all(parent);
         let _ = std::fs::write(&file, serde_json::to_vec(&cache).unwrap_or_default());
     }
+    let t = track.unwrap_or(0);
+    let mut kept = crate::audition::Kept::open();
+    // New auditions this time, at most: what isn't heard now is next time.
+    let mut budget = 40usize;
+    let mut instruments: Vec<(f32, Value)> = Vec::new();
+    let mut best: Vec<(f32, Value)> = Vec::new();
+    for (p, all) in &classes {
+        let plugin = p.plugin_ref();
+        // Those whose names suit the part first; a bank of unnamed programs (an FM synth's
+        // voices) is heard a few at a time.
+        let mut named: Vec<(usize, &Preset)> = all
+            .iter()
+            .map(|x| (fit(x, role_name, &wanted), x))
+            .collect();
+        named.sort_by_key(|(f, _)| std::cmp::Reverse(*f));
+        let mut candidates: Vec<(usize, &Preset)> = named
+            .iter()
+            .filter(|(f, _)| *f > 0)
+            .take(8)
+            .copied()
+            .collect();
+        if candidates.len() < 4 && all.len() <= 160 {
+            for &(f, x) in named.iter().filter(|(f, _)| *f == 0) {
+                if candidates.len() >= 8 {
+                    break;
+                }
+                candidates.push((f, x));
+            }
+        }
+        let unheard: Vec<Preset> = candidates
+            .iter()
+            .filter(|(_, x)| kept.get(&plugin, x, role_name).is_none())
+            .map(|(_, x)| (*x).clone())
+            .take(budget)
+            .collect();
+        budget -= unheard.len();
+        for (x, h) in unheard
+            .iter()
+            .zip(crate::audition::hear(&plugin, &unheard, role_name))
+        {
+            kept.put(&plugin, x, role_name, &h);
+        }
+        let set_instrument = json!({ "op": "set_instrument", "track": t, "instrument": Instrument::Plugin(plugin.clone()) });
+        let mut heard: Vec<(f32, Value)> = candidates
+            .iter()
+            .filter_map(|(f, x)| {
+                let load = json!({ "op": "set_preset", "channel": { "track": t }, "plugin": "instrument", "preset": x.source });
+                // Its name on one scale for every instrument: a part's word or two and one asked.
+                let by_name = (*f as f32 / 7.0).min(1.0);
+                match kept.get(&plugin, x, role_name) {
+                    // Silent, or it wouldn't play.
+                    Some(None) => None,
+                    Some(Some(h)) => {
+                        let (score, why) =
+                            crate::audition::judge(role_name, &h, &asked, &asked_sounds);
+                        let called = naming.iter().any(|w| x.name.to_lowercase().contains(w.as_str()));
+                        let score = score * 0.8 + by_name * 0.1 + if called { 0.1 } else { 0.0 };
+                        Some((score, json!({ "name": x.name, "sounds": crate::audition::say(&h), "fit": (score as f64 * 100.0).round() / 100.0, "watch": why, "load": load })))
+                    }
+                    None => Some((by_name * 0.3, json!({ "name": x.name, "sounds": "not heard yet: ask again", "load": load }))),
+                }
+            })
+            .collect();
+        heard.sort_by(|a, b| b.0.total_cmp(&a.0));
+        heard.truncate(5);
+        for (score, v) in heard.iter().take(2) {
+            best.push((*score, json!({ "instrument": p.class, "preset": v["name"], "sounds": v["sounds"], "fit": v.get("fit"), "commands": [set_instrument, v["load"]] })));
+        }
+        let top = heard.first().map_or(0.0, |h| h.0);
+        instruments.push((
+            top,
+            json!({
+                "name": p.class,
+                "vendor": p.vendor,
+                "presets_in_all": all.len(),
+                "set_instrument": set_instrument,
+                "presets": heard.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
+            }),
+        ));
+    }
+    kept.save();
+    instruments.sort_by(|a, b| b.0.total_cmp(&a.0));
+    best.sort_by(|a, b| b.0.total_cmp(&a.0));
+    best.truncate(6);
     // The library's search wants few words: what's asked, else the genre's first sound, else
     // the part.
     let first = from_book.split(',').next().unwrap_or("").trim().to_string();
@@ -485,9 +596,10 @@ pub fn sounds(
     Ok(json!({
         "role": role_name,
         "looking_for": from_book,
+        "best": best.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
         "instruments": instruments.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
         "samples": samples,
-        "how": "an instrument's set_instrument on the track, then one of its presets' load; or a sample with samples_put. Render a bar or two and try another if it isn't right. `presets` lists everything an instrument has.",
+        "how": "each preset was played a phrase for the part and heard by the sample library's model (`sounds`: what it heard, its character, attack and brightness; `fit` 0-1 for the part and the character asked; `watch`: what may be wrong). Run a best one's commands, then `listen` to the track in the song; if it isn't right, try the next. `presets` lists everything an instrument has.",
     }))
 }
 

@@ -9,7 +9,7 @@ use std::{
 use pina_engine::commands::{Command, DESCRIBE};
 use serde_json::{Value, json};
 
-use crate::{cli, produce, server::Request};
+use crate::{cli, listen, produce, server::Request};
 
 const INSTRUCTIONS: &str = "Pina Studio is a DAW. A project is a folder; call `describe` first for the \
 commands and how time and levels work, `show` to see a project, `edit` to change it one command at \
@@ -57,6 +57,20 @@ fn tools() -> Value {
                     "to_bar": { "type": "integer", "minimum": 1 }
                 },
                 "required": ["path"]
+            }
+        },
+        {
+            "name": "listen",
+            "description": "What each track sounds like on its own (or `track`): rendered alone over `from_bar`-`to_bar` (eight bars from where it starts, if not given) and heard by the sample library's model: `sounds_like` (its guess at what the sound is: pad 70% · strings 20%), `character` (dark, punchy, wide, distorted, lo-fi…), attack and decay, brightness, the spectrum, width, loudness and the key it sounds in; and `issues`: a default patch, a sound unlike its name or part (strings that sound like a synth), a fader doing the sound's job, rumble under a part, a wide low end, a loop in another key. Use after choosing or changing a sound, before mixing. Measurements and a model's guesses, not listening.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string" },
+                    "track": { "type": "integer", "minimum": 0 },
+                    "from_bar": { "type": "integer", "minimum": 1 },
+                    "to_bar": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["project"]
             }
         },
         {
@@ -151,7 +165,7 @@ fn tools() -> Value {
         },
         {
             "name": "sounds",
-            "description": "Real sounds for a part (`role`: drums, perc, bass, chords, pad, lead, counter, arp, fx, vocals, texture), for `genre`, matching `words` (\"warm rhodes\", \"dark bell\"): every installed instrument's presets that suit it (a few from each, with the set_instrument and set_preset that load them), and samples from the library. With `project` and `track`, the commands are ready for that track.",
+            "description": "Real sounds for a part (`role`: drums, perc, bass, chords, pad, lead, counter, arp, fx, vocals, texture), for `genre`, matching `words` (\"warm rhodes\", \"dark 808\", \"brass\"): every installed instrument's presets that might suit it (Apple's General MIDI synth's 128 instruments among them), each auditioned (played a phrase for the part and heard by the sample library's model) and ranked by how it sounds, not its name: `best` first, each with what was heard (`sounds`), a `fit` 0-1 and the commands that load it; then each instrument's, and samples from the library. With `project` and `track`, the commands are ready for that track. A first ask can take a minute (what's heard is kept); presets not heard yet are heard next time. After loading one, `listen` to it in the song.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -341,6 +355,13 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
             cli::edit_with(&path(args, "project")?, command)
         }
         "analyze" => cli::analyze(&path(args, "path")?, bar_range(args)?),
+        "listen" => listen::listen(
+            &path(args, "project")?,
+            args.get("track")
+                .and_then(Value::as_u64)
+                .map(|t| t as usize),
+            bar_range(args)?,
+        ),
         "render" => cli::render(
             &path(args, "project")?,
             &path(args, "out")?,
@@ -594,6 +615,7 @@ mod tests {
                 "show",
                 "edit",
                 "analyze",
+                "listen",
                 "render",
                 "bounce",
                 "critique",

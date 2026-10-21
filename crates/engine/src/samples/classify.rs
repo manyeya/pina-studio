@@ -479,6 +479,12 @@ pub fn kind(f: &Features, x: &[f32], hints: &Hints) -> Kind {
 
 /// The category, and how sure (0 to 1): the audio model's probabilities times the name's prior.
 pub fn category(x: &[f32], hints: &Hints, kind: Kind) -> (Category, f32) {
+    categories(x, hints, kind)[0]
+}
+
+/// Every category, likeliest first, each with its share (they sum to 1): what `category` picks
+/// from, for saying what else a sound could be.
+pub fn categories(x: &[f32], hints: &Hints, kind: Kind) -> Vec<(Category, f32)> {
     let nets = match kind {
         Kind::OneShot => model::ONE_SHOT,
         Kind::Loop => model::LOOP,
@@ -517,9 +523,10 @@ pub fn category(x: &[f32], hints: &Hints, kind: Kind) -> (Category, f32) {
         }
         p.iter_mut().zip(&prior).for_each(|(v, q)| *v *= q);
     }
-    let sum: f32 = p.iter().sum();
-    let best = (0..n).max_by(|&a, &b| p[a].total_cmp(&p[b])).unwrap();
-    (Category::ALL[best], p[best] / sum.max(1e-20))
+    let sum: f32 = p.iter().sum::<f32>().max(1e-20);
+    let mut all: Vec<(Category, f32)> = (0..n).map(|i| (Category::ALL[i], p[i] / sum)).collect();
+    all.sort_by(|a, b| b.1.total_cmp(&a.1));
+    all
 }
 
 #[cfg(test)]
