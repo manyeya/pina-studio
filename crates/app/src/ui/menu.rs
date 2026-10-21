@@ -5,8 +5,8 @@ use gpui::{
     Context, MouseButton, Pixels, Point, SharedString, anchored, deferred, div, prelude::*, px, rgb,
 };
 use pina_engine::{
-    commands::{self, ChannelRef, Command, PresetChoice},
-    project::{
+    song::commands::{self, ChannelRef, Command, PresetChoice},
+    song::project::{
         At, AuxSend, Comp, Content, Eq, Input, Instrument, PatternRow, PluginRef, Preset,
         Saturator, Which,
     },
@@ -155,12 +155,12 @@ pub enum MenuAction {
     Stamp(crate::editors::pianoroll::Stamp),
     /// A step pattern's swing.
     PatternSwing {
-        at: pina_engine::project::At,
+        at: pina_engine::song::project::At,
         swing: f32,
     },
     /// Something done to a row of a step pattern.
     Row {
-        at: pina_engine::project::At,
+        at: pina_engine::song::project::At,
         row: usize,
         op: crate::editors::steps::RowOp,
     },
@@ -201,16 +201,16 @@ pub enum MenuAction {
     Mod(usize, usize, crate::editors::modulation::ModChange),
     /// A modulator a track's stack shares with every track in it, new; or one it shares, on
     /// this track too.
-    ShareMod(usize, pina_engine::modulate::ModKind),
+    ShareMod(usize, pina_engine::dsp::modulate::ModKind),
     LinkMod(usize, u8),
     /// A modulator letting a setting go; a new one moving it (from an automation lane).
-    Unmap(usize, usize, pina_engine::modulate::ModTarget),
+    Unmap(usize, usize, pina_engine::dsp::modulate::ModTarget),
     NewModFor(
         usize,
-        pina_engine::modulate::ModKind,
-        pina_engine::modulate::ModTarget,
+        pina_engine::dsp::modulate::ModKind,
+        pina_engine::dsp::modulate::ModTarget,
     ),
-    Map(usize, usize, pina_engine::modulate::ModTarget),
+    Map(usize, usize, pina_engine::dsp::modulate::ModTarget),
     /// A tool in hand.
     Tool(crate::workspace::Tool),
     /// The right-click menus of the tracks area (`context.rs`).
@@ -223,7 +223,7 @@ pub enum MenuAction {
     /// A region's playback quantize, in ticks, or none.
     RegionQuantize(At, Option<u64>),
     /// How an audio region is stretched.
-    RegionFlex(At, pina_engine::stretch::Flex),
+    RegionFlex(At, pina_engine::audio::stretch::Flex),
     /// Names a marker, or adds one at a tick.
     NameMarker(usize, String),
     AddMarker(u64, String),
@@ -470,7 +470,7 @@ impl Workspace {
             MenuAction::AddMarker(tick, name) => self.edit(cx, |ws| {
                 let markers = &mut ws.session.project.markers;
                 let at = markers.partition_point(|m| m.tick <= tick);
-                markers.insert(at, pina_engine::project::Marker { tick, name });
+                markers.insert(at, pina_engine::song::project::Marker { tick, name });
             }),
             MenuAction::DeleteMarker(i) => self.edit(cx, |ws| {
                 if i < ws.session.project.markers.len() {
@@ -489,7 +489,7 @@ impl Workspace {
             MenuAction::Unmap(t, k, mt) => self.unmap(t, k, mt, cx),
             MenuAction::NewModFor(t, kind, mt) => self.new_mod_for(t, kind, mt, cx),
             MenuAction::LinkMod(t, s) => {
-                let kind = pina_engine::modulate::ModKind::Shared { modulator: s };
+                let kind = pina_engine::dsp::modulate::ModKind::Shared { modulator: s };
                 self.add_modulator(t, kind, cx)
             }
             MenuAction::Map(t, k, target) => self.map_modulator(t, k, target, cx),

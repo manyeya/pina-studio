@@ -59,23 +59,26 @@ pub struct Playbook {
 
 /// Pina Studio's own, by id.
 const BUILT_IN: &[(&str, &str)] = &[
-    ("lofi", include_str!("../playbooks/lofi.json")),
-    ("boom_bap", include_str!("../playbooks/boom_bap.json")),
-    ("trap", include_str!("../playbooks/trap.json")),
-    ("drill", include_str!("../playbooks/drill.json")),
-    ("rnb", include_str!("../playbooks/rnb.json")),
-    ("neo_soul", include_str!("../playbooks/neo_soul.json")),
-    ("pop", include_str!("../playbooks/pop.json")),
-    ("house", include_str!("../playbooks/house.json")),
-    ("deep_house", include_str!("../playbooks/deep_house.json")),
-    ("techno", include_str!("../playbooks/techno.json")),
-    ("afrobeats", include_str!("../playbooks/afrobeats.json")),
-    ("amapiano", include_str!("../playbooks/amapiano.json")),
-    ("dnb", include_str!("../playbooks/dnb.json")),
-    ("reggaeton", include_str!("../playbooks/reggaeton.json")),
-    ("edm", include_str!("../playbooks/edm.json")),
-    ("cinematic", include_str!("../playbooks/cinematic.json")),
-    ("ambient", include_str!("../playbooks/ambient.json")),
+    ("lofi", include_str!("../../playbooks/lofi.json")),
+    ("boom_bap", include_str!("../../playbooks/boom_bap.json")),
+    ("trap", include_str!("../../playbooks/trap.json")),
+    ("drill", include_str!("../../playbooks/drill.json")),
+    ("rnb", include_str!("../../playbooks/rnb.json")),
+    ("neo_soul", include_str!("../../playbooks/neo_soul.json")),
+    ("pop", include_str!("../../playbooks/pop.json")),
+    ("house", include_str!("../../playbooks/house.json")),
+    (
+        "deep_house",
+        include_str!("../../playbooks/deep_house.json"),
+    ),
+    ("techno", include_str!("../../playbooks/techno.json")),
+    ("afrobeats", include_str!("../../playbooks/afrobeats.json")),
+    ("amapiano", include_str!("../../playbooks/amapiano.json")),
+    ("dnb", include_str!("../../playbooks/dnb.json")),
+    ("reggaeton", include_str!("../../playbooks/reggaeton.json")),
+    ("edm", include_str!("../../playbooks/edm.json")),
+    ("cinematic", include_str!("../../playbooks/cinematic.json")),
+    ("ambient", include_str!("../../playbooks/ambient.json")),
 ];
 
 const README: &str = "\
@@ -166,8 +169,11 @@ fn check(p: &Playbook) -> Result<(), String> {
     if p.id.trim().is_empty() {
         return Err("no id".into());
     }
-    if !crate::theory::GROOVES.iter().any(|g| g.id == p.groove) {
-        let ids: Vec<&str> = crate::theory::GROOVES.iter().map(|g| g.id).collect();
+    if !crate::music::theory::GROOVES
+        .iter()
+        .any(|g| g.id == p.groove)
+    {
+        let ids: Vec<&str> = crate::music::theory::GROOVES.iter().map(|g| g.id).collect();
         return Err(format!(
             "groove {:?} isn't one of {}",
             p.groove,
@@ -331,7 +337,10 @@ mod tests {
                 root: 9,
                 minor: p.minor,
             };
-            assert_eq!(crate::theory::suggest(&key, &p.harmony, 0).minor, p.minor);
+            assert_eq!(
+                crate::music::theory::suggest(&key, &p.harmony, 0).minor,
+                p.minor
+            );
         }
         assert_eq!(find("Lo-Fi").unwrap().id, "lofi");
         assert_eq!(find("UK drill").unwrap().id, "drill");

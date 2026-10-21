@@ -10,9 +10,9 @@ use gpui::{
     linear_color_stop, linear_gradient, point, prelude::*, px, rgb, size,
 };
 use pina_engine::{
-    peaks::Peaks,
-    project::{At, Content, Instrument, PPQ, PanMode, Param, Region, comp_segments},
-    stretch::Map,
+    audio::peaks::Peaks,
+    audio::stretch::Map,
+    song::project::{At, Content, Instrument, PPQ, PanMode, Param, Region, comp_segments},
 };
 
 use crate::{
@@ -79,7 +79,7 @@ fn region_name(track: &str, region: &Region) -> String {
 }
 
 /// A sampler's name: a kit of its sounds, or the sample it plays across the keys.
-pub fn sampler_name(s: &pina_engine::project::Sampler) -> String {
+pub fn sampler_name(s: &pina_engine::song::project::Sampler) -> String {
     match (s.zones.len(), s.zones.first()) {
         (0, _) => "Sampler".into(),
         (1, Some(z)) if z.high.is_some() => {
@@ -100,7 +100,7 @@ pub fn sampler_name(s: &pina_engine::project::Sampler) -> String {
 
 /// What a multisample's files are named for, as "Moog Bass" for Moog_Bass_C1.wav,
 /// Moog_Bass_C#1.wav...: the start their names share.
-fn multisample_name(s: &pina_engine::project::Sampler) -> Option<String> {
+fn multisample_name(s: &pina_engine::song::project::Sampler) -> Option<String> {
     let stems: Vec<String> = s
         .zones
         .iter()
@@ -1251,7 +1251,7 @@ impl Workspace {
             .cursor_ns_resize()
             .debug_selector(move || format!("track-pan-{i}"))
             .child(self.modded(
-                Some((i, pina_engine::modulate::ModTarget::Pan)),
+                Some((i, pina_engine::dsp::modulate::ModTarget::Pan)),
                 24.,
                 pan_dial(mode, pan, spread, color),
             ))
@@ -2866,7 +2866,7 @@ mod tests {
 
     #[test]
     fn samplers_are_named_for_what_they_play() {
-        use pina_engine::project::{Sampler, Zone};
+        use pina_engine::song::project::{Sampler, Zone};
         let zone = |file: &str, high| Zone {
             file: file.into(),
             note: 36,

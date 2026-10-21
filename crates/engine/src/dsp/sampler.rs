@@ -16,9 +16,9 @@
 use std::{path::Path, sync::Arc};
 
 use crate::{
-    engine::{AudioData, load_wav},
+    audio::engine::{AudioData, load_wav},
     plugin::{Control, ControlKind, ExpressionKind, Note},
-    project::{self, FilterMode, LoopMode, SamplerVoice, Zone},
+    song::project::{self, FilterMode, LoopMode, SamplerVoice, Zone},
 };
 
 const VOICES: usize = 64;
@@ -310,7 +310,7 @@ impl Sampler {
 
     /// Its voice as its settings have it moved by modulators, this block; back as they have it
     /// when nothing moves it. (Envelope times aren't modulated: they'd need reshaping.)
-    pub fn modulate(&mut self, base: &project::SamplerVoice, by: &crate::modulate::Offsets) {
+    pub fn modulate(&mut self, base: &project::SamplerVoice, by: &crate::dsp::modulate::Offsets) {
         if by.voice {
             let mut v = *base;
             by.voice(&mut v);
@@ -769,7 +769,7 @@ pub fn slices(file: &Path, cuts: &[f32], first: u8) -> Vec<Zone> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{AudioData, MAX_BLOCK};
+    use crate::audio::engine::{AudioData, MAX_BLOCK};
 
     fn sampler(zones: Vec<(Zone, Vec<f32>)>) -> Sampler {
         with_voice(zones, SamplerVoice::default())

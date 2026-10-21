@@ -5,7 +5,7 @@ use std::{
     time::SystemTime,
 };
 
-use crate::project::{FILE, Project, RECOVERY_DIR};
+use crate::song::project::{FILE, Project, RECOVERY_DIR};
 
 /// Undo steps kept.
 const HISTORY: usize = 200;

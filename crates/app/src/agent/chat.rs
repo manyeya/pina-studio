@@ -105,13 +105,13 @@ pub struct Chat {
     /// Pina Studio's critic's notes on the song.
     pub critic: crate::agent::producer::Critic,
     /// The song as it was when the agent was last asked: Undo this turn puts it back.
-    pub before: Option<pina_engine::project::Project>,
+    pub before: Option<pina_engine::song::project::Project>,
     /// Whether what's selected goes along with what's asked.
     pub use_selection: bool,
     /// The model and effort it runs with, as last picked for it.
     pub tuning: agent::Tuning,
     /// The palette as the agent was last told it, so it's told again only when it changes.
-    pub palette_heard: Option<pina_engine::project::Palette>,
+    pub palette_heard: Option<pina_engine::song::project::Palette>,
     _sent: Subscription,
 }
 

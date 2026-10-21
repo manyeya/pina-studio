@@ -733,7 +733,7 @@ fn run(files: &[PathBuf], fit: bool) -> Vec<Row> {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(path) = files.get(i) else { break };
                     let start = Instant::now();
-                    let Ok((channels, rate)) = pina_engine::engine::read_audio(path) else {
+                    let Ok((channels, rate)) = pina_engine::audio::engine::read_audio(path) else {
                         eprintln!("can't read {}", path.display());
                         continue;
                     };
@@ -949,7 +949,7 @@ fn tempos(rows: &[&Row]) {
         e[4] += 1;
         let got = r.blind.bpm.or_else(|| {
             // Called a one-shot: what tempo would it have had?
-            let (c, rate) = pina_engine::engine::read_audio(&r.path).ok()?;
+            let (c, rate) = pina_engine::audio::engine::read_audio(&r.path).ok()?;
             let f = features::extract(&c, rate, None);
             f.tempo.map(|t| t.bpm)
         });
@@ -1143,7 +1143,7 @@ fn duplicates(rows: &[&Row]) {
     let groups: Vec<&Vec<&PathBuf>> = by.values().filter(|g| g.len() > 1).collect();
     let mut same = 0;
     for g in &groups {
-        let read = |p: &PathBuf| pina_engine::engine::read_audio(p).ok().map(|a| a.0);
+        let read = |p: &PathBuf| pina_engine::audio::engine::read_audio(p).ok().map(|a| a.0);
         let first = read(g[0]);
         if g[1..].iter().all(|p| read(p) == first) {
             same += 1;
@@ -2076,7 +2076,7 @@ fn key_check(files: &[PathBuf]) {
                     let Some((path, t)) = labelled.get(i) else {
                         break;
                     };
-                    let Ok((c, rate)) = pina_engine::engine::read_audio(path) else {
+                    let Ok((c, rate)) = pina_engine::audio::engine::read_audio(path) else {
                         continue;
                     };
                     let f = features::extract(&c, rate, None);
@@ -2179,7 +2179,7 @@ fn tempo_check(files: &[PathBuf]) {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some((path, t)) = loops.get(i) else { break };
-                    let Ok((c, rate)) = pina_engine::engine::read_audio(path) else {
+                    let Ok((c, rate)) = pina_engine::audio::engine::read_audio(path) else {
                         continue;
                     };
                     let f = features::extract(&c, rate, None);

@@ -18,10 +18,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    analysis::{self, Analysis},
     music::Key,
-    playbook::{self, Part, Playbook, Section},
-    theory::Chord,
+    music::analysis::{self, Analysis},
+    music::playbook::{self, Part, Playbook, Section},
+    music::theory::Chord,
 };
 
 pub use groove::Groove;
@@ -244,7 +244,7 @@ fn db(power: f32) -> f32 {
 
 /// Studies the song in an audio file (WAV, AIFF, FLAC, MP3).
 pub fn study(path: &Path) -> Result<Study, String> {
-    let (mut sides, rate) = crate::engine::read_audio(path)?;
+    let (mut sides, rate) = crate::audio::engine::read_audio(path)?;
     let l = sides.remove(0);
     let r = sides.pop().unwrap_or_else(|| l.clone());
     let mut s = study_audio(&l, &r, rate as f32)?;

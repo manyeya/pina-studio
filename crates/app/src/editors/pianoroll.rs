@@ -18,7 +18,7 @@ use gpui::{
 };
 use pina_engine::{
     music::{Key, NoteEdit},
-    project::{At, Content, ControlPoint, ControlValue, Note, PPQ, Region},
+    song::project::{At, Content, ControlPoint, ControlValue, Note, PPQ, Region},
 };
 
 use crate::{

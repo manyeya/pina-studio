@@ -26,14 +26,14 @@ use gpui::{
     canvas, div, prelude::*, px, rgb,
 };
 use pina_engine::{
-    engine::LiveNote,
-    player::Player,
-    project::{
+    audio::engine::LiveNote,
+    audio::player::Player,
+    plugin::scan::{self, PluginInfo},
+    song::project::{
         At, AutoMode, Comp, Content, Cycle, Eq, Instrument, PPQ, Param, Place, Project,
         RECOVERY_DIR, STATES_DIR, Track, Which, value_at,
     },
-    scan::{self, PluginInfo},
-    session::Session,
+    song::session::Session,
 };
 
 use crate::{
@@ -379,7 +379,7 @@ pub enum Drag {
     ModDepth {
         track: usize,
         index: usize,
-        target: pina_engine::modulate::ModTarget,
+        target: pina_engine::dsp::modulate::ModTarget,
         x: f32,
         y: f32,
         depth: f32,
@@ -877,10 +877,10 @@ pub struct Workspace {
     /// the one clicked.
     pub picked: Vec<usize>,
     /// Notes copied in the piano roll, their starts from the first's.
-    pub clip: Vec<pina_engine::project::Note>,
+    pub clip: Vec<pina_engine::song::project::Note>,
     /// What a piano roll drag carries: the notes picked up, as they began; the notes picked
     /// before a rubber band; the pitches the pencil sounds.
-    pub held: Vec<(usize, pina_engine::project::Note)>,
+    pub held: Vec<(usize, pina_engine::song::project::Note)>,
     pub held_picks: Vec<usize>,
     pub painting: Vec<u8>,
     /// The pitch under the mouse in the piano roll.
@@ -893,16 +893,16 @@ pub struct Workspace {
     pub header_w: f32,
     pub inspector_w: f32,
     /// Regions copied (⌘C on the tracks), to paste at the playhead.
-    pub region_clip: Option<pina_engine::project::Region>,
+    pub region_clip: Option<pina_engine::song::project::Region>,
     /// A MIDI or pattern region's contents as they were when its time-stretch drag began.
-    pub stretching: Option<pina_engine::project::Content>,
+    pub stretching: Option<pina_engine::song::project::Content>,
     /// ⇧ held while dragging a fader or knob: it moves a fifth as far.
     pub fine: bool,
     /// Modulation: each track's modulators' values and their recent ones; the knobs a
     /// modulator can be dropped on, where they were drawn; the steps' editors; the modulator
     /// being dragged, where; the one picked (knobs it moves set its depth); a clock for those
     /// running free.
-    pub mod_values: HashMap<u64, [f32; pina_engine::modulate::MAX_MODS]>,
+    pub mod_values: HashMap<u64, [f32; pina_engine::dsp::modulate::MAX_MODS]>,
     pub mod_trace: HashMap<(u64, usize), std::collections::VecDeque<f32>>,
     pub mod_targets: crate::editors::modulation::DropTargets,
     /// Plugins' parameter names, by track and plugin (`param_names`).
@@ -961,15 +961,15 @@ pub struct Workspace {
     /// when a drag on it began.
     pub auto_picked: Option<crate::arrange::automation::Picked>,
     pub auto_focus: Option<(u64, Param)>,
-    pub auto_clip: Option<pina_engine::project::AutoClip>,
-    pub auto_grab: Vec<pina_engine::project::AutoPoint>,
+    pub auto_clip: Option<pina_engine::song::project::AutoClip>,
+    pub auto_grab: Vec<pina_engine::song::project::AutoPoint>,
     /// Controls a hand has taken over from their automation, those being trimmed, and those
     /// recorded this pass (to thin when it ends).
     pub taken: HashMap<(u64, Param), crate::arrange::automation::Live>,
     pub touches: HashMap<(u64, Param), crate::arrange::automation::Touch>,
     pub written: std::collections::HashSet<(u64, Param)>,
     /// The lines Touch is recording over, as they were.
-    pub recorded: HashMap<(u64, Param), Vec<pina_engine::project::AutoPoint>>,
+    pub recorded: HashMap<(u64, Param), Vec<pina_engine::song::project::AutoPoint>>,
     /// Whether the song was playing last frame, to tell a pass starting or ending.
     pub was_playing: bool,
     /// What each group of aliases played after the last edit, to tell which one changed.
@@ -1016,7 +1016,7 @@ pub struct Workspace {
     pub lanes_bounds: Rc<Cell<Bounds<Pixels>>>,
     /// The Channel EQ's window, when it's open; and bands copied from it.
     pub eq_view: Option<crate::mix::eq::EqView>,
-    pub eq_clipboard: Vec<pina_engine::project::EqBand>,
+    pub eq_clipboard: Vec<pina_engine::song::project::EqBand>,
     /// The window's size, for what fits.
     pub viewport_h: f32,
     pub viewport_w: f32,
@@ -1479,9 +1479,9 @@ impl Workspace {
             }
             Param::Eq(band, field) => {
                 let what = match field {
-                    pina_engine::project::EqField::Freq => "Frequency",
-                    pina_engine::project::EqField::Gain => "Gain",
-                    pina_engine::project::EqField::Q => "Q",
+                    pina_engine::song::project::EqField::Freq => "Frequency",
+                    pina_engine::song::project::EqField::Gain => "Gain",
+                    pina_engine::song::project::EqField::Q => "Q",
                 };
                 let shape =
                     t.eq.and_then(|e| e.bands.get(band as usize).map(|b| b.shape.name()))
@@ -2018,7 +2018,7 @@ impl Workspace {
                 self.set_mod_field(track, index, field, value + (y - p.y) / 150.0 * fine);
                 // Turned while its automation records, it's recorded.
                 if let Some(setting) = crate::editors::modulation::setting_of(field) {
-                    let param = pina_engine::project::Param::Mod(index as u8, setting);
+                    let param = pina_engine::song::project::Param::Mod(index as u8, setting);
                     let now = self.own_value(track, param);
                     self.moved(track, param, now);
                 }
@@ -2851,7 +2851,7 @@ impl Workspace {
         match target {
             Target::Param { track, param } => {
                 self.player
-                    .param_value(track, pina_engine::player::Which::Instrument, param)
+                    .param_value(track, pina_engine::audio::player::Which::Instrument, param)
                     as f32
             }
             Target::LowCut(ch) => low_cut_pos(

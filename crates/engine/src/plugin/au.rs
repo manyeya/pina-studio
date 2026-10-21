@@ -60,8 +60,8 @@ use super::{
     PresetSource, Processor, ProcessorApi, editor_window,
 };
 use crate::{
-    project::{Format, PluginRef},
-    scan::PluginInfo,
+    plugin::scan::PluginInfo,
+    song::project::{Format, PluginRef},
 };
 
 /// The kinds of unit Pina Studio plays: instruments, effects that take MIDI, and effects.

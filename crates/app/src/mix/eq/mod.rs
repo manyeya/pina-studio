@@ -35,8 +35,8 @@ use gpui::{
     prelude::*, px, rgb,
 };
 use pina_engine::{
-    eq::{TAP_LEN, auto_times, band_sections, response_db, spectrum_db},
-    project::{
+    dsp::eq::{TAP_LEN, auto_times, band_sections, response_db, spectrum_db},
+    song::project::{
         Bands, Character, Dynamic, Eq, EqBand, EqField, MAX_BANDS, Param, Placement, Processing,
         Shape,
     },
@@ -1457,7 +1457,7 @@ impl Workspace {
     fn eq_curve_at(&self, freq: f64) -> f32 {
         let rate = self.session.project.sample_rate as f64;
         self.shown_eq().map_or(0.0, |(_, eq)| {
-            pina_engine::eq::eq_response(&eq, freq, rate) as f32
+            pina_engine::dsp::eq::eq_response(&eq, freq, rate) as f32
         })
     }
 
@@ -2642,7 +2642,7 @@ impl EqView {
             .columns
             .iter()
             .zip(&self.pre)
-            .map(|(&f, &p)| p + pina_engine::eq::eq_response(eq, f, rate) as f32)
+            .map(|(&f, &p)| p + pina_engine::dsp::eq::eq_response(eq, f, rate) as f32)
             .collect();
         self.meter = [-9.5, -10.2];
         self.peak = -6.8;

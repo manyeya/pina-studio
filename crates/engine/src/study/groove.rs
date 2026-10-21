@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::features::{Frames, peaks_of};
-use crate::theory::{self, Drum};
+use crate::music::theory::{self, Drum};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Groove {

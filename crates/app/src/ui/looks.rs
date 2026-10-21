@@ -1,6 +1,6 @@
 //! How tracks look on screen: their icons, drawn; their colours, each a shade of its family's;
 //! and the picker that chooses them (click a track's icon). What a track plays decides both
-//! (`pina_engine::look`), from its samples' and audio's analysis, done here in the background.
+//! (`pina_engine::music::look`), from its samples' and audio's analysis, done here in the background.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -13,7 +13,7 @@ use gpui::{
     Svg, anchored, deferred, div, prelude::*, px, rgb, svg,
 };
 use pina_engine::{
-    look::{self, Family, Look, Source},
+    music::look::{self, Family, Look, Source},
     samples::Category,
 };
 
@@ -384,7 +384,7 @@ impl Workspace {
 
     /// Analyses the song's audio and samples not heard yet, then works the looks out again.
     fn hear_new_files(&mut self, cx: &mut Context<Self>) {
-        use pina_engine::project::{Content, Instrument};
+        use pina_engine::song::project::{Content, Instrument};
         let dir = self.session.dir.clone();
         let mut new = Vec::new();
         for t in &self.session.project.tracks {

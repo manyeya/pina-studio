@@ -8,7 +8,7 @@ use gpui::{
     AnyElement, Bounds, Context, Div, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point,
     canvas, div, fill, linear_color_stop, linear_gradient, point, prelude::*, px, rgb, size,
 };
-use pina_engine::project::{
+use pina_engine::song::project::{
     AutoClip, AutoMode, AutoPoint, AutoShape, EqField, PPQ, Param, Project, SILENT_DB, Which,
     value_at,
 };
@@ -24,7 +24,7 @@ use crate::{
 const PAD: f32 = 7.0;
 
 /// How long a control let go takes to go back to its line (Touch, Trim): a sixteenth.
-const RAMP: u64 = pina_engine::project::PPQ / 4;
+const RAMP: u64 = pina_engine::song::project::PPQ / 4;
 
 /// How close (pixels) the pointer has to be to a line to take hold of it.
 const NEAR: f32 = 6.0;
@@ -328,7 +328,7 @@ impl Workspace {
         let settings: Vec<Param> = (0..t.modulators.len())
             .filter_map(|k| Some((k, project.mod_kind(track, k)?)))
             .flat_map(|(k, kind)| {
-                pina_engine::modulate::ModParam::of(kind)
+                pina_engine::dsp::modulate::ModParam::of(kind)
                     .into_iter()
                     .map(move |s| Param::Mod(k as u8, s))
             })
@@ -468,7 +468,7 @@ impl Workspace {
             Param::Eq(_, EqField::Gain) => format!("{} dB", db_text(value)),
             Param::Eq(_, EqField::Q) => format!("Q {value:.2}"),
             Param::Mod(_, setting) => {
-                use pina_engine::modulate::ModParam;
+                use pina_engine::dsp::modulate::ModParam;
                 match setting {
                     ModParam::Attack | ModParam::Decay | ModParam::Release if value >= 1000.0 => {
                         format!("{:.1} s", value / 1000.0)
@@ -2454,4 +2454,4 @@ impl Workspace {
 }
 
 /// Ticks in a beat, for naming a grid step.
-const PPQ_BEAT: u64 = pina_engine::project::PPQ;
+const PPQ_BEAT: u64 = pina_engine::song::project::PPQ;

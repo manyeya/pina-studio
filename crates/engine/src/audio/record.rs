@@ -4,7 +4,7 @@ use std::{fs::File, io::BufWriter, path::Path};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-use crate::project::Input;
+use crate::song::project::Input;
 
 /// Seconds of input buffered between the input callback and `drain`.
 const BUFFER: usize = 4;

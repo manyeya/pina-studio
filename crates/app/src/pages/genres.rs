@@ -9,8 +9,8 @@ use gpui::{
 };
 use pina_engine::{
     music::Key,
-    playbook::{self, Origin, Part, Playbook, Section},
-    theory,
+    music::playbook::{self, Origin, Part, Playbook, Section},
+    music::theory,
 };
 
 use crate::{

@@ -2,7 +2,7 @@
 //! who's here (you, and an agent when one is editing), and export.
 
 use gpui::{Context, Div, FontWeight, MouseButton, MouseDownEvent, div, prelude::*, px, rgb};
-use pina_engine::{look::Family, music::Key, project::PPQ};
+use pina_engine::{music::Key, music::look::Family, song::project::PPQ};
 
 use crate::{
     ui::looks::family_shade,

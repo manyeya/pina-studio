@@ -8,7 +8,7 @@ use gpui::{
     Bounds, Context, Hsla, MouseButton, MouseDownEvent, Pixels, Point, Window, anchored, canvas,
     deferred, div, fill, point, prelude::*, px, rgb, size,
 };
-use pina_engine::project::{PanMode, Place};
+use pina_engine::song::project::{PanMode, Place};
 
 use crate::{
     ui::theme::*,
@@ -154,7 +154,7 @@ impl Workspace {
         track.elevation = Some(elevation).filter(|&e| e != 0.0);
         track.distance = Some(distance).filter(|&d| d != 1.0);
         let pan = track.pan;
-        self.moved(t, pina_engine::project::Param::Pan, pan);
+        self.moved(t, pina_engine::song::project::Param::Pan, pan);
     }
 
     /// A drag in the view: the source (⌘ raises it) or, anywhere else, the view round.

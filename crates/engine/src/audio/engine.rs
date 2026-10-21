@@ -19,23 +19,23 @@ use std::{
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-use crate::modulate::{
+use crate::dsp::modulate::{
     self, MAX_MODS, ModInput, ModKind, ModOver, ModParam, ModRoute, ModState, ModTarget, Modulator,
     Offsets,
 };
 use crate::{
-    drums::Drums,
+    audio::peaks::Peaks,
+    audio::stretch::{self, Fit},
     dsp::Strip,
-    eq::Made,
-    peaks::Peaks,
+    dsp::drums::Drums,
+    dsp::eq::Made,
+    dsp::sampler::Sampler,
+    dsp::synth::Synth,
     plugin::{self, Control, ControlKind, Libraries, Note, Plugin, Processor},
-    project::{
+    song::project::{
         AutoMode, AutoPoint, Comp, Content, Eq, EqField, Flex, Instrument, PanLaw, PanMode, Param,
         Place, PluginRef, Project, Region, Saturator, Which, chase, comp_segments, value_at,
     },
-    sampler::Sampler,
-    stretch::{self, Fit},
-    synth::Synth,
 };
 
 /// The most frames one `process` call handles.
@@ -274,7 +274,7 @@ impl AudioFiles {
         }
     }
 
-    /// A file fitted as `fit` says (see `crate::stretch`), made once for each.
+    /// A file fitted as `fit` says (see `crate::audio::stretch`), made once for each.
     fn stretched(&mut self, file: &Path, mut fit: Fit) -> Result<Arc<AudioData>, String> {
         // Speed can't move pitch without moving time.
         if fit.flex == Flex::Speed {
@@ -877,7 +877,7 @@ struct Plan {
     /// The aux it plays into instead of the master.
     output: Option<usize>,
     /// The sampler's settings, which it follows as they change.
-    sampler: Option<Arc<crate::project::Sampler>>,
+    sampler: Option<Arc<crate::song::project::Sampler>>,
     /// Delay compensation before the sends, and on the direct path after them.
     delay: usize,
     direct: usize,
@@ -1106,7 +1106,7 @@ pub fn compile(
     files.begin();
     let mut problems = Vec::new();
     // Each channel's plugins' latency, and its EQ's.
-    let eq_latency = |eq: &Option<Eq>| eq.as_ref().map_or(0, crate::eq::latency);
+    let eq_latency = |eq: &Option<Eq>| eq.as_ref().map_or(0, crate::dsp::eq::latency);
     let latencies = |l: &[(usize, u32)], eqs: &mut dyn Iterator<Item = &Option<Eq>>| {
         l.iter()
             .zip(eqs)
@@ -1268,7 +1268,7 @@ pub fn compile(
                         .iter()
                         .filter_map(|r| match r.target {
                             ModTarget::Send(j) => {
-                                let playing = |s: &&crate::project::AuxSend| {
+                                let playing = |s: &&crate::song::project::AuxSend| {
                                     project.auxes.iter().any(|a| a.bus == s.bus)
                                 };
                                 let k = t.sends.iter().take(j).filter(playing).count();
@@ -1439,7 +1439,7 @@ pub fn compile(
             .filter(|c| !c.off && c.end > c.start)
             .map(|c| (project.samples(c.start, rate), project.samples(c.end, rate))),
         master_lane: master,
-        beat: project.beat() as f64 / crate::project::PPQ as f64,
+        beat: project.beat() as f64 / crate::song::project::PPQ as f64,
         beats_per_bar: project.beats_per_bar(),
     };
     files.end();
@@ -1491,7 +1491,7 @@ fn play_region(
             let notes = match content {
                 // A pattern as it plays: its lanes, and the modulators on its sounds.
                 Content::Pattern { step, rows, swing } => {
-                    std::borrow::Cow::Owned(crate::project::pattern_played(
+                    std::borrow::Cow::Owned(crate::song::project::pattern_played(
                         *step,
                         rows,
                         (to as i64 - at).max(0) as u64,
@@ -1529,7 +1529,7 @@ fn play_region(
                 controls: points, ..
             } = content
             {
-                let moved = points.iter().map(|c| crate::project::ControlPoint {
+                let moved = points.iter().map(|c| crate::song::project::ControlPoint {
                     start: at + c.start,
                     ..*c
                 });
@@ -1703,7 +1703,7 @@ pub struct Shared {
     /// Each lane's modulators' latest values (f32 bits), `MAX_MODS` a lane.
     mods: Vec<AtomicU32>,
     /// The EQ the EQ window shows: what it hears and plays, for its analyzer.
-    pub eq_tap: crate::eq::Tap,
+    pub eq_tap: crate::dsp::eq::Tap,
 }
 
 impl Shared {
@@ -1718,7 +1718,7 @@ impl Shared {
             buffer: AtomicU32::new(0),
             metronome: AtomicBool::new(false),
             mods: (0..SLOTS * MAX_MODS).map(|_| AtomicU32::new(0)).collect(),
-            eq_tap: crate::eq::Tap::new(),
+            eq_tap: crate::dsp::eq::Tap::new(),
         }
     }
 
@@ -2894,7 +2894,7 @@ pub(crate) fn resample(samples: &[f32], from: f64, to: f64) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{AuxSend, Note as MidiNote, PPQ, Track};
+    use crate::song::project::{AuxSend, Note as MidiNote, PPQ, Track};
 
     const RATE: f64 = 48_000.0;
     const BEAT: usize = 24_000; // samples per beat at 120 bpm
@@ -3036,7 +3036,7 @@ mod tests {
 
     #[test]
     fn an_lfo_moves_the_volume_and_a_follower_ducks_one_track_under_another() {
-        use crate::modulate::{LfoShape, ModRate};
+        use crate::dsp::modulate::{LfoShape, ModRate};
         // A square LFO a beat long, 24 dB down while high: the first half of each beat quiet.
         let mut pad = synth_track("pad", vec![note(0, PPQ * 4, 60)], PPQ * 4);
         pad.modulators = vec![Modulator {
@@ -3091,7 +3091,7 @@ mod tests {
 
     #[test]
     fn a_stacks_shared_lfo_moves_each_track_in_it_as_it_routes_it() {
-        use crate::modulate::{LfoShape, ModRate};
+        use crate::dsp::modulate::{LfoShape, ModRate};
         // Two tracks in a stack, one square LFO on the stack: each routes it to its own volume,
         // one down, the other not at all.
         let mut p = project(vec![
@@ -3256,7 +3256,7 @@ mod tests {
             pre: false,
         }];
         p.add_aux();
-        p.tracks[0].automation.sends = vec![crate::project::SendAuto {
+        p.tracks[0].automation.sends = vec![crate::song::project::SendAuto {
             bus: 1,
             points: vec![
                 AutoPoint::new(0, -144.0),
@@ -3339,16 +3339,16 @@ mod tests {
         b.pan = 1.0;
         let plain = project(vec![a.clone(), b.clone()]);
         a.eq = Some(Eq {
-            processing: crate::project::Processing::Linear,
+            processing: crate::song::project::Processing::Linear,
             resolution: 0,
             ..Eq::default()
         });
         let mut p = project(vec![a, b]);
         p.master_eq = Some(Eq {
-            processing: crate::project::Processing::Natural,
+            processing: crate::song::project::Processing::Natural,
             ..Eq::default()
         });
-        assert!(crate::eq::latency(p.tracks[0].eq.as_ref().unwrap()) > 2_000);
+        assert!(crate::dsp::eq::latency(p.tracks[0].eq.as_ref().unwrap()) > 2_000);
         let onset = |s: &[f32]| s.iter().position(|x| x.abs() > 1e-3).unwrap() as i64;
         let [l, r] = render(&p, Path::new("."), BEAT * 2);
         let [on_time, _] = render(&plain, Path::new("."), BEAT * 2);
@@ -3504,7 +3504,7 @@ mod tests {
 
     #[test]
     fn a_pattern_loops_over_its_region() {
-        use crate::project::PatternRow;
+        use crate::song::project::PatternRow;
         // Kick on steps 1 and 3 of four sixteenths, over a beat and a half: it comes round again.
         let rows = vec![PatternRow {
             pitch: 36,
@@ -3550,7 +3550,7 @@ mod tests {
 
     #[test]
     fn a_take_folder_plays_its_comp() {
-        use crate::project::{CompPiece, Take};
+        use crate::song::project::{CompPiece, Take};
         // Two takes, an octave apart; the comp plays the first for a beat, then the second.
         let take = |pitch| Take {
             start: 0,
@@ -3742,7 +3742,7 @@ mod tests {
 
     #[test]
     fn a_launched_cell_loops_instead_of_the_track() {
-        use crate::project::Cell;
+        use crate::song::project::Cell;
         // The track's own region is silent; its cell is a beat-long loop with a short note.
         let mut t = synth_track("a", vec![], PPQ * 8);
         let notes = vec![note(0, PPQ / 4, 69)];
@@ -3848,7 +3848,7 @@ mod tests {
 
     #[test]
     fn controllers_reach_the_instrument_as_they_stand_at_each_pass() {
-        use crate::project::{ControlPoint, ControlValue::Cc};
+        use crate::song::project::{ControlPoint, ControlValue::Cc};
         // A beat-long region from beat 2, looping: the mod wheel at 10 from before it starts,
         // then 100 halfway through.
         let controls = vec![
@@ -3948,7 +3948,7 @@ mod tests {
 
     #[test]
     fn a_launched_audio_cell_plays_its_loop() {
-        use crate::project::Cell;
+        use crate::song::project::Cell;
         // A quarter second of tone, as a beat-long loop on an audio track with no regions.
         let dir = scratch_dir("audio-cell");
         let spec = hound::WavSpec {
@@ -4167,7 +4167,7 @@ mod tests {
     #[test]
     fn the_cycle_loops_playback() {
         let mut p = project(vec![synth_track("a", vec![note(0, PPQ * 4, 69)], PPQ * 4)]);
-        p.cycle = Some(crate::project::Cycle {
+        p.cycle = Some(crate::song::project::Cycle {
             start: PPQ,
             end: PPQ * 2,
             off: false,
@@ -4198,8 +4198,8 @@ mod tests {
         let dry = peak(&render(&project(vec![t.clone()]), Path::new("."), BEAT)[0][BEAT / 2..]);
         let mut boosted = t.clone();
         boosted.eq = Some(Eq {
-            bands: crate::project::Bands::from_slice(&[crate::project::EqBand::new(
-                crate::project::Shape::Bell,
+            bands: crate::song::project::Bands::from_slice(&[crate::song::project::EqBand::new(
+                crate::song::project::Shape::Bell,
                 440.0,
                 6.0,
             )]),
@@ -4229,8 +4229,8 @@ mod tests {
         let dry = peak(&render(&project(vec![t.clone()]), Path::new("."), BEAT)[0][BEAT / 2..]);
         let mut boosted = t.clone();
         boosted.eq = Some(Eq {
-            bands: crate::project::Bands::from_slice(&[crate::project::EqBand::new(
-                crate::project::Shape::Bell,
+            bands: crate::song::project::Bands::from_slice(&[crate::song::project::EqBand::new(
+                crate::song::project::Shape::Bell,
                 440.0,
                 0.0,
             )]),
@@ -4409,7 +4409,7 @@ mod tests {
         // A track 64 samples late (as a plugin's latency would make it): the engine reads 64
         // ahead, so each pass of the cycle must read its start before the last one's heard end.
         let mut p = project(vec![synth_track("a", vec![note(0, 240, 69)], PPQ)]);
-        p.cycle = Some(crate::project::Cycle {
+        p.cycle = Some(crate::song::project::Cycle {
             start: 0,
             end: PPQ,
             off: false,
@@ -4453,7 +4453,7 @@ mod tests {
     #[ignore]
     fn a_plugin_parameter_follows_its_automation() {
         let path = std::env::var("PINA_TEST_VST3").expect("set PINA_TEST_VST3");
-        let class = crate::scan::inspect(Path::new(&path))
+        let class = crate::plugin::scan::inspect(Path::new(&path))
             .unwrap()
             .remove(0)
             .class;
@@ -4477,7 +4477,7 @@ mod tests {
         quiet.tracks[0]
             .automation
             .plugins
-            .push(crate::project::PluginAuto {
+            .push(crate::song::project::PluginAuto {
                 plugin: Which::Instrument,
                 param: volume.id,
                 name: volume.name.clone(),

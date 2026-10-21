@@ -14,10 +14,10 @@ use std::{
 use futures::StreamExt;
 use gpui::{App, Context, WeakEntity};
 use pina_engine::{
-    commands::{self, ChannelRef, Command, PluginSource},
-    player::Player,
+    audio::player::Player,
     plugin::PluginApi,
-    project::{Project, Which},
+    song::commands::{self, ChannelRef, Command, PluginSource},
+    song::project::{Project, Which},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

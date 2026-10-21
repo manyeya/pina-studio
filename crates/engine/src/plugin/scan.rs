@@ -13,7 +13,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{plugin, project::Format};
+use crate::{plugin, song::project::Format};
 
 /// How long one bundle gets to report what's in it.
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -38,8 +38,8 @@ pub struct PluginInfo {
 
 impl PluginInfo {
     /// The reference a project keeps to it.
-    pub fn plugin_ref(&self) -> crate::project::PluginRef {
-        crate::project::PluginRef {
+    pub fn plugin_ref(&self) -> crate::song::project::PluginRef {
+        crate::song::project::PluginRef {
             format: self.format,
             path: self.path.clone(),
             class: self.class.clone(),

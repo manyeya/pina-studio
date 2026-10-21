@@ -18,7 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{AudioData, resample};
+use crate::audio::engine::{AudioData, resample};
 
 /// How an audio region is fitted to its length.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]

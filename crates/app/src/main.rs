@@ -19,7 +19,9 @@ use std::{
 
 use cli::server::Request;
 use gpui::{App, AppContext, Bounds, Menu, MenuItem, WindowBounds, WindowOptions, px, size};
-use pina_engine::{engine::Engine, player::Player, project::Project, session::Session};
+use pina_engine::{
+    audio::engine::Engine, audio::player::Player, song::project::Project, song::session::Session,
+};
 use serde_json::Value;
 use workspace::topbar::MIN_W;
 use workspace::*;
@@ -105,7 +107,7 @@ fn main() {
     let p = Path::new;
     let result = match args.as_slice() {
         ["describe"] => {
-            print!("{}", pina_engine::commands::DESCRIBE);
+            print!("{}", pina_engine::song::commands::DESCRIBE);
             Ok(())
         }
         ["show", dir] => print(cli::show(p(dir))),
@@ -206,9 +208,9 @@ fn main() {
                     Ok(())
                 }
                 Ok(s) if rest.contains(&"--playbook") => {
-                    let taken = pina_engine::playbook::ids();
+                    let taken = pina_engine::music::playbook::ids();
                     let book = pina_engine::study::to_playbook(&s, &taken);
-                    pina_engine::playbook::save(&book)
+                    pina_engine::music::playbook::save(&book)
                         .map(|f| println!("{} ({}): {}", book.name, book.id, f.display()))
                 }
                 Ok(s) => print(Ok(cli::study::for_agent(&s))),
@@ -219,14 +221,16 @@ fn main() {
         ["playbook", "--edit", genre] => agent::produce::edit_playbooks(Some(genre)),
         // An instrument's presets, listed by loading it alone: run by `pina sounds`.
         ["__audition", plugin, part, presets] => sounds::audition::command(plugin, part, presets),
-        ["__presets", plugin] => serde_json::from_str::<pina_engine::project::PluginRef>(plugin)
-            .map_err(|e| e.to_string())
-            .and_then(|r| {
-                let dir = std::env::temp_dir();
-                let (plugin, _) = pina_engine::engine::load_plugin(&r, &dir, 48_000.0)?;
-                println!("{}", serde_json::to_string(&plugin.presets()).unwrap());
-                Ok(())
-            }),
+        ["__presets", plugin] => {
+            serde_json::from_str::<pina_engine::song::project::PluginRef>(plugin)
+                .map_err(|e| e.to_string())
+                .and_then(|r| {
+                    let dir = std::env::temp_dir();
+                    let (plugin, _) = pina_engine::audio::engine::load_plugin(&r, &dir, 48_000.0)?;
+                    println!("{}", serde_json::to_string(&plugin.presets()).unwrap());
+                    Ok(())
+                })
+        }
         ["playbook", genre @ ..] => print(agent::produce::playbook(Some(&genre.join(" ")))),
         ["theory", key, words @ ..] => print(agent::produce::theory(key, &words.join(" "))),
         ["reference", file] => print(agent::produce::reference(p(file), None)),
@@ -283,7 +287,7 @@ fn main() {
             agent::ask(agent::chosen(), p(dir), &words.join(" "))
         }
         // What a plugin bundle holds, as JSON: run by the plugin scan, one bundle per process.
-        ["__scan", bundle] => pina_engine::scan::inspect(p(bundle))
+        ["__scan", bundle] => pina_engine::plugin::scan::inspect(p(bundle))
             .map(|found| println!("{}", serde_json::to_string(&found).unwrap())),
         ["-h" | "--help" | "help"] => {
             println!("{USAGE}");
@@ -367,10 +371,10 @@ fn bar_range(s: &str) -> Option<(u64, u64)> {
 fn params_args(
     args: &[&str],
 ) -> Option<(
-    pina_engine::commands::ChannelRef,
-    pina_engine::project::Which,
+    pina_engine::song::commands::ChannelRef,
+    pina_engine::song::project::Which,
 )> {
-    use pina_engine::{commands::ChannelRef, project::Which};
+    use pina_engine::{song::commands::ChannelRef, song::project::Which};
     let (channel, rest) = match args {
         ["--aux", n, rest @ ..] => (ChannelRef::Aux(n.parse().ok()?), rest),
         ["--master", rest @ ..] => (ChannelRef::Master, rest),
@@ -527,7 +531,7 @@ fn new_song(name: &str, rest: &[&str]) -> Result<(), String> {
 /// Plays a project through the default output, without the app.
 fn play(dir: &Path) -> Result<(), String> {
     let project = Project::load(dir)?;
-    let rate = pina_engine::engine::output_rate(project.sample_rate)? as f64;
+    let rate = pina_engine::audio::engine::output_rate(project.sample_rate)? as f64;
     let (mut engine, _plugins) = Engine::load(&project, dir, rate)?;
     let frames = project.samples(project.end(), rate) + (cli::TAIL * rate) as u64;
     let seconds = frames as f64 / rate;

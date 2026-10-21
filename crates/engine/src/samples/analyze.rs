@@ -12,7 +12,7 @@ use super::{
 
 /// Analyses a sample file. Its folder and name give hints ("Kick_03", "Loops/120bpm").
 pub fn analyze_file(path: &Path) -> Result<Analysis, String> {
-    let data = crate::engine::read_audio(path)?;
+    let data = crate::audio::engine::read_audio(path)?;
     let hint = path.to_string_lossy().to_lowercase();
     Ok(analyze(&data.0, data.1, &hint))
 }

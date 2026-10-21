@@ -5,11 +5,11 @@ use std::path::Path;
 
 use super::*;
 use crate::{
-    arrange::{self, Arrangement, SectionIn},
-    compose::{self, BassPart, ChordPart, DrumPart, MelodyPart},
-    engine::Engine,
-    project::{Instrument, Project, Track},
-    theory::{BassStyle, ChordRhythm, MelodyStyle},
+    audio::engine::Engine,
+    music::arrange::{self, Arrangement, SectionIn},
+    music::compose::{self, BassPart, ChordPart, DrumPart, MelodyPart},
+    music::theory::{BassStyle, ChordRhythm, MelodyStyle},
+    song::project::{Instrument, Project, Track},
 };
 
 const RATE: f64 = 44_100.0;

@@ -7,9 +7,9 @@ use gpui::{
     prelude::*, px, rgb, size,
 };
 use pina_engine::{
+    audio::player::Which,
     dsp::sat_curve,
-    player::Which,
-    project::{Comp, Eq, Instrument, Saturator},
+    song::project::{Comp, Eq, Instrument, Saturator},
 };
 
 use crate::{

@@ -4,6 +4,7 @@
 
 pub mod au;
 pub mod clap;
+pub mod scan;
 pub mod vst2;
 pub mod vst3;
 
@@ -16,8 +17,8 @@ use objc2::{MainThreadMarker, rc::Retained};
 use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-use crate::project::PluginRef;
-pub use crate::project::{ExpressionKind, Format, Preset, PresetSource};
+use crate::song::project::PluginRef;
+pub use crate::song::project::{ExpressionKind, Format, Preset, PresetSource};
 
 /// A note for an instrument, `offset` samples into the block.
 #[derive(Clone, Copy, Default, Debug, PartialEq)]

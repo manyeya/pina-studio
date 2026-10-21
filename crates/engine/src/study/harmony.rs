@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use super::beats::cosine;
 use crate::{
     music::Key,
-    theory::{Chord, Quality},
+    music::theory::{Chord, Quality},
 };
 
 /// Temperley's major and minor key profiles (from the Kostka-Payne corpus), tonic first.

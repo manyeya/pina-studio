@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use pina_engine::{engine::read_audio, study::study_audio};
+use pina_engine::{audio::engine::read_audio, study::study_audio};
 
 fn bpm_in(s: &str) -> Option<f32> {
     let lower = s.to_lowercase();

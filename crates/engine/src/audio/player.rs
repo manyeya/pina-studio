@@ -11,14 +11,14 @@ use std::{
 };
 
 use crate::{
-    engine::{
+    audio::engine::{
         AudioData, AudioFiles, Engine, Garbage, LanePlugins, Link, LiveNote, MASTER, MAX_BLOCK,
         Modules, Msg, Played, SLOTS, Shared, compile, make_lane,
     },
-    midi::{self, LiveInput},
-    peaks::Peaks,
+    audio::midi::{self, LiveInput},
+    audio::peaks::Peaks,
     plugin::{Editor, Plugin, PluginParam},
-    project::{Instrument, PluginRef, Project, STATES_DIR},
+    song::project::{Instrument, PluginRef, Project, STATES_DIR},
 };
 
 /// A lane: which slot it's in, what it was built from, its latency, and its plugins'
@@ -34,7 +34,7 @@ struct Slot {
     original: HashMap<(Which, u32), f64>,
     /// The preset each plugin has loaded, as last applied; and its settings from before Pina Studio
     /// first loaded one, to go back to.
-    presets: HashMap<Which, Option<crate::project::Preset>>,
+    presets: HashMap<Which, Option<crate::song::project::Preset>>,
     before_preset: HashMap<Which, Vec<u8>>,
 }
 
@@ -125,7 +125,7 @@ fn sound(instrument: Option<&Instrument>, inserts: &[PluginRef]) -> Sound {
     (instrument, inserts.iter().map(key).collect())
 }
 
-pub use crate::project::Which;
+pub use crate::song::project::Which;
 
 pub struct Player {
     rate: f64,
@@ -194,7 +194,7 @@ impl Player {
     /// Plays through the default output device, with every MIDI input playing the armed track.
     pub fn start(project: &Project, dir: &Path) -> Result<Player, String> {
         // At the project's rate if the output can run at it, else at the output's.
-        let rate = crate::engine::output_rate(project.sample_rate)?;
+        let rate = crate::audio::engine::output_rate(project.sample_rate)?;
         let (mut player, engine) = Player::new(dir, rate as f64);
         player._stream = Some(engine.start_output()?);
         player._midi = midi::connect(&player.live);
@@ -461,11 +461,11 @@ impl Player {
     /// Previews a sample now, over whatever's playing, moved by `semitones` (to hear it in a
     /// song's key) at `gain_db`; it stops by itself at its end, or with `stop_audition`.
     pub fn audition(&mut self, path: &Path, semitones: f32, gain_db: f32) -> Result<(), String> {
-        let data = std::sync::Arc::new(crate::engine::load_wav(path, self.rate)?);
+        let data = std::sync::Arc::new(crate::audio::engine::load_wav(path, self.rate)?);
         self.audition_audio(data, semitones, gain_db)
     }
 
-    /// Previews audio already read at the player's rate (see `crate::engine::load_audio`), so a
+    /// Previews audio already read at the player's rate (see `crate::audio::engine::load_audio`), so a
     /// browser can read files off the main thread and keep them.
     pub fn audition_audio(
         &mut self,
@@ -473,7 +473,7 @@ impl Player {
         semitones: f32,
         gain_db: f32,
     ) -> Result<(), String> {
-        let a = crate::engine::Audition::new(data, semitones, gain_db);
+        let a = crate::audio::engine::Audition::new(data, semitones, gain_db);
         self.send(Msg::Audition(Some(Box::new(a))))
     }
 
@@ -484,7 +484,7 @@ impl Player {
         data: std::sync::Arc<AudioData>,
         gain_db: f32,
     ) -> Result<(), String> {
-        let a = crate::engine::Audition::new(data, 0.0, gain_db).synced();
+        let a = crate::audio::engine::Audition::new(data, 0.0, gain_db).synced();
         self.send(Msg::Audition(Some(Box::new(a))))
     }
 
@@ -536,10 +536,10 @@ impl Player {
     }
 
     /// A track's modulators' latest values, as the engine last worked them out.
-    pub fn modulators(&self, track: u64) -> [f32; crate::modulate::MAX_MODS] {
+    pub fn modulators(&self, track: u64) -> [f32; crate::dsp::modulate::MAX_MODS] {
         self.lanes
             .get(&track)
-            .map_or([0.0; crate::modulate::MAX_MODS], |s| {
+            .map_or([0.0; crate::dsp::modulate::MAX_MODS], |s| {
                 self.shared.mod_values(s.slot)
             })
     }
@@ -577,9 +577,13 @@ impl Player {
 
     /// A channel's sound lately (a track's or aux's by id; none, the master's), oldest first;
     /// how many samples it's had ever (0: none yet).
-    pub fn lane_sound(&self, channel: Option<u64>, out: &mut [f32; crate::eq::LANE_LEN]) -> usize {
+    pub fn lane_sound(
+        &self,
+        channel: Option<u64>,
+        out: &mut [f32; crate::dsp::eq::LANE_LEN],
+    ) -> usize {
         let slot = match channel {
-            None => crate::engine::MASTER,
+            None => crate::audio::engine::MASTER,
             Some(id) => match self.lanes.get(&id) {
                 Some(s) => s.slot,
                 None => return 0,
@@ -598,7 +602,7 @@ impl Player {
     }
 
     /// What the watched EQ hears and plays.
-    pub fn eq_tap(&self) -> &crate::eq::Tap {
+    pub fn eq_tap(&self) -> &crate::dsp::eq::Tap {
         &self.shared.eq_tap
     }
 
@@ -677,7 +681,7 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::Track;
+    use crate::song::project::Track;
 
     /// With a real instrument, which CI doesn't have:
     /// `PINA_TEST_VST3="/path/Some Synth.vst3" cargo test -p pina-engine -- --ignored`
@@ -685,7 +689,7 @@ mod tests {
     #[ignore]
     fn plugin_settings_are_saved_with_the_project_and_loaded_back() {
         let path = std::env::var("PINA_TEST_VST3").expect("set PINA_TEST_VST3");
-        let class = crate::scan::inspect(Path::new(&path))
+        let class = crate::plugin::scan::inspect(Path::new(&path))
             .unwrap()
             .remove(0)
             .class;

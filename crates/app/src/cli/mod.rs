@@ -7,13 +7,13 @@ pub mod study;
 use std::path::{Path, PathBuf};
 
 use pina_engine::{
-    analysis,
-    commands::{self, ChannelRef, Command, PluginSource},
-    engine::{Engine, load_plugin},
+    audio::engine::{Engine, load_plugin},
+    music::analysis,
+    plugin::scan,
     plugin::{Plugin, PluginApi, Processor, named_values},
-    project::{Content, Project, Region, Track, Which},
-    scan,
-    session::Session,
+    song::commands::{self, ChannelRef, Command, PluginSource},
+    song::project::{Content, Project, Region, Track, Which},
+    song::session::Session,
 };
 use serde_json::{Value, json};
 
@@ -109,7 +109,7 @@ pub fn app(dir: &Path, request: Request) -> Result<Value, String> {
 
 /// An audio file (WAV, AIFF, FLAC or MP3) as left and right, and its rate.
 pub fn audio(path: &Path) -> Result<(Vec<f32>, Vec<f32>, f64), String> {
-    let (mut channels, rate) = pina_engine::engine::read_audio(path)?;
+    let (mut channels, rate) = pina_engine::audio::engine::read_audio(path)?;
     let l = channels.remove(0);
     let r = channels.pop().unwrap_or_else(|| l.clone());
     Ok((l, r, rate))
@@ -287,7 +287,7 @@ pub fn render(dir: &Path, out: &Path, bars_given: Option<(u64, u64)>) -> Result<
 /// through the master), `from_bar`/`to_bar`, `out` (a folder: the song's Bounces by default),
 /// `name` (the song's by default), `kbps` (MP3 and AAC).
 pub fn bounce_spec(dir: &Path, spec: &Value) -> Result<Value, String> {
-    use pina_engine::bounce::{self, Bits, Format, Job, Level, Options};
+    use pina_engine::audio::bounce::{self, Bits, Format, Job, Level, Options};
     let p = project(dir)?;
     let num = |k: &str| spec.get(k).and_then(Value::as_f64);
     let kbps = num("kbps").map(|k| k as u32);

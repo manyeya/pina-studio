@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use crate::{
     music::Key,
-    project::{ChordSpan, Content, Instrument, Note, PatternRow, Project, Region},
-    theory::{self, BassStyle, Chord, ChordRhythm, MelodyStyle, Span, Voicing},
+    music::theory::{self, BassStyle, Chord, ChordRhythm, MelodyStyle, Span, Voicing},
+    song::project::{ChordSpan, Content, Instrument, Note, PatternRow, Project, Region},
 };
 
 /// The song's key, which numerals and melodies need.
@@ -498,7 +498,7 @@ pub struct DrumPart {
 /// The notes a kit has a sound on; None for a plugin, which may play any.
 fn sounds(i: &Instrument) -> Option<Vec<u8>> {
     match i {
-        Instrument::Drums => Some(crate::drums::SOUNDS.iter().map(|s| s.0).collect()),
+        Instrument::Drums => Some(crate::dsp::drums::SOUNDS.iter().map(|s| s.0).collect()),
         Instrument::Sampler(s) => Some(
             s.zones
                 .iter()
@@ -547,7 +547,7 @@ pub fn write_drums(p: &mut Project, w: DrumPart) -> Result<Value, String> {
             if !keep && cells.iter().any(|&c| c > 0) {
                 skipped.push(format!(
                     "{} (note {pitch})",
-                    crate::drums::name(*pitch).to_lowercase()
+                    crate::dsp::drums::name(*pitch).to_lowercase()
                 ));
             }
             keep
@@ -585,7 +585,7 @@ pub fn write_drums(p: &mut Project, w: DrumPart) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::Track;
+    use crate::song::project::Track;
 
     fn song() -> Project {
         let mut p = Project::new(48_000);
@@ -739,7 +739,7 @@ mod tests {
 
     #[test]
     fn parts_are_commands() {
-        use crate::commands::Command;
+        use crate::song::commands::Command;
         let c: Command =
             serde_json::from_str(r#"{"op": "write_drums", "track": 2, "style": "trap"}"#).unwrap();
         assert!(matches!(c, Command::WriteDrums(DrumPart { track: 2, .. })));

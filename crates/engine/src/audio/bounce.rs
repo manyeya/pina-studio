@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    analysis::{self, Analysis},
-    engine::Engine,
-    project::{Content, Project},
+    audio::engine::Engine,
+    music::analysis::{self, Analysis},
+    song::project::{Content, Project},
 };
 
 /// How long a tail can ring past the song's end, and how quiet counts as silent.
@@ -543,7 +543,7 @@ fn halve(x: &[f32]) -> Vec<f32> {
 /// regions round their loops; from `range`'s start (ticks), if given, to its end.
 pub fn midi(p: &Project, range: Option<(u64, u64)>) -> Vec<u8> {
     let (from, to) = range.unwrap_or((0, p.end()));
-    let ppq = crate::project::PPQ as u16;
+    let ppq = crate::song::project::PPQ as u16;
     let vlq = |mut v: u64, out: &mut Vec<u8>| {
         let mut bytes = vec![(v & 0x7f) as u8];
         v >>= 7;
@@ -705,7 +705,7 @@ pub fn has_notes(p: &Project) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{Instrument, Marker, Note, PPQ, Region, Track};
+    use crate::song::project::{Instrument, Marker, Note, PPQ, Region, Track};
 
     /// Two synth tracks, a bar each: a C on the first, an E on the second.
     fn song() -> Project {

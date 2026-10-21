@@ -26,8 +26,8 @@ use super::{
     PluginParam, Preset, PresetSource, Processor, ProcessorApi, edit_queue, editor_window,
 };
 use crate::{
-    project::{Format, PluginRef},
-    scan::PluginInfo,
+    plugin::scan::PluginInfo,
+    song::project::{Format, PluginRef},
 };
 
 // The VST2 interface, as the 2.4 SDK lays it out.

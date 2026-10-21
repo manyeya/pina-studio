@@ -51,8 +51,8 @@ use super::{
     editor_window,
 };
 use crate::{
-    project::{Format, PluginRef},
-    scan::PluginInfo,
+    plugin::scan::PluginInfo,
+    song::project::{Format, PluginRef},
 };
 
 /// What Pina Studio's own preset files for a CLAP plugin end in: its settings, as `state` gives them.

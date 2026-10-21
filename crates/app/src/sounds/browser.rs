@@ -32,9 +32,8 @@ use gpui::{
     fill, point, prelude::*, px, relative, rgb, size, uniform_list,
 };
 use pina_engine::{
-    commands::{self, Command},
+    audio::stretch,
     music::Key,
-    project::{At, Content, Instrument, PPQ, Sampler},
     samples::{
         Analysis, Category, Kind, NOTES, Pitch, Sample, TRAITS,
         library::Library,
@@ -42,7 +41,8 @@ use pina_engine::{
         place::{loop_ticks, place_zone, transpose_to},
         search::{self, Aspects, Hit, KitSeed, KitSlot, Query},
     },
-    stretch,
+    song::commands::{self, Command},
+    song::project::{At, Content, Instrument, PPQ, Sampler},
 };
 
 use crate::{
@@ -180,7 +180,7 @@ pub struct Browser {
     /// Samples read for previews, by path, and as heard (at the song's tempo, in its key), by
     /// path, stretch and semitones, so going back to one is instant; and the one asked for last,
     /// so a slow read that's overtaken doesn't play.
-    heard: HashMap<(PathBuf, u64, u32), Arc<pina_engine::engine::AudioData>>,
+    heard: HashMap<(PathBuf, u64, u32), Arc<pina_engine::audio::engine::AudioData>>,
     /// The preview is a loop playing in time with the song, over and over while it plays.
     pub looping: bool,
     wanted: Option<usize>,
@@ -959,7 +959,7 @@ impl Workspace {
             async move {
                 let raw = match raw {
                     Some(raw) => raw,
-                    None => Arc::new(pina_engine::engine::load_audio(&path, rate)?),
+                    None => Arc::new(pina_engine::audio::engine::load_audio(&path, rate)?),
                 };
                 let heard = match ratio == 1.0 && semis == 0.0 {
                     true => raw.clone(),
@@ -1006,7 +1006,7 @@ impl Workspace {
     fn play_heard(
         &mut self,
         index: usize,
-        data: Arc<pina_engine::engine::AudioData>,
+        data: Arc<pina_engine::audio::engine::AudioData>,
         synced: bool,
         gain: f32,
         seconds: f32,

@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    look::{self, Family},
-    playbook,
-    project::{
+    music::look::{self, Family},
+    music::playbook,
+    song::project::{
         AUDIO_DIR, AutoPoint, ChordSpan, Content, Instrument, Marker, Note, Project, Region, Track,
     },
 };
@@ -135,7 +135,7 @@ pub fn clip(p: &Project, r: &Region, from: u64, to: u64) -> Option<Region> {
             controls: controls
                 .iter()
                 .filter(|c| c.start >= skip as i64 && c.start < (skip + length) as i64)
-                .map(|c| crate::project::ControlPoint {
+                .map(|c| crate::song::project::ControlPoint {
                     start: c.start - skip as i64,
                     ..*c
                 })
@@ -152,7 +152,7 @@ pub fn clip(p: &Project, r: &Region, from: u64, to: u64) -> Option<Region> {
                         let mut cells = row.cells.clone();
                         cells.resize(steps, 0);
                         cells.rotate_left(turn);
-                        crate::project::PatternRow {
+                        crate::song::project::PatternRow {
                             pitch: row.pitch,
                             cells,
                             mute: row.mute,
@@ -701,7 +701,7 @@ fn make_fx(p: &Project, dir: &Path, kind: Move, ticks: u64) -> Result<PathBuf, S
     }
     let [l, r] = synth_fx(kind, frames, rate as f32);
     std::fs::create_dir_all(dir.join(AUDIO_DIR)).map_err(|e| e.to_string())?;
-    crate::analysis::write_wav(&path, &l, &r, rate)?;
+    crate::music::analysis::write_wav(&path, &l, &r, rate)?;
     Ok(PathBuf::from(name))
 }
 
@@ -804,7 +804,7 @@ fn synth_fx(kind: Move, frames: usize, rate: f32) -> [Vec<f32>; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compose::{self, ChordPart, DrumPart};
+    use crate::music::compose::{self, ChordPart, DrumPart};
 
     fn sketch() -> Project {
         let mut p = Project::new(48_000);
@@ -974,7 +974,7 @@ mod tests {
         let Content::Audio { file, .. } = &riser.content else {
             panic!()
         };
-        let (l, _, _) = crate::analysis::read_wav(&dir.join(file)).unwrap();
+        let (l, _, _) = crate::music::analysis::read_wav(&dir.join(file)).unwrap();
         // It rises: the last quarter is louder than the first.
         let energy = |s: &[f32]| s.iter().map(|v| v * v).sum::<f32>();
         assert!(energy(&l[l.len() * 3 / 4..]) > energy(&l[..l.len() / 4]) * 10.0);

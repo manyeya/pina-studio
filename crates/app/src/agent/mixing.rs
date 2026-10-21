@@ -11,11 +11,11 @@
 use std::path::Path;
 
 use pina_engine::{
-    analysis,
-    arrange::role,
-    commands::{AutoParam, Command, PointIn},
-    project::{Content, Format, PluginRef, Project},
-    scan,
+    music::analysis,
+    music::arrange::role,
+    plugin::scan,
+    song::commands::{AutoParam, Command, PointIn},
+    song::project::{Content, Format, PluginRef, Project},
 };
 use serde_json::{Value, json};
 
@@ -994,7 +994,7 @@ pub fn tonal_balance(dir: &Path) -> Result<Value, String> {
         .map(|r| (r.spectrum, "the reference"))
         .or_else(|| {
             let g = p.genre.as_deref()?;
-            pina_engine::playbook::find(g).map(|b| (b.spectrum, "the genre"))
+            pina_engine::music::playbook::find(g).map(|b| (b.spectrum, "the genre"))
         });
     let Some((target, aim)) = target else {
         return Ok(Value::Null);

@@ -6,7 +6,7 @@ use gpui::{
     Bounds, Context, Hsla, MouseButton, MouseDownEvent, canvas, div, fill, point, prelude::*, px,
     rgb, size,
 };
-use pina_engine::project::{At, Content, comp_segments};
+use pina_engine::song::project::{At, Content, comp_segments};
 
 use crate::{
     arrange::tracks::{Inside, paint_inside},

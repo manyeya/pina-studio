@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use pina_engine::commands::{Command, DESCRIBE};
+use pina_engine::song::commands::{Command, DESCRIBE};
 use serde_json::{Value, json};
 
 use crate::{agent::listen, agent::produce, cli, cli::server::Request};
@@ -384,8 +384,9 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
-                let book = pina_engine::study::to_playbook(&s, &pina_engine::playbook::ids());
-                let file = pina_engine::playbook::save(&book)?;
+                let book =
+                    pina_engine::study::to_playbook(&s, &pina_engine::music::playbook::ids());
+                let file = pina_engine::music::playbook::save(&book)?;
                 out["playbook"] = json!({ "id": book.id, "name": book.name, "file": file });
             }
             Ok(out)

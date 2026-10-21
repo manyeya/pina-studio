@@ -11,8 +11,8 @@ use gpui::{
     prelude::*, px, rgb, svg,
 };
 use pina_engine::{
-    project::{Format, Instrument, Preset, Which},
-    scan::PluginInfo,
+    plugin::scan::PluginInfo,
+    song::project::{Format, Instrument, Preset, Which},
 };
 use serde::{Deserialize, Serialize};
 
@@ -1499,8 +1499,11 @@ impl Workspace {
                     .rounded(px(7.))
                     .bg(alpha(color, 0.14))
                     .child(
-                        glyph(pina_engine::look::category_icon(s.analysis.category), 15.)
-                            .text_color(rgb(color)),
+                        glyph(
+                            pina_engine::music::look::category_icon(s.analysis.category),
+                            15.,
+                        )
+                        .text_color(rgb(color)),
                     ),
             )
             .child(

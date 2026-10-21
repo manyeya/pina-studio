@@ -9,8 +9,8 @@ use std::{
 
 use gpui::Context;
 use pina_engine::{
-    project::{AUDIO_DIR, Content, Note, Region},
-    record::AudioRecorder,
+    audio::record::AudioRecorder,
+    song::project::{AUDIO_DIR, Content, Note, Region},
 };
 
 use crate::workspace::Workspace;

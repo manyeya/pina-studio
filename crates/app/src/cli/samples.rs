@@ -235,8 +235,8 @@ pub fn remove_folder(dir: &Path) -> Result<Value, String> {
 /// plays it in tune: a drum on its note, a pitched sound across the keys from its own note.
 pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Value, String> {
     use pina_engine::{
-        commands::Command,
-        project::{Instrument, Sampler},
+        song::commands::Command,
+        song::project::{Instrument, Sampler},
     };
     let lib = library();
     let path = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());

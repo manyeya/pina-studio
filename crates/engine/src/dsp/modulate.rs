@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::project::{Comp, Eq, MAX_BANDS, SamplerVoice, Saturator, Shape, Which};
+use crate::song::project::{Comp, Eq, MAX_BANDS, SamplerVoice, Saturator, Shape, Which};
 
 /// The most modulators a track has.
 pub const MAX_MODS: usize = 8;

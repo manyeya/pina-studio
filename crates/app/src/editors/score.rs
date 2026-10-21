@@ -10,7 +10,7 @@ use gpui::{
 };
 use pina_engine::{
     music::Key,
-    project::{Content, PPQ},
+    song::project::{Content, PPQ},
 };
 
 use crate::{

@@ -8,8 +8,8 @@
 use std::path::Path;
 
 use crate::{
-    project::{Content, Instrument, Track},
     samples::Category,
+    song::project::{Content, Instrument, Track},
 };
 
 /// A colour family: what tracks that play alike share.
@@ -882,7 +882,7 @@ pub fn parse_color(s: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{Note, Region, Sampler, Zone};
+    use crate::song::project::{Note, Region, Sampler, Zone};
 
     fn track(name: &str, instrument: Option<Instrument>) -> Track {
         Track {

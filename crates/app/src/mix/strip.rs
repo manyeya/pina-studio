@@ -10,9 +10,9 @@ use gpui::{
     fill, point, prelude::*, px, rgb, size,
 };
 use pina_engine::{
+    audio::player::{MASTER_ID, Which},
     dsp::{LOW_CUT_OFF, eq_response},
-    player::{MASTER_ID, Which},
-    project::{Comp, Eq, Input, Instrument, Param, PluginRef, Saturator},
+    song::project::{Comp, Eq, Input, Instrument, Param, PluginRef, Saturator},
 };
 
 use crate::{
@@ -525,7 +525,7 @@ impl Workspace {
 
     /// What an audio track can record: each input channel alone, and in pairs.
     pub fn input_menu(&self, track: usize, at: Point<Pixels>) -> Menu {
-        let channels = pina_engine::record::input_channels();
+        let channels = pina_engine::audio::record::input_channels();
         let mut items = Vec::new();
         for stereo in [true, false] {
             let step = if stereo { 2 } else { 1 };
@@ -1041,7 +1041,7 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                     .pr(px(3.))
                     .cursor_ns_resize()
                     .child(ws.modded(
-                        Some((track, pina_engine::modulate::ModTarget::Send(index))),
+                        Some((track, pina_engine::dsp::modulate::ModTarget::Send(index))),
                         16.,
                         knob(fader_pos(level), 16., tone, false),
                     ))
@@ -1137,7 +1137,7 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                 .cursor_ns_resize()
                 .child(ws.modded(
                     match ch {
-                        Channel::Track(t) => Some((t, pina_engine::modulate::ModTarget::Pan)),
+                        Channel::Track(t) => Some((t, pina_engine::dsp::modulate::ModTarget::Pan)),
                         _ => None,
                     },
                     if mixer { 32. } else { 26. },
@@ -1447,7 +1447,7 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
         Channel::Track(i) => {
             let mode = project.tracks[i].automation.mode;
             let c = crate::arrange::automation::mode_color(mode);
-            let on = mode != pina_engine::project::AutoMode::Off;
+            let on = mode != pina_engine::song::project::AutoMode::Off;
             Some(
                 div()
                     .flex_none()

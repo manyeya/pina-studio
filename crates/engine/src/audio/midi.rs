@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::engine::LiveNote;
+use crate::audio::engine::LiveNote;
 
 /// Where live notes go: the engine's queue, shared by every input port.
 pub type LiveInput = Arc<Mutex<rtrb::Producer<LiveNote>>>;

@@ -8,8 +8,8 @@ use gpui::{
     prelude::*, px, rgb, size,
 };
 use pina_engine::{
-    eq::{Section, band_sections, response_db},
-    project::{Eq, EqBand, MAX_BANDS, Placement},
+    dsp::eq::{Section, band_sections, response_db},
+    song::project::{Eq, EqBand, MAX_BANDS, Placement},
 };
 
 use super::{
@@ -301,7 +301,7 @@ impl Workspace {
                     .map(|&f| {
                         m.proposed
                             .iter()
-                            .map(|b| pina_engine::eq::band_response(b, 1.0, f, rate) as f32)
+                            .map(|b| pina_engine::dsp::eq::band_response(b, 1.0, f, rate) as f32)
                             .sum()
                     })
                     .collect();

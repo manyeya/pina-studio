@@ -4,8 +4,8 @@
 
 use crate::{
     music::Key,
-    project::{PPQ, Sampler},
     samples::{Analysis, Category, Sample, search},
+    song::project::{PPQ, Sampler},
 };
 
 /// A key and those that go with it: its relative, and its neighbours round the circle of fifths.

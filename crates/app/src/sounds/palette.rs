@@ -11,8 +11,8 @@ use gpui::{
     Context, Div, FontWeight, MouseButton, MouseDownEvent, Stateful, div, prelude::*, px, rgb,
 };
 use pina_engine::{
-    project::{Palette, PaletteDevice, PaletteSound},
     samples::{Category, Kind, Sample, note_name},
+    song::project::{Palette, PaletteDevice, PaletteSound},
 };
 
 use crate::{

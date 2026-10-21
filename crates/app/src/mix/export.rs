@@ -20,8 +20,8 @@ use gpui::{
     Context, Div, Entity, FontWeight, MouseButton, PathPromptOptions, div, prelude::*, px, rgb,
 };
 use pina_engine::{
-    bounce::{self, Bits, Done, Format, Job, Level, Options},
-    commands::{self, Command},
+    audio::bounce::{self, Bits, Done, Format, Job, Level, Options},
+    song::commands::{self, Command},
 };
 
 use crate::{
@@ -509,7 +509,7 @@ impl Workspace {
         let work = cx.background_spawn(async move {
             let [l, r] = bounce::render(&project, &dir, &job, rate, true, &|_| {})?;
             let file = std::env::temp_dir().join(format!("{}.wav", job.name));
-            pina_engine::analysis::write_wav(&file, &l, &r, rate)?;
+            pina_engine::music::analysis::write_wav(&file, &l, &r, rate)?;
             Ok::<_, String>(file)
         });
         cx.spawn(async move |this, cx| {

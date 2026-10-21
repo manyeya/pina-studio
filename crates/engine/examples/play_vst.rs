@@ -17,8 +17,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use pina_engine::{
+    plugin::scan,
     plugin::{self, Libraries, Note},
-    scan,
 };
 
 const MAX_BLOCK: usize = 512;

@@ -1,9 +1,19 @@
-//! Keys and scales, and the edits the piano roll makes to a region's notes in one go: quantize,
-//! humanize, legato, chop, arpeggiate, transpose and velocity.
+//! Music itself: theory, writing parts (`compose`) and songs (`arrange`), the critic, genre
+//! playbooks, how tracks look by what they play, and analysis of audio. Here: keys and scales,
+//! and the edits the piano roll makes to a region's notes in one go (quantize, humanize, legato,
+//! chop, arpeggiate, transpose and velocity).
+
+pub mod analysis;
+pub mod arrange;
+pub mod compose;
+pub mod critique;
+pub mod look;
+pub mod playbook;
+pub mod theory;
 
 use serde::{Deserialize, Serialize};
 
-use crate::project::Note;
+use crate::song::project::Note;
 
 const NAMES_SHARP: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
@@ -502,7 +512,7 @@ impl NoteEdit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::PPQ;
+    use crate::song::project::PPQ;
 
     fn n(start: i64, length: u64, pitch: u8) -> Note {
         Note {

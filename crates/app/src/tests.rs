@@ -12,10 +12,10 @@ use gpui::{
     VisualTestContext, point, px,
 };
 use pina_engine::{
-    player::Player,
-    project::{AuxSend, Content, PPQ, Shape},
-    scan::PluginInfo,
-    session::Session,
+    audio::player::Player,
+    plugin::scan::PluginInfo,
+    song::project::{AuxSend, Content, PPQ, Shape},
+    song::session::Session,
 };
 
 use crate::{
@@ -243,7 +243,7 @@ fn pick(cx: &mut VisualTestContext, ws: &Entity<Workspace>, label: &str) {
 
 #[gpui::test]
 fn a_tracks_menu_its_pan_modes_its_height_and_the_columns_widths(cx: &mut TestAppContext) {
-    use pina_engine::project::{PanLaw, PanMode};
+    use pina_engine::song::project::{PanLaw, PanMode};
     let (ws, cx) = open(cx);
     // The pan knob's menu: Stereo Pan, then the song's pan law.
     click_on(cx, "track-pan-1", Modifiers::none(), MouseButton::Right);
@@ -378,7 +378,7 @@ fn a_headers_fader_and_pan_drag_finely_type_and_reset(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_binaural_panner_places_a_sound_round_the_head(cx: &mut TestAppContext) {
     use crate::editors::binaural::Camera;
-    use pina_engine::project::{PanMode, Place};
+    use pina_engine::song::project::{PanMode, Place};
     let (ws, cx) = open(cx);
     // Binaural, from the pan knob's menu: the panner opens.
     click_on(cx, "track-pan-1", Modifiers::none(), MouseButton::Right);
@@ -452,7 +452,7 @@ fn the_binaural_panner_places_a_sound_round_the_head(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn modulators_are_added_mapped_by_dragging_and_their_depth_set(cx: &mut TestAppContext) {
-    use pina_engine::modulate::{ModKind, ModTarget};
+    use pina_engine::dsp::modulate::{ModKind, ModTarget};
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
         ws.select_track(0);
@@ -513,9 +513,9 @@ fn a_modulator_learns_the_plugin_parameter_turned_next_and_lists_every_one(
     cx: &mut TestAppContext,
 ) {
     use pina_engine::{
-        commands::{ChannelRef, Command},
-        modulate::{ModKind, ModTarget},
-        project::{Format, PluginRef, Which},
+        dsp::modulate::{ModKind, ModTarget},
+        song::commands::{ChannelRef, Command},
+        song::project::{Format, PluginRef, Which},
     };
     let (ws, cx) = open(cx);
     // Apple's low-pass filter, on every Mac, in the first track's first insert.
@@ -533,7 +533,7 @@ fn a_modulator_learns_the_plugin_parameter_turned_next_and_lists_every_one(
                 }),
             };
             let dir = ws.session.dir.clone();
-            pina_engine::commands::apply(&mut ws.session.project, &dir, insert).unwrap();
+            pina_engine::song::commands::apply(&mut ws.session.project, &dir, insert).unwrap();
         });
         ws.show_bottom(Bottom::Modulation, cx);
     });
@@ -659,7 +659,7 @@ fn a_stack_has_a_row_of_its_own_folds_its_tracks_away_and_flattens(cx: &mut Test
 
 #[gpui::test]
 fn an_automation_lane_takes_a_modulator(cx: &mut TestAppContext) {
-    use pina_engine::modulate::ModTarget;
+    use pina_engine::dsp::modulate::ModTarget;
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
         ws.select_track(0);
@@ -698,7 +698,7 @@ fn an_automation_lane_takes_a_modulator(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_stacks_shared_modulator_is_on_every_track_in_it(cx: &mut TestAppContext) {
     use crate::editors::modulation::ModField;
-    use pina_engine::modulate::ModKind;
+    use pina_engine::dsp::modulate::ModKind;
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
         ws.edit(cx, |ws| {
@@ -734,8 +734,8 @@ fn a_stacks_shared_modulator_is_on_every_track_in_it(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_modulators_knob_is_automated_from_its_right_click(cx: &mut TestAppContext) {
     use pina_engine::{
-        modulate::ModParam,
-        project::{AutoPoint, Param},
+        dsp::modulate::ModParam,
+        song::project::{AutoPoint, Param},
     };
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
@@ -902,7 +902,8 @@ fn the_tool_menu_and_its_tools_text_glue_solo_mute_zoom_fade_flex(cx: &mut TestA
     cx.simulate_keystrokes("escape");
     // Cut in two, then glued back: one region, every note.
     let whole = region(cx, (0, 0));
-    let notes = |r: &pina_engine::project::Region| r.content.notes(r.length).map_or(0, |n| n.len());
+    let notes =
+        |r: &pina_engine::song::project::Region| r.content.notes(r.length).map_or(0, |n| n.len());
     ws.update(cx, |ws, cx| ws.split_at((0, 0), BAR * 2, cx));
     assert_eq!(
         ws.read_with(cx, |ws, _| ws.session.project.tracks[0].regions.len()),
@@ -1022,7 +1023,7 @@ fn regions_copy_paste_mute_and_repeat_from_their_menus_and_keys(cx: &mut TestApp
 
 #[gpui::test]
 fn a_regions_end_loops_from_its_top_and_time_stretches_with_option(cx: &mut TestAppContext) {
-    use pina_engine::project::Content;
+    use pina_engine::song::project::Content;
     let (ws, cx) = open(cx);
     let region = |cx: &VisualTestContext, at: (usize, usize)| {
         ws.read_with(cx, |ws, _| ws.session.project.region(at).clone())
@@ -1108,7 +1109,7 @@ fn mute_solo_and_arm_from_the_track_header(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_new_track_palette_adds_beats_samplers_and_instruments(cx: &mut TestAppContext) {
-    use pina_engine::project::Instrument;
+    use pina_engine::song::project::Instrument;
     let (ws, cx) = open(cx);
     let last = |cx: &VisualTestContext| {
         ws.read_with(cx, |ws, _| {
@@ -1369,7 +1370,7 @@ fn the_pencil_writes_chords_in_key_paints_on_and_the_lane_draws(cx: &mut TestApp
                 .filter(|c| {
                     matches!(
                         c.kind,
-                        pina_engine::project::ControlValue::Cc { number: 1, .. }
+                        pina_engine::song::project::ControlValue::Cc { number: 1, .. }
                     )
                 })
                 .count(),
@@ -1408,7 +1409,7 @@ fn automation_points_are_added_dragged_and_deleted(cx: &mut TestAppContext) {
         top.x,
         px(lane_top
             + crate::arrange::automation::to_y(
-                pina_engine::project::Param::Volume,
+                pina_engine::song::project::Param::Volume,
                 points[0].value,
                 64.0,
             )),
@@ -1423,7 +1424,7 @@ fn automation_points_are_added_dragged_and_deleted(cx: &mut TestAppContext) {
         top.x,
         px(lane_top
             + crate::arrange::automation::to_y(
-                pina_engine::project::Param::Volume,
+                pina_engine::song::project::Param::Volume,
                 moved.value,
                 64.0,
             )),
@@ -1641,7 +1642,9 @@ fn agents_edit_the_open_project_through_its_socket(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-z");
     assert_eq!(ws.read_with(cx, |ws, _| ws.session.project.tempo), 100.0);
     assert_eq!(
-        pina_engine::project::Project::load(&dir).unwrap().tempo,
+        pina_engine::song::project::Project::load(&dir)
+            .unwrap()
+            .tempo,
         100.0
     );
     // The window shows where the agent was working.
@@ -1842,7 +1845,10 @@ fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
             ws.session.project.tracks[ws.track].instrument.clone(),
         )
     });
-    assert_eq!(instrument, Some(pina_engine::project::Instrument::Drums));
+    assert_eq!(
+        instrument,
+        Some(pina_engine::song::project::Instrument::Drums)
+    );
 
     cx.simulate_keystrokes("cmd-alt-p");
     assert_eq!(ws.read_with(cx, |ws, _| ws.bottom), Some(Bottom::Steps));
@@ -1932,7 +1938,7 @@ fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
             .map(|r| r.target)
             .collect::<Vec<_>>()
     });
-    use pina_engine::modulate::{ModKind, ModTarget, SoundParam};
+    use pina_engine::dsp::modulate::{ModKind, ModTarget, SoundParam};
     assert_eq!(routes, [ModTarget::Sound(2, SoundParam::Velocity)]);
 
     // A parameter row: mapped to the volume from its menu, its first step painted low.
@@ -2160,7 +2166,7 @@ fn snap_follows_the_menu(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_eq_window_sets_dynamics_character_output_and_records_automation(cx: &mut TestAppContext) {
-    use pina_engine::project::{
+    use pina_engine::song::project::{
         AutoMode, Bands, Character, Eq, EqBand, EqField, Param, Processing,
     };
     let (ws, cx) = open(cx);
@@ -2282,7 +2288,7 @@ fn the_eq_window_sets_dynamics_character_output_and_records_automation(cx: &mut 
 
 #[gpui::test]
 fn the_instance_list_edits_every_eq_in_the_song(cx: &mut TestAppContext) {
-    use pina_engine::project::{Bands, Eq, EqBand};
+    use pina_engine::song::project::{Bands, Eq, EqBand};
     let (ws, cx) = open(cx);
     cx.simulate_resize(gpui::size(px(1500.), px(1000.)));
     ws.update(cx, |ws, cx| {
@@ -2446,7 +2452,7 @@ fn smart_controls_turn_the_channel_eq_on_a_built_in_instrument(cx: &mut TestAppC
 
 #[gpui::test]
 fn the_band_panel_never_hides_the_band_it_is_for(cx: &mut TestAppContext) {
-    use pina_engine::project::{Bands, Eq, EqBand};
+    use pina_engine::song::project::{Bands, Eq, EqBand};
     let (ws, cx) = open(cx);
     cx.simulate_resize(gpui::size(px(1500.), px(1000.)));
     // A band high up: the panel at the bottom, under it. Low down, where the panel would
@@ -2473,7 +2479,7 @@ fn the_band_panel_never_hides_the_band_it_is_for(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_eq_window_adds_shapes_moves_and_takes_out_bands(cx: &mut TestAppContext) {
-    use pina_engine::project::Placement;
+    use pina_engine::song::project::Placement;
     let (ws, cx) = open(cx);
     cx.simulate_resize(gpui::size(px(1500.), px(1000.)));
     ws.update(cx, |ws, cx| ws.open_eq(Channel::Track(0), cx));
@@ -2908,7 +2914,7 @@ fn latch_records_the_fader_while_playing_until_stop(cx: &mut TestAppContext) {
     click_on(cx, "auto-mode-0", Modifiers::none(), MouseButton::Left);
     click_on(cx, "menu-3", Modifiers::none(), MouseButton::Left);
     let mode = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].automation.mode);
-    assert_eq!(mode, pina_engine::project::AutoMode::Latch);
+    assert_eq!(mode, pina_engine::song::project::AutoMode::Latch);
 
     ws.update(cx, |ws, _| ws.player.play());
     until(cx, &ws, |ws| ws.playhead() > PPQ / 4);
@@ -2965,7 +2971,7 @@ fn the_automation_menu_narrows_down_as_you_type(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     let id = ws.read_with(cx, |ws, _| ws.session.project.tracks[1].id);
     let param = ws.read_with(cx, |ws, _| ws.auto_lanes.get(&id).map(|l| l[0]));
-    assert_eq!(param, Some(pina_engine::project::Param::Pan));
+    assert_eq!(param, Some(pina_engine::song::project::Param::Pan));
     // Typing didn't reach the shortcuts ("a" hides automation).
     assert!(ws.read_with(cx, |ws, _| ws.show_automation && ws.menu.is_none()));
 }
@@ -2992,7 +2998,7 @@ fn lane_spot(
 #[gpui::test]
 fn controls_show_their_automation_and_moved_while_stopped_move_its_line(cx: &mut TestAppContext) {
     use crate::{arrange::automation::Stopped, mix::strip::Channel};
-    use pina_engine::project::{AutoPoint, Param, value_at};
+    use pina_engine::song::project::{AutoPoint, Param, value_at};
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
         ws.session.project.tracks[0].automation.volume =
@@ -3071,7 +3077,7 @@ fn controls_show_their_automation_and_moved_while_stopped_move_its_line(cx: &mut
 
 #[gpui::test]
 fn read_hands_over_while_held_and_trim_moves_the_line_while_playing(cx: &mut TestAppContext) {
-    use pina_engine::project::{AutoMode, AutoPoint, Param, value_at};
+    use pina_engine::song::project::{AutoMode, AutoPoint, Param, value_at};
     let (ws, cx) = open(cx);
     let id = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].id);
     ws.update(cx, |ws, cx| {
@@ -3169,7 +3175,7 @@ fn read_hands_over_while_held_and_trim_moves_the_line_while_playing(cx: &mut Tes
 
 #[gpui::test]
 fn write_records_every_automated_control_from_play_then_turns_to_latch(cx: &mut TestAppContext) {
-    use pina_engine::project::{AutoMode, AutoPoint, value_at};
+    use pina_engine::song::project::{AutoMode, AutoPoint, value_at};
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
         let a = &mut ws.session.project.tracks[0].automation;
@@ -3194,7 +3200,7 @@ fn write_records_every_automated_control_from_play_then_turns_to_latch(cx: &mut 
 
 #[gpui::test]
 fn automation_lanes_draw_select_copy_bend_and_take_shapes(cx: &mut TestAppContext) {
-    use pina_engine::project::{Param, value_at};
+    use pina_engine::song::project::{Param, value_at};
     let (ws, cx) = open(cx);
     cx.simulate_keystrokes("a");
     let points = |cx: &VisualTestContext, param: Param| {
@@ -3267,7 +3273,7 @@ fn automation_lanes_draw_select_copy_bend_and_take_shapes(cx: &mut TestAppContex
     ws.update(cx, |ws, _| ws.tool = Tool::Pointer);
     // The line between its two ends dragged down: both ends with it.
     ws.update(cx, |ws, cx| {
-        use pina_engine::project::AutoPoint;
+        use pina_engine::song::project::AutoPoint;
         *ws.session.project.tracks[0]
             .automation
             .points_mut(Param::Pan) = vec![AutoPoint::new(0, -0.5), AutoPoint::new(BAR, 0.5)];
@@ -3289,7 +3295,7 @@ fn automation_lanes_draw_select_copy_bend_and_take_shapes(cx: &mut TestAppContex
 
 #[gpui::test]
 fn automation_smooths_from_its_menus_and_takes_s_curves(cx: &mut TestAppContext) {
-    use pina_engine::project::{AutoPoint, Param, value_at};
+    use pina_engine::song::project::{AutoPoint, Param, value_at};
     let (ws, cx) = open(cx);
     cx.simulate_keystrokes("a");
     // The keys' pan, recorded with a wobble every sixteenth through bar 2.
@@ -3352,7 +3358,7 @@ fn automation_smooths_from_its_menus_and_takes_s_curves(cx: &mut TestAppContext)
 
 #[gpui::test]
 fn automation_moves_with_regions_when_set(cx: &mut TestAppContext) {
-    use pina_engine::project::{AutoPoint, value_at};
+    use pina_engine::song::project::{AutoPoint, value_at};
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| {
         ws.settings.carry_automation = true;
@@ -3384,7 +3390,10 @@ fn the_saturator_goes_on_from_the_browser_and_turns_in_the_mixer(cx: &mut TestAp
     };
     ws.update(cx, |ws, cx| ws.choose(add.clone(), cx));
     let sat = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.session.project.tracks[0].sat);
-    assert_eq!(sat(cx), Some(pina_engine::project::Saturator::default()));
+    assert_eq!(
+        sat(cx),
+        Some(pina_engine::song::project::Saturator::default())
+    );
     // Asking again shows it, in the mixer, without another edit.
     let edits = ws.read_with(cx, |ws, _| ws.session.project.clone());
     ws.update(cx, |ws, cx| ws.choose(add, cx));
@@ -3472,7 +3481,7 @@ fn sends_switch_between_pre_and_post_fader(cx: &mut TestAppContext) {
 fn the_master_takes_plugins_and_audio_tracks_pick_an_input(cx: &mut TestAppContext) {
     use crate::{mix::strip::Channel, ui::menu::MenuAction};
     let (ws, cx) = open(cx);
-    let plugin = pina_engine::project::PluginRef {
+    let plugin = pina_engine::song::project::PluginRef {
         path: "/nonexistent/Missing.vst3".into(),
         class: "Missing".into(),
         ..Default::default()
@@ -3494,7 +3503,7 @@ fn the_master_takes_plugins_and_audio_tracks_pick_an_input(cx: &mut TestAppConte
     cx.run_until_parked();
     click_on(cx, "input-2", Modifiers::none(), MouseButton::Left);
     assert!(ws.read_with(cx, |ws, _| ws.menu.is_some()));
-    let input = pina_engine::project::Input {
+    let input = pina_engine::song::project::Input {
         channel: 1,
         stereo: false,
     };
@@ -3612,7 +3621,7 @@ fn the_compact_browser_is_resized_by_its_left_edge(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn an_audio_regions_flex_and_tempo_following_are_set_in_its_inspector(cx: &mut TestAppContext) {
-    use pina_engine::project::Flex;
+    use pina_engine::song::project::Flex;
     let (ws, cx) = open(cx);
     let drums = ws.read_with(cx, |ws, _| {
         let p = &ws.session.project;
@@ -3908,7 +3917,7 @@ fn a_loop_is_previewed_at_the_songs_tempo(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn add_to_song_puts_loops_on_audio_tracks_and_one_shots_on_samplers(cx: &mut TestAppContext) {
-    use pina_engine::project::Instrument;
+    use pina_engine::song::project::Instrument;
     let (ws, cx, dir) = open_browser(cx, "browser-add");
     let pick = |ws: &Entity<Workspace>, cx: &mut VisualTestContext, name: &str| {
         let i = ws.read_with(cx, |ws, _| {
@@ -3991,7 +4000,7 @@ fn add_to_song_puts_loops_on_audio_tracks_and_one_shots_on_samplers(cx: &mut Tes
 
 #[gpui::test]
 fn a_kit_becomes_a_sampler_track_and_samples_drag_onto_tracks(cx: &mut TestAppContext) {
-    use pina_engine::project::Instrument;
+    use pina_engine::song::project::Instrument;
     let (ws, cx, dir) = open_browser(cx, "browser-kit");
     cx.simulate_keystrokes("escape");
     click_on(cx, "results-Kit", Modifiers::none(), MouseButton::Left);
@@ -4065,7 +4074,7 @@ fn a_kit_becomes_a_sampler_track_and_samples_drag_onto_tracks(cx: &mut TestAppCo
 
 #[gpui::test]
 fn the_compact_browser_hears_finds_alike_and_drags_onto_tracks(cx: &mut TestAppContext) {
-    use pina_engine::project::Instrument;
+    use pina_engine::song::project::Instrument;
     let dir = demo_copy("browser-compact");
     let library = little_library(&dir.join("Library"));
     let (ws, cx) = open_at(cx, &dir);
@@ -4334,7 +4343,7 @@ fn a_tracks_icon_opens_a_picker_for_its_colour_and_icon(cx: &mut TestAppContext)
     assert!(ws.read_with(cx, |ws, _| ws.picker.as_ref().is_some_and(|p| p.track == 2)));
     // The demo's Drums track is drums, by its name.
     let before = ws.read_with(cx, |ws, _| ws.shown(2));
-    assert_eq!(before.look.family, pina_engine::look::Family::Drums);
+    assert_eq!(before.look.family, pina_engine::music::look::Family::Drums);
     // A swatch colours it, an icon marks it: each one edit, undone in turn.
     let swatch = cx.debug_bounds("swatch-1-9").unwrap().center();
     cx.simulate_click(swatch, Modifiers::none());
@@ -4346,7 +4355,7 @@ fn a_tracks_icon_opens_a_picker_for_its_colour_and_icon(cx: &mut TestAppContext)
     assert_eq!(t.icon.as_deref(), Some("808"));
     assert_eq!(
         ws.read_with(cx, |ws, _| ws.shown(2).look.family),
-        pina_engine::look::Family::Bass
+        pina_engine::music::look::Family::Bass
     );
     cx.simulate_keystrokes("cmd-z cmd-z");
     cx.run_until_parked();
@@ -4359,7 +4368,7 @@ fn the_browser_finds_by_words_and_puts_devices_on_tracks(cx: &mut TestAppContext
     ws.update(cx, |ws, cx| {
         ws.show_browser = true;
         ws.plugins = Some(vec![PluginInfo {
-            format: pina_engine::project::Format::Au,
+            format: pina_engine::song::project::Format::Au,
             path: "".into(),
             class: "AUDelay".into(),
             uid: Some("aufx dely appl".into()),
@@ -4599,7 +4608,7 @@ fn audio_dragged_in_from_the_finder_lands_on_the_timeline(cx: &mut TestAppContex
 
 #[gpui::test]
 fn the_inspectors_strips_line_up_row_for_row(cx: &mut TestAppContext) {
-    use pina_engine::project::Eq;
+    use pina_engine::song::project::Eq;
     let dir = demo_copy("strips-line-up");
     let (ws, cx) = open_at(cx, &dir);
     let lined_up = |cx: &mut VisualTestContext, t: usize| {
@@ -4645,7 +4654,7 @@ fn the_inspectors_strips_line_up_row_for_row(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn writing_notes_starts_with_a_double_click_anywhere(cx: &mut TestAppContext) {
-    use pina_engine::project::Instrument;
+    use pina_engine::song::project::Instrument;
     let dir = demo_copy("write-notes");
     let (ws, cx) = open_at(cx, &dir);
     // A new instrument track, empty: it says how to start.
@@ -4711,7 +4720,7 @@ fn writing_notes_starts_with_a_double_click_anywhere(cx: &mut TestAppContext) {
 
     // Inside a cycle that's on, a new region takes the cycle's stretch.
     ws.update(cx, |ws, cx| {
-        ws.session.project.cycle = Some(pina_engine::project::Cycle {
+        ws.session.project.cycle = Some(pina_engine::song::project::Cycle {
             start: 0,
             end: BAR,
             off: false,
@@ -4823,7 +4832,7 @@ fn playbook_parts_are_added_edited_and_removed(cx: &mut TestAppContext) {
     };
     let saved = || {
         let json = std::fs::read_to_string(books.join("lofi.json")).unwrap();
-        serde_json::from_str::<pina_engine::playbook::Playbook>(&json).unwrap()
+        serde_json::from_str::<pina_engine::music::playbook::Playbook>(&json).unwrap()
     };
     let before = parts(cx).len();
 
@@ -4863,8 +4872,8 @@ fn playbook_parts_are_added_edited_and_removed(cx: &mut TestAppContext) {
     );
     // Pina Studio's again: the same as it ships.
     assert_eq!(
-        pina_engine::playbook::origin(&book),
-        pina_engine::playbook::Origin::Pina
+        pina_engine::music::playbook::origin(&book),
+        pina_engine::music::playbook::Origin::Pina
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -5019,7 +5028,7 @@ fn sounds_are_picked_for_the_agent_given_parts_and_told_it(cx: &mut TestAppConte
     assert!(note.contains("choose your own"));
     cx.simulate_keystrokes("cmd-z");
     ws.update(cx, |ws, cx| ws.save(cx));
-    let saved = pina_engine::project::Project::load(&dir).unwrap();
+    let saved = pina_engine::song::project::Project::load(&dir).unwrap();
     assert_eq!(saved.palette.sounds.len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -5121,7 +5130,7 @@ fn the_agent_panel_knows_the_song_and_its_critic(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_song_map_toggles_parts_and_genres_duplicate_and_go(cx: &mut TestAppContext) {
-    use pina_engine::playbook::{self, Origin};
+    use pina_engine::music::playbook::{self, Origin};
     let dir = demo_copy("playbook-map");
     let (ws, cx) = open_at(cx, &dir);
     cx.simulate_resize(gpui::size(px(1600.), px(3400.)));
@@ -5225,7 +5234,7 @@ fn a_song_studied_shows_its_form_and_becomes_the_mix_reference(cx: &mut TestAppC
         })
         .collect();
     let song = dir.join("Someone - A Test.wav");
-    pina_engine::analysis::write_wav(&song, &l, &l, rate).unwrap();
+    pina_engine::music::analysis::write_wav(&song, &l, &l, rate).unwrap();
     let studied = crate::cli::study::study(&song, false).unwrap();
     assert_eq!(studied.identity.title, "A Test");
     let (ws, cx) = open(cx);
@@ -5250,7 +5259,7 @@ fn a_song_studied_shows_its_form_and_becomes_the_mix_reference(cx: &mut TestAppC
 
 #[gpui::test]
 fn the_sampler_takes_samples_slices_them_and_its_knobs_and_marks_turn(cx: &mut TestAppContext) {
-    use pina_engine::project::{FilterMode, Instrument, LoopMode};
+    use pina_engine::song::project::{FilterMode, Instrument, LoopMode};
     // A song of the test's own, so samples are copied into it, not the demo.
     let dir = std::env::temp_dir().join(format!("pina-test-sampler-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -5263,7 +5272,7 @@ fn the_sampler_takes_samples_slices_them_and_its_knobs_and_marks_turn(cx: &mut T
             (k as f32 * 0.7).sin() * (-(k as f32) / 300.0).exp()
         })
         .collect();
-    pina_engine::analysis::write_wav(&loop_file, &hits, &hits, rate).unwrap();
+    pina_engine::music::analysis::write_wav(&loop_file, &hits, &hits, rate).unwrap();
     let song = dir.join("Song");
     let (ws, cx) = open_at(cx, &song);
     let sampler = |cx: &VisualTestContext| {
@@ -5404,7 +5413,7 @@ fn the_bounce_sheet_writes_stems_in_several_formats(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn bounce_in_place_puts_a_track_on_audio_and_mutes_it(cx: &mut TestAppContext) {
-    use pina_engine::project::Content;
+    use pina_engine::song::project::Content;
     let song = demo_copy("in-place");
     let (ws, cx) = open_at(cx, &song);
     let before = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
@@ -5517,16 +5526,16 @@ fn shots() {
                     }
                 }
                 "sampler" => {
-                    use pina_engine::project::{
+                    use pina_engine::song::project::{
                         FilterMode, Instrument, Sampler, SamplerVoice, Track,
                     };
                     let file = PathBuf::from(
                         std::env::var("PINA_SHOT_SAMPLE").expect("PINA_SHOT_SAMPLE: a loop"),
                     );
-                    let (sides, rate) = pina_engine::engine::read_audio(&file).unwrap();
-                    let found = pina_engine::sampler::onsets(&sides[0], rate as f32);
-                    let cut = pina_engine::sampler::cuts(&found, 8);
-                    let zones = pina_engine::sampler::slices(&file, &cut, 36);
+                    let (sides, rate) = pina_engine::audio::engine::read_audio(&file).unwrap();
+                    let found = pina_engine::dsp::sampler::onsets(&sides[0], rate as f32);
+                    let cut = pina_engine::dsp::sampler::cuts(&found, 8);
+                    let zones = pina_engine::dsp::sampler::slices(&file, &cut, 36);
                     let voice = SamplerVoice {
                         filter: FilterMode::LowPass,
                         cutoff_hz: 6000.0,
@@ -5550,10 +5559,11 @@ fn shots() {
                 }
                 p if p.starts_with("adder") => {
                     // The plugins as last scanned, their presets as last read, the library.
-                    let cached: serde_json::Value = std::fs::read(pina_engine::scan::cache_file())
-                        .ok()
-                        .and_then(|b| serde_json::from_slice(&b).ok())
-                        .unwrap_or_default();
+                    let cached: serde_json::Value =
+                        std::fs::read(pina_engine::plugin::scan::cache_file())
+                            .ok()
+                            .and_then(|b| serde_json::from_slice(&b).ok())
+                            .unwrap_or_default();
                     let plugins: Vec<PluginInfo> = cached
                         .as_object()
                         .map(|m| {
@@ -5589,11 +5599,11 @@ fn shots() {
                     if let Some(e) = ws.export.as_mut() {
                         e.tracks = vec![true; e.tracks.len()];
                         e.formats = vec![
-                            pina_engine::bounce::Format::Wav,
-                            pina_engine::bounce::Format::Mp3 { kbps: 320 },
-                            pina_engine::bounce::Format::Flac,
+                            pina_engine::audio::bounce::Format::Wav,
+                            pina_engine::audio::bounce::Format::Mp3 { kbps: 320 },
+                            pina_engine::audio::bounce::Format::Flac,
                         ];
-                        e.level = pina_engine::bounce::Level::Loudness {
+                        e.level = pina_engine::audio::bounce::Level::Loudness {
                             lufs: -14.0,
                             ceiling: -1.0,
                         };
@@ -5604,10 +5614,10 @@ fn shots() {
                     if let Some(e) = ws.export.as_mut() {
                         e.tracks = vec![true; e.tracks.len()];
                         e.formats = vec![
-                            pina_engine::bounce::Format::Wav,
-                            pina_engine::bounce::Format::Mp3 { kbps: 320 },
+                            pina_engine::audio::bounce::Format::Wav,
+                            pina_engine::audio::bounce::Format::Mp3 { kbps: 320 },
                         ];
-                        e.level = pina_engine::bounce::Level::Loudness {
+                        e.level = pina_engine::audio::bounce::Level::Loudness {
                             lufs: -14.0,
                             ceiling: -1.0,
                         };
@@ -5622,11 +5632,14 @@ fn shots() {
                     ws.show_bottom(Bottom::Steps, cx);
                 }
                 "steps" | "steps-mod" => {
-                    ws.session.project.tracks.push(pina_engine::project::Track {
-                        name: "Kit".into(),
-                        instrument: Some(pina_engine::project::Instrument::Drums),
-                        ..Default::default()
-                    });
+                    ws.session
+                        .project
+                        .tracks
+                        .push(pina_engine::song::project::Track {
+                            name: "Kit".into(),
+                            instrument: Some(pina_engine::song::project::Instrument::Drums),
+                            ..Default::default()
+                        });
                     ws.session.project.assign_ids();
                     ws.track = ws.session.project.tracks.len() - 1;
                     ws.editor_h = 380.0;
@@ -5646,7 +5659,7 @@ fn shots() {
                     }
                     ws.steps_row = 2;
                     if page == "steps-mod" {
-                        use pina_engine::modulate::{
+                        use pina_engine::dsp::modulate::{
                             LfoShape, ModKind, ModRate, ModRoute, ModTarget, Modulator, SoundParam,
                         };
                         if let Content::Pattern { rows, .. } =
@@ -5718,7 +5731,7 @@ fn shots() {
                 }
                 // Sounds picked for the agent: in its message box, and the Browser picking them.
                 "palette" | "palette-pick" | "palette-start" => {
-                    use pina_engine::{project::PaletteSound, samples::Category};
+                    use pina_engine::{samples::Category, song::project::PaletteSound};
                     if ws.browser.library.samples.is_empty() {
                         ws.browser.library = pina_engine::samples::library::Library::load();
                         ws.browser.loaded = true;
@@ -5773,7 +5786,7 @@ fn shots() {
                 // Modulation: an LFO, steps, an envelope, a follower and random on the keys,
                 // mapped to its pan, volume, low cut and presence; values as if playing.
                 "modulation" => {
-                    use pina_engine::modulate::{
+                    use pina_engine::dsp::modulate::{
                         LfoShape, ModKind, ModRate, ModRoute, ModTarget, Modulator,
                     };
                     let drums = ws.session.project.tracks[2].id;
@@ -5833,7 +5846,7 @@ fn shots() {
                 // A stack of the keys and drums (gathered), its row and its lane; the keys'
                 // volume lane moved by an LFO. Folded, its tracks go.
                 "stack-rows" | "stack-folded" => {
-                    use pina_engine::modulate::{ModKind, ModRoute, ModTarget, Modulator};
+                    use pina_engine::dsp::modulate::{ModKind, ModRoute, ModTarget, Modulator};
                     ws.session.project.tracks[0].modulators.push(Modulator {
                         kind: ModKind::lfo(),
                         routes: vec![ModRoute {
@@ -5851,7 +5864,7 @@ fn shots() {
                 }
                 // A stack of the keys and lead, both picked, sharing an LFO and a macro.
                 "stack-shared" | "stack-shared-menu" => {
-                    use pina_engine::modulate::{ModKind, ModRoute, ModTarget};
+                    use pina_engine::dsp::modulate::{ModKind, ModRoute, ModTarget};
                     let p = &mut ws.session.project;
                     let (bus, _) = p.add_stack(&[0, 1]);
                     p.add_shared(bus, ModKind::lfo());
@@ -5866,7 +5879,7 @@ fn shots() {
                     }];
                     p.tracks[0]
                         .modulators
-                        .push(pina_engine::modulate::Modulator {
+                        .push(pina_engine::dsp::modulate::Modulator {
                             kind: ModKind::random(),
                             routes: vec![],
                         });
@@ -5889,7 +5902,7 @@ fn shots() {
                 // and each right-click menu.
                 // Automation: the keys' volume rising, the lead's pan swinging, in Read and Latch.
                 "automation" => {
-                    use pina_engine::project::{AutoMode, AutoPoint, Param};
+                    use pina_engine::song::project::{AutoMode, AutoPoint, Param};
                     let pt = |tick, value| AutoPoint::new(tick, value);
                     let bent = |tick, value, curve| AutoPoint {
                         curve,
@@ -5944,7 +5957,7 @@ fn shots() {
                 }
                 // The automation lanes' menus: a mode's, the shapes', a point's.
                 "auto-modes" | "auto-shapes" | "auto-point" => {
-                    use pina_engine::project::{AutoPoint, Param};
+                    use pina_engine::song::project::{AutoPoint, Param};
                     let id = ws.session.project.tracks[0].id;
                     ws.session.project.tracks[0].automation.volume = vec![
                         AutoPoint {
@@ -6017,7 +6030,9 @@ fn shots() {
                 | "eq-piano" | "eq-analyzer" | "eq-empty" | "eq-dynamics" | "eq-output"
                 | "eq-list" | "eq-match" | "eq-sketch" | "eq-grab" | "eq-compare"
                 | "eq-spectral" | "eq-modes" | "eq-slopes" | "eq-instances" => {
-                    use pina_engine::project::{Bands, Dynamic, Eq, EqBand, Placement, Shape};
+                    use pina_engine::song::project::{
+                        Bands, Dynamic, Eq, EqBand, Placement, Shape,
+                    };
                     let mut cut = EqBand::new(Shape::LowCut, 32.0, 0.0);
                     cut.slope = 24.0;
                     let mut side = EqBand::new(Shape::LowCut, 160.0, 0.0);
@@ -6044,7 +6059,7 @@ fn shots() {
                         eq.bands[4].gain_db = 6.0;
                     }
                     if page == "eq-spectral" {
-                        use pina_engine::project::Processing;
+                        use pina_engine::song::project::Processing;
                         (eq.processing, eq.resolution) = (Processing::Linear, 2);
                         let d = eq.bands[4].dynamic.as_mut().unwrap();
                         (d.spectral, d.density) = (true, 0.7);
@@ -6141,7 +6156,7 @@ fn shots() {
                     cx.notify();
                 }
                 "tracks" | "track-menu" | "pan-menu" | "region-menu" | "lane-menu" | "panner" => {
-                    use pina_engine::project::PanMode;
+                    use pina_engine::song::project::PanMode;
                     let tracks = &mut ws.session.project.tracks;
                     tracks[0].pan = -0.3;
                     tracks[1].mute = page == "tracks";

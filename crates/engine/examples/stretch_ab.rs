@@ -8,8 +8,8 @@
 use std::{path::Path, time::Instant};
 
 use pina_engine::{
-    engine::{AudioData, load_audio},
-    stretch::{Fit, Flex, onsets, render},
+    audio::engine::{AudioData, load_audio},
+    audio::stretch::{Fit, Flex, onsets, render},
 };
 
 const RATE: f64 = 44_100.0;

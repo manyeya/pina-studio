@@ -21,10 +21,10 @@ use std::sync::{
 };
 
 use crate::{
-    engine::{MASTER, MAX_BLOCK},
-    eq_linear::{self, Linear},
-    eq_spectral,
-    project::{Character, Eq, EqBand, MAX_BANDS, Placement, Processing, Shape},
+    audio::engine::{MASTER, MAX_BLOCK},
+    dsp::eq_linear::{self, Linear},
+    dsp::eq_spectral,
+    song::project::{Character, Eq, EqBand, MAX_BANDS, Placement, Processing, Shape},
 };
 
 /// The most second-order sections a band takes: a shelf between its two steepest slopes.
@@ -1766,7 +1766,7 @@ pub fn fit_bands(curve: &[f32], freqs: &[f64], count: usize, rate: f64) -> Vec<E
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{Bands, Dynamic};
+    use crate::song::project::{Bands, Dynamic};
 
     const RATE: f64 = 48_000.0;
 
@@ -2226,9 +2226,9 @@ mod tests {
         let mut e = eq(&[band(Shape::Bell, 500.0, 9.0)]);
         let tail = |s: &[f32]| s[12_000..].to_vec();
         let (clean, _, _) = run(&e, &x, &x, None);
-        e.character = crate::project::Character::Subtle;
+        e.character = crate::song::project::Character::Subtle;
         let (subtle, _, _) = run(&e, &x, &x, None);
-        e.character = crate::project::Character::Warm;
+        e.character = crate::song::project::Character::Warm;
         let (warm, _, _) = run(&e, &x, &x, None);
         let (c3, s3) = (
             harmonic(&tail(&clean), 500.0, 3.0),

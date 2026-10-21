@@ -30,7 +30,7 @@ use super::{
     AUTOMATED, Control, ControlKind, EditReceiver, Editor, ExpressionKind, Note, Plugin, PluginApi,
     PluginParam, Preset, PresetSource, Processor, ProcessorApi, edit_queue, editor_window,
 };
-use crate::{project::PluginRef, scan::PluginInfo};
+use crate::{plugin::scan::PluginInfo, song::project::PluginRef};
 
 /// The category of a plugin's processor class.
 pub const AUDIO_MODULE: &str = "Audio Module Class";
@@ -196,7 +196,7 @@ pub fn inspect(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
         .into_iter()
         .filter(|c| c.category == AUDIO_MODULE)
         .map(|c| PluginInfo {
-            format: crate::project::Format::Vst3,
+            format: crate::song::project::Format::Vst3,
             path: bundle.to_path_buf(),
             class: c.name,
             uid: None,

@@ -7,11 +7,11 @@
 use std::path::Path;
 
 use pina_engine::{
-    analysis,
-    arrange::role,
     music::Key,
-    project::{Instrument, Project},
+    music::analysis,
+    music::arrange::role,
     samples::{Category, analyze, search},
+    song::project::{Instrument, Project},
 };
 use serde_json::{Value, json};
 
@@ -224,7 +224,7 @@ pub fn listen(dir: &Path, only: Option<usize>, bars: Option<(u64, u64)>) -> Resu
         let midi = track
             .regions
             .iter()
-            .any(|r| !matches!(r.content, pina_engine::project::Content::Audio { .. }));
+            .any(|r| !matches!(r.content, pina_engine::song::project::Content::Audio { .. }));
         if midi && !slow_ok && heard.envelope.attack_ms > 400.0 {
             issues.push(format!(
                 "a slow attack ({:.1} s) for its {part} part: its notes swell in late, as a pad's do; \
@@ -266,7 +266,7 @@ pub fn listen(dir: &Path, only: Option<usize>, bars: Option<(u64, u64)>) -> Resu
         let audio = track
             .regions
             .iter()
-            .any(|r| matches!(r.content, pina_engine::project::Content::Audio { .. }));
+            .any(|r| matches!(r.content, pina_engine::song::project::Content::Audio { .. }));
         let key_heard = heard
             .key
             .as_ref()

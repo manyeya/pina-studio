@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::{Category, Kind, Sample, TRAITS, note_name};
-use crate::{music::Key, project::Zone};
+use crate::{music::Key, song::project::Zone};
 
 /// What to look for. Everything is optional: leave it all out for everything.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

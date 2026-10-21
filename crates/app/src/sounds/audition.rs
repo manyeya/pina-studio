@@ -10,9 +10,9 @@ use std::{
 };
 
 use pina_engine::{
-    analysis,
-    project::{PluginRef, Preset, Project},
+    music::analysis,
     samples::{Category, analyze},
+    song::project::{PluginRef, Preset, Project},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

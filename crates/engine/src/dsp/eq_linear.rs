@@ -18,8 +18,8 @@ use std::{
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 
 use crate::{
-    eq::{Section, band_sections},
-    project::{Eq, EqBand, Placement, Shape},
+    dsp::eq::{Section, band_sections},
+    song::project::{Eq, EqBand, Placement, Shape},
 };
 
 /// Samples a partition: what the convolver works on at a time, and adds to the latency.
@@ -189,7 +189,7 @@ fn kernel(
         let f = k as f64 * rate / len as f64;
         let db: f64 = sections
             .iter()
-            .map(|s| crate::eq::response_db(s, f.max(1.0), rate))
+            .map(|s| crate::dsp::eq::response_db(s, f.max(1.0), rate))
             .sum();
         let m = 10f64.powf(db / 20.0) as f32;
         spectrum[k] = Complex::new(m, 0.0);
@@ -459,7 +459,7 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{Bands, EqBand};
+    use crate::song::project::{Bands, EqBand};
     use std::f64::consts::PI;
 
     const RATE: f64 = 48_000.0;

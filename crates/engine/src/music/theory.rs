@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{music::Key, project::Note};
+use crate::{music::Key, song::project::Note};
 
 /// A chord's kind, as the intervals over its root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

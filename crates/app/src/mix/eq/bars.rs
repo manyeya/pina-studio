@@ -5,7 +5,7 @@
 use gpui::{
     Context, Div, FontWeight, MouseButton, MouseDownEvent, Stateful, div, prelude::*, px, rgb,
 };
-use pina_engine::project::{Eq, Processing, RESOLUTIONS};
+use pina_engine::song::project::{Eq, Processing, RESOLUTIONS};
 
 use super::{EqKnob, EqOp, FOOT_H, HEAD_H, Popup, factory, saved_presets};
 use crate::{
@@ -371,7 +371,7 @@ impl Workspace {
             }
             p => p.name().to_string(),
         };
-        let latency = pina_engine::eq::latency(eq) as f32;
+        let latency = pina_engine::dsp::eq::latency(eq) as f32;
         let latency_ms = latency / self.session.project.sample_rate.max(1) as f32 * 1_000.0;
         let tool =
             |label: &'static str, on: bool, sel: &'static str, op: EqOp, cx: &mut Context<Self>| {
@@ -441,7 +441,7 @@ impl Workspace {
                 el.child(
                     bar_button(
                         format!("Character · {}", eq.character.name()),
-                        eq.character != pina_engine::project::Character::Clean,
+                        eq.character != pina_engine::song::project::Character::Clean,
                         AMBER,
                     )
                     .debug_selector(|| "eq-character".into())
@@ -450,7 +450,7 @@ impl Workspace {
                         cx.listener(|ws, e: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
                             let now = ws.shown_eq().map(|(_, e)| e.character);
-                            let items = pina_engine::project::Character::ALL
+                            let items = pina_engine::song::project::Character::ALL
                                 .iter()
                                 .map(|&c| {
                                     (

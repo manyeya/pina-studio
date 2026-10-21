@@ -9,7 +9,7 @@ use gpui::{
     Animation, AnimationExt, Context, Div, FontWeight, MouseButton, MouseDownEvent, div,
     prelude::*, px, rgb,
 };
-use pina_engine::{arrange, critique, playbook, project::Project};
+use pina_engine::{music::arrange, music::critique, music::playbook, song::project::Project};
 use serde_json::Value;
 
 use crate::{
@@ -96,7 +96,7 @@ impl Stage {
             Stage::Chords => {
                 !p.chords.is_empty() || {
                     let end = p.end().min(16 * p.bar());
-                    pina_engine::compose::heard_chords(p, 0, end).len() >= 2
+                    pina_engine::music::compose::heard_chords(p, 0, end).len() >= 2
                 }
             }
             Stage::Loop => sounding >= 2,

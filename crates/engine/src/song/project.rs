@@ -11,9 +11,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::modulate::{MAX_MODS, ModKind, Modulator};
+use crate::dsp::modulate::{MAX_MODS, ModKind, Modulator};
 
-pub use crate::stretch::Flex;
+pub use crate::audio::stretch::Flex;
 
 /// Ticks per quarter note.
 pub const PPQ: u64 = 960;
@@ -1136,7 +1136,7 @@ pub struct Track {
     pub distance: Option<f32>,
     /// Its modulators, and what each moves (`modulate.rs`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub modulators: Vec<crate::modulate::Modulator>,
+    pub modulators: Vec<crate::dsp::modulate::Modulator>,
     #[serde(default)]
     pub mute: bool,
     #[serde(default)]
@@ -1286,7 +1286,7 @@ pub struct Aux {
     /// A stack's shared modulators: each runs once, and a track in the stack moves its own
     /// settings by one through a `Shared` modulator of its own, its routes its own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub modulators: Vec<crate::modulate::Modulator>,
+    pub modulators: Vec<crate::dsp::modulate::Modulator>,
     /// A stack's tracks folded away under it in the arrangement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub folded: bool,
@@ -1331,7 +1331,7 @@ pub struct EqAuto {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ModAuto {
     pub modulator: u8,
-    pub field: crate::modulate::ModParam,
+    pub field: crate::dsp::modulate::ModParam,
     pub points: Vec<AutoPoint>,
 }
 
@@ -1471,7 +1471,7 @@ pub enum Param {
     Plugin(Which, u32),
     Eq(u8, EqField),
     /// A modulator's setting, by the modulator's place on the track.
-    Mod(u8, crate::modulate::ModParam),
+    Mod(u8, crate::dsp::modulate::ModParam),
 }
 
 impl Param {
@@ -1490,7 +1490,7 @@ impl Param {
 
     /// Whether its scale is octaves (frequencies, widths, times) rather than steps.
     fn logarithmic(self) -> bool {
-        use crate::modulate::ModParam;
+        use crate::dsp::modulate::ModParam;
         matches!(
             self,
             Param::Eq(_, EqField::Freq | EqField::Q)
@@ -1640,7 +1640,7 @@ impl AutoShape {
                     }
                 }
                 AutoShape::Random => {
-                    let r = crate::modulate::roll(n as i64, 7);
+                    let r = crate::dsp::modulate::roll(n as i64, 7);
                     out.push(at(start, low + (high - low) * r, 0.0, true));
                 }
                 AutoShape::RampUp | AutoShape::RampDown => unreachable!(),
@@ -2711,7 +2711,7 @@ pub enum Content {
         /// speed. `offset` is in the file's own samples.
         #[serde(default = "one", skip_serializing_if = "is_one")]
         stretch: f64,
-        /// How it's stretched: Polyphonic, Slicing or Speed (see `crate::stretch`).
+        /// How it's stretched: Polyphonic, Slicing or Speed (see `crate::audio::stretch`).
         #[serde(default, skip_serializing_if = "Flex::is_default")]
         flex: Flex,
         /// It follows the song's tempo, as a loop from the browser does: a tempo change
@@ -2894,10 +2894,10 @@ pub fn pattern_played(
     length: u64,
     swing: f32,
     start: u64,
-    mods: &[crate::modulate::Modulator],
+    mods: &[crate::dsp::modulate::Modulator],
     tempo: f64,
 ) -> Vec<Note> {
-    use crate::modulate::{ModTarget, SoundParam};
+    use crate::dsp::modulate::{ModTarget, SoundParam};
     // Swing is where in a pair of steps the second lands: at 50% exactly between.
     let late = ((swing.clamp(50.0, 75.0) - 50.0) / 50.0 * step as f32) as i64;
     let mut notes = Vec::new();
@@ -2922,7 +2922,7 @@ pub fn pattern_played(
                 for route in &m.routes {
                     if let ModTarget::Sound(on, param) = route.target
                         && on == r
-                        && let Some(v) = crate::modulate::value_at(&m.kind, beats, tempo)
+                        && let Some(v) = crate::dsp::modulate::value_at(&m.kind, beats, tempo)
                     {
                         let by = route.depth * v;
                         match param {
@@ -2934,7 +2934,7 @@ pub fn pattern_played(
                 }
             }
             let chance = (row.chance_at(i) as f32 + dc).clamp(0.0, 100.0);
-            if chance < 100.0 && crate::modulate::roll(first + k as i64, r) >= chance {
+            if chance < 100.0 && crate::dsp::modulate::roll(first + k as i64, r) >= chance {
                 continue;
             }
             let velocity = (velocity as f32 + dv).round().clamp(1.0, 127.0) as u8;
@@ -4182,7 +4182,7 @@ mod tests {
 
     #[test]
     fn a_patterns_lanes_and_the_modulators_on_its_sounds() {
-        use crate::modulate::{
+        use crate::dsp::modulate::{
             LfoShape, ModKind, ModRate, ModRoute, ModTarget, Modulator, SoundParam,
         };
         let step = PPQ / 4;
@@ -4417,11 +4417,11 @@ mod tests {
         );
         // A command names it by its number, as commands do every track.
         let dir = std::env::temp_dir();
-        let set: crate::commands::Command = serde_json::from_value(serde_json::json!({
+        let set: crate::song::commands::Command = serde_json::from_value(serde_json::json!({
             "op": "set_eq", "channel": { "track": 1 }, "eq": { "sidechain": 0, "bands": [] }
         }))
         .unwrap();
-        crate::commands::apply(&mut read, &dir, set).unwrap();
+        crate::song::commands::apply(&mut read, &dir, set).unwrap();
         assert_eq!(
             read.tracks[1].eq.as_ref().unwrap().sidechain,
             Some(read.tracks[0].id)

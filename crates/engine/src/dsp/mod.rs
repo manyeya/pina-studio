@@ -1,15 +1,26 @@
-//! The channel strip's built-in processors: the EQ (`eq.rs`), a soft-knee compressor and a
-//! saturator. The compressor's and saturator's sound is Faust's (`crates/engine/faust/*.dsp`,
-//! compiled into `faust/`); this runs them, and works out the saturator's curve for the UI.
+//! Making and shaping sound: the built-in instruments (`synth`, `drums`, `sampler`), the
+//! channel EQ (`eq`, with its linear-phase and spectral modes), modulation (`modulate`), and here
+//! the strip's soft-knee compressor and saturator. Their sound is Faust's
+//! (`crates/engine/faust/*.dsp`, compiled into `faust/`); this runs them, and works out the
+//! saturator's curve for the UI.
+
+pub mod drums;
+pub mod eq;
+pub mod eq_linear;
+pub mod eq_spectral;
+pub(crate) mod faust;
+pub mod modulate;
+pub mod sampler;
+pub mod synth;
 
 use crate::{
-    engine::MAX_BLOCK,
-    eq::{Made, Processor, Tap},
-    faust::{FaustDsp, ParamIndex, comp::CompDsp, controls, sat::SatDsp},
-    project::{Comp, Eq, Saturator},
+    audio::engine::MAX_BLOCK,
+    dsp::eq::{Made, Processor, Tap},
+    dsp::faust::{FaustDsp, ParamIndex, comp::CompDsp, controls, sat::SatDsp},
+    song::project::{Comp, Eq, Saturator},
 };
 
-pub use crate::eq::eq_response;
+pub use crate::dsp::eq::eq_response;
 
 /// The lowest low cut: at or under this, it's off.
 pub const LOW_CUT_OFF: f32 = 20.0;
@@ -162,7 +173,7 @@ pub fn sat_curve(s: &Saturator, x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{Bands, EqBand, Shape};
+    use crate::song::project::{Bands, EqBand, Shape};
     use std::f64::consts::PI;
 
     const RATE: f64 = 48_000.0;
@@ -351,11 +362,27 @@ mod cost {
         let mut strip = Strip::new(rate);
         let (eq, comp, sat) = (
             Eq {
-                bands: crate::project::Bands::from_slice(&[
-                    crate::project::EqBand::new(crate::project::Shape::LowCut, 80.0, 0.0),
-                    crate::project::EqBand::new(crate::project::Shape::Bell, 300.0, -3.0),
-                    crate::project::EqBand::new(crate::project::Shape::Bell, 3_000.0, 2.0),
-                    crate::project::EqBand::new(crate::project::Shape::HighShelf, 10_000.0, 2.0),
+                bands: crate::song::project::Bands::from_slice(&[
+                    crate::song::project::EqBand::new(
+                        crate::song::project::Shape::LowCut,
+                        80.0,
+                        0.0,
+                    ),
+                    crate::song::project::EqBand::new(
+                        crate::song::project::Shape::Bell,
+                        300.0,
+                        -3.0,
+                    ),
+                    crate::song::project::EqBand::new(
+                        crate::song::project::Shape::Bell,
+                        3_000.0,
+                        2.0,
+                    ),
+                    crate::song::project::EqBand::new(
+                        crate::song::project::Shape::HighShelf,
+                        10_000.0,
+                        2.0,
+                    ),
                 ]),
                 ..Eq::default()
             },

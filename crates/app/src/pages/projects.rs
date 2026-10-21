@@ -14,10 +14,10 @@ use gpui::{
     prelude::*, px, rgb,
 };
 use pina_engine::{
-    look::{self, Family},
     music::Key,
-    project::{FILE, Instrument, Project, Track},
-    session::Session,
+    music::look::{self, Family},
+    song::project::{FILE, Instrument, Project, Track},
+    song::session::Session,
 };
 use serde::Serialize;
 
@@ -127,7 +127,7 @@ pub fn summary(dir: &Path) -> Option<Song> {
         key: p.key.clone(),
         signature: p.time_signature,
         tracks: p.tracks.len(),
-        seconds: p.end() as f64 / pina_engine::project::PPQ as f64 * 60.0 / p.tempo,
+        seconds: p.end() as f64 / pina_engine::song::project::PPQ as f64 * 60.0 / p.tempo,
         lanes,
     })
 }
@@ -292,7 +292,7 @@ pub fn duplicate(dir: &Path) -> Result<PathBuf, String> {
         .status()
         .map_err(|e| e.to_string())?;
     // Unsaved edits kept from the original stay with it.
-    let _ = std::fs::remove_dir_all(to.join(pina_engine::project::RECOVERY_DIR));
+    let _ = std::fs::remove_dir_all(to.join(pina_engine::song::project::RECOVERY_DIR));
     match status.success() {
         true => Ok(to),
         false => Err(format!("couldn't copy {}", dir.display())),
@@ -518,8 +518,8 @@ impl Workspace {
             }
         };
         let player = match cfg!(test) {
-            true => pina_engine::player::Player::silent(&session.project, &dir),
-            false => match pina_engine::player::Player::start(&session.project, &dir) {
+            true => pina_engine::audio::player::Player::silent(&session.project, &dir),
+            false => match pina_engine::audio::player::Player::start(&session.project, &dir) {
                 Ok(p) => p,
                 Err(e) => {
                     self.status = Some(e);

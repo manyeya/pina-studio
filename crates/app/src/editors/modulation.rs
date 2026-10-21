@@ -5,18 +5,18 @@
 //! it there; that knob then wears a ring in the modulator's colour, its range, and a dot riding
 //! where it is now. Click a card to pick it: dragging a knob it moves then sets how far, not the
 //! knob. Each card lists where it goes, each route's depth dragged sideways. The engine side is
-//! `pina_engine::modulate`.
+//! `pina_engine::dsp::modulate`.
 
 use gpui::{
     Bounds, Context, Div, FontWeight, Hsla, MouseButton, MouseDownEvent, PathBuilder, Pixels,
     Point, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 use pina_engine::{
-    modulate::{
+    dsp::modulate::{
         self, LfoShape, MAX_MODS, ModKind, ModParam, ModRate, ModRoute, ModTarget, Modulator,
         SamplerParam,
     },
-    project::{Instrument, Param, Sampler, Which},
+    song::project::{Instrument, Param, Sampler, Which},
 };
 
 use crate::{
@@ -445,9 +445,9 @@ impl Workspace {
                     .sound_name(t, r)
                     .unwrap_or_else(|| format!("Sound {}", r + 1));
                 let what = match param {
-                    pina_engine::modulate::SoundParam::Velocity => "velocity",
-                    pina_engine::modulate::SoundParam::Pitch => "pitch",
-                    pina_engine::modulate::SoundParam::Chance => "chance",
+                    pina_engine::dsp::modulate::SoundParam::Velocity => "velocity",
+                    pina_engine::dsp::modulate::SoundParam::Pitch => "pitch",
+                    pina_engine::dsp::modulate::SoundParam::Chance => "chance",
                 };
                 format!("{sound} {what}")
             }
@@ -461,7 +461,7 @@ impl Workspace {
         let regions = shown.into_iter().chain(0..track.regions.len());
         let pitch = regions
             .filter_map(|i| match &track.regions.get(i)?.content {
-                pina_engine::project::Content::Pattern { rows, .. } => {
+                pina_engine::song::project::Content::Pattern { rows, .. } => {
                     rows.get(r).map(|row| row.pitch)
                 }
                 _ => None,
@@ -502,12 +502,12 @@ impl Workspace {
             .pattern()
             .filter(|at| at.0 == t)
             .and_then(|at| match &track.regions[at.1].content {
-                pina_engine::project::Content::Pattern { rows, .. } => Some(rows.len()),
+                pina_engine::song::project::Content::Pattern { rows, .. } => Some(rows.len()),
                 _ => None,
             })
             .unwrap_or(0);
         if ahead {
-            use pina_engine::modulate::SoundParam;
+            use pina_engine::dsp::modulate::SoundParam;
             let sounds = (0..rows)
                 .flat_map(|r| {
                     [SoundParam::Velocity, SoundParam::Pitch, SoundParam::Chance]
@@ -1153,7 +1153,7 @@ impl Workspace {
         let tempo = self.session.project.tempo;
         match (rate, self.player.playing()) {
             (ModRate::Beats(b), true) => {
-                let beats = self.playhead() as f64 / pina_engine::project::PPQ as f64;
+                let beats = self.playhead() as f64 / pina_engine::song::project::PPQ as f64;
                 beats / b.max(1e-3) as f64
             }
             _ => self.mod_clock.elapsed().as_secs_f64() * rate.hz(tempo),
@@ -1986,7 +1986,7 @@ impl Workspace {
 
     /// What a modulator moves to move an automation lane's parameter, if one can.
     pub fn mod_target_of(&self, t: usize, param: Param) -> Option<ModTarget> {
-        use pina_engine::project::EqField;
+        use pina_engine::song::project::EqField;
         Some(match param {
             Param::Volume => ModTarget::Volume,
             Param::Pan => ModTarget::Pan,

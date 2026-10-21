@@ -5,14 +5,14 @@
 use std::path::{Path, PathBuf};
 
 use pina_engine::{
-    analysis,
-    commands::{ChannelRef, Command, ParamRef},
-    critique::{self, Heard},
     music::Key,
-    playbook,
-    project::{Format, Instrument, PluginRef, Preset, PresetSource, Reference, Which},
-    scan,
-    theory::{self, PROGRESSIONS},
+    music::analysis,
+    music::critique::{self, Heard},
+    music::playbook,
+    music::theory::{self, PROGRESSIONS},
+    plugin::scan,
+    song::commands::{ChannelRef, Command, ParamRef},
+    song::project::{Format, Instrument, PluginRef, Preset, PresetSource, Reference, Which},
 };
 use serde_json::{Value, json};
 

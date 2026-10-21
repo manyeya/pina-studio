@@ -7,12 +7,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    arrange::{self, Arrangement, Transition},
-    compose::{self, BassPart, ChordPart, DrumPart, MelodyPart},
-    modulate::{ModKind, ModParam},
+    dsp::modulate::{ModKind, ModParam},
+    music::arrange::{self, Arrangement, Transition},
+    music::compose::{self, BassPart, ChordPart, DrumPart, MelodyPart},
     music::{Key, NoteEdit},
     plugin::{PluginApi, PluginParam, value_from_text},
-    project::{
+    song::project::{
         AUDIO_DIR, AutoMode, AutoPoint, AutoShape, AuxSend, BEAT_UNITS, Cell, Comp, Content,
         ControlPoint, Cycle, Dynamic, Eq, Flex, Input, Instrument, Marker, Note, PPQ,
         PaletteDevice, PaletteSound, PanLaw, PanMode, Param, PatternRow, Place, PluginRef, Preset,
@@ -454,7 +454,7 @@ pub enum Command {
         channel: ChannelRef,
         band: usize,
         #[serde(default)]
-        shape: Option<crate::project::Shape>,
+        shape: Option<crate::song::project::Shape>,
         #[serde(default)]
         freq: Option<f32>,
         #[serde(default)]
@@ -464,7 +464,7 @@ pub enum Command {
         #[serde(default)]
         slope: Option<f32>,
         #[serde(default)]
-        placement: Option<crate::project::Placement>,
+        placement: Option<crate::song::project::Placement>,
         /// `false` makes it still; an object (any of range_db, threshold_db, attack_ms,
         /// release_ms) makes it move with the sound.
         #[serde(default)]
@@ -538,19 +538,19 @@ pub enum Command {
     /// one, the genre's targets.
     SetReference {
         #[serde(default)]
-        reference: Option<crate::project::Reference>,
+        reference: Option<crate::song::project::Reference>,
     },
     /// A modulator on a track (eight at most): an LFO, steps, an envelope, a follower, random, a
     /// macro.
     AddModulator {
         track: usize,
-        modulator: crate::modulate::Modulator,
+        modulator: crate::dsp::modulate::Modulator,
     },
     /// A modulator replaced (its routes kept unless given), or taken off.
     SetModulator {
         track: usize,
         index: usize,
-        modulator: crate::modulate::Modulator,
+        modulator: crate::dsp::modulate::Modulator,
     },
     RemoveModulator {
         track: usize,
@@ -560,7 +560,7 @@ pub enum Command {
     /// route as it likes; or one taken off the stack, and off every track in it.
     ShareModulator {
         aux: usize,
-        modulator: crate::modulate::Modulator,
+        modulator: crate::dsp::modulate::Modulator,
     },
     UnshareModulator {
         aux: usize,
@@ -570,7 +570,7 @@ pub enum Command {
     Modulate {
         track: usize,
         modulator: usize,
-        target: crate::modulate::ModTarget,
+        target: crate::dsp::modulate::ModTarget,
         depth: f32,
     },
 }
@@ -580,7 +580,7 @@ fn yes() -> bool {
 }
 
 /// A follower in a command names what it follows by the track's place: its id, here.
-fn follower_source(p: &mut Project, m: &mut crate::modulate::Modulator) -> Result<(), String> {
+fn follower_source(p: &mut Project, m: &mut crate::dsp::modulate::Modulator) -> Result<(), String> {
     if let ModKind::Follower { source, .. } = &mut m.kind {
         *source = track(p, *source as usize)
             .map_err(|e| format!("a follower's source is a track's place: {e}"))?
@@ -593,7 +593,7 @@ fn modulator_at(
     p: &mut Project,
     t: usize,
     index: usize,
-) -> Result<&mut crate::modulate::Modulator, String> {
+) -> Result<&mut crate::dsp::modulate::Modulator, String> {
     let track = track(p, t)?;
     let n = track.modulators.len();
     track
@@ -851,9 +851,9 @@ fn eq_param(
     band: Option<u32>,
 ) -> Result<Param, String> {
     let field = match param {
-        AutoParam::EqFreq => crate::project::EqField::Freq,
-        AutoParam::EqGain => crate::project::EqField::Gain,
-        _ => crate::project::EqField::Q,
+        AutoParam::EqFreq => crate::song::project::EqField::Freq,
+        AutoParam::EqGain => crate::song::project::EqField::Gain,
+        _ => crate::song::project::EqField::Q,
     };
     let Some(band) = band else {
         return Err("an EQ band's automation needs `id`: the band's place in the EQ".into());
@@ -987,7 +987,7 @@ fn region_at(p: &Project, t: usize, r: usize) -> Result<(), String> {
     }
 }
 
-fn aux(p: &mut Project, i: usize) -> Result<&mut crate::project::Aux, String> {
+fn aux(p: &mut Project, i: usize) -> Result<&mut crate::song::project::Aux, String> {
     let n = p.auxes.len();
     p.auxes
         .get_mut(i)
@@ -1090,16 +1090,17 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             if let Some(v) = color {
                 t.color = match v.as_str() {
                     "auto" => None,
-                    c if crate::look::parse_color(c).is_some() => Some(c.to_lowercase()),
+                    c if crate::music::look::parse_color(c).is_some() => Some(c.to_lowercase()),
                     c => return Err(format!("color: {c:?} isn't \"#rrggbb\" or \"auto\"")),
                 };
             }
             if let Some(v) = icon {
                 t.icon = match v.as_str() {
                     "auto" => None,
-                    i if crate::look::icon(i).is_some() => Some(i.to_string()),
+                    i if crate::music::look::icon(i).is_some() => Some(i.to_string()),
                     i => {
-                        let ids: Vec<&str> = crate::look::ICONS.iter().map(|i| i.id).collect();
+                        let ids: Vec<&str> =
+                            crate::music::look::ICONS.iter().map(|i| i.id).collect();
                         return Err(format!("icon: no icon {i:?}; there are {}", ids.join(", ")));
                     }
                 };
@@ -1255,7 +1256,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             let (frames, from) = match hound::WavReader::open(dir.join(&file)) {
                 Ok(wav) => (wav.duration() as u64, wav.spec().sample_rate as f64),
                 Err(_) => {
-                    let (sides, rate) = crate::engine::read_audio(&dir.join(&file))?;
+                    let (sides, rate) = crate::audio::engine::read_audio(&dir.join(&file))?;
                     (sides[0].len() as u64, rate)
                 }
             };
@@ -1943,10 +1944,10 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                 }
             }
             let t = track(p, t)?;
-            if t.modulators.len() >= crate::modulate::MAX_MODS {
+            if t.modulators.len() >= crate::dsp::modulate::MAX_MODS {
                 return Err(format!(
                     "a track has {} modulators at most",
-                    crate::modulate::MAX_MODS
+                    crate::dsp::modulate::MAX_MODS
                 ));
             }
             t.modulators.push(modulator);
@@ -1992,7 +1993,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             let index = p.add_shared(bus, modulator.kind).ok_or_else(|| {
                 format!(
                     "a stack shares {} modulators at most",
-                    crate::modulate::MAX_MODS
+                    crate::dsp::modulate::MAX_MODS
                 )
             })?;
             return Ok(json!({ "index": index }));
@@ -2016,22 +2017,23 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             target,
             depth,
         } => {
-            let range = crate::modulate::depth_range(target);
+            let range = crate::dsp::modulate::depth_range(target);
             let depth = finite("depth", depth)?.clamp(-range, range);
             let m = modulator_at(p, t, modulator)?;
             m.routes.retain(|r| r.target != target);
             if depth != 0.0 {
-                m.routes.push(crate::modulate::ModRoute { target, depth });
+                m.routes
+                    .push(crate::dsp::modulate::ModRoute { target, depth });
             }
         }
         Command::SetGenre { genre } => {
             p.genre = match genre {
                 None => None,
                 Some(g) => Some(
-                    crate::playbook::find(&g)
+                    crate::music::playbook::find(&g)
                         .ok_or(format!(
                             "no playbook for {g:?}; there are {}",
-                            crate::playbook::ids().join(", ")
+                            crate::music::playbook::ids().join(", ")
                         ))?
                         .id
                         .to_string(),
@@ -2087,10 +2089,10 @@ fn check_eq(eq: &Eq) -> Result<(), String> {
         if b.shape.slope_range().is_some() && b.shape.fit_slope(b.slope) != b.slope {
             let (lo, hi) = b.shape.slope_range().unwrap_or_default();
             let takes = match b.shape {
-                crate::project::Shape::LowCut | crate::project::Shape::HighCut => {
+                crate::song::project::Shape::LowCut | crate::song::project::Shape::HighCut => {
                     format!("{lo} to {hi}, or 144 (a brickwall)")
                 }
-                crate::project::Shape::Notch | crate::project::Shape::AllPass => {
+                crate::song::project::Shape::Notch | crate::song::project::Shape::AllPass => {
                     format!("{lo} to {hi} in twelves")
                 }
                 _ => format!("{lo} to {hi}"),
@@ -2503,8 +2505,8 @@ mod tests {
         assert_eq!(
             shapes,
             [
-                (crate::project::Shape::LowCut, 150.0, 0.0),
-                (crate::project::Shape::HighShelf, 10_000.0, 2.5)
+                (crate::song::project::Shape::LowCut, 150.0, 0.0),
+                (crate::song::project::Shape::HighShelf, 10_000.0, 2.5)
             ]
         );
         assert_eq!(eq.bands[1].q, std::f32::consts::FRAC_1_SQRT_2);
@@ -2525,7 +2527,7 @@ mod tests {
         assert_eq!(eq.bands[0].slope, 24.0);
         let b = eq.bands[2];
         assert_eq!((b.freq, b.gain_db, b.q), (300.0, -3.0, 1.5));
-        assert_eq!(b.placement, crate::project::Placement::Mid);
+        assert_eq!(b.placement, crate::song::project::Placement::Mid);
         assert_eq!(b.dynamic.unwrap().range_db, -4.0);
         // Its attack and release its own, by its frequency.
         assert_eq!(b.dynamic.unwrap().attack_ms, None);
@@ -2554,7 +2556,7 @@ mod tests {
         let eq = p.tracks[0].eq.unwrap();
         assert_eq!(
             (eq.processing, eq.resolution, eq.bands.len()),
-            (crate::project::Processing::Linear, 2, 3)
+            (crate::song::project::Processing::Linear, 2, 3)
         );
         let wrong = run(&mut p, &set(r#"{"resolution": 7}"#)).unwrap_err();
         assert!(wrong.contains("resolution 7"), "{wrong}");
@@ -2718,7 +2720,7 @@ mod tests {
 
     #[test]
     fn a_stack_says_where_its_tracks_went_and_a_follower_names_its_track_by_its_place() {
-        use crate::modulate::ModKind;
+        use crate::dsp::modulate::ModKind;
         let mut p = Project::new(48_000);
         for name in ["Kick", "Bass", "Snare"] {
             run(
@@ -2745,7 +2747,7 @@ mod tests {
 
     #[test]
     fn a_stack_shares_a_modulator_with_every_track_in_it() {
-        use crate::modulate::{ModKind, ModParam};
+        use crate::dsp::modulate::{ModKind, ModParam};
         let mut p = Project::new(48_000);
         for name in ["Bass", "Pad", "Lead"] {
             run(
@@ -2810,7 +2812,7 @@ mod tests {
 
     #[test]
     fn a_modulators_settings_are_automated_and_go_with_it() {
-        use crate::modulate::ModParam;
+        use crate::dsp::modulate::ModParam;
         let mut p = Project::new(48_000);
         run(
             &mut p,
@@ -2866,7 +2868,7 @@ mod tests {
 
     #[test]
     fn modulators_are_added_routed_and_removed() {
-        use crate::modulate::{ModKind, ModTarget, SamplerParam};
+        use crate::dsp::modulate::{ModKind, ModTarget, SamplerParam};
         let mut p = Project::new(48_000);
         run(
             &mut p,

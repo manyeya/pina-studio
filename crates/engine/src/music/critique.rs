@@ -7,13 +7,13 @@
 use serde::Serialize;
 
 use crate::{
-    analysis::Analysis,
-    arrange::role,
-    compose::{chords_at, heard_notes},
     music::Key,
-    playbook::{self, Playbook},
-    project::{Content, Instrument, Note, Project},
-    theory::{Quality, Span},
+    music::analysis::Analysis,
+    music::arrange::role,
+    music::compose::{chords_at, heard_notes},
+    music::playbook::{self, Playbook},
+    music::theory::{Quality, Span},
+    song::project::{Content, Instrument, Note, Project},
 };
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -687,8 +687,8 @@ pub fn critique(p: &Project, heard: Option<&Heard>) -> Vec<Issue> {
 mod tests {
     use super::*;
     use crate::{
-        compose::{self, BassPart, ChordPart, DrumPart},
-        project::{Region, Track},
+        music::compose::{self, BassPart, ChordPart, DrumPart},
+        song::project::{Region, Track},
     };
 
     fn song() -> Project {
@@ -725,7 +725,7 @@ mod tests {
                 track: 1,
                 start: None,
                 bars: None,
-                style: Some(crate::theory::BassStyle::Kick),
+                style: Some(crate::music::theory::BassStyle::Kick),
                 register: None,
                 seed: None,
                 kick_track: None,
@@ -811,8 +811,8 @@ mod tests {
     fn a_long_song_that_never_changes_is_flat() {
         let mut p = song();
         p.genre = Some("trap".into());
-        crate::arrange::copy_bars(&mut p, 0, 8, 8 * 3840, None).unwrap();
-        crate::arrange::copy_bars(&mut p, 0, 16, 16 * 3840, None).unwrap();
+        crate::music::arrange::copy_bars(&mut p, 0, 8, 8 * 3840, None).unwrap();
+        crate::music::arrange::copy_bars(&mut p, 0, 16, 16 * 3840, None).unwrap();
         let issues = music(&p);
         assert!(
             has(&issues, "arrangement", "nothing comes or goes"),
@@ -822,9 +822,9 @@ mod tests {
         // Arranged, it isn't.
         let mut p = song();
         p.genre = Some("trap".into());
-        crate::arrange::arrange(
+        crate::music::arrange::arrange(
             &mut p,
-            crate::arrange::Arrangement {
+            crate::music::arrange::Arrangement {
                 from: None,
                 bars: Some(8),
                 sections: None,

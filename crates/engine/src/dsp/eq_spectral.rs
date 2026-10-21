@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 
 use crate::{
-    eq::{MAX_SECTIONS, Section, auto_times, response_db, sections},
-    project::{Eq, EqBand, MAX_BANDS, Placement, Processing, Shape},
+    dsp::eq::{MAX_SECTIONS, Section, auto_times, response_db, sections},
+    song::project::{Eq, EqBand, MAX_BANDS, Placement, Processing, Shape},
 };
 
 /// The window, by resolution.
@@ -455,7 +455,7 @@ fn frame(s: &mut State, eq: &Eq, rate: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{Bands, Dynamic, Shape};
+    use crate::song::project::{Bands, Dynamic, Shape};
     use std::f64::consts::PI;
 
     const RATE: f64 = 48_000.0;

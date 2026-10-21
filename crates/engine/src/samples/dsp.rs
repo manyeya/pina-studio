@@ -192,7 +192,7 @@ pub fn amp_db(amp: f32) -> f32 {
 /// playing in both). For a short sound, the loudest 400 ms (EBU's maximum momentary loudness);
 /// otherwise gated integrated loudness.
 pub fn loudness(channels: &[Vec<f32>], rate: f64, short: bool) -> f32 {
-    let [shelf, highpass] = crate::analysis::k_weighting(rate);
+    let [shelf, highpass] = crate::music::analysis::k_weighting(rate);
     let len = channels.first().map_or(0, Vec::len);
     let mut power = vec![0f64; len];
     for c in channels {

@@ -17,11 +17,11 @@ use gpui::{
     Window, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 use pina_engine::{
-    commands::{self, Command},
-    engine::read_audio,
-    peaks::Peaks,
-    project::{FilterMode, Instrument, LoopMode, Sampler, Zone},
-    sampler::{cuts, onsets, slices},
+    audio::engine::read_audio,
+    audio::peaks::Peaks,
+    dsp::sampler::{cuts, onsets, slices},
+    song::commands::{self, Command},
+    song::project::{FilterMode, Instrument, LoopMode, Sampler, Zone},
 };
 
 use crate::{

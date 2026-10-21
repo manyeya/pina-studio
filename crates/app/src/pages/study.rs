@@ -12,10 +12,10 @@ use gpui::{
 };
 use pina_engine::{
     music::Key,
-    playbook::{self, Playbook},
-    project::{Project, Reference},
+    music::playbook::{self, Playbook},
+    music::theory,
+    song::project::{Project, Reference},
     study::{self, Study},
-    theory,
 };
 
 use crate::{

@@ -12,13 +12,13 @@ use gpui::{
     Window, anchored, deferred, div, prelude::*, px, rgb,
 };
 use pina_engine::{
-    commands::{self, Command},
-    project::{Instrument, Preset, Sampler},
     samples::{
         Category, Kind,
         place::place_zone,
         search::{self, KitSeed, Query},
     },
+    song::commands::{self, Command},
+    song::project::{Instrument, Preset, Sampler},
 };
 
 use crate::{
@@ -171,7 +171,7 @@ impl Workspace {
             return;
         }
         self.sounds.asked = true;
-        let wanted: Vec<(String, pina_engine::scan::PluginInfo)> = self
+        let wanted: Vec<(String, pina_engine::plugin::scan::PluginInfo)> = self
             .catalog
             .devices
             .iter()
@@ -189,7 +189,7 @@ impl Workspace {
         });
         cx.spawn(async move |this, cx| {
             let (wanted, kept) = job.await;
-            let missing: Vec<(String, pina_engine::scan::PluginInfo)> = wanted
+            let missing: Vec<(String, pina_engine::plugin::scan::PluginInfo)> = wanted
                 .iter()
                 .zip(&kept)
                 .filter(|(_, k)| k.is_empty())
