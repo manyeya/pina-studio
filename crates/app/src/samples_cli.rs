@@ -28,12 +28,21 @@ fn progress(done: usize, of: usize) {
 }
 
 /// A hit as JSON: what the sample is, how well it matched and why, and how a sampler would
-/// play it.
-pub fn hit_json(lib: &Library, hit: &Hit) -> Value {
-    let mut v = sample_json(&lib.samples[hit.index]);
+/// play it: in `key`, a pitched drum tuned onto it.
+pub fn hit_json(lib: &Library, hit: &Hit, key: Option<&str>) -> Value {
+    let s = &lib.samples[hit.index];
+    let mut v = sample_json(s);
     let map = v.as_object_mut().unwrap();
+    let mut reasons = hit.reasons.clone();
+    if let Some(key) = key.and_then(pina_engine::music::Key::parse) {
+        let mut z = search::zone(s, None);
+        if let Some(why) = search::tune_to(&mut z, s, key) {
+            map.insert("zone".into(), json!(z));
+            reasons.push(why);
+        }
+    }
     map.insert("score".into(), json!((hit.score * 100.0).round() / 100.0));
-    map.insert("reasons".into(), json!(hit.reasons));
+    map.insert("reasons".into(), json!(reasons));
     if let Some(t) = hit.transpose {
         map.insert("transpose".into(), json!(t));
     }
@@ -112,7 +121,9 @@ pub fn find(mut q: Query, project: Option<&Path>) -> Result<Value, String> {
     let lib = library();
     let hits = search::find(&lib.samples, &q);
     Ok(Value::Array(
-        hits.iter().map(|h| hit_json(&lib, h)).collect(),
+        hits.iter()
+            .map(|h| hit_json(&lib, h, q.key.as_deref()))
+            .collect(),
     ))
 }
 
@@ -127,7 +138,7 @@ pub fn similar(path: &Path, aspects: Aspects, limit: usize) -> Result<Value, Str
     }
     let hits = search::similar(&lib.samples, &path, aspects, limit);
     Ok(Value::Array(
-        hits.iter().map(|h| hit_json(&lib, h)).collect(),
+        hits.iter().map(|h| hit_json(&lib, h, None)).collect(),
     ))
 }
 
@@ -141,8 +152,8 @@ pub fn kit(mut seed: KitSeed, project: Option<&Path>) -> Result<Value, String> {
         .map(|slot| {
             json!({
                 "role": slot.role,
-                "pick": slot.pick.as_ref().map(|h| hit_json(&lib, h)),
-                "alternatives": slot.alternatives.iter().map(|h| hit_json(&lib, h)).collect::<Vec<_>>(),
+                "pick": slot.pick.as_ref().map(|h| hit_json(&lib, h, seed.key.as_deref())),
+                "alternatives": slot.alternatives.iter().map(|h| hit_json(&lib, h, seed.key.as_deref())).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -315,7 +326,7 @@ pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Val
     // Kept off the notes the sampler's other zones play (a full-range sound makes room).
     match track.and_then(|t| sampler(p.tracks.get(t)?.instrument.as_ref()).map(|s| (t, s))) {
         Some((t, mut s)) => {
-            place::place_zone(&mut s, &sample, None)?;
+            place::place_zone_in(&mut s, &sample, None, p.song_key())?;
             let zone = s.zones.last().unwrap();
             let (note, high) = (zone.note, zone.high);
             edit(Command::SetInstrument {
@@ -326,7 +337,7 @@ pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Val
         }
         None => {
             let mut s = Sampler::default();
-            place::place_zone(&mut s, &sample, None)?;
+            place::place_zone_in(&mut s, &sample, None, p.song_key())?;
             let (note, high) = (s.zones[0].note, s.zones[0].high);
             let made = edit(Command::AddTrack {
                 name: sample.name.clone(),

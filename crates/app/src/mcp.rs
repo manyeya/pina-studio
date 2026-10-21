@@ -250,7 +250,7 @@ fn tools() -> Value {
         },
         {
             "name": "samples_find",
-            "description": "Finds samples in the library (analysed for kind, category, pitch, key, tempo, envelope, spectrum and traits), best first, each with why it matched and, for a one-shot, a sampler zone to play it in tune. `query` is words (\"dusty keys loop in C minor 95 bpm\", \"punchy dark kick\") or a query object: text, kind (one_shot|loop), categories, traits, key, bpm, tonal, min_seconds, max_seconds, folder, like (a path: sounds like it), aspects ({timbre, pitch, envelope, spectrum} weights for like), with (paths it should go with), limit. `project` fills the key and tempo from a song.",
+            "description": "Finds samples in the library (analysed for kind, category, pitch, key, tempo, envelope, spectrum and traits), best first, each with why it matched and, for a one-shot, a sampler zone to play it in tune. `query` is words (\"dusty keys loop in C minor 95 bpm\", \"punchy dark kick\") or a query object: text, kind (one_shot|loop), categories, traits, key, bpm, tonal, min_seconds, max_seconds, folder, like (a path: sounds like it), aspects ({timbre, pitch, envelope, spectrum} weights for like), with (paths it should go with), limit. `project` fills the key and tempo from a song; with a key, a pitched drum's zone comes tuned onto it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -275,7 +275,7 @@ fn tools() -> Value {
         },
         {
             "name": "samples_kit",
-            "description": "Builds a kit that goes together (kick, snare, clap, hats, perc, 808, keys by default): each pick fits the key and tempo and the picks before it (no clashes, one sound, one pack where it can), with alternatives. `seed` is words or {key, bpm, text, traits, like, folder, roles, alternatives, keep}; `project` fills the key and tempo from a song.",
+            "description": "Builds a kit that goes together (kick, snare, clap, hats, perc, 808, keys by default): each pick fits the key and tempo and the picks before it (no clashes, one sound, one pack where it can), with alternatives. Each drum is judged as its kind (a closed hat tight, not ringing in reverb; a kick without a long tail; a snare that doesn't boom; the 808 a one-shot with a clear note, to play the bassline on), the kit's character kept to the roles it suits (a dark kit's hats stay bright), and with a key, a pitched drum's zone comes tuned onto it (a kick on the root or fifth). `seed` is words or {key, bpm, text, traits, like, folder, roles, alternatives, keep}; `project` fills the key and tempo from a song.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

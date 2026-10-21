@@ -112,11 +112,22 @@ fn free_run(sampler: &Sampler, root: u8) -> Option<(u8, u8)> {
 /// sound across the free notes round its own (in tune), anything else on the next free note from
 /// middle C. A tonal zone a drum lands in makes room, keeping to its own side of it.
 pub fn place_zone(sampler: &mut Sampler, s: &Sample, role: Option<Category>) -> Result<(), String> {
+    place_zone_in(sampler, s, role, None)
+}
+
+/// As `place_zone`, a pitched drum (a kick, a tom, a perc with a note) tuned onto `key` if given.
+pub fn place_zone_in(
+    sampler: &mut Sampler,
+    s: &Sample,
+    role: Option<Category>,
+    key: Option<Key>,
+) -> Result<(), String> {
     let full = || "There's no free note left on that sampler.".to_string();
     let mut z = search::zone(s, None);
     if let Some(r) = role.filter(|r| *r != Category::Other) {
         z.name = r.name().to_string();
     }
+    let tuned = key.is_some_and(|k| search::tune_to(&mut z, s, k).is_some());
     match z.high {
         Some(_) => {
             let (low, high) = free_run(sampler, z.root.unwrap_or(z.note)).ok_or_else(full)?;
@@ -136,10 +147,15 @@ pub fn place_zone(sampler: &mut Sampler, s: &Sample, role: Option<Category>) -> 
                 }
             }
             let taken = |n: u8| sampler.zones.iter().any(|z| z.covers(n));
-            z.note = (from..=127)
+            let note = (from..=127)
                 .chain((0..from).rev())
                 .find(|&n| !taken(n))
                 .ok_or_else(full)?;
+            // Tuned on its first note: moved, its root moves with it.
+            if tuned && let Some(root) = z.root {
+                z.root = Some((root as i32 + note as i32 - z.note as i32).clamp(0, 127) as u8);
+            }
+            z.note = note;
         }
     }
     sampler.zones.push(z);

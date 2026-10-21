@@ -621,6 +621,88 @@ fn pack(folder: &str) -> &str {
     folder.split(['/', '\\']).next().unwrap_or("")
 }
 
+/// How good a one-shot is at being its kind of drum, 0 to 1, and what's off: a closed hat that
+/// rings on, a kick with a long tail, a snare that booms, an 808 too short or toneless to play a
+/// bassline. By how long it sounds (to 20 dB under its peak) and its character.
+fn profile(a: &super::Analysis) -> Option<(f32, Option<&'static str>)> {
+    if a.kind != Kind::OneShot {
+        return None;
+    }
+    let has = |t: &str| a.traits.iter().any(|x| x == t);
+    let d = a.envelope.decay_ms;
+    let (mut q, mut why) = (1.0f32, None);
+    // What it has that its kind wants: a kick's punch and sub, an 808's sub.
+    let mut bonus = 1.0f32;
+    let mut off = |by: f32, w: &'static str| {
+        q *= by;
+        why.get_or_insert(w);
+    };
+    match a.category {
+        // A hat's crack is over at once; what tells a tight one from a washy one is its tail.
+        Category::HatClosed => {
+            let tail = a.envelope.tail_ms.max(d);
+            match tail {
+                t if t <= 300.0 => {}
+                t if t <= 600.0 => off(0.8, "a little long for a closed hat"),
+                _ => off(0.5, "a reverb tail: it rings on, long for a closed hat"),
+            }
+            if has("wet") {
+                off(0.8, "reverb on it");
+            }
+            if has("sub") || has("boomy") {
+                off(0.7, "low end in a hat");
+            }
+        }
+        Category::HatOpen => match d {
+            d if d < 120.0 => off(0.6, "short for an open hat"),
+            d if d > 1500.0 => off(0.75, "rings very long"),
+            _ => {}
+        },
+        Category::Kick => {
+            match d {
+                d if d <= 400.0 => {}
+                d if d <= 700.0 => off(0.85, "a long tail for a kick"),
+                _ => off(0.6, "a long tail for a kick"),
+            }
+            if has("noisy") {
+                off(0.8, "noisy for a kick");
+            }
+            if has("wet") {
+                off(0.85, "reverb on it");
+            }
+            bonus = 0.85 + 0.075 * has("punchy") as u8 as f32 + 0.075 * has("sub") as u8 as f32;
+        }
+        Category::Snare | Category::Clap => {
+            match d {
+                d if d <= 350.0 => {}
+                d if d <= 700.0 => off(0.85, "a long tail"),
+                _ => off(0.65, "a long tail"),
+            }
+            if has("boomy") || has("sub") {
+                off(0.85, "boomy");
+            }
+        }
+        Category::Rim | Category::Snap if d > 250.0 => off(0.75, "long for a rim or snap"),
+        Category::Perc | Category::Shaker | Category::Tambourine if d > 600.0 => {
+            off(0.8, "rings on")
+        }
+        Category::Bass808 => {
+            if a.tonal < 0.4 || a.pitch.is_none() {
+                off(0.6, "no clear note: it won't play a bassline in tune");
+            }
+            if d < 400.0 {
+                off(0.65, "too short to hold a note");
+            }
+            bonus = if has("sub") { 1.0 } else { 0.85 };
+        }
+        _ => return None,
+    }
+    if a.loudness < -40.0 {
+        off(0.75, "very quiet");
+    }
+    Some(((q * bonus).min(1.0), why))
+}
+
 /// The samples matching `q`, best first.
 pub fn find(samples: &[Sample], q: &Query) -> Vec<Hit> {
     let words = understand(&q.text);
@@ -675,6 +757,11 @@ pub fn find(samples: &[Sample], q: &Query) -> Vec<Hit> {
             }
             if !categories.is_empty() {
                 parts.push((0.6 + 0.4 * a.confidence, 0.5));
+            }
+            // A drum good at being its drum: short closed hats, kicks without a tail.
+            if let Some((good, why)) = profile(a) {
+                parts.push((good, 2.0));
+                reasons.extend(why.map(str::to_string));
             }
             let mut transpose = None;
             if let Some(key) = key {
@@ -773,6 +860,12 @@ pub fn find(samples: &[Sample], q: &Query) -> Vec<Hit> {
             .total_cmp(&a.score)
             .then_with(|| samples[a.index].name.cmp(&samples[b.index].name))
     });
+    // The same sound twice (a pack's copy in another folder) is said once.
+    let mut seen = std::collections::HashSet::new();
+    hits.retain(|h| {
+        let f = samples[h.index].analysis.fingerprint;
+        f == 0 || seen.insert(f)
+    });
     hits.truncate(q.limit.max(1));
     hits
 }
@@ -842,6 +935,20 @@ pub const KIT_ROLES: [Category; 8] = [
     Category::Keys,
 ];
 
+/// Whether a kit's character suits a role: a dark kit's hats, shakers and cymbals stay bright, its
+/// kick and 808 aren't made thin and bright, its snare and clap aren't made boomy.
+fn suits(role: Category, t: &str) -> bool {
+    use Category::*;
+    match role {
+        HatClosed | HatOpen | Shaker | Tambourine | Ride | Crash => {
+            !matches!(t, "dark" | "sub" | "boomy" | "warm")
+        }
+        Kick | Bass808 | Tom => !matches!(t, "bright" | "airy" | "thin"),
+        Snare | Clap | Rim | Snap => !matches!(t, "sub" | "boomy"),
+        _ => true,
+    }
+}
+
 /// Builds a kit from `seed`: each role in turn, the best fit for the words, key and tempo that
 /// also goes with what's been picked so far (no clashes, one sound), so it holds together.
 pub fn kit(samples: &[Sample], seed: &KitSeed) -> Kit {
@@ -857,7 +964,6 @@ pub fn kit(samples: &[Sample], seed: &KitSeed) -> Kit {
     // The seed's words, less any category in them (each role is its own). How they say it should
     // sound ranks, as in a search; traits picked are kept to.
     let rest = words.rest.join(" ");
-    let feel = words.said.join(" ");
     let traits = seed.traits.clone();
     let key = seed.key.clone().or(words.key.map(|k| k.name()));
     let bpm = seed.bpm.or(words.bpm);
@@ -883,9 +989,23 @@ pub fn kit(samples: &[Sample], seed: &KitSeed) -> Kit {
                     alternatives: Vec::new(),
                 };
             }
+            // A drum, or an 808 to play the bassline on, is a one-shot unless a loop's asked for.
+            let shot = role.drum_note().is_some() || role == Category::Bass808;
+            let kind = words.kind.or(shot.then_some(Kind::OneShot));
+            // How the kit should sound, as it suits this role: a dark kit's hats aren't dark,
+            // its kick isn't bright.
+            let feel: String = words
+                .said
+                .iter()
+                .zip(&words.traits)
+                .filter(|(_, t)| suits(role, t))
+                .map(|(w, _)| w.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
             let ask = |rest: &str, traits: Vec<String>, folder: Option<String>| Query {
                 text: format!("{rest} {feel}"),
                 categories: vec![role],
+                kind,
                 traits,
                 key: key.clone(),
                 bpm,
@@ -1232,6 +1352,45 @@ pub fn zone(s: &Sample, note: Option<u8>) -> Zone {
             ..base
         },
     }
+}
+
+/// A pitched drum's zone moved onto `key`: a kick to the key's root or fifth, a tom or perc to
+/// its scale, by the nearer way and never far (a kick four semitones, the rest two). Says what it
+/// did; leaves a drum without a clear note, and anything that isn't a drum zone, as it is.
+pub fn tune_to(z: &mut Zone, s: &Sample, key: Key) -> Option<String> {
+    let a = &s.analysis;
+    let (Some(p), None) = (&a.pitch, z.high) else {
+        return None;
+    };
+    let (targets, reach): (Vec<u8>, f32) = match a.category {
+        Category::Kick => (vec![key.root, (key.root + 7) % 12], 4.0),
+        Category::Tom | Category::Perc => ((0..12).filter(|&pc| key.contains(pc)).collect(), 2.0),
+        _ => return None,
+    };
+    if a.tonal < 0.3 {
+        return None;
+    }
+    let heard = p.note as f32 + p.cents / 100.0;
+    let shift = (-12..=12)
+        .map(|d| (heard.round() as i32 + d) as f32 - heard)
+        .filter(|d| targets.contains(&(((heard + d).round() as i32).rem_euclid(12) as u8)))
+        .min_by(|x, y| x.abs().total_cmp(&y.abs()))?;
+    if shift.abs() > reach || shift.abs() < 0.1 {
+        return None;
+    }
+    let whole = shift.round();
+    z.root = Some((z.note as i32 - whole as i32).clamp(0, 127) as u8);
+    z.tune_cents = ((shift - whole) * 100.0).round();
+    let to = Key {
+        root: ((heard + shift).round() as i32).rem_euclid(12) as u8,
+        minor: false,
+    }
+    .name();
+    let to = to.split_whitespace().next().unwrap_or("");
+    Some(format!(
+        "tuned {shift:+.1} semitones onto {to}, in {}",
+        key.name()
+    ))
 }
 
 #[cfg(test)]
@@ -1632,5 +1791,72 @@ mod tests {
         let d =
             |a: usize, b: usize| ((m[a][0] - m[b][0]).powi(2) + (m[a][1] - m[b][1]).powi(2)).sqrt();
         assert!(d(0, 1) < d(0, 4), "{m:?}");
+    }
+
+    #[test]
+    fn a_drum_is_judged_as_its_kind_of_drum() {
+        let hat = |tail: f32, traits: &[&str]| {
+            let mut a = drum(Category::HatClosed, traits, [0.5, 0.5]);
+            a.envelope.decay_ms = 40.0;
+            a.envelope.tail_ms = tail;
+            a
+        };
+        // A tight hat beats one that rings on in reverb, and the reverb is said.
+        let tight = profile(&hat(180.0, &["snappy", "dry"])).unwrap();
+        let washy = profile(&hat(1100.0, &["wet"])).unwrap();
+        assert!(
+            tight.0 > washy.0 && washy.1.is_some(),
+            "{tight:?} {washy:?}"
+        );
+        // An 808 with no note can't play a bassline.
+        let mut toneless = drum(Category::Bass808, &["sub"], [0.5, 0.5]);
+        toneless.envelope.decay_ms = 900.0;
+        assert!(profile(&toneless).unwrap().1.unwrap().contains("note"));
+        // A loop isn't judged as a hit.
+        let mut beat = hat(180.0, &[]);
+        beat.kind = Kind::Loop;
+        assert!(profile(&beat).is_none());
+    }
+
+    #[test]
+    fn a_dark_kit_keeps_its_hats_bright_and_its_kick_low() {
+        assert!(!suits(Category::HatClosed, "dark"));
+        assert!(suits(Category::Kick, "dark"));
+        assert!(!suits(Category::Kick, "bright"));
+        assert!(suits(Category::HatOpen, "bright"));
+        assert!(!suits(Category::Snare, "boomy"));
+    }
+
+    #[test]
+    fn a_pitched_drum_is_tuned_onto_the_key_by_the_nearer_way() {
+        let mut a = drum(Category::Kick, &["punchy", "sub"], [0.5, 0.5]);
+        a.tonal = 0.8;
+        // Ab1 a little flat: two and a half semitones above F1, the key's root.
+        a.pitch = Some(Pitch {
+            note: 32,
+            cents: -43.0,
+            hz: 50.7,
+            confidence: 0.9,
+        });
+        let s = sample("Kick", "Pack", a);
+        let key = Key::parse("F minor").unwrap();
+        let mut z = zone(&s, None);
+        let why = tune_to(&mut z, &s, key).unwrap();
+        // Down three semitones, back up 43 cents: on F.
+        assert_eq!((z.note, z.root, z.tune_cents), (36, Some(39), 43.0));
+        assert!(why.contains("onto F"), "{why}");
+        // A snare has no note to tune; a kick already on the key's fifth stays.
+        let mut on_fifth = s.clone();
+        on_fifth.analysis.pitch = Some(Pitch {
+            note: 36,
+            cents: 0.0,
+            hz: 65.4,
+            confidence: 0.9,
+        });
+        let mut z = zone(&on_fifth, None);
+        assert!(tune_to(&mut z, &on_fifth, key).is_none());
+        let snare = sample("Snare", "Pack", drum(Category::Snare, &[], [0.5, 0.5]));
+        let mut z = zone(&snare, None);
+        assert!(tune_to(&mut z, &snare, key).is_none());
     }
 }
