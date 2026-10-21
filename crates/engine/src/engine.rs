@@ -3099,7 +3099,7 @@ mod tests {
             synth_track("b", vec![note(0, PPQ * 4, 67)], PPQ * 4),
         ]);
         p.assign_ids();
-        let bus = p.add_stack(&[0, 1]);
+        let (bus, _) = p.add_stack(&[0, 1]);
         let lfo = ModKind::Lfo {
             shape: LfoShape::Square,
             rate: ModRate::Beats(1.0),

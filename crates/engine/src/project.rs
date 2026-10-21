@@ -1287,6 +1287,9 @@ pub struct Aux {
     /// settings by one through a `Shared` modulator of its own, its routes its own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modulators: Vec<crate::modulate::Modulator>,
+    /// A stack's tracks folded away under it in the arrangement.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub folded: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -3288,7 +3291,7 @@ impl Project {
             ));
         }
         p.assign_ids();
-        p.resolve_sidechains();
+        p.resolve_sources();
         Ok(p)
     }
 
@@ -3322,15 +3325,41 @@ impl Project {
         for sc in p.sidechains_mut() {
             *sc = sc.and_then(|id| ids.iter().position(|&x| x == id).map(|i| i as u64 + 1));
         }
+        // A follower too (0 when what it followed has gone).
+        for s in p.followed_mut() {
+            *s = ids
+                .iter()
+                .position(|&x| x == *s)
+                .map_or(0, |i| i as u64 + 1);
+        }
         p
     }
 
-    /// After reading a portable project and giving its tracks ids: each sidechain's number back to
-    /// its track's id (one past the last track is none).
-    pub fn resolve_sidechains(&mut self) {
+    /// Every follower's source, on tracks and stacks.
+    fn followed_mut(&mut self) -> Vec<&mut u64> {
+        let tracks = self.tracks.iter_mut().flat_map(|t| &mut t.modulators);
+        let stacks = self.auxes.iter_mut().flat_map(|a| &mut a.modulators);
+        tracks
+            .chain(stacks)
+            .filter_map(|m| match &mut m.kind {
+                ModKind::Follower { source, .. } => Some(source),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// After reading a portable project and giving its tracks ids: each sidechain's and
+    /// follower's number back to its track's id (one past the last track, or 0, is none).
+    pub fn resolve_sources(&mut self) {
         let ids: Vec<u64> = self.tracks.iter().map(|t| t.id).collect();
         for sc in self.sidechains_mut() {
             *sc = sc.and_then(|n| ids.get((n as usize).checked_sub(1)?).copied());
+        }
+        for s in self.followed_mut() {
+            *s = (*s as usize)
+                .checked_sub(1)
+                .and_then(|i| ids.get(i).copied())
+                .unwrap_or(0);
         }
     }
 
@@ -3357,8 +3386,10 @@ impl Project {
 
     /// Adds an aux on the next free bus, as Logic does when a send picks a new bus; returns the
     /// bus.
-    /// Makes a summing stack of these tracks: a stack channel they all play into. Returns its bus.
-    pub fn add_stack(&mut self, tracks: &[usize]) -> u32 {
+    /// Makes a summing stack of these tracks: a stack channel they all play into, and the tracks
+    /// moved together under the first of them, as Logic does. Returns its bus, and where each
+    /// track is now, by where it was.
+    pub fn add_stack(&mut self, tracks: &[usize]) -> (u32, Vec<usize>) {
         let bus = self.add_aux();
         let n = self.auxes.iter().filter(|a| a.stack).count() + 1;
         let stack = self.auxes.last_mut().unwrap();
@@ -3367,7 +3398,52 @@ impl Project {
         for &t in tracks {
             self.tracks[t].output = Some(bus);
         }
-        bus
+        (bus, self.gather(bus))
+    }
+
+    /// Moves the tracks playing into `bus` together, under the first of them, in their order;
+    /// returns where each track is now, by where it was.
+    pub fn gather(&mut self, bus: u32) -> Vec<usize> {
+        let n = self.tracks.len();
+        let members: Vec<usize> = (0..n)
+            .filter(|&i| self.tracks[i].output == Some(bus))
+            .collect();
+        let order: Vec<usize> = (0..n)
+            .flat_map(|i| match members.first() {
+                Some(&first) if i == first => members.clone(),
+                _ if members.contains(&i) => Vec::new(),
+                _ => vec![i],
+            })
+            .collect();
+        let mut old: Vec<Option<Track>> = std::mem::take(&mut self.tracks)
+            .into_iter()
+            .map(Some)
+            .collect();
+        self.tracks = order.iter().map(|&i| old[i].take().unwrap()).collect();
+        let mut moved = vec![0; n];
+        for (to, &from) in order.iter().enumerate() {
+            moved[from] = to;
+        }
+        moved
+    }
+
+    /// Undoes a stack, as Logic's Flatten Stack: its tracks play into the master again, and the
+    /// stack goes, with the modulators it shared.
+    pub fn flatten_stack(&mut self, bus: u32) {
+        while self
+            .auxes
+            .iter()
+            .any(|a| a.bus == bus && !a.modulators.is_empty())
+        {
+            self.remove_shared(bus, 0);
+        }
+        for t in &mut self.tracks {
+            if t.output == Some(bus) {
+                t.output = None;
+            }
+            t.sends.retain(|s| s.bus != bus);
+        }
+        self.auxes.retain(|a| a.bus != bus);
     }
 
     /// The stack a track plays into, if it plays into one.
@@ -4265,6 +4341,54 @@ mod tests {
     }
 
     #[test]
+    fn a_follower_follows_its_track_after_the_song_is_saved_and_read() {
+        let mut p: Project = serde_json::from_str(
+            r#"{"tempo": 120, "sample_rate": 48000,
+                "tracks": [{"name": "Kick"}, {"name": "Bass"}]}"#,
+        )
+        .unwrap();
+        for _ in 0..5 {
+            next_id();
+        }
+        p.assign_ids();
+        let kick = p.tracks[0].id;
+        p.tracks[1].modulators.push(Modulator {
+            kind: ModKind::follower(kick),
+            routes: vec![],
+        });
+        let saved = serde_json::to_string(&p.portable()).unwrap();
+        let mut read: Project = serde_json::from_str(&saved).unwrap();
+        read.assign_ids();
+        read.resolve_sources();
+        assert_eq!(
+            read.tracks[1].modulators[0].kind,
+            ModKind::follower(read.tracks[0].id)
+        );
+    }
+
+    #[test]
+    fn a_stack_gathers_its_tracks_and_flattening_it_lets_them_go() {
+        let mut p: Project = serde_json::from_str(
+            r#"{"tempo": 120, "sample_rate": 48000, "tracks": [
+                {"name": "Kick"}, {"name": "Bass"}, {"name": "Snare"}, {"name": "Pad"}, {"name": "Hats"}]}"#,
+        )
+        .unwrap();
+        p.assign_ids();
+        let (bus, moved) = p.add_stack(&[0, 2, 4]);
+        let names: Vec<&str> = p.tracks.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["Kick", "Snare", "Hats", "Bass", "Pad"]);
+        assert_eq!(moved, [0, 3, 1, 4, 2]);
+        p.add_shared(bus, ModKind::mac());
+        p.flatten_stack(bus);
+        assert!(p.auxes.is_empty());
+        assert!(
+            p.tracks
+                .iter()
+                .all(|t| t.output.is_none() && t.modulators.is_empty())
+        );
+    }
+
+    #[test]
     fn a_sidechain_names_its_track_wherever_the_song_goes() {
         // Ids are a session's own: the drums' here aren't the drums' after it's saved and read
         // elsewhere, so a sidechain is saved as the track's number.
@@ -4285,7 +4409,7 @@ mod tests {
         let saved = serde_json::to_string(&p.portable()).unwrap();
         let mut read: Project = serde_json::from_str(&saved).unwrap();
         read.assign_ids();
-        read.resolve_sidechains();
+        read.resolve_sources();
         assert_ne!(read.tracks[0].id, drums);
         assert_eq!(
             read.tracks[2].eq.as_ref().unwrap().sidechain,

@@ -274,11 +274,15 @@ pub enum Command {
         #[serde(default)]
         bus: Option<u32>,
     },
-    /// Makes a summing stack of these tracks: a channel they all play into.
+    /// Makes a summing stack of these tracks: a channel they all play into, the tracks moved
+    /// together under the first of them. Flattening one undoes it.
     AddStack {
         tracks: Vec<usize>,
         #[serde(default)]
         name: Option<String>,
+    },
+    FlattenStack {
+        aux: usize,
     },
     RemoveSend {
         track: usize,
@@ -573,6 +577,16 @@ pub enum Command {
 
 fn yes() -> bool {
     true
+}
+
+/// A follower in a command names what it follows by the track's place: its id, here.
+fn follower_source(p: &mut Project, m: &mut crate::modulate::Modulator) -> Result<(), String> {
+    if let ModKind::Follower { source, .. } = &mut m.kind {
+        *source = track(p, *source as usize)
+            .map_err(|e| format!("a follower's source is a track's place: {e}"))?
+            .id;
+    }
+    Ok(())
 }
 
 fn modulator_at(
@@ -1499,11 +1513,20 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             for &t in &tracks {
                 track(p, t)?;
             }
-            let bus = p.add_stack(&tracks);
+            let (bus, moved) = p.add_stack(&tracks);
             if let Some(name) = name {
                 p.auxes.last_mut().unwrap().name = name;
             }
-            return Ok(json!({ "bus": bus }));
+            let tracks: Vec<usize> = tracks.iter().map(|&t| moved[t]).collect();
+            return Ok(json!({ "bus": bus, "tracks": tracks, "moved": moved }));
+        }
+        Command::FlattenStack { aux: a } => {
+            let stack = aux(p, a)?;
+            if !stack.stack {
+                return Err(format!("aux {a} ({}) isn't a stack", stack.name));
+            }
+            let bus = stack.bus;
+            p.flatten_stack(bus);
         }
         Command::RemoveSend { track: t, send } => {
             let sends = &mut track(p, t)?.sends;
@@ -1903,9 +1926,10 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         Command::SetReference { reference } => p.reference = reference,
         Command::AddModulator {
             track: t,
-            modulator,
+            mut modulator,
         } => {
             track(p, t)?;
+            follower_source(p, &mut modulator)?;
             if let ModKind::Shared { modulator: s } = modulator.kind {
                 let Some(stack) = p.stack_of(t) else {
                     return Err(format!("track {t} isn't in a stack"));
@@ -1930,8 +1954,9 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         Command::SetModulator {
             track: t,
             index,
-            modulator,
+            mut modulator,
         } => {
+            follower_source(p, &mut modulator)?;
             let m = modulator_at(p, t, index)?;
             // One its stack shares, given settings: the stack's, for every track in it.
             if matches!(m.kind, ModKind::Shared { .. })
@@ -1951,7 +1976,11 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
                 m.routes = routes;
             }
         }
-        Command::ShareModulator { aux: a, modulator } => {
+        Command::ShareModulator {
+            aux: a,
+            mut modulator,
+        } => {
+            follower_source(p, &mut modulator)?;
             let stack = aux(p, a)?;
             if !stack.stack {
                 return Err(format!("aux {a} ({}) isn't a stack", stack.name));
@@ -2688,6 +2717,33 @@ mod tests {
     }
 
     #[test]
+    fn a_stack_says_where_its_tracks_went_and_a_follower_names_its_track_by_its_place() {
+        use crate::modulate::ModKind;
+        let mut p = Project::new(48_000);
+        for name in ["Kick", "Bass", "Snare"] {
+            run(
+                &mut p,
+                &format!(r#"{{"op": "add_track", "name": "{name}", "instrument": "synth"}}"#),
+            )
+            .unwrap();
+        }
+        let made = run(&mut p, r#"{"op": "add_stack", "tracks": [0, 2]}"#).unwrap();
+        assert_eq!(made["tracks"], json!([0, 1]));
+        assert_eq!(made["moved"], json!([0, 2, 1]));
+        // The bass (now third) ducks under the kick, named by its place.
+        run(&mut p, r#"{"op": "add_modulator", "track": 2, "modulator": {"type": "follower", "source": 0, "attack_ms": 5, "release_ms": 150}}"#).unwrap();
+        assert!(matches!(
+            p.tracks[2].modulators[0].kind,
+            ModKind::Follower { source, .. } if source == p.tracks[0].id
+        ));
+        let e = run(&mut p, r#"{"op": "add_modulator", "track": 2, "modulator": {"type": "follower", "source": 9, "attack_ms": 5, "release_ms": 150}}"#).unwrap_err();
+        assert!(e.contains("track's place"), "{e}");
+        let a = p.auxes.iter().position(|a| a.stack).unwrap();
+        run(&mut p, &format!(r#"{{"op": "flatten_stack", "aux": {a}}}"#)).unwrap();
+        assert!(p.auxes.is_empty() && p.tracks.iter().all(|t| t.output.is_none()));
+    }
+
+    #[test]
     fn a_stack_shares_a_modulator_with_every_track_in_it() {
         use crate::modulate::{ModKind, ModParam};
         let mut p = Project::new(48_000);
@@ -2911,6 +2967,7 @@ mod tests {
             "set_send",
             "set_output",
             "add_stack",
+            "flatten_stack",
             "remove_send",
             "set_aux",
             "set_automation",

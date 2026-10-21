@@ -122,7 +122,43 @@ fn multisample_name(s: &pina_engine::project::Sampler) -> Option<String> {
     (name.chars().count() >= 3).then_some(name)
 }
 
-/// The instrument's kind, in a word or two: beside a stack's chip, where a name won't fit.
+/// A header's button: dark until on, then lit in its colour.
+fn strip_button(label: &'static str, on: bool, glow: u32, ink: u32) -> Div {
+    div()
+        .w(px(24.))
+        .h(px(18.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .border_1()
+        .text_size(px(9.5))
+        .font_weight(FontWeight::SEMIBOLD)
+        .cursor_pointer()
+        .when(on, |d| {
+            d.bg(rgb(glow))
+                .border_color(rgb(glow))
+                .text_color(rgb(ink))
+                .shadow(vec![BoxShadow {
+                    color: alpha(glow, 0.55),
+                    offset: point(px(0.), px(0.)),
+                    blur_radius: px(8.),
+                    spread_radius: px(0.),
+                    inset: false,
+                }])
+        })
+        .when(!on, |d| {
+            d.bg(rgb(HEADERS))
+                .border_color(rgb(RAISED))
+                .text_color(rgb(0x6a6a75))
+                .hover(|s| s.text_color(rgb(TEXT_2)))
+        })
+        .child(label)
+}
+
+/// The instrument's kind, in a word or two: for a track set in under its stack, where a name
+/// won't fit.
 fn instrument_kind(i: Option<&Instrument>) -> String {
     match i {
         Some(i @ Instrument::Sampler(_)) if i.is_kit() => "Kit".into(),
@@ -553,27 +589,310 @@ impl Workspace {
             .on_scroll_wheel(self.on_scroll(cx))
     }
 
+    /// The colour of the stack track `i` plays into (its first track's), if it's in one.
+    pub fn stack_color(&self, i: usize) -> Option<u32> {
+        let bus = self.session.project.stack_of(i)?.bus;
+        let first = self
+            .session
+            .project
+            .tracks
+            .iter()
+            .position(|t| t.output == Some(bus))?;
+        Some(self.color(first))
+    }
+
+    /// A stack's own row, above its tracks: fold them away, its name and how many it has, its
+    /// mute, solo (its tracks') and level (drag it). A click picks the stack: its tracks, and its
+    /// channel in the inspector and mixer; a right-click, its menu.
+    fn stack_row(&self, a: usize, first: usize, cx: &mut Context<Self>) -> Div {
+        let p = &self.session.project;
+        let aux = &p.auxes[a];
+        let (bus, folded, mute, volume) = (aux.bus, aux.folded, aux.mute, aux.volume_db);
+        let members: Vec<usize> = (0..p.tracks.len())
+            .filter(|&i| p.tracks[i].output == Some(bus))
+            .collect();
+        let solo = members.iter().all(|&i| p.tracks[i].solo);
+        let color = self.color(first);
+        let selected = self.channel == Channel::Aux(a);
+        let top = self.row_top(first) - STACK_H;
+        let count = match members.len() {
+            1 => "1 track".to_string(),
+            n => format!("{n} tracks"),
+        };
+        let readout = match volume {
+            v if v <= strip::SILENT + 0.01 => "−∞".to_string(),
+            v => format!("{v:+.1}").replace('-', "−"),
+        };
+        let pos = strip::fader_pos(volume);
+        div()
+            .absolute()
+            .top(px(top))
+            .left_0()
+            .w_full()
+            .h(px(STACK_H))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .pl(px(8.))
+            .pr(px(10.))
+            .bg(rgb(if selected { HEADER_SELECTED } else { HEADERS }))
+            .border_b_1()
+            .border_color(rgb(LINE_SOFT))
+            .debug_selector(move || format!("stack-{a}"))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(3.))
+                    .bg(alpha(color, if selected { 0.95 } else { 0.6 })),
+            )
+            // Down into its tracks, unless they're folded away.
+            .when(!folded, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .left(px(12.))
+                        .top(px(STACK_H * 0.5 + 9.))
+                        .bottom(px(-1.))
+                        .w(px(2.))
+                        .bg(alpha(color, 0.55)),
+                )
+            })
+            .child(
+                div()
+                    .size(px(20.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(rgb(RAISED)))
+                    .debug_selector(move || format!("stack-fold-{a}"))
+                    .child(
+                        icon(
+                            if folded {
+                                Icon::ChevronRight
+                            } else {
+                                Icon::Chevron
+                            },
+                            12.,
+                        )
+                        .text_color(rgb(TEXT_2)),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| {
+                            cx.stop_propagation();
+                            ws.track_op(crate::context::TrackOp::Fold(bus), cx);
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .size(px(24.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.))
+                    .bg(alpha(color, 0.16))
+                    .border_1()
+                    .border_color(alpha(color, 0.4))
+                    .child(icon(Icon::Stack, 14.).text_color(rgb(color))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .flex()
+                    .flex_col()
+                    .when(mute, |d| d.opacity(0.55))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(TEXT))
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(aux.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(TEXT_3))
+                            .whitespace_nowrap()
+                            .child(match folded {
+                                true => format!("Stack · {count} folded"),
+                                false => format!("Stack · {count}"),
+                            }),
+                    ),
+            )
+            .child(
+                strip_button("M", mute, ACCENT, 0xffffff)
+                    .debug_selector(move || format!("stack-mute-{a}"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| {
+                            cx.stop_propagation();
+                            ws.edit(cx, |ws| ws.session.project.auxes[a].mute ^= true);
+                        }),
+                    ),
+            )
+            .child({
+                let members = members.clone();
+                strip_button("S", solo, SOLO, BG)
+                    .debug_selector(move || format!("stack-solo-{a}"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| {
+                            cx.stop_propagation();
+                            ws.edit(cx, |ws| {
+                                for &m in &members {
+                                    ws.session.project.tracks[m].solo = !solo;
+                                }
+                            });
+                        }),
+                    )
+            })
+            // Its level, an LCD over how far up its fader is: drag it up or down.
+            .child(
+                div()
+                    .w(px(58.))
+                    .h(px(20.))
+                    .flex_none()
+                    .relative()
+                    .overflow_hidden()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .px(px(6.))
+                    .rounded(px(4.))
+                    .bg(rgb(0x0b0b0e))
+                    .border_1()
+                    .border_color(rgb(0x22222a))
+                    .font_family(MONO)
+                    .text_size(px(10.))
+                    .text_color(rgb(TEXT_2))
+                    .cursor_ns_resize()
+                    .debug_selector(move || format!("stack-level-{a}"))
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(gpui::relative(pos))
+                            .bg(alpha(color, 0.18)),
+                    )
+                    .child(readout)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            if e.modifiers.alt {
+                                ws.edit(cx, |ws| ws.session.project.auxes[a].volume_db = 0.0);
+                                return;
+                            }
+                            ws.begin_drag(
+                                Drag::Fader {
+                                    channel: Channel::Aux(a),
+                                    y: f32::from(e.position.y),
+                                    pos,
+                                    height: 160.,
+                                },
+                                cx,
+                            );
+                        }),
+                    ),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                    if e.click_count == 2 {
+                        ws.start_naming(Name::Aux(a), window, cx);
+                        return;
+                    }
+                    ws.pick_stack(a);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    ws.pick_stack(a);
+                    ws.stack_menu(a, e.position, cx);
+                }),
+            )
+    }
+
+    /// A stack picked: its tracks, and its channel.
+    pub fn pick_stack(&mut self, a: usize) {
+        let p = &self.session.project;
+        let Some(bus) = p.auxes.get(a).map(|x| x.bus) else {
+            return;
+        };
+        let ids: Vec<u64> = p
+            .tracks
+            .iter()
+            .filter(|t| t.output == Some(bus))
+            .map(|t| t.id)
+            .collect();
+        if let Some(first) = p.tracks.iter().position(|t| t.output == Some(bus)) {
+            self.track = first;
+        }
+        self.tracks_picked = ids;
+        self.channel = Channel::Aux(a);
+        self.region = None;
+    }
+
+    /// A stack's menu: fold its tracks away or show them, rename it, flatten it.
+    fn stack_menu(&mut self, a: usize, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(aux) = self.session.project.auxes.get(a) else {
+            return;
+        };
+        let op =
+            |label: &str, o: crate::context::TrackOp| (label.to_string(), MenuAction::Track(o));
+        let items = vec![
+            match aux.folded {
+                true => op("Show Its Tracks", crate::context::TrackOp::Fold(aux.bus)),
+                false => op(
+                    "Fold Its Tracks Away",
+                    crate::context::TrackOp::Fold(aux.bus),
+                ),
+            },
+            (
+                format!("Rename {}…", aux.name),
+                MenuAction::Rename(Name::Aux(a)),
+            ),
+            (String::new(), MenuAction::Nothing),
+            op("Flatten Stack", crate::context::TrackOp::Flatten(aux.bus)),
+        ];
+        self.open_menu(at, items, cx);
+    }
+
     fn headers(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let armed = self.armed();
         let mut rows: Vec<Div> = Vec::new();
         for i in 0..self.session.project.tracks.len() {
-            let t = &self.session.project.tracks[i];
+            if let Some(a) = self.stack_above(i) {
+                rows.push(self.stack_row(a, i, cx));
+            }
+            if self.folded(i) {
+                continue;
+            }
             let selected = self.is_picked(i);
             let color = self.color(i);
             let glyph = self.shown(i).look.icon;
             let picking = self.picker.as_ref().is_some_and(|p| p.track == i);
-            // The summing stack it plays into, if it's in one.
-            let stack = t.output.and_then(|b| {
-                let aux = self
-                    .session
-                    .project
-                    .auxes
-                    .iter()
-                    .find(|a| a.bus == b && a.stack)?;
-                Some(aux.name.clone())
-            });
+            // In a stack, it's set in under the stack's row, in the stack's colour.
+            let nested = self.stack_color(i);
             let top = self.row_top(i);
-            rows.push(self.header_row(i, top, selected, color, glyph, picking, stack, armed, cx));
+            rows.push(self.header_row(i, top, selected, color, glyph, picking, nested, armed, cx));
             if self.show_automation {
                 rows.extend(self.auto_headers(i, cx));
             }
@@ -642,7 +961,7 @@ impl Workspace {
         color: u32,
         glyph: &'static str,
         picking: bool,
-        stack: Option<String>,
+        nested: Option<u32>,
         armed: Option<usize>,
         cx: &mut Context<Self>,
     ) -> Div {
@@ -658,7 +977,7 @@ impl Workspace {
             t.pan_mode,
             t.spread.unwrap_or(1.0),
         );
-        let kind = match stack {
+        let kind = match nested {
             Some(_) => instrument_kind(t.instrument.as_ref()),
             None => instrument_name(t.instrument.as_ref()),
         };
@@ -699,40 +1018,7 @@ impl Workspace {
         };
         let lit = marked.unwrap_or(tint(color, 0.55));
 
-        // The strip's buttons: dark until on, then lit in their colour.
-        let button = |label: &'static str, on: bool, glow: u32, ink: u32| {
-            div()
-                .w(px(24.))
-                .h(px(18.))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(4.))
-                .border_1()
-                .text_size(px(9.5))
-                .font_weight(FontWeight::SEMIBOLD)
-                .cursor_pointer()
-                .when(on, |d| {
-                    d.bg(rgb(glow))
-                        .border_color(rgb(glow))
-                        .text_color(rgb(ink))
-                        .shadow(vec![BoxShadow {
-                            color: alpha(glow, 0.55),
-                            offset: point(px(0.), px(0.)),
-                            blur_radius: px(8.),
-                            spread_radius: px(0.),
-                            inset: false,
-                        }])
-                })
-                .when(!on, |d| {
-                    d.bg(rgb(HEADERS))
-                        .border_color(rgb(RAISED))
-                        .text_color(rgb(0x6a6a75))
-                        .hover(|s| s.text_color(rgb(TEXT_2)))
-                })
-                .child(label)
-        };
+        let button = strip_button;
         let buttons = div()
             .flex()
             .gap(px(4.))
@@ -1068,7 +1354,7 @@ impl Workspace {
             .flex()
             .items_center()
             .gap(px(10.))
-            .pl(px(13.))
+            .pl(px(if nested.is_some() { 25. } else { 13. }))
             .pr(px(8.))
             .when(mute, |d| d.opacity(0.55))
             .when(shown.header_icons, |d| {
@@ -1165,10 +1451,7 @@ impl Workspace {
                                         .overflow_hidden()
                                         .text_ellipsis()
                                         .child(kind),
-                                )
-                                .when_some(stack, |d, name| {
-                                    d.child(div().flex_none().child(chip(name, VIOLET)))
-                                }),
+                                ),
                         )
                     }),
             );
@@ -1196,6 +1479,18 @@ impl Workspace {
                     .w(px(3.))
                     .bg(alpha(color, if selected { 0.95 } else { 0.5 })),
             )
+            // Its stack's, down from the stack's row.
+            .when_some(nested, |d, c| {
+                d.child(
+                    div()
+                        .absolute()
+                        .left(px(12.))
+                        .top(px(-1.))
+                        .bottom(px(-1.))
+                        .w(px(2.))
+                        .bg(alpha(c, 0.55)),
+                )
+            })
             .child(identity)
             .child(strip_panel)
             // The bottom edge: drag the track taller or shorter; double-click for its usual size.
@@ -1266,10 +1561,43 @@ impl Workspace {
         let tracks = self.session.project.tracks.len();
         let selected: Vec<usize> = self.picked_tracks();
         let automation = self.show_automation;
-        // Each row's top and its lane's height, for the grid.
+        // Each row's top and its lane's height, for the grid (none, folded in a stack).
         let rows_at: Vec<(f32, f32, f32)> = (0..tracks)
-            .map(|i| (self.row_top(i), self.lane_h(i), self.autos_h(i)))
+            .map(|i| match self.folded(i) {
+                true => (self.row_top(i), 0.0, 0.0),
+                false => (self.row_top(i), self.lane_h(i), self.autos_h(i)),
+            })
             .collect();
+        // Each stack's lane: its tracks' regions, a line each, in their colours.
+        // (Its top, a line's height, and each region's x, top, width and colour.)
+        type Bars = Vec<(f32, f32, f32, u32)>;
+        let mut stacks: Vec<(f32, f32, Bars)> = Vec::new();
+        for first in 0..tracks {
+            let Some(a) = self.stack_above(first) else {
+                continue;
+            };
+            let bus = p.auxes[a].bus;
+            let members: Vec<usize> = (0..tracks)
+                .filter(|&i| p.tracks[i].output == Some(bus))
+                .collect();
+            let line = (STACK_H - 10.0) / members.len().max(1) as f32;
+            let bars = members
+                .iter()
+                .enumerate()
+                .flat_map(|(m, &i)| {
+                    let color = self.color(i);
+                    p.tracks[i]
+                        .regions
+                        .iter()
+                        .filter(|r| !r.mute)
+                        .map(move |r| {
+                            let x = r.start as f32 * ppt - sx;
+                            (x, 5.0 + m as f32 * line, r.length as f32 * ppt, color)
+                        })
+                })
+                .collect();
+            stacks.push((self.row_top(first) - STACK_H, (line - 1.0).max(1.5), bars));
+        }
         let auto_h = self.auto_h();
         let bounds = self.lanes_bounds.clone();
         let cycle = self
@@ -1318,6 +1646,18 @@ impl Workspace {
                         alpha(ACCENT, 0.04),
                     );
                 }
+                // Stacks' lanes, a shade darker (their tracks' regions go on them over the grid).
+                for (y, _, _) in &stacks {
+                    quad(window, 0.0, *y, w, STACK_H, rgb(0x0e0e12).into());
+                    quad(
+                        window,
+                        0.0,
+                        y + STACK_H - 1.0,
+                        w,
+                        1.0,
+                        rgb(LINE_SOFT).into(),
+                    );
+                }
                 for (i, &(y, lh, ah)) in rows_at.iter().enumerate() {
                     if selected.contains(&i) {
                         quad(window, 0.0, y, w, lh, alpha(0xffffff, 0.025));
@@ -1360,6 +1700,14 @@ impl Workspace {
                         rgb(color).into(),
                     );
                 }
+                for (y, line, bars) in &stacks {
+                    for &(x, top, bw, color) in bars {
+                        if x + bw < 0.0 || x > w {
+                            continue;
+                        }
+                        quad(window, x, y + top, bw.max(1.0), *line, alpha(color, 0.7));
+                    }
+                }
             },
         )
         .absolute()
@@ -1367,6 +1715,7 @@ impl Workspace {
 
         // Clicking an empty lane selects its track; the pencil draws a region there.
         let rows: Vec<Div> = (0..tracks)
+            .filter(|&i| !self.folded(i))
             .map(|i| {
                 div()
                     .absolute()
@@ -1432,6 +1781,9 @@ impl Workspace {
         let width = f32::from(self.lanes_bounds.get().size.width).max(2000.0);
         let mut regions = Vec::new();
         for (t, track) in self.session.project.tracks.iter().enumerate() {
+            if self.folded(t) {
+                continue;
+            }
             for r in 0..track.regions.len() {
                 let region = &track.regions[r];
                 let x = region.start as f32 * ppt - sx;

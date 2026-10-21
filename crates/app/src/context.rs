@@ -36,6 +36,9 @@ pub enum TrackOp {
     ResetPan(usize),
     Move(usize, i32),
     Stack(usize),
+    /// A stack (by its bus): undone, as Logic's Flatten Stack; its tracks folded or shown.
+    Flatten(u32),
+    Fold(u32),
     Look(usize, Point<Pixels>),
     /// The Binaural Panner, on a track.
     Panner(usize),
@@ -79,7 +82,7 @@ fn ticked(on: bool, label: &str) -> String {
 }
 
 impl Workspace {
-    fn open_menu(
+    pub fn open_menu(
         &mut self,
         at: Point<Pixels>,
         items: Vec<(String, MenuAction)>,
@@ -193,15 +196,19 @@ impl Workspace {
                 true => op("Move Down".into(), TrackOp::Move(t, 1)),
                 false => ("Move Down".into(), MenuAction::Nothing),
             },
-            op(
-                match self.picked_tracks().len() {
-                    n @ 2.. if self.is_picked(t) => {
-                        format!("Create Track Stack of {n} Tracks\t⇧⌘D")
-                    }
-                    _ => "Create Track Stack\t⇧⌘D".into(),
-                },
-                TrackOp::Stack(t),
-            ),
+            match self.session.project.stack_of(t) {
+                // In one: undo it.
+                Some(a) => op(format!("Flatten {}", a.name), TrackOp::Flatten(a.bus)),
+                None => op(
+                    match self.picked_tracks().len() {
+                        n @ 2.. if self.is_picked(t) => {
+                            format!("Create Track Stack of {n} Tracks\t⇧⌘D")
+                        }
+                        _ => "Create Track Stack\t⇧⌘D".into(),
+                    },
+                    TrackOp::Stack(t),
+                ),
+            },
             rule(),
             op("Modulation…".into(), TrackOp::Modulation(t)),
             ("Bounce in Place".to_string(), MenuAction::BounceInPlace(t)),
@@ -394,9 +401,18 @@ impl Workspace {
                     true => self.picked_tracks(),
                     false => vec![t],
                 };
-                self.edit(cx, |ws| {
-                    ws.session.project.add_stack(&tracks);
-                });
+                self.make_stack(&tracks, cx);
+            }
+            TrackOp::Flatten(bus) => {
+                self.edit(cx, |ws| ws.session.project.flatten_stack(bus));
+                self.channel = crate::strip::Channel::Track(self.track);
+            }
+            // Folding is how it's seen, not an edit to undo.
+            TrackOp::Fold(bus) => {
+                if let Some(a) = self.session.project.auxes.iter_mut().find(|a| a.bus == bus) {
+                    a.folded ^= true;
+                    self.session.edited = true;
+                }
             }
             TrackOp::Look(t, at) if t < n => self.pending_look = Some((t, at)),
             TrackOp::Automation => self.show_automation ^= true,

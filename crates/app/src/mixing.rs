@@ -817,6 +817,15 @@ pub fn mix(
                     dir,
                     json!({ "op": "add_stack", "tracks": kit, "name": "Drums" }),
                 )?;
+                // The kit's tracks were moved together: what's been said about each, to where
+                // it is now.
+                let moved: Vec<usize> = serde_json::from_value(made["moved"].clone())
+                    .map_err(|e| format!("add_stack: {e}"))?;
+                for d in done.iter_mut() {
+                    if let Some(t) = d["track"].as_u64().and_then(|t| moved.get(t as usize)) {
+                        d["track"] = json!(t);
+                    }
+                }
                 let bus = made["bus"].as_u64().ok_or("no stack made")? as u32;
                 cli::project(dir)?
                     .auxes
@@ -859,7 +868,8 @@ pub fn mix(
             if d.get("skipped").is_some() {
                 continue;
             }
-            let part = part_of(t);
+            // As the song is now (a stack may have moved it).
+            let part = as_role.unwrap_or_else(|| role(&p.tracks[t]));
             let a = &report.tracks[t];
             let measured = if part == "bass" {
                 (a.rms_db[0] + a.rms_db[1]) / 2.0

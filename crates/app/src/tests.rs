@@ -609,10 +609,81 @@ fn tracks_picked_with_cmd_and_shift_go_into_one_stack(cx: &mut TestAppContext) {
         (stack, p.tracks.iter().map(|t| t.output).collect::<Vec<_>>())
     });
     let stack = outputs.0.expect("a stack");
-    assert_eq!(outputs.1, [Some(stack), None, Some(stack)]);
+    // Gathered under the first, as Logic does: the drums moved up beside the keys.
+    assert_eq!(outputs.1, [Some(stack), Some(stack), None]);
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[1].name.clone()),
+        "Drums"
+    );
     // A plain click picks one again.
     header(cx, 1, Modifiers::none(), MouseButton::Left);
     assert_eq!(picked(cx), [1]);
+}
+
+#[gpui::test]
+fn a_stack_has_a_row_of_its_own_folds_its_tracks_away_and_flattens(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| ws.make_stack(&[0, 2], cx));
+    cx.run_until_parked();
+    // Its row above its tracks, and its channel picked.
+    let row = cx.debug_bounds("stack-0").expect("the stack's row");
+    let keys = cx.debug_bounds("header-0").unwrap();
+    assert!(row.origin.y < keys.origin.y);
+    assert!(ws.read_with(cx, |ws, _| ws.channel == Channel::Aux(0)));
+    // Folded: its tracks' rows go, and the lead comes up under it.
+    let lead = cx.debug_bounds("header-2").unwrap().origin.y;
+    click_on(cx, "stack-fold-0", Modifiers::none(), MouseButton::Left);
+    assert!(cx.debug_bounds("header-0").is_none() && cx.debug_bounds("header-1").is_none());
+    assert!(cx.debug_bounds("header-2").unwrap().origin.y < lead);
+    click_on(cx, "stack-fold-0", Modifiers::none(), MouseButton::Left);
+    assert!(cx.debug_bounds("header-1").is_some());
+    // Flattened from its menu: the tracks play into the master again.
+    click_on(cx, "stack-0", Modifiers::none(), MouseButton::Right);
+    pick(cx, &ws, "Flatten Stack");
+    ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        assert!(p.auxes.iter().all(|a| !a.stack));
+        assert!(p.tracks.iter().all(|t| t.output.is_none()));
+    });
+    assert!(cx.debug_bounds("stack-0").is_none());
+}
+
+#[gpui::test]
+fn an_automation_lane_takes_a_modulator(cx: &mut TestAppContext) {
+    use pina_engine::modulate::ModTarget;
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| {
+        ws.select_track(0);
+        ws.show_automation = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    // The keys' volume lane: a new LFO moving it, from its right-click.
+    click_on(cx, "auto-lane-0-0", Modifiers::none(), MouseButton::Right);
+    pick(cx, &ws, "New LFO");
+    let routes = |cx: &mut VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let mods = &ws.session.project.tracks[0].modulators;
+            mods.iter().map(|m| m.routes.len()).collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(routes(cx), [1]);
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[0].modulators[0]
+            .routes[0]
+            .target),
+        ModTarget::Volume
+    );
+    // Ticked in the menu: picking it again lets the volume go.
+    click_on(cx, "auto-lane-0-0", Modifiers::none(), MouseButton::Right);
+    let ticked = ws.read_with(cx, |ws, _| {
+        ws.menu
+            .as_ref()
+            .is_some_and(|m| m.items.iter().any(|(l, _)| l == "✓ LFO 1"))
+    });
+    assert!(ticked);
+    pick(cx, &ws, "LFO 1");
+    assert_eq!(routes(cx), [0]);
 }
 
 #[gpui::test]
@@ -634,15 +705,16 @@ fn a_stacks_shared_modulator_is_on_every_track_in_it(cx: &mut TestAppContext) {
     ws.read_with(cx, |ws, _| {
         let p = &ws.session.project;
         assert_eq!(p.tracks[0].modulators[0].kind, shared);
-        assert_eq!(p.tracks[2].modulators[0].kind, shared);
-        assert!(p.tracks[1].modulators.is_empty(), "not in the stack");
-        assert_eq!(ws.mod_name(2, 0), "Stack 1 · Macro 1");
+        // The drums moved up under the keys.
+        assert_eq!(p.tracks[1].modulators[0].kind, shared);
+        assert!(p.tracks[2].modulators.is_empty(), "not in the stack");
+        assert_eq!(ws.mod_name(1, 0), "Stack 1 · Macro 1");
     });
     // Turned on one track, it's turned on every one.
     ws.update(cx, |ws, _| ws.set_mod_field(0, 0, ModField::Value, 0.7));
-    assert!((ws.read_with(cx, |ws, _| ws.mod_field(2, 0, ModField::Value)) - 0.7).abs() < 1e-4);
+    assert!((ws.read_with(cx, |ws, _| ws.mod_field(1, 0, ModField::Value)) - 0.7).abs() < 1e-4);
     // Taken off one track's card: off the stack, and every track in it.
-    ws.update(cx, |ws, cx| ws.remove_modulator(2, 0, cx));
+    ws.update(cx, |ws, cx| ws.remove_modulator(1, 0, cx));
     ws.read_with(cx, |ws, _| {
         let p = &ws.session.project;
         assert!(p.auxes.iter().all(|a| a.modulators.is_empty()));
@@ -5739,11 +5811,30 @@ fn shots() {
                     ws.editor_h = 330.0;
                     ws.show_bottom(Bottom::Modulation, cx);
                 }
+                // A stack of the keys and drums (gathered), its row and its lane; the keys'
+                // volume lane moved by an LFO. Folded, its tracks go.
+                "stack-rows" | "stack-folded" => {
+                    use pina_engine::modulate::{ModKind, ModRoute, ModTarget, Modulator};
+                    ws.session.project.tracks[0].modulators.push(Modulator {
+                        kind: ModKind::lfo(),
+                        routes: vec![ModRoute {
+                            target: ModTarget::Volume,
+                            depth: -6.0,
+                        }],
+                    });
+                    ws.make_stack(&[0, 2], cx);
+                    ws.session.project.auxes[0].name = "Rhythm".into();
+                    ws.session.project.auxes[0].volume_db = -3.0;
+                    ws.show_automation = page == "stack-rows";
+                    if page == "stack-folded" {
+                        ws.session.project.auxes[0].folded = true;
+                    }
+                }
                 // A stack of the keys and lead, both picked, sharing an LFO and a macro.
                 "stack-shared" | "stack-shared-menu" => {
                     use pina_engine::modulate::{ModKind, ModRoute, ModTarget};
                     let p = &mut ws.session.project;
-                    let bus = p.add_stack(&[0, 1]);
+                    let (bus, _) = p.add_stack(&[0, 1]);
                     p.add_shared(bus, ModKind::lfo());
                     p.add_shared(bus, ModKind::Macro { value: 0.35 });
                     p.tracks[0].modulators[0].routes = vec![ModRoute {

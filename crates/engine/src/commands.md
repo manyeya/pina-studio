@@ -165,8 +165,11 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `remove_send` `{"track": 0, "send": 0}`
 - `set_output` `{"track": 0, "bus": 2}`: the track plays into that aux or stack instead of the
   master; without `bus`, back to the master.
-- `add_stack` `{"tracks": [0, 1], "name": "Drums"}`: a summing stack, a channel (an aux, listed
-  with the others) those tracks play into. Answers with its bus.
+- `add_stack` `{"tracks": [0, 3], "name": "Drums"}`: a summing stack, a channel (an aux, listed
+  with the others) those tracks play into, the tracks moved together under the first of them.
+  Answers with its bus, where its tracks are now (`"tracks"`) and where every track went
+  (`"moved"`, by where it was). `flatten_stack` `{"aux": 2}` undoes one: its tracks play into
+  the master again.
 - `set_aux` `{"aux": 0, "name": "Reverb", "volume_db": -3, "pan": 0, "mute": false}`
 - `set_automation` `{"track": 0, "param": "volume", "points": [{"tick": 0, "value": -12}, {"tick": 3840, "value": 0}]}`:
   `volume` in dB, `pan`, `mute` (1 muted, 0 not; always steps), `send` (with `"send": i`, which
@@ -340,9 +343,9 @@ chord track; parts are written over it, and the critic checks against it.
   `{"beats": n}` in time with the song, or `{"hz": n}`; `"phase"` 0 to 1; `"unipolar": true` for
   0 to 1 rather than -1 to 1), `"steps"` (`"values"` 0 to 1, a step each `"rate"`; `"glide"` 0 to
   1), `"envelope"` (`"attack_ms"`, `"decay_ms"`, `"sustain"`, `"release_ms"`: set off by the
-  track's notes), `"follower"` (`"source"`: another track's id, `"attack_ms"`, `"release_ms"`:
-  its level, for sidechain pumping and ducking), `"random"` (`"rate"`, `"smooth"`) or `"macro"`
-  (`"value"` 0 to 1).
+  track's notes), `"follower"` (`"source"`: the track it follows, by its place; `"attack_ms"`,
+  `"release_ms"`: its level, for sidechain pumping and ducking), `"random"` (`"rate"`,
+  `"smooth"`) or `"macro"` (`"value"` 0 to 1).
 - `set_modulator` `{"track": 1, "index": 0, "modulator": {"type": "lfo", "shape": "square", "rate": {"beats": 0.25}}}`:
   one replaced (its routes kept unless it brings its own); `remove_modulator` `{"track": 1, "index": 0}`.
 - `share_modulator` `{"aux": 2, "modulator": {"type": "macro"}}`: a modulator a stack shares (an

@@ -68,6 +68,8 @@ pub const TOP_H: f32 = MARKERS_H + RULER_H;
 pub const LANE_H: f32 = 76.0;
 pub const MIN_LANE_H: f32 = 40.0;
 pub const MAX_LANE_H: f32 = 240.0;
+/// A stack's own row, above its tracks.
+pub const STACK_H: f32 = 36.0;
 pub const EDITOR_H: f32 = 296.0;
 /// The shortest the editor can be dragged.
 pub const EDITOR_MIN_H: f32 = 160.0;
@@ -118,6 +120,10 @@ pub enum Icon {
     Mixer,
     Grid,
     Chevron,
+    /// A stack's fold: its tracks shown (as `Chevron`) or folded away.
+    ChevronRight,
+    /// A summing stack: layers.
+    Stack,
     Plus,
     Minus,
     Close,
@@ -201,6 +207,10 @@ impl Icon {
                 r##"<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>"##
             }
             Icon::Chevron => r##"<path d="M6 9l6 6 6-6"/>"##,
+            Icon::ChevronRight => r##"<path d="M9 6l6 6-6 6"/>"##,
+            Icon::Stack => {
+                r##"<path d="M12 3.5l8.5 4.5-8.5 4.5-8.5-4.5z"/><path d="M3.5 12l8.5 4.5 8.5-4.5"/><path d="M3.5 16l8.5 4.5 8.5-4.5"/>"##
+            }
             Icon::Plus => r##"<path d="M6 12h12M12 6v12"/>"##,
             Icon::Minus => r##"<path d="M6 12h12"/>"##,
             Icon::Close => r##"<path d="M7 7l10 10M17 7L7 17"/>"##,

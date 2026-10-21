@@ -1968,6 +1968,79 @@ impl Workspace {
             )
     }
 
+    /// What a modulator moves to move an automation lane's parameter, if one can.
+    pub fn mod_target_of(&self, t: usize, param: Param) -> Option<ModTarget> {
+        use pina_engine::project::EqField;
+        Some(match param {
+            Param::Volume => ModTarget::Volume,
+            Param::Pan => ModTarget::Pan,
+            Param::Send(bus) => {
+                let sends = &self.session.project.tracks.get(t)?.sends;
+                ModTarget::Send(sends.iter().position(|s| s.bus == bus)?)
+            }
+            Param::Plugin(which, id) => ModTarget::Plugin(which, id),
+            Param::Eq(band, EqField::Gain) => ModTarget::EqGain(band),
+            Param::Eq(band, EqField::Freq) => ModTarget::EqFreq(band),
+            _ => return None,
+        })
+    }
+
+    /// An automation lane's menu of modulators: each of the track's, ticked if it moves `mt`
+    /// (picking it maps it, or lets it go), and new ones that do.
+    pub fn lane_mod_menu(
+        &self,
+        t: usize,
+        mt: ModTarget,
+        title: String,
+    ) -> Vec<(String, MenuAction)> {
+        let Some(track) = self.session.project.tracks.get(t) else {
+            return Vec::new();
+        };
+        let mut items = vec![(format!("Modulate {title}"), MenuAction::Nothing)];
+        for (k, m) in track.modulators.iter().enumerate() {
+            let name = self.mod_name(t, k);
+            items.push(match m.routes.iter().any(|r| r.target == mt) {
+                true => (format!("✓ {name}"), MenuAction::Unmap(t, k, mt)),
+                false => (name, MenuAction::Map(t, k, mt)),
+            });
+        }
+        if track.modulators.len() < MAX_MODS {
+            if !track.modulators.is_empty() {
+                items.push((String::new(), MenuAction::Nothing));
+            }
+            for kind in [
+                ModKind::lfo(),
+                ModKind::steps(),
+                ModKind::random(),
+                ModKind::mac(),
+                ModKind::envelope(),
+            ] {
+                items.push((
+                    format!("New {}", kind.name()),
+                    MenuAction::NewModFor(t, kind, mt),
+                ));
+            }
+        }
+        items
+    }
+
+    /// A new modulator on track `t`, moving `mt`.
+    pub fn new_mod_for(&mut self, t: usize, kind: ModKind, mt: ModTarget, cx: &mut Context<Self>) {
+        let Some(k) = self
+            .session
+            .project
+            .tracks
+            .get(t)
+            .map(|tr| tr.modulators.len())
+        else {
+            return;
+        };
+        self.add_modulator(t, kind, cx);
+        if self.session.project.tracks[t].modulators.len() > k {
+            self.map_modulator(t, k, mt, cx);
+        }
+    }
+
     /// For a track in a stack: a modulator to share with every track in it, or one the stack
     /// shares that this track hasn't.
     pub fn shared_menu(&self, t: usize) -> Option<Vec<(String, MenuAction)>> {

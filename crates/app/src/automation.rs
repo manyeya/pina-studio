@@ -1792,11 +1792,23 @@ impl Workspace {
         let h = self.auto_h();
         let lanes = self.auto_lanes(i);
         let n = lanes.len();
+        let nested = self.stack_color(i);
         let mut out = Vec::new();
         for (k, &param) in lanes.iter().enumerate() {
             let top = self.lane_top(i, k);
             let has = !t.automation.points(param).is_empty();
             let value = self.now_value(i, param);
+            // What modulators move to move it, and those that do.
+            let target = self.mod_target_of(i, param);
+            let moving: Vec<usize> = t
+                .modulators
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.routes.iter().any(|r| Some(r.target) == target))
+                .map(|(k, _)| k)
+                .collect();
+            let offering = target.is_some()
+                && matches!(self.drag, Some(Drag::Modulator { track, .. }) if track == i);
             let lit = has && mode != AutoMode::Off;
             let (label, plugin) = match param {
                 Param::Plugin(Which::Instrument, _) => (self.param_name(i, param), None),
@@ -1902,6 +1914,14 @@ impl Workspace {
                         .child(name)
                 }))
                 .child(div().flex_1())
+                // The modulators moving it, a dot each in its colour.
+                .children(moving.iter().map(|&k| {
+                    div()
+                        .flex_none()
+                        .size(px(7.))
+                        .rounded(px(4.))
+                        .bg(rgb(crate::modulation::MOD_COLORS[k % 8]))
+                }))
                 .child(readout);
             let bottom_row = div()
                 .flex()
@@ -1952,6 +1972,8 @@ impl Workspace {
                         ),
                     )
                 });
+            let targets = self.mod_targets.clone();
+            let title = self.param_name(i, param);
             out.push(
                 div()
                     .absolute()
@@ -1962,6 +1984,41 @@ impl Workspace {
                     .bg(rgb(0x141419))
                     .border_b_1()
                     .border_color(rgb(LINE_SOFT))
+                    .debug_selector(move || format!("auto-lane-{i}-{k}"))
+                    // A modulator's ↗ dropped here moves its parameter; right-click to pick one.
+                    .when_some(target, |d, mt| {
+                        d.child(
+                            canvas(
+                                move |b, _, _| targets.borrow_mut().push((i, mt, b)),
+                                move |b, _, window, _| {
+                                    if offering {
+                                        window.paint_quad(
+                                            fill(b, alpha(ACCENT, 0.1))
+                                                .border_widths(px(1.))
+                                                .border_color(alpha(ACCENT, 0.7)),
+                                        );
+                                    }
+                                },
+                            )
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full(),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                let items = ws.lane_mod_menu(i, mt, title.clone());
+                                ws.menu = Some(Menu {
+                                    at: e.position,
+                                    items,
+                                    ..Default::default()
+                                });
+                                cx.notify();
+                            }),
+                        )
+                    })
                     .child(
                         div()
                             .absolute()
@@ -1972,10 +2029,22 @@ impl Workspace {
                             .bg(alpha(color, if lit { 0.9 } else { 0.35 })),
                     )
                     .children(scale)
+                    // Its stack's line, on down from its track's row.
+                    .when_some(nested, |d, c| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .left(px(12.))
+                                .top(px(-1.))
+                                .bottom(px(-1.))
+                                .w(px(2.))
+                                .bg(alpha(c, 0.55)),
+                        )
+                    })
                     .child(
                         div()
                             .absolute()
-                            .left(px(12.))
+                            .left(px(if nested.is_some() { 22. } else { 12. }))
                             .right(px(30.))
                             .top(px(6.))
                             .bottom(px(5.))
@@ -1999,6 +2068,9 @@ impl Workspace {
         let playhead = self.playhead();
         let mut out = Vec::new();
         for (t, track) in self.session.project.tracks.iter().enumerate() {
+            if self.folded(t) {
+                continue;
+            }
             let color = self.color(t);
             let off = track.automation.mode == AutoMode::Off;
             for (k, param) in self.auto_lanes(t).into_iter().enumerate() {

@@ -203,6 +203,13 @@ pub enum MenuAction {
     /// this track too.
     ShareMod(usize, pina_engine::modulate::ModKind),
     LinkMod(usize, u8),
+    /// A modulator letting a setting go; a new one moving it (from an automation lane).
+    Unmap(usize, usize, pina_engine::modulate::ModTarget),
+    NewModFor(
+        usize,
+        pina_engine::modulate::ModKind,
+        pina_engine::modulate::ModTarget,
+    ),
     Map(usize, usize, pina_engine::modulate::ModTarget),
     /// A tool in hand.
     Tool(crate::workspace::Tool),
@@ -479,6 +486,8 @@ impl Workspace {
             MenuAction::Track(op) => self.track_op(op, cx),
             MenuAction::Mod(t, k, change) => self.mod_change(t, k, change, cx),
             MenuAction::ShareMod(t, kind) => self.share_modulator(t, kind, cx),
+            MenuAction::Unmap(t, k, mt) => self.unmap(t, k, mt, cx),
+            MenuAction::NewModFor(t, kind, mt) => self.new_mod_for(t, kind, mt, cx),
             MenuAction::LinkMod(t, s) => {
                 let kind = pina_engine::modulate::ModKind::Shared { modulator: s };
                 self.add_modulator(t, kind, cx)

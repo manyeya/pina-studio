@@ -1244,9 +1244,31 @@ impl Workspace {
         ((x - left + self.scroll_x) / self.px_per_tick()).max(0.0) as f64
     }
 
-    /// A track's row: its lane, and its automation lane under it while automation shows.
+    /// A track's row: its stack's row above it if it's the stack's first track, then its lane
+    /// and its automation lanes (none of them while the stack's folded).
     pub fn row_h_of(&self, i: usize) -> f32 {
-        self.lane_h(i) + self.autos_h(i)
+        let above = self.stack_above(i).map_or(0.0, |_| STACK_H);
+        match self.folded(i) {
+            true => above,
+            false => above + self.lane_h(i) + self.autos_h(i),
+        }
+    }
+
+    /// The stack (by its place among the auxes) whose row is above track `i`: the first track
+    /// in it.
+    pub fn stack_above(&self, i: usize) -> Option<usize> {
+        let p = &self.session.project;
+        let bus = p.tracks.get(i)?.output?;
+        let a = p.auxes.iter().position(|a| a.bus == bus && a.stack)?;
+        p.tracks[..i]
+            .iter()
+            .all(|t| t.output != Some(bus))
+            .then_some(a)
+    }
+
+    /// Whether track `i` is folded away in its stack.
+    pub fn folded(&self, i: usize) -> bool {
+        self.session.project.stack_of(i).is_some_and(|a| a.folded)
     }
 
     /// Track `i`'s lane height, as dragged (the usual, past the last track).
@@ -1262,7 +1284,8 @@ impl Workspace {
 
     /// Where track `i`'s row begins, from the top of the lanes, scrolled.
     pub fn row_top(&self, i: usize) -> f32 {
-        (0..i).map(|j| self.row_h_of(j)).sum::<f32>() - self.scroll_y
+        let above = self.stack_above(i).map_or(0.0, |_| STACK_H);
+        (0..i).map(|j| self.row_h_of(j)).sum::<f32>() + above - self.scroll_y
     }
 
     /// Every row, top to bottom.
@@ -1276,7 +1299,11 @@ impl Workspace {
     pub fn track_at_y(&self, y: f32) -> Option<usize> {
         let mut top = -self.scroll_y;
         for i in 0..self.session.project.tracks.len() {
-            let h = self.row_h_of(i);
+            top += self.stack_above(i).map_or(0.0, |_| STACK_H);
+            if self.folded(i) {
+                continue;
+            }
+            let h = self.lane_h(i) + self.autos_h(i);
             if y < top + h {
                 return (y >= top).then_some(i);
             }
@@ -1655,6 +1682,31 @@ impl Workspace {
             }
         }
         self.channel = Channel::Track(self.track);
+    }
+
+    /// A stack of these tracks, gathered under the first of them; they stay selected, with the
+    /// stack's channel shown.
+    pub fn make_stack(&mut self, tracks: &[usize], cx: &mut Context<Self>) {
+        let ids: Vec<u64> = tracks
+            .iter()
+            .filter_map(|&t| self.session.project.tracks.get(t).map(|t| t.id))
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let mut bus = 0;
+        self.edit(cx, |ws| bus = ws.session.project.add_stack(tracks).0);
+        let p = &self.session.project;
+        let first = p.tracks.iter().position(|t| t.id == ids[0]).unwrap_or(0);
+        let aux = p.auxes.iter().position(|a| a.bus == bus);
+        self.select_track(first);
+        self.tracks_picked = ids;
+        self.region = None;
+        self.mod_edit = None;
+        if let Some(a) = aux {
+            self.channel = Channel::Aux(a);
+        }
+        cx.notify();
     }
 
     pub fn is_picked(&self, i: usize) -> bool {
@@ -3382,9 +3434,7 @@ impl Render for Workspace {
                 // A summing stack of the selected tracks, as Logic's ⇧⌘D makes of the selection.
                 let tracks = ws.picked_tracks();
                 if !tracks.is_empty() {
-                    ws.edit(cx, |ws| {
-                        ws.session.project.add_stack(&tracks);
-                    });
+                    ws.make_stack(&tracks, cx);
                 }
             }))
             .on_action(cx.listener(|ws, _: &ToggleTyping, _, cx| ws.toggle_typing(cx)))
