@@ -180,7 +180,7 @@ fn tools() -> Value {
         },
         {
             "name": "mix",
-            "description": "Mixes tracks by the part each plays (all with regions, or `track`): a channel EQ (low cut, mud cut, presence), compression, saturation, pan, a send to a shared reverb aux (made if there's none), then each track's level, measured alone, to where its part sits against the drums. `role` overrides the part; `levels: false` leaves the faders.",
+            "description": "Mixes tracks (all with regions, or `track`) by measuring them first: each part's own sound rendered and measured, then its channel set from that: a low cut under its lowest note, mud and harshness cut only as far as it has them (harshness tamed dynamically, spectrally on a lead), air where it lacks it, its low end mono; parts making room for each other (the bass dipping at the kick's own frequency as it hits; in genres that pump, the bass and pads ducking under the kick; chords and pads dipping their presence while the lead plays), compression set from each part's level, a reverb (Dragonfly's if installed, its pre-delay and decay by tempo and genre) and a tempo-synced delay, the drums glued on a bus, then each part's level against the drums. Says what it did and why, track by track. `role` overrides the part; `levels: false` leaves the faders. Then `listen` and `critique`, and `master`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -194,7 +194,7 @@ fn tools() -> Value {
         },
         {
             "name": "master",
-            "description": "Masters the song: a limiter on the master, its gain set and measured again until the song is at `lufs` (the reference's, else the genre's, else -10), peaks under -0.5 dBFS. Mix first.",
+            "description": "Masters the song: the master's EQ brings its tonal balance (sub, bass, low mid, mid, presence, air) halfway to the reference's, else the genre's, in broad moves; then a limiter, its gain set and measured again until the song is at `lufs` (the reference's, else the genre's, else -10), peaks under -0.5 dBFS. Mix first.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "project": project, "lufs": { "type": "number" } },

@@ -594,7 +594,7 @@ impl SatDsp {
 			let mut fTemp42: F32 = 0.995 * self.fRec17[1] + 0.5 * (fTemp41 - self.fVec5[1]);
 			self.fRec17[0] = (if (fTemp42.to_bits().cast_signed()) & 2139095040 != 0 {fTemp42} else {0.0});
 			let mut fTemp43: F32 = self.fConst2 * (self.fConst3 * self.fRec16[1] - (self.fRec17[1] + self.fRec17[0]));
-			self.fRec16[0] = (if (-fTemp43.to_bits().cast_signed()) & 2139095040 != 0 {-fTemp43} else {0.0});
+			self.fRec16[0] = (if ((-fTemp43).to_bits().cast_signed()) & 2139095040 != 0 {-fTemp43} else {0.0});
 			let mut fTemp44: F32 = fSlow1 + self.fConst5 * self.fRec27[1];
 			self.fRec27[0] = (if (fTemp44.to_bits().cast_signed()) & 2139095040 != 0 {fTemp44} else {0.0});
 			let mut fTemp45: F32 = 0.3 * self.fRec27[0];
@@ -678,7 +678,7 @@ impl SatDsp {
 			let mut fTemp90: F32 = 0.995 * self.fRec47[1] + 0.5 * (fTemp89 - self.fVec11[1]);
 			self.fRec47[0] = (if (fTemp90.to_bits().cast_signed()) & 2139095040 != 0 {fTemp90} else {0.0});
 			let mut fTemp91: F32 = self.fConst2 * (self.fConst3 * self.fRec46[1] - (self.fRec47[1] + self.fRec47[0]));
-			self.fRec46[0] = (if (-fTemp91.to_bits().cast_signed()) & 2139095040 != 0 {-fTemp91} else {0.0});
+			self.fRec46[0] = (if ((-fTemp91).to_bits().cast_signed()) & 2139095040 != 0 {-fTemp91} else {0.0});
 			*output1 = (fTemp50 * (fTemp68 + self.fRec28[0] * (fTemp46 * self.fRec46[0] + fTemp47 * (self.fRec47[0] - self.fRec46[0]) - fTemp68))) as FaustFloat;
 			self.fVec0[1] = self.fVec0[0];
 			self.fRec7[1] = self.fRec7[0];

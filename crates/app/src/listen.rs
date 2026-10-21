@@ -86,7 +86,7 @@ fn named(name: &str) -> Vec<Category> {
 }
 
 /// The bars heard: those asked for, else eight from where the track first plays.
-fn span(p: &Project, t: usize) -> Option<(u64, u64)> {
+pub(crate) fn span(p: &Project, t: usize) -> Option<(u64, u64)> {
     let first = p.tracks[t].regions.iter().map(|r| r.start).min()?;
     let bar = p.bar();
     let from = first / bar * bar;

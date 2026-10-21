@@ -286,7 +286,7 @@ impl Workspace {
                     }
                 }
             }
-            Request::Project => Ok(serde_json::to_value(&self.session.project).unwrap()),
+            Request::Project => Ok(serde_json::to_value(self.session.project.portable()).unwrap()),
             Request::Play => {
                 self.player.play();
                 ok

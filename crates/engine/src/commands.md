@@ -233,7 +233,9 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   true` makes up for how much louder or quieter its bands make it, `"pan"` (-1 to 1) balances
   left and right (with `"pan_ms": true` mid against side), `"invert": true` turns it upside down;
   `"character"` is `clean`, `subtle` or `warm` (an analog EQ's saturation, more where it boosts);
-  `"sidechain"` is the id of the track its dynamic bands hear with `external`. `"processing"` is
+  `"sidechain"` is the track (numbered as everywhere here) its dynamic bands hear with
+  `external`, after its fader: a bass dipping at the kick's frequency as it hits, a pad ducking
+  under the kick, the chords dipping their presence while the lead plays. `"processing"` is
   how it treats phase: `zero_latency` (the default: as an analog EQ, no latency), `natural` (an
   analog EQ's phase right up to the top, about 1 ms late) or `linear` (no phase shift at all, the
   bands' timing kept together, its every dynamic band moving as spectral ones do; tens to

@@ -29,6 +29,7 @@ pub fn project(dir: &Path) -> Result<Project, String> {
         Some(reply) => {
             let mut p: Project = serde_json::from_value(reply?).map_err(|e| e.to_string())?;
             p.assign_ids();
+            p.resolve_sidechains();
             Ok(p)
         }
         None => Project::load(dir),

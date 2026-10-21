@@ -6,12 +6,11 @@ use std::path::{Path, PathBuf};
 
 use pina_engine::{
     analysis,
-    arrange::role,
-    commands::{AutoParam, ChannelRef, Command, ParamRef, PointIn},
+    commands::{ChannelRef, Command, ParamRef},
     critique::{self, Heard},
     music::Key,
     playbook,
-    project::{Format, Instrument, PluginRef, Preset, PresetSource, Project, Reference, Which},
+    project::{Format, Instrument, PluginRef, Preset, PresetSource, Reference, Which},
     scan,
     theory::{self, PROGRESSIONS},
 };
@@ -603,162 +602,6 @@ pub fn sounds(
     }))
 }
 
-/// A channel strip for a part: EQ, compressor, saturator, pan, and how much reverb.
-struct Strip {
-    low_cut: f32,
-    low_mid: (f32, f32, f32),
-    high_mid: (f32, f32, f32),
-    shelf: (f32, f32),
-    comp: Option<(f32, f32, f32, f32)>,
-    sat: Option<(f32, f32, f32)>,
-    /// Loudness alone, LUFS (a bass's RMS, as LUFS hardly hears sub), against drums at -20:
-    /// the mix leaves the master room.
-    lufs: f32,
-    pan: f32,
-    reverb: Option<f32>,
-}
-
-fn strip_for(role: &str) -> Strip {
-    let s = |low_cut, low_mid, high_mid, shelf, comp, sat, lufs, pan, reverb| Strip {
-        low_cut,
-        low_mid,
-        high_mid,
-        shelf,
-        comp,
-        sat,
-        lufs,
-        pan,
-        reverb,
-    };
-    match role {
-        // The saturator soft-clips the hits a compressor lets through.
-        "drums" => s(
-            30.0,
-            (400.0, -2.0, 1.0),
-            (5000.0, 0.0, 1.0),
-            (10000.0, 0.0),
-            Some((-18.0, 4.0, 8.0, 90.0)),
-            Some((6.0, 0.0, 0.7)),
-            -20.0,
-            0.0,
-            None,
-        ),
-        "perc" => s(
-            150.0,
-            (400.0, -1.5, 1.0),
-            (4000.0, 1.0, 1.0),
-            (10000.0, 1.0),
-            Some((-18.0, 2.5, 10.0, 80.0)),
-            None,
-            -28.0,
-            0.35,
-            Some(-16.0),
-        ),
-        // Body at 100 Hz and harmonics from the saturator, so it's heard on small speakers and
-        // fills 60-250 Hz rather than living in the sub alone.
-        "bass" => s(
-            28.0,
-            (100.0, 2.5, 0.8),
-            (800.0, 2.0, 1.0),
-            (8000.0, -2.0),
-            Some((-18.0, 4.0, 10.0, 120.0)),
-            Some((9.0, 0.15, 0.55)),
-            -21.0,
-            0.0,
-            None,
-        ),
-        "chords" => s(
-            150.0,
-            (350.0, -2.5, 1.0),
-            (3000.0, -1.0, 1.0),
-            (10000.0, 0.0),
-            Some((-20.0, 2.5, 20.0, 150.0)),
-            Some((3.0, -0.1, 0.35)),
-            -25.0,
-            0.0,
-            Some(-14.0),
-        ),
-        "pad" => s(
-            200.0,
-            (400.0, -3.0, 0.9),
-            (2500.0, -2.0, 1.0),
-            (10000.0, 0.0),
-            Some((-22.0, 2.0, 30.0, 200.0)),
-            None,
-            -29.0,
-            0.0,
-            Some(-9.0),
-        ),
-        "lead" => s(
-            180.0,
-            (300.0, -2.0, 1.0),
-            (3000.0, 1.0, 1.0),
-            (10000.0, 1.0),
-            Some((-18.0, 3.0, 5.0, 100.0)),
-            Some((2.0, 0.1, 0.25)),
-            -25.0,
-            0.0,
-            Some(-12.0),
-        ),
-        "counter" | "arp" => s(
-            200.0,
-            (350.0, -2.0, 1.0),
-            (2000.0, -1.0, 1.0),
-            (10000.0, 0.5),
-            Some((-20.0, 2.5, 10.0, 120.0)),
-            None,
-            -28.0,
-            -0.35,
-            Some(-10.0),
-        ),
-        "vocals" => s(
-            90.0,
-            (300.0, -2.0, 1.0),
-            (3500.0, 2.0, 1.0),
-            (12000.0, 2.0),
-            Some((-20.0, 4.0, 3.0, 80.0)),
-            Some((2.0, 0.1, 0.2)),
-            -22.0,
-            0.0,
-            Some(-13.0),
-        ),
-        "fx" => s(
-            60.0,
-            (400.0, 0.0, 1.0),
-            (3000.0, 0.0, 1.0),
-            (10000.0, 0.0),
-            None,
-            None,
-            -28.0,
-            0.0,
-            Some(-12.0),
-        ),
-        "texture" => s(
-            200.0,
-            (400.0, -2.0, 1.0),
-            (3000.0, -2.0, 1.0),
-            (8000.0, -3.0),
-            None,
-            None,
-            -36.0,
-            0.0,
-            None,
-        ),
-        _ => s(
-            120.0,
-            (350.0, -2.0, 1.0),
-            (3000.0, 0.0, 1.0),
-            (10000.0, 0.0),
-            Some((-20.0, 2.5, 15.0, 120.0)),
-            None,
-            -26.0,
-            0.0,
-            Some(-14.0),
-        ),
-    }
-}
-
-const REVERB: (&str, &str) = ("AUReverb2", "aufx rvb2 appl");
 const LIMITER: (&str, &str) = ("AUPeakLimiter", "aufx lmtr appl");
 
 fn au(class: &str, uid: &str) -> PluginRef {
@@ -780,264 +623,14 @@ fn param(channel: ChannelRef, plugin: Which, name: &str, text: &str) -> Command 
     }
 }
 
-/// The song's reverb aux, "Verb", made (a plate-like AUReverb2, fully wet, its low end cut) if
-/// there's none. Its bus.
-fn reverb_bus(dir: &Path, p: &Project, first: usize) -> Result<u32, String> {
-    if let Some(a) = p.auxes.iter().find(|a| a.name == "Verb") {
-        return Ok(a.bus);
-    }
-    let made = cli::edit_with(
-        dir,
-        Command::AddSend {
-            track: first,
-            bus: None,
-            level_db: -60.0,
-            pre: false,
-        },
-    )?;
-    let bus = made["bus"].as_u64().ok_or("no bus made")? as u32;
-    let p = cli::project(dir)?;
-    let aux = p
-        .auxes
-        .iter()
-        .position(|a| a.bus == bus)
-        .ok_or("no aux made")?;
-    let ch = ChannelRef::Aux(aux);
-    let edits = [
-        Command::SetAux {
-            aux,
-            name: Some("Verb".into()),
-            volume_db: Some(0.0),
-            pan: None,
-            mute: None,
-        },
-        Command::SetInsert {
-            channel: ch,
-            index: 0,
-            plugin: Some(au(REVERB.0, REVERB.1)),
-        },
-        param(ch, Which::Insert(0), "Dry/Wet Mix", "100"),
-        param(ch, Which::Insert(0), "Low Freq Decay Time", "1.8"),
-        param(ch, Which::Insert(0), "High Freq Decay Time", "1.0"),
-        Command::SetEq {
-            channel: ch,
-            eq: Some(json!({ "bands": [
-                { "shape": "low_cut", "freq": 250 },
-                { "shape": "high_shelf", "freq": 8000, "gain_db": -3 },
-            ] })),
-        },
-    ];
-    for e in edits {
-        cli::edit_with(dir, e)?;
-    }
-    Ok(bus)
-}
-
-/// Mixes tracks by their parts (all, or `only`): EQ, compression, saturation, pan, a reverb send,
-/// then (unless `levels` is off) each one's level, measured alone, to where its part sits.
+/// Mixes tracks (all, or `only`) by measuring them: see `mixing`.
 pub fn mix_role(
     dir: &Path,
     only: Option<usize>,
     as_role: Option<&str>,
     levels: bool,
 ) -> Result<Value, String> {
-    let p = cli::project(dir)?;
-    let tracks: Vec<usize> = match only {
-        Some(t) if t < p.tracks.len() => vec![t],
-        Some(t) => return Err(format!("no track {t}")),
-        None => (0..p.tracks.len())
-            .filter(|&t| !p.tracks[t].regions.is_empty())
-            .collect(),
-    };
-    if tracks.is_empty() {
-        return Err("no tracks with anything on them to mix".into());
-    }
-    let lofi = p
-        .genre
-        .as_deref()
-        .is_some_and(|g| matches!(g, "lofi" | "boom_bap" | "neo_soul"));
-    // Where the 808 or log drum carries the song, the melodic parts sit under it.
-    let sub_led = p
-        .genre
-        .as_deref()
-        .is_some_and(|g| matches!(g, "trap" | "drill" | "amapiano" | "reggaeton"));
-    let mut done = Vec::new();
-    let mut side = 1.0f32;
-    let mut bus = None;
-    for &t in &tracks {
-        let r = as_role.unwrap_or_else(|| role(&p.tracks[t]));
-        let s = strip_for(r);
-        let ch = ChannelRef::Track(t);
-        let shelf = if lofi && !matches!(r, "drums" | "perc") {
-            s.shelf.1 - 3.0
-        } else {
-            s.shelf.1
-        };
-        // The part's EQ in place of what was there: its low cut, bells and shelf, the flat
-        // ones left out.
-        let mut bands = Vec::new();
-        if s.low_cut > 20.0 {
-            bands.push(json!({ "shape": "low_cut", "freq": s.low_cut }));
-        }
-        for (freq, gain, q) in [s.low_mid, s.high_mid] {
-            if gain != 0.0 {
-                bands.push(json!({ "shape": "bell", "freq": freq, "gain_db": gain, "q": q }));
-            }
-        }
-        if shelf != 0.0 {
-            bands.push(json!({ "shape": "high_shelf", "freq": s.shelf.0, "gain_db": shelf }));
-        }
-        cli::edit_with(
-            dir,
-            Command::SetEq {
-                channel: ch,
-                eq: Some(json!({ "bands": bands })),
-            },
-        )?;
-        cli::edit_with(dir, Command::SetComp { channel: ch, comp: s.comp.map(|(threshold, ratio, attack, release)| json!({
-            "threshold_db": threshold, "ratio": ratio, "attack_ms": attack, "release_ms": release, "makeup_db": 0, "rms": r == "pad",
-        })) })?;
-        let sat = s.sat.map(|(drive, tone, mix)| json!({ "drive_db": if lofi { drive + 3.0 } else { drive }, "tone": tone, "mix": mix }));
-        cli::edit_with(dir, Command::SetSaturator { channel: ch, sat })?;
-        let pan = if s.pan != 0.0 {
-            side = -side;
-            s.pan * side
-        } else {
-            0.0
-        };
-        cli::edit_with(
-            dir,
-            Command::SetTrack {
-                track: t,
-                name: None,
-                color: None,
-                icon: None,
-                volume_db: None,
-                pan: Some(pan),
-                pan_mode: None,
-                spread: None,
-                elevation: None,
-                distance: None,
-                mute: None,
-                solo: None,
-            },
-        )?;
-        if let Some(level) = s.reverb {
-            let b = match bus {
-                Some(b) => b,
-                None => *bus.insert(reverb_bus(dir, &cli::project(dir)?, t)?),
-            };
-            let now = cli::project(dir)?;
-            match now.tracks[t].sends.iter().position(|x| x.bus == b) {
-                Some(send) => cli::edit_with(
-                    dir,
-                    Command::SetSend {
-                        track: t,
-                        send,
-                        level_db: Some(level),
-                        pre: None,
-                    },
-                )?,
-                None => cli::edit_with(
-                    dir,
-                    Command::AddSend {
-                        track: t,
-                        bus: Some(b),
-                        level_db: level,
-                        pre: false,
-                    },
-                )?,
-            };
-        }
-        done.push(json!({ "track": t, "name": p.tracks[t].name, "role": r }));
-    }
-    // Levels: each part alone, moved to its part's loudness.
-    if levels {
-        let p = cli::project(dir)?;
-        // Before the master's chain: levels are the mix's, and a limiter there would make every
-        // part read loud.
-        let mut unmastered = p.clone();
-        unmastered.master_inserts.clear();
-        (
-            unmastered.master_eq,
-            unmastered.master_comp,
-            unmastered.master_sat,
-        ) = (None, None, None);
-        unmastered.master_volume_db = 0.0;
-        let report = cli::report(&unmastered, dir, None, true)?;
-        for (i, &t) in tracks.iter().enumerate() {
-            let r = as_role.unwrap_or_else(|| role(&p.tracks[t]));
-            let a = &report.tracks[t];
-            let measured = if r == "bass" {
-                (a.rms_db[0] + a.rms_db[1]) / 2.0
-            } else {
-                a.lufs
-            };
-            if measured < -60.0 {
-                done[i]["level"] = json!("silent: no level set");
-                continue;
-            }
-            let under = if sub_led && matches!(r, "lead" | "chords" | "pad" | "counter" | "arp") {
-                3.0
-            } else {
-                0.0
-            };
-            let wanted = p.tracks[t].volume_db + strip_for(r).lufs - under - measured;
-            let volume = wanted.clamp(-30.0, 12.0);
-            cli::edit_with(
-                dir,
-                Command::SetTrack {
-                    track: t,
-                    name: None,
-                    color: None,
-                    icon: None,
-                    volume_db: Some((volume * 10.0).round() / 10.0),
-                    pan: None,
-                    pan_mode: None,
-                    spread: None,
-                    elevation: None,
-                    distance: None,
-                    mute: None,
-                    solo: None,
-                },
-            )?;
-            // Its level automation (a section's ups and downs) moves with it: it's what plays.
-            let moved = volume - p.tracks[t].volume_db;
-            let auto = &p.tracks[t].automation.volume;
-            if !auto.is_empty() && moved.abs() > 0.05 {
-                let points = auto
-                    .iter()
-                    .map(|x| PointIn {
-                        tick: x.tick,
-                        value: Some(x.value + moved),
-                        text: None,
-                        curve: Some(x.curve),
-                        step: Some(x.step),
-                        ease: Some(x.ease),
-                    })
-                    .collect();
-                cli::edit_with(
-                    dir,
-                    Command::SetAutomation {
-                        track: t,
-                        param: AutoParam::Volume,
-                        send: None,
-                        plugin: None,
-                        id: None,
-                        name: None,
-                        points,
-                    },
-                )?;
-            }
-            done[i]["volume_db"] = json!((volume * 10.0).round() / 10.0);
-            if wanted > 12.0 {
-                done[i]["level"] = json!(format!(
-                    "needed {wanted:.0} dB: turn its instrument (or sample) up and mix again"
-                ));
-            }
-        }
-    }
-    Ok(json!({ "mixed": done, "next": "critique to hear what's left; master when it's right" }))
+    crate::mixing::mix(dir, only, as_role, levels)
 }
 
 /// Masters the song: a limiter on the master and its gain set so the song's loudness is `lufs`
@@ -1051,6 +644,8 @@ pub fn master(dir: &Path, lufs: Option<f32>) -> Result<Value, String> {
     if !(-30.0..=-4.0).contains(&target) {
         return Err("lufs is -30 to -4".into());
     }
+    // Its tonal balance towards what it aims at, before the limiter hears it.
+    let tonal = crate::mixing::tonal_balance(dir)?;
     let slot = match p.master_inserts.iter().position(|i| i.class == LIMITER.0) {
         Some(i) => i,
         None => {
@@ -1177,6 +772,7 @@ pub fn master(dir: &Path, lufs: Option<f32>) -> Result<Value, String> {
         "lufs": (end.lufs * 10.0).round() / 10.0,
         "peak_db": (peak * 10.0).round() / 10.0,
         "crest_db": (end.crest_db * 10.0).round() / 10.0,
+        "tonal_balance": tonal,
         "limiter": format!("master insert {slot}, pre-gain {gain:.1} dB"),
         "clipper": if clip > 0.0 { format!("the master's saturator, drive {clip} dB") } else { "none".into() },
         "steps": steps,

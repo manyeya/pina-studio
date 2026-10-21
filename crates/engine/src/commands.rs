@@ -1711,9 +1711,23 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
             if let Some(r) = resolution.filter(|r| !(0.0..=3.0).contains(r)) {
                 return Err(format!("resolution {r}: it's 0 (low) to 3 (very high)"));
             }
+            // Its sidechain is a track, numbered as commands number them: its id here.
+            let source = match eq.as_ref().and_then(|e| e.get("sidechain")) {
+                Some(Value::Null) => Some(None),
+                Some(v) => {
+                    let t = v
+                        .as_u64()
+                        .ok_or("sidechain is a track's number (from 0), or null for none")?;
+                    Some(Some(track(p, t as usize)?.id))
+                }
+                None => None,
+            };
             let slot = strip(p, channel)?.eq;
             let mut new = *slot;
             set_effect(&mut new, eq)?;
+            if let (Some(e), Some(source)) = (&mut new, source) {
+                e.sidechain = source;
+            }
             if let Some(e) = &new {
                 check_eq(e)?;
             }

@@ -3221,13 +3221,56 @@ impl Project {
             ));
         }
         p.assign_ids();
+        p.resolve_sidechains();
         Ok(p)
+    }
+
+    /// Every sidechain (an EQ's, an insert's or instrument's) and what it's set to.
+    fn sidechains_mut(&mut self) -> Vec<&mut Option<u64>> {
+        fn eqs(eq: &mut Option<Eq>) -> Option<&mut Option<u64>> {
+            eq.as_mut().map(|e| &mut e.sidechain)
+        }
+        let mut out: Vec<&mut Option<u64>> = Vec::new();
+        for t in &mut self.tracks {
+            out.extend(eqs(&mut t.eq));
+            if let Some(Instrument::Plugin(r)) = &mut t.instrument {
+                out.push(&mut r.sidechain);
+            }
+            out.extend(t.inserts.iter_mut().map(|r| &mut r.sidechain));
+        }
+        for a in &mut self.auxes {
+            out.extend(eqs(&mut a.eq));
+            out.extend(a.inserts.iter_mut().map(|r| &mut r.sidechain));
+        }
+        out.extend(eqs(&mut self.master_eq));
+        out.extend(self.master_inserts.iter_mut().map(|r| &mut r.sidechain));
+        out
+    }
+
+    /// The project as it's saved or sent to another process: a sidechain names its source by
+    /// the track's number (from 1), since ids are only this session's.
+    pub fn portable(&self) -> Project {
+        let mut p = self.clone();
+        let ids: Vec<u64> = p.tracks.iter().map(|t| t.id).collect();
+        for sc in p.sidechains_mut() {
+            *sc = sc.and_then(|id| ids.iter().position(|&x| x == id).map(|i| i as u64 + 1));
+        }
+        p
+    }
+
+    /// After reading a portable project and giving its tracks ids: each sidechain's number back to
+    /// its track's id (one past the last track is none).
+    pub fn resolve_sidechains(&mut self) {
+        let ids: Vec<u64> = self.tracks.iter().map(|t| t.id).collect();
+        for sc in self.sidechains_mut() {
+            *sc = sc.and_then(|n| ids.get((n as usize).checked_sub(1)?).copied());
+        }
     }
 
     pub fn save(&self, dir: &Path) -> Result<(), String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let path = dir.join(FILE);
-        let json = serde_json::to_string_pretty(self).unwrap();
+        let json = serde_json::to_string_pretty(&self.portable()).unwrap();
         // Written beside it and moved over it, so stopping halfway leaves the old one whole.
         let part = dir.join(format!("{FILE}.part"));
         std::fs::write(&part, json + "\n")
@@ -4053,6 +4096,46 @@ mod tests {
         assert_eq!(p.end(), 3840);
         let again: Project = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert_eq!(p, again);
+    }
+
+    #[test]
+    fn a_sidechain_names_its_track_wherever_the_song_goes() {
+        // Ids are a session's own: the drums' here aren't the drums' after it's saved and read
+        // elsewhere, so a sidechain is saved as the track's number.
+        let mut p: Project = serde_json::from_str(
+            r#"{"tempo": 120, "sample_rate": 48000,
+                "tracks": [{"name": "Drums"}, {"name": "Bass"}, {"name": "Pad"}]}"#,
+        )
+        .unwrap();
+        for _ in 0..5 {
+            next_id(); // as an app that's opened other songs has used ids up
+        }
+        p.assign_ids();
+        let drums = p.tracks[0].id;
+        p.tracks[2].eq = Some(Eq {
+            sidechain: Some(drums),
+            ..Eq::default()
+        });
+        let saved = serde_json::to_string(&p.portable()).unwrap();
+        let mut read: Project = serde_json::from_str(&saved).unwrap();
+        read.assign_ids();
+        read.resolve_sidechains();
+        assert_ne!(read.tracks[0].id, drums);
+        assert_eq!(
+            read.tracks[2].eq.as_ref().unwrap().sidechain,
+            Some(read.tracks[0].id)
+        );
+        // A command names it by its number, as commands do every track.
+        let dir = std::env::temp_dir();
+        let set: crate::commands::Command = serde_json::from_value(serde_json::json!({
+            "op": "set_eq", "channel": { "track": 1 }, "eq": { "sidechain": 0, "bands": [] }
+        }))
+        .unwrap();
+        crate::commands::apply(&mut read, &dir, set).unwrap();
+        assert_eq!(
+            read.tracks[1].eq.as_ref().unwrap().sidechain,
+            Some(read.tracks[0].id)
+        );
     }
 
     #[test]

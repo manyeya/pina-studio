@@ -19,6 +19,7 @@ mod looks;
 mod mcp;
 mod menu;
 mod mixer;
+mod mixing;
 mod modulation;
 mod palette;
 mod pianoroll;
