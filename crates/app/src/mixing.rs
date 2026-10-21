@@ -568,6 +568,7 @@ pub fn mix(
                 band_peak_db(&s.render, rate, beat, [1500.0, 4500.0], (15.0, 200.0))?.0,
             ))
         });
+    let has_bass = all.iter().any(|&t| part_of(t) == "bass");
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let plugins = scan::scan(&exe, &scan::everything(), &scan::cache_file());
     let first = tracks[0];
@@ -596,10 +597,20 @@ pub fn mix(
         let mut bands = Vec::new();
         let mut why: Vec<String> = Vec::new();
         // Low cut: the part's, never into its lowest note.
-        let mut cut = low_cut(part);
-        if let Some(hz) = src.lowest_hz.filter(|_| !matches!(part, "bass" | "drums")) {
-            // Where the 808 carries the song, the rest keep out from under it whatever they play.
-            let floor: f32 = if sub_led { 120.0 } else { 80.0 };
+        // What thumps hardest down low (a taiko, as much as a kick) keeps its lows.
+        let thump = kick.is_some_and(|k| k.0 == t);
+        let mut cut = if thump { 25.0 } else { low_cut(part) };
+        if let Some(hz) = src
+            .lowest_hz
+            .filter(|_| !matches!(part, "bass" | "drums") && !thump)
+        {
+            // Room under the rest for a bass, if there's one (and more where an 808 carries the
+            // song); without one, low strings or a low piano are the bass.
+            let floor: f32 = match (has_bass, sub_led) {
+                (true, true) => 120.0,
+                (true, false) => 80.0,
+                (false, _) => 30.0,
+            };
             cut = cut.min(hz * 0.7).max(floor.min(cut));
         }
         bands.push(json!({ "shape": "low_cut", "freq": cut.round(), "slope": if part == "bass" { 24 } else { 12 } }));
