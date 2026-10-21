@@ -154,7 +154,7 @@ const HOST_CAN_DO: [&[u8]; 8] = [
 const PROCESS_LEVEL_USER: isize = 1;
 const PROCESS_LEVEL_REALTIME: isize = 2;
 
-/// The answer to the REAPER extension that shows any value of a parameter, not just its own.
+/// The answer to the host extension that shows any value of a parameter, not just its own.
 const COCKOS_YES: isize = 0xbeef;
 
 #[repr(C)]
@@ -1224,8 +1224,8 @@ impl PluginApi for Vst2Plugin {
         self.instance.value(id)
     }
 
-    /// VST2 shows only a parameter's current value. Another is shown by the REAPER extension
-    /// (JUCE and iPlug plugins have it), else by the twin set to it: never by touching what
+    /// VST2 shows only a parameter's current value. Another is shown by the host extension
+    /// (where the plugin has it), else by the twin set to it: never by touching what
     /// plays.
     fn param_text(&self, id: u32, value: f64) -> String {
         let i = &self.instance;
@@ -1308,7 +1308,7 @@ impl PluginApi for Vst2Plugin {
             }
         };
         let mut out: Vec<Preset> = Vec::new();
-        // One unnamed program is no list at all (JUCE plugins all have it).
+        // One unnamed program is no list at all (many plugins have just that).
         if i.num_programs() > 1 || !named(0).is_empty() {
             out.extend((0..i.num_programs()).map(|program| Preset {
                 name: match named(program) {

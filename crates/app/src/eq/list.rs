@@ -1,4 +1,4 @@
-//! The instance list, as Pro-Q 4's: every channel's EQ in the display's place, each with what
+//! The instance list: every channel's EQ in the display's place, each with what
 //! it's playing (its spectrum, and where it collides with the reference's) and its curve; zoomed
 //! in (or under the pointer, with auto-zoom), its bands to drag and a click to make one, as on
 //! the display. Filter by name, pin some and show only those; bypass one, make it the

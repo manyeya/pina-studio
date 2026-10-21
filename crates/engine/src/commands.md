@@ -51,7 +51,7 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   audio track; `index` defaults to the end.
 - `delete_track` `{"track": 1}`
 - `set_track` `{"track": 1, "name": "Sub", "volume_db": -6, "pan": -0.3, "mute": false, "solo": false}`:
-  any of them. `"pan_mode"` is Logic's: `"balance"` (the default: turns one side down),
+  any of them. `"pan_mode"`: `"balance"` (the default: turns one side down),
   `"stereo"` (places each side, `"spread"` -1 to 1 apart: 1 as recorded, 0 both in the middle,
   below 0 swapped) or `"binaural"` (round the listener's head, for headphones: its `pan` is
   then the way round, 0 in front, 0.5 right, -0.5 left, ±1 behind; `"elevation"` is degrees above
@@ -127,14 +127,14 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   of the song); `"loop_length"` (ticks from its start, 0 for none) stops its loops sooner, as
   dragging out its top right corner does. `"fade_in"` and `"fade_out"` (ticks) fade an audio
   region in and out (an equal-power curve). `transpose` (semitones), `velocity` (added) and `quantize` (a grid in ticks; 0 is
-  off) change how a MIDI or pattern region plays, not its notes, as Logic's region inspector does;
+  off) change how a MIDI or pattern region plays, not its notes;
   `transpose` moves an audio region's pitch too, keeping its length (a loop into the song's key).
   For audio, `"flex"` is how it's stretched: `"polyphonic"` (the default: Rubber Band's finer
   engine, with the recording kept around every hit, so drums stay sharp), `"slicing"` (cut at the
   hits, each played as recorded at its new time) or `"speed"` (a turntable: faster is higher);
   and `"follow": true` has it follow the song's tempo, as loops from the sample browser do.
   `"formants": true` keeps a voice's formants when it's transposed. `"warps": [[48000, 52800],
-  …]` are warp markers, as Logic's flex markers: a frame of the file and where it plays in the
+  …]` are warp markers: a frame of the file and where it plays in the
   stretched audio (both at the project's rate); the audio between is stretched to fit, every
   flex mode, and a tempo change moves them with a region that follows it.
 - `add_alias` `{"track": 0, "region": 0, "start": 7680, "to_track": 0}`: an alias of a MIDI or
@@ -199,7 +199,7 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   the sounds the person picked for the song, for an agent to make it with (each audio file, and
   what it's for if they said: kick, snare, hats, bass, pad, lead…); `"only": true` asks for these
   and no others. `sounds` replaces the list; leave it out to change only `only`. `"devices"`
-  are the instruments and effects picked, the same way: `{"name": "Serum", "instrument": true,
+  are the instruments and effects picked, the same way: `{"name": "Wavetable Synth", "instrument": true,
   "plugin": {…as set_instrument takes it}, "role": "bass"}`, or Pina Studio's own by `"own"`
   (`synth`, `drums`, `sampler`, `eq`, `comp`, `sat`). The `palette` tool (in `pina mcp`) lists
   them with what each is and whether it's in the song yet.

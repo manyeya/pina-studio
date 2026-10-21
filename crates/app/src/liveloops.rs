@@ -1,4 +1,4 @@
-//! Live Loops, as in Logic: a grid of cells, a row per track and a column per scene, each a loop
+//! Live Loops: a grid of cells, a row per track and a column per scene, each a loop
 //! to launch. A launched cell starts on the next bar (or at once, starting playback) and plays
 //! instead of the track's regions until it's stopped. Click an empty cell to copy the selected
 //! region of that track into it; click a cell to launch or stop it; right-click to empty it. The

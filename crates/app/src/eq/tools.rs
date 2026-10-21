@@ -1,4 +1,4 @@
-//! The EQ window's tools, as Pro-Q's: EQ Match (this track's sound made like another's, or a song's:
+//! The EQ window's tools: EQ Match (this track's sound made like another's, or a song's:
 //! bands fitted to the difference), EQ Sketch (a curve drawn, bands made along it), and
 //! Spectrum Grab's peaks.
 

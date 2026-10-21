@@ -1,7 +1,7 @@
 //! Loads an instrument (VST3, CLAP or VST2 bundle, or with `au` the first Audio Unit
 //! instrument), opens its editor, and plays an arpeggio through it.
 //!
-//!     cargo run -p pina-engine --example play_vst -- "/path/to/Surge XT.vst3"
+//!     cargo run -p pina-engine --example play_vst -- "/path/to/Some Synth.vst3"
 
 use std::{
     path::Path,

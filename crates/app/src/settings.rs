@@ -1,6 +1,6 @@
-//! Settings (⌘,), as Logic's: a section at a time from the list down the left, kept for every
+//! Settings (⌘,): a section at a time from the list down the left, kept for every
 //! song in `~/Library/Application Support/Pina Studio/settings.json`. Track headers (which parts show,
-//! as Logic's Track Header Components, and how tall new tracks are), regions and the grid (names,
+//! and how tall new tracks are), regions and the grid (names,
 //! contents, colour, bar shading, beat lines), editing (the loop zone at a region's end, writing
 //! with a double-click), the transport (following the playhead, going back where play started on
 //! stop), automation (its lanes' height, what an automated control does moved while stopped,
@@ -27,7 +27,7 @@ pub struct Settings {
     /// The editor's tabs left out, by name.
     pub hidden: Vec<String>,
     pub follow_playhead: bool,
-    /// Stopping goes back to where play started, as Logic's "Return to Last Play Position".
+    /// Stopping goes back to where play started.
     pub return_on_stop: bool,
     /// The track headers' parts.
     pub header_numbers: bool,
@@ -170,7 +170,7 @@ impl Section {
     fn note(self) -> &'static str {
         match self {
             Section::Tracks => {
-                "What each track's header shows, as Logic's Track Header Components; and how tall a track is until you drag it."
+                "What each track's header shows, and how tall a track is until you drag it."
             }
             Section::Regions => "How regions and the grid behind them look.",
             Section::Editing => "What the mouse does in the tracks.",
@@ -508,7 +508,7 @@ impl Workspace {
                 ),
                 flag(
                     "Return when stopping",
-                    "Stopping goes back to where play started, as Logic's Return to Last Play Position",
+                    "Stopping goes back to where play started",
                     "return_on_stop",
                     |s| &mut s.return_on_stop,
                     cx,

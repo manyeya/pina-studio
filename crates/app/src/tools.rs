@@ -1,4 +1,4 @@
-//! The tracks' tools beyond the pointer, pencil, scissors and eraser, as Logic's Tool menu (T):
+//! The tracks' tools beyond the pointer, pencil, scissors and eraser, in the Tool menu (T):
 //! Text renames a region; Glue joins one to the next on its track; Solo plays one alone while
 //! held; Mute mutes one; Zoom zooms in where clicked (⌥ out) or onto the bars dragged across;
 //! Fade draws an audio region's fade in or out; Flex makes dragging a region's end stretch it.
@@ -88,7 +88,7 @@ impl Tool {
 }
 
 impl Workspace {
-    /// The Tool menu, as Logic's (T): every tool, the one in hand ticked.
+    /// The Tool menu (T): every tool, the one in hand ticked.
     pub fn tool_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         let items = Tool::ALL
             .iter()

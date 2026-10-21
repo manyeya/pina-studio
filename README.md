@@ -1,7 +1,7 @@
 # Pina Studio
 
-A DAW with Logic Pro's structure and FL Studio's speed, written in Rust: gpui for the UI, VST3,
-CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macOS first.
+A DAW written in Rust: gpui for the UI, VST3, CLAP, VST2 and Audio Unit plugins, and agents as
+first-class collaborators. macOS first, Windows next.
 
 ## Layout
 
@@ -58,7 +58,7 @@ CLAP, VST2 and Audio Unit plugins, and agents as first-class collaborators. macO
     cargo run -p pina -- play examples/demo                # play it through the default output
     cargo run -p pina-engine --example play_vst -- "/path/to/Some Synth.vst3"
 
-`play` sets the output device to the project's sample rate, as Logic does. `play_vst` loads a
+`play` sets the output device to the project's sample rate. `play_vst` loads a
 plugin, opens its editor and plays an arpeggio through it.
 
 `scripts/bundle.sh` builds `Pina Studio.app` (`scripts/mac-app.sh`: the release binary, its icon, an
@@ -97,12 +97,12 @@ Dragonfly Room Reverb installed:
     cargo build -p pina && PINA=target/debug/pina python3 examples/corner-store-blues/build.py
 
 It goes in `~/Music/Pina Studio/Corner Store Blues`: sampler kits on swung step patterns with aliases,
-a Moog multisample bass and an 808 on the keys loop's roots, the loop flexed to half time in the
-break, a Surge XT pad whose filter opens through each hook and a gliding sine whistle, drums
+a multisample bass and an 808 on the keys loop's roots, the loop flexed to half time in the
+break, a synth pad whose filter opens through each hook and a gliding sine whistle, drums
 glued in a stack, two reverb sends, Live Loops scenes, and the master clipped by the saturator
 to about -13.5 LUFS.
 
-In the app, mostly as in Logic:
+In the app:
 
 - Space plays and stops, return goes to the start, R records onto the armed track: the selected
   one, until a track's R button arms another (click it again to disarm). An instrument track
@@ -112,7 +112,7 @@ In the app, mostly as in Logic:
   clicked on and off) in the ruler's top half. With the cycle on, the playhead stays in it: play
   from before it runs into it, from after it (or a cycle drawn behind the playhead) jumps to its
   start.
-- Song plays the arrangement; Pattern (as in FL Studio) loops the selected region alone. Sweeping
+- Song plays the arrangement; Pattern loops the selected region alone. Sweeping
   a cycle goes back to Song.
 - To write notes: double-click an empty spot on an instrument track (a four-bar region there, or
   the cycle's, opens in the piano roll), or just draw in the piano roll: with no region there it
@@ -133,7 +133,7 @@ In the app, mostly as in Logic:
   is in the inspector. Enter keeps it, escape doesn't, clicking elsewhere keeps it too.
 - Over the track headers: the tools (pointer; pencil, which draws a region in an empty lane and a
   note in the piano roll; scissors, which cut a region or note where clicked; eraser), and what
-  edits snap to. The fifth button (or T) is Logic's Tool menu, with the rest: Text names a region
+  edits snap to. The fifth button (or T) is the Tool menu, with the rest: Text names a region
   where it is; Glue joins a region to the next on its track (MIDI always, audio cut from one
   take); Solo plays a region alone while held, from where it's held; Mute mutes or unmutes one;
   Zoom zooms in where clicked, out with ⌥, or fills the window with the bars dragged across;
@@ -149,7 +149,7 @@ In the app, mostly as in Logic:
   ⌥-click for 0 dB or the middle; the readout shows the pan while the knob turns. A short track
   keeps the buttons and LEDs. Drag a header's bottom edge for that track's height, and the
   column's right edge (or the side panel's) for its width; double-click an edge to put it back.
-- Pans as Logic's: right-click a pan knob for Balance, Stereo Pan (each side placed, ⌘-drag the
+- Pans: right-click a pan knob for Balance, Stereo Pan (each side placed, ⌘-drag the
   knob to spread them, or swap them) or Binaural (round your head, for headphones), and the
   song's pan law (0, −3, −3 compensated or −6 dB). Binaural opens the Binaural Panner (again from
   the 3D button beside the knob, or double-clicking it): the sound round the listener's head in
@@ -172,7 +172,7 @@ In the app, mostly as in Logic:
   and ⇧F the sample library's page (filters, the sound map, kits, the details; drag a sound out of it and the tracks come
   back to drop it on); ⌘K turns on musical typing (A to K play a C major scale from C3, W E T Y U the
   sharps, Z and X change octave). ⌘B exports the song to `Bounces/` in the project.
-- The Inspector, left of the tracks, shows the selected region with its playback settings, as Logic's:
+- The Inspector, left of the tracks, shows the selected region with its playback settings:
   Loop (it plays over and over until the next region on its track, its repeats drawn after it),
   and for MIDI and patterns Quantize, Transpose and Velocity, which change what plays but not
   the notes ("Apply to notes" writes them in). Then Smart Controls (a plugin instrument's filter
@@ -239,13 +239,12 @@ In the app, mostly as in Logic:
   it, option-shift-drag for an alias: a linked copy, its name in italics with a link, that plays
   the same notes, so editing either edits both (its place, length and playback settings are its
   own; "Make unique" in the inspector, splitting it or trimming its start unlinks it).
-- A region's end works as Logic's: its bottom half trims; its top half (a loop sign shows on
+- A region's end: its bottom half trims; its top half (a loop sign shows on
   hover) loops it out to wherever it's dragged, and the last repeat's drags the loops back; and
   option-dragging it time-stretches the region: audio flexes (slower or faster, same pitch, by
   Signalsmith Stretch), a MIDI region's notes and controllers spread out or close up, and a step
   pattern's steps get longer or shorter.
-- Bounce (⌘B, or Export in the control bar) opens the Bounce sheet, as Logic's Bounce and FL
-  Studio's Export: the mix, each track as a stem (through the master or not), or each marked
+- Bounce (⌘B, or Export in the control bar) opens the Bounce sheet: the mix, each track as a stem (through the master or not), or each marked
   section as its own file; over the song, the cycle or any bars; as WAV, AIFF, FLAC, MP3 (LAME,
   built in), AAC or ALAC (macOS's encoder), and the notes as a MIDI file, several formats at once;
   16-, 24- or 32-bit float at 44.1 to 96 kHz (rendered at that rate, not converted); as it plays,
@@ -257,7 +256,7 @@ In the app, mostly as in Logic:
   to play or show in the Finder. Right-click a track's header for Bounce in Place (the track
   rendered to audio on a track under it, through its own plugins and sends, the original muted;
   one undo puts it back) or Export as Stem.
-- The piano roll works as Logic's and FL Studio's do. Pick notes by clicking (shift adds), by
+- The piano roll: pick notes by clicking (shift adds), by
   dragging a band over the grid, ⌘A for all, or ⌘-click a key for every note of its pitch; drag
   them together, by either edge to resize, ⌥-drag to copy. ↑↓ move them a semitone (⇧ an octave),
   ←→ a grid step (⌥ finer); ⌘C ⌘X ⌘V copy, cut and paste at the playhead, ⌘D duplicates them
@@ -271,11 +270,10 @@ In the app, mostly as in Logic:
   picked notes (or all): quantize (grid, strength, swing), humanize, legato, chop, arpeggiate,
   strum, glue, reverse, flip, softer and harder. Ghost shows another track's notes behind; Fit
   fits the notes' range; ⌥-scroll makes rows taller or shorter.
-- Recording over a region of the same kind makes a take folder, as in Logic. Double-click it to
+- Recording over a region of the same kind makes a take folder. Double-click it to
   see its takes; swipe across a take to comp that stretch from it, click one to use all of it,
   and Flatten to turn the comp back into plain regions.
-- The Sampler tab (in the editor under the tracks, on a sampler track) is Pina Studio's sampler, as
-  Logic's Sampler, Ableton's Simpler and FL Studio's Slicex: its zones down the left (drop samples
+- The Sampler tab (in the editor under the tracks, on a sampler track) is Pina Studio's sampler: its zones down the left (drop samples
   on it, or click; right-click removes one), the picked zone's waveform with its start, end and
   loop points dragged in place and its sample's other slices marked, the keys with each zone over
   its notes (click to hear), and knobs for the zone (notes, root, fine tune, level, pan,
@@ -300,7 +298,7 @@ In the app, mostly as in Logic:
   staying where they were; it stays selected to smooth again. Mute is all steps.
 - Every control shows its automation: the header's fader, pan and readout, the strips' faders,
   knobs, sends and mute buttons, Smart Controls and plugin editors; an automated readout lights
-  in its mode's colour. The mode is on the lane and on each track's strip, as in Logic: Read plays
+  in its mode's colour. The mode is on the lane and on each track's strip: Read plays
   it, and a control held while it plays takes over until let go; Touch records a control while
   held, then ramps back to the line; Latch records it until stop; Trim moves the line up or down
   by as much as the control moves while held, keeping its shape; Write records every automated
@@ -318,7 +316,7 @@ In the app, mostly as in Logic:
   the list to theirs; Sampler, Audio and Beat, a kit with a pattern open in the step sequencer, add
   one at once), then what's been used lately and the favourites. ⌥⌘P makes a step pattern region on the
   selected instrument track (at the first free bar from the playhead); double-click one for the
-  step sequencer, as Maschine's and Push's: the sounds as pads (tap one to hear and pick it,
+  step sequencer: the sounds as pads (tap one to hear and pick it,
   right-click for its menu, an empty pad adds a sound) beside every sound's steps in its own
   colour. Click a step on or off and drag across to paint more (or rub them out), option-click for
   an accent (a white dot; again to take it off); a step is as bright as it hits hard, and the
@@ -326,13 +324,13 @@ In the app, mostly as in Logic:
   grid, the picked sound's actions in sight: fill every 1, 2, 4 or 8, shift ← →, reverse,
   randomize, Euclid (so many hits spread evenly), a length of its own (three steps against
   sixteen: a polymeter, its repeats drawn faint), clear, remove. Each step has its own settings
-  too, as Logic's edit modes: in the lane under the picked sound, Velocity, Chance (it plays that
+  too: in the lane under the picked sound, Velocity, Chance (it plays that
   often, rolled afresh each time round), Pitch, Repeat (a ratchet of up to four hits), Gate and
   Nudge, drawn a bar a step; the grid marks them (a ratchet split, a chance faded, a pitch moved).
   MODULATE above the grid: the track's modulators, to drag onto a sound's lane (an LFO swaying the
   hats' velocity, random on the snare's pitch, its dots showing where each step lands) or onto
   any knob of the track; + LFO, + Random; and + Parameter row: a row under the sounds that steps
-  any setting in time with the pattern (a filter, the volume, a plugin's knob), as Logic's
+  any setting in time with the pattern (a filter, the volume, a plugin's knob), like
   automation rows, picked from a menu and painted. The editor's bar sets the
   pattern's length (8 to 64 steps, repeating the groove as it grows), its rate (1/8, 1/16, 1/32)
   and swing; To MIDI turns it
@@ -353,12 +351,12 @@ In the app, mostly as in Logic:
   for how far (⇧ finer), ✕ to take it off; click a card to pick it, and dragging any knob it moves
   sets its depth instead. Modulation plays in bounces too, and agents use it as well
   (`add_modulator`, `modulate`).
-- Settings (⌘,, the Pina Studio menu, or the top bar's sliders), as Logic's, a section at a time: Track
-  headers (numbers, icons, what each plays, level meters, fader and pan, record buttons, as
-  Logic's Track Header Components; and how tall tracks are, Small to Huge), Regions & grid (names,
+- Settings (⌘,, the Pina Studio menu, or the top bar's sliders), a section at a time: Track
+  headers (numbers, icons, what each plays, level meters, fader and pan, record buttons;
+  and how tall tracks are, Small to Huge), Regions & grid (names,
   contents, bright colours, bar shading, beat lines), Editing (the loop zone at a region's end;
   writing a region with a double-click), Transport (following the playhead; going back where play
-  started on stop, as Logic's Return to Last Play Position) and Editor tabs (which show; a hidden
+  started on stop) and Editor tabs (which show; a hidden
   one's shortcut still opens it). Kept for every song in
   `~/Library/Application Support/Pina Studio/settings.json`.
 - N shows the score: the selected MIDI region as notation on a grand staff, in time with the
@@ -375,7 +373,7 @@ In the app, mostly as in Logic:
   output). The master takes plugins too, after its built-ins. In the mixer the selected channel's
   chain shows on the right: the EQ's curve, the compressor's knobs and gain reduction, the
   saturator's drive and curve.
-- The Channel EQ is a Pro-Q style EQ in a window of its own (click a strip's EQ curve, or the
+- The Channel EQ is a full EQ in a window of its own (click a strip's EQ curve, or the
   mixer's; the channel name at its top switches to another's): up to 24 bands, each a bell, low or
   high shelf, low or high cut (to 96 dB an octave, or a brickwall), notch, band pass, tilt shelf,
   flat tilt or all pass, every one with a slope (fractions too: click it for the usual ones, drag
@@ -431,7 +429,7 @@ first opened in a child process (`pina __scan`), so a broken one can't crash the
 results are cached in `~/Library/Caches/Pina Studio/plugins.json`. A plugin slot's menu lists them all
 (with their format, since one plugin is often installed in several) and the presets of the one
 in it. Saving writes each plugin's settings to `Plugin States/` in the project. Plugin latency is
-compensated, as Logic does. If the output device can't run at the project's sample rate (a
+compensated. If the output device can't run at the project's sample rate (a
 Bluetooth speaker at 44.1 kHz), playback runs at the device's.
 
 Audio is stretched (Flex, for a tempo or a region's length) three ways, per region.
@@ -443,8 +441,8 @@ R3's; transposed, the recording around each hit moves in pitch as a sampler woul
 region keeps its formants (for a voice). Slicing cuts at the hits and plays each as recorded at
 its new time; Speed is a turntable. Each can be warped: a selected audio region shows its hits
 as handles along its top, and dragging one makes a warp marker there (on the sixteenth), the
-hits either side pinned, so that beat moves and the audio around it stretches to fit, as Logic's
-flex markers do; double-click a marker to take it out.
+hits either side pinned, so that beat moves and the audio around it stretches to fit;
+double-click a marker to take it out.
 Stretches are made off the main thread, something standing in until they're done; loops from
 the sample browser follow the tempo, and their previews play at it, in time with the song while
 it plays. `cargo run --release -p pina-engine --example stretch_ab -- <out dir> <loop.wav>

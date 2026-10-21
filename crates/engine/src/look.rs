@@ -2,8 +2,7 @@
 //! A track's own `icon` and `color`, chosen by a person or an agent, take their place.
 //!
 //! Its role comes first from what it sounds like (its samples' and audio's analysis), then from
-//! the plugin it plays, its name, and its notes; Logic takes it from a patch's metadata, FL Studio
-//! from what you pick. Tracks that play alike share a colour family, each in a shade of its own,
+//! the plugin it plays, its name, and its notes. Tracks that play alike share a colour family, each in a shade of its own,
 //! so a session reads at a glance: drums warm, bass deep violet, keys teal, vocals pink.
 
 use std::path::Path;

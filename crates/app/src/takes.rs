@@ -1,5 +1,5 @@
 //! A take folder's takes, a row each, in the pane under the tracks (double-click the folder).
-//! As in Logic, swiping across a take comps that stretch from it; clicking a take uses all of it.
+//! Swiping across a take comps that stretch from it; clicking a take uses all of it.
 //! Lined up with the tracks above, like the piano roll.
 
 use gpui::{

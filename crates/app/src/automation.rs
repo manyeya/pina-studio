@@ -1,4 +1,4 @@
-//! Automation, as Logic's and then some. Every control shows where its automation has it; moving
+//! Automation. Every control shows where its automation has it; moving
 //! one records it (Touch, Latch, Write), moves the line up or down (Trim, or any time the song is
 //! stopped), or takes over from it while held (Read). Under each track are its lanes, a
 //! parameter each, to draw on: points to drag, lines to bend or step, shapes to draw in, a
@@ -858,7 +858,7 @@ impl Workspace {
     }
 
     /// Playback stops: recording does; what was recorded is thinned of points that change
-    /// nothing, and Write turns to Latch, as Logic's does after a pass.
+    /// nothing, and Write turns to Latch after a pass.
     fn pass_ends(&mut self, cx: &mut Context<Self>) {
         let ids: Vec<(u64, Param)> = self.touches.keys().copied().collect();
         for (id, param) in ids {

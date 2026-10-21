@@ -1,5 +1,4 @@
-//! The Sampler editor, in the pane under the tracks: the selected track's built-in sampler, as
-//! Logic's Sampler and Quick Sampler, Ableton's Simpler and FL Studio's Slicex show theirs. Its
+//! The Sampler editor, in the pane under the tracks: the selected track's built-in sampler. Its
 //! zones down the left (drop samples there, or anywhere on it); the picked zone's sample as a
 //! waveform, its start, end and loop dragged in place and its slices marked; the keys, each zone
 //! over the notes it plays (click a key to hear it); and how it plays: the zone's notes, tuning,

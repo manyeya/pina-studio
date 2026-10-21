@@ -1,4 +1,4 @@
-//! The Binaural Panner, as Logic's: a binaural track's sound round the listener's head, in 3D.
+//! The Binaural Panner: a binaural track's sound round the listener's head, in 3D.
 //! The floor's rings are a metre apart; the head faces FRONT. Drag the source round the head at
 //! its height, ⌘-drag it up or down, drag the space round it to look from another side; or set
 //! the way round, the height and the distance with the sliders, or a place with a click. Its

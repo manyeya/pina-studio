@@ -1353,7 +1353,9 @@ impl Render for Installer {
                                     .text_size(px(12.5))
                                     .line_height(px(18.))
                                     .text_color(rgb(TEXT_3))
-                                    .child("Logic's structure, FL Studio's speed, and agents as collaborators."),
+                                    .child(
+                                        "Arrange, mix and produce, with agents as collaborators.",
+                                    ),
                                 appear(now, 0.48, 0.6),
                             )),
                     ),

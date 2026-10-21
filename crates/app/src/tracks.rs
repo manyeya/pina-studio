@@ -247,7 +247,7 @@ impl Workspace {
             .border_color(rgb(LINE))
             .child({
                 // The four always to hand, then the one other in hand (or the rest's menu): Text,
-                // Glue, Solo, Mute, Zoom, Fade, Flex, as Logic's Tool menu (T).
+                // Glue, Solo, Mute, Zoom, Fade, Flex: the rest of the Tool menu (T).
                 let mains: Vec<_> = Tool::ALL
                     .into_iter()
                     .filter(|t| t.main())
@@ -1620,7 +1620,7 @@ impl Workspace {
                         c,
                     ));
                 };
-                // Every other four bars a shade lighter, as FL Studio does.
+                // Every other four bars a shade lighter.
                 let group = ppt * (bar_ticks * 4) as f32;
                 let mut k = (sx / group).floor() as i64;
                 while shading && (k as f32 * group - sx) < w {
@@ -2032,7 +2032,7 @@ impl Workspace {
     }
 
     /// A hit (or a warp marker) of an audio region dragged to `x`: a warp marker there, on the
-    /// sixteenth, the hits either side pinned where they play (as Logic's flex markers do), and
+    /// sixteenth, the hits either side pinned where they play (flex markers), and
     /// kept between its neighbours so the audio stays in order.
     pub fn drag_warp(&mut self, at: At, from: u64, x: f32) {
         let Some(w) = self.warping(at) else {
@@ -2165,8 +2165,7 @@ impl Workspace {
         let inside = self.inside(&region.content, region.length);
         let (start, end) = (region.start, region.start + region.length);
         let ink = Hsla::from(rgb(color));
-        // Its start trims; its end's bottom half trims (⌥ time-stretches), its top half loops,
-        // as Logic's region edges do.
+        // Its start trims; its end's bottom half trims (⌥ time-stretches), its top half loops.
         let half = (lh - 8.0) / 2.0;
         let zone = self.settings.loop_zone;
         let handle = |edge: Edge, cx: &mut Context<Self>| {
@@ -2243,7 +2242,7 @@ impl Workspace {
                         .whitespace_nowrap()
                         .overflow_hidden()
                         .text_color(rgb(ink))
-                        // An alias, as Logic shows one: its name in italics, and a link.
+                        // An alias: its name in italics, and a link.
                         .when(region.link.is_some(), |d| {
                             d.italic().child(icon(Icon::Link, 11.).text_color(rgb(ink)))
                         })
@@ -2271,7 +2270,7 @@ impl Workspace {
                         ),
                 )
             })
-            // Its fades, as Logic draws them: the corners darkened above an equal-power curve.
+            // Its fades: the corners darkened above an equal-power curve.
             .when(region.fade_in > 0 || region.fade_out > 0, |d| {
                 let (fade_in, fade_out, length) = (region.fade_in, region.fade_out, region.length);
                 d.child(
@@ -2465,7 +2464,7 @@ fn swipe(
 }
 
 /// The top half of a region's end (or of its last repeat's): drag it to loop the region out to
-/// there, as Logic's loop tool does. A loop sign shows on hover.
+/// there. A loop sign shows on hover.
 fn loop_tab(
     at: At,
     (start, end): (u64, u64),
@@ -2561,7 +2560,7 @@ fn grab(
                 return;
             }
         }
-        // Option-dragging a region's end time-stretches it, as in Logic: audio flexes, MIDI
+        // Option-dragging a region's end time-stretches it: audio flexes, MIDI
         // and patterns spread their notes or steps. A take folder only trims.
         let content = &ws.session.project.region(at).content;
         let edge = match (edge, content) {
@@ -2576,7 +2575,7 @@ fn grab(
             _ => None,
         };
         let from = e.position.map(f32::from);
-        // Option-dragging a region drags a copy of it; with shift too, an alias, as in Logic.
+        // Option-dragging a region drags a copy of it; with shift too, an alias.
         let copy = edge == Edge::Move && e.modifiers.alt;
         let drag = Drag::Region {
             at,

@@ -1,4 +1,4 @@
-//! The Channel EQ's window, as FabFilter's Pro-Q 4: one big display of the channel's sound,
+//! The Channel EQ's window: one big display of the channel's sound,
 //! a live analyzer of what goes in and comes out, and the EQ's curve, each band a dot.
 //!
 //! Hover the display to see the band a click would make there (a cut at either end, a notch
@@ -52,7 +52,7 @@ use crate::{
 /// The bands' colors, round and round by their place.
 pub const BAND_COLORS: [u32; 8] = [CORAL, AMBER, MINT, SKY, VIOLET, PINK, TEAL, 0xa3e635];
 
-/// The overall curve, as Pro-Q draws it; and the curves of bands on part of the sound alone.
+/// The overall curve; and the curves of bands on part of the sound alone.
 pub const CURVE: u32 = 0xffd166;
 const LEFT_CURVE: u32 = 0xf4f4f6;
 const RIGHT_CURVE: u32 = 0xff6b6b;

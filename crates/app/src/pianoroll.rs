@@ -1,5 +1,5 @@
 //! The piano roll: the selected MIDI region's notes against a keyboard, in the editor under the
-//! tracks, as Logic's and FL Studio's are. It shares the tracks area's zoom and horizontal scroll,
+//! tracks. It shares the tracks area's zoom and horizontal scroll,
 //! so its grid lines up with the lanes above; ⌥-scroll zooms its rows.
 //!
 //! Notes are picked by clicking (shift adds), by a rubber band over the grid, or all with ⌘A;
@@ -44,7 +44,7 @@ fn black(pitch: u8) -> bool {
     matches!(pitch % 12, 1 | 3 | 6 | 8 | 10)
 }
 
-/// Logic's names: middle C (60) is C3.
+/// Note names: middle C (60) is C3.
 pub fn name(pitch: u8) -> String {
     const NAMES: [&str; 12] = [
         "C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B",
@@ -52,8 +52,8 @@ pub fn name(pitch: u8) -> String {
     format!("{}{}", NAMES[pitch as usize % 12], pitch as i32 / 12 - 2)
 }
 
-/// A pitch's name as a key spells it (B♭ in F major, A♯ in E major), middle C being C3 as in
-/// Logic; with no key, sharps.
+/// A pitch's name as a key spells it (B♭ in F major, A♯ in E major), middle C being C3;
+/// with no key, sharps.
 pub fn name_in(key: Option<Key>, pitch: u8) -> String {
     let Some(key) = key else {
         return name(pitch);
@@ -72,7 +72,7 @@ pub fn name_in(key: Option<Key>, pitch: u8) -> String {
 /// the span of a new region round it.
 type Target = (usize, Option<At>, Option<(u64, u64)>);
 
-/// What a click writes: a note, or a chord on it, as FL Studio's stamps.
+/// What a click writes: a note, or a chord stamped on it.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Stamp {
     Note,
@@ -285,7 +285,7 @@ pub enum RollOp {
     Edit(NoteEdit),
 }
 
-/// A velocity's colour, as Logic shows them: soft notes cool, hard ones hot.
+/// A velocity's colour: soft notes cool, hard ones hot.
 pub fn velocity_color(v: u8) -> u32 {
     const STOPS: [(f32, u32); 6] = [
         (0.0, 0x6366f1),
@@ -319,7 +319,7 @@ impl Workspace {
         name_in(self.session.project.song_key(), pitch)
     }
 
-    /// Where a tick falls in the song, as Logic counts: bar, beat, sixteenth.
+    /// Where a tick falls in the song: bar, beat, sixteenth.
     fn position(&self, tick: u64) -> String {
         let (bar, beat) = (
             self.session.project.bar().max(1),
@@ -657,7 +657,7 @@ impl Workspace {
     }
 
     /// The pencil dragged on: a note (or chord) at each note length it passes, at the pitch under
-    /// it, as FL Studio's paint tool.
+    /// it, painting.
     pub(crate) fn drag_paint(&mut self, p: Point<f32>) {
         let Some(Drag::Paint { at, last }) = self.drag else {
             return;
@@ -1530,7 +1530,7 @@ impl Workspace {
                             _ => gpui::CursorStyle::OpenHand,
                         })
                         .when(label, |d| d.child(name_in(spelling, n.pitch)))
-                        // Its velocity, as a line along its foot as long as it's hard (Logic's).
+                        // Its velocity, as a line along its foot as long as it's hard.
                         .when(kh >= 9.0 && w > 8.0, |d| {
                             d.child(
                                 div()
@@ -1825,7 +1825,7 @@ impl Workspace {
                             MouseButton::Left,
                             cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                                 let pitch = ws.pitch_at(f32::from(e.position.y));
-                                // ⌘-click picks every note of the key's pitch, as Logic does.
+                                // ⌘-click picks every note of the key's pitch.
                                 if e.modifiers.platform {
                                     ws.roll_op(RollOp::SelectPitch(pitch), cx);
                                     return;
@@ -2334,7 +2334,7 @@ fn grab_note(
             ws.picked = vec![i];
         }
         ws.region = Some(at);
-        // The length new notes are written at: this one's, as FL Studio does.
+        // The length new notes are written at: this one's.
         ws.roll.length = n.length;
         let track = ws.session.project.tracks[at.0].id;
         ws.player.preview(track, n.pitch, n.velocity);
@@ -2387,7 +2387,7 @@ mod spelling {
     #[test]
     fn notes_are_named_as_the_key_spells_them() {
         let key = |s: &str| Key::parse(s);
-        assert_eq!(name_in(None, 60), "C3"); // middle C, as Logic numbers it
+        assert_eq!(name_in(None, 60), "C3"); // middle C
         assert_eq!(name_in(None, 70), "A♯3");
         assert_eq!(name_in(key("Eb major"), 70), "B♭3");
         assert_eq!(name_in(key("Eb major"), 63), "E♭3");

@@ -618,7 +618,7 @@ fn tracks_picked_with_cmd_and_shift_go_into_one_stack(cx: &mut TestAppContext) {
         (stack, p.tracks.iter().map(|t| t.output).collect::<Vec<_>>())
     });
     let stack = outputs.0.expect("a stack");
-    // Gathered under the first, as Logic does: the drums moved up beside the keys.
+    // Gathered under the first: the drums moved up beside the keys.
     assert_eq!(outputs.1, [Some(stack), Some(stack), None]);
     assert_eq!(
         ws.read_with(cx, |ws, _| ws.session.project.tracks[1].name.clone()),

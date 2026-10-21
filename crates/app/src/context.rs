@@ -1,4 +1,4 @@
-//! The right-click menus of the tracks area, as Logic's: a track's header (new tracks, the same
+//! The right-click menus of the tracks area: a track's header (new tracks, the same
 //! strip, duplicating, renaming, its colour and icon, mute, solo, record, its height, its pan,
 //! moving it, stacking, bouncing, deleting), a pan knob (Balance, Stereo Pan, Binaural, and the
 //! song's pan law), a region (cut, copy, paste, duplicate, split, mute, loop, rename, alias, into
@@ -36,7 +36,7 @@ pub enum TrackOp {
     ResetPan(usize),
     Move(usize, i32),
     Stack(usize),
-    /// A stack (by its bus): undone, as Logic's Flatten Stack; its tracks folded or shown.
+    /// A stack (by its bus): flattened, its tracks back on the master; its tracks folded or shown.
     Flatten(u32),
     Fold(u32),
     Look(usize, Point<Pixels>),
@@ -368,7 +368,7 @@ impl Workspace {
             }
             TrackOp::PanMode(t, mode) if t < n => {
                 self.edit(cx, |ws| ws.session.project.tracks[t].pan_mode = mode);
-                // Binaural opens its panner, as Logic's does.
+                // Binaural opens its panner.
                 if mode == PanMode::Binaural {
                     self.open_panner(t, cx);
                 }

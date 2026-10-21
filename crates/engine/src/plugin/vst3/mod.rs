@@ -559,7 +559,7 @@ impl PluginApi for Vst3Plugin {
                         units.getProgramName(list.id, program, &mut name);
                         text16(&name)
                     };
-                    // One unnamed program is no list at all (JUCE plugins all have it).
+                    // One unnamed program is no list at all (many plugins have just that).
                     if list.programCount <= 1 && named(0).trim().is_empty() {
                         continue;
                     }

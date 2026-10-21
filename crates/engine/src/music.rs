@@ -359,7 +359,7 @@ impl NoteEdit {
                 }
             }
             NoteEdit::Legato => {
-                // Each chosen note held to the next note to start, chosen or not, as Logic's.
+                // Each chosen note held to the next note to start, chosen or not.
                 let mut starts: Vec<i64> = notes.iter().map(|n| n.start).collect();
                 starts.sort_unstable();
                 starts.dedup();

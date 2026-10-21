@@ -1,4 +1,4 @@
-//! A channel strip, as in Logic's inspector and mixer: the instrument or input, an EQ curve,
+//! A channel strip, as in the inspector and mixer: the instrument or input, an EQ curve,
 //! effect slots (the built-in EQ and compressor, then plugins), sends, where it plays, pan,
 //! level, fader and meters, mute and solo, name; for a track, an aux, or the master.
 //!
@@ -1441,7 +1441,7 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
         }),
     };
 
-    // A track's automation mode, as Logic's strips have it: lit in its colour, click for the
+    // A track's automation mode: lit in its colour, click for the
     // others.
     let auto_button = match ch {
         Channel::Track(i) => {

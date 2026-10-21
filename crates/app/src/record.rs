@@ -1,4 +1,4 @@
-//! Recording onto the selected track, as Logic does with it armed: an instrument track records
+//! Recording onto the selected track, armed: an instrument track records
 //! the notes played on it (MIDI keyboards, musical typing), an audio track records the default
 //! input into a new file under `Audio Files/`.
 
@@ -225,7 +225,7 @@ impl Workspace {
         else {
             return;
         };
-        // Over a region of its kind, the take joins it in a take folder, as in Logic.
+        // Over a region of its kind, the take joins it in a take folder.
         self.edit(cx, |ws| {
             let end = region.start + region.length;
             let at = ws

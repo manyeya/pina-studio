@@ -1,5 +1,5 @@
 //! The mixer, in place of the arrangement: a strip for every track, aux and the master, labelled
-//! down the left; and on the right the selected channel's chain, FL Studio style: its instrument,
+//! down the left; and on the right the selected channel's chain: its instrument,
 //! its EQ to drag about, its compressor and saturator, its plugins, its sends.
 
 use gpui::{

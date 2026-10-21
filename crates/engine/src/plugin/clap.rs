@@ -2594,7 +2594,7 @@ mod tests {
     }
 
     /// With a real instrument, which CI doesn't have:
-    /// `PINA_TEST_CLAP="/path/Surge XT.clap" cargo test -p pina-engine clap -- --ignored`
+    /// `PINA_TEST_CLAP="/path/Some Synth.clap" cargo test -p pina-engine clap -- --ignored`
     /// (skipped without it, so the other formats' real-plugin tests run alone).
     #[test]
     #[ignore]

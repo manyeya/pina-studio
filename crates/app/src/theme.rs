@@ -45,7 +45,7 @@ pub const AGENT_TEXT: u32 = 0xd9f99d;
 pub const MASTER: u32 = 0xf4f4f6;
 pub const BUS: u32 = 0xc4c4cc;
 
-// Track colors, picked by what a track is called (as Logic suggests one), else in turn.
+// Track colors, picked by what a track is called, else in turn.
 pub const CORAL: u32 = 0xff7a59;
 pub const AMBER: u32 = 0xffc53d;
 pub const MINT: u32 = 0x3ddc97;

@@ -1,4 +1,4 @@
-//! Modulation, as Bitwig's modulators and Logic's mod matrix: a track's modulators (an LFO, a
+//! Modulation: a track's modulators (an LFO, a
 //! step sequence of values, an envelope its notes set off, a follower of another track's level,
 //! random values, a macro to turn by hand) each moving any number of its settings by a depth:
 //! its volume, pan and sends, its EQ, compressor and saturator, its Sampler's voice, its plugins'

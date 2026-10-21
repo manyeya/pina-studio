@@ -3,7 +3,7 @@
 //! resolution says (longer: truer low down, more latency); then the sound is convolved with it in
 //! partitions of 256 (uniformly partitioned overlap-save), which costs little for even the longest.
 //! Bands on the left or right alone get a kernel each side; bands on the mid or side, a second
-//! stage on those, as Pro-Q does (twice the latency). A new curve crossfades in over a partition.
+//! stage on those (twice the latency). A new curve crossfades in over a partition.
 //!
 //! The kernels and the convolvers' memory are made off the audio thread, when the song's planned
 //! (`Linear::new`); the EQ takes the memory the first time it needs it. An EQ moving as it plays

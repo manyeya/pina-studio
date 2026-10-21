@@ -750,7 +750,7 @@ pub fn cuts(onsets: &[(f32, f32)], most: usize) -> Vec<f32> {
 }
 
 /// A sound cut into one-shot zones at `cuts` (shares of its length), on notes upward from
-/// `first`, as Logic's slice mode and FL Studio's Slicex do.
+/// `first`, as a slicer does.
 pub fn slices(file: &Path, cuts: &[f32], first: u8) -> Vec<Zone> {
     cuts.iter()
         .enumerate()

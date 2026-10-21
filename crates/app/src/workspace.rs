@@ -109,7 +109,7 @@ actions!(
     ]
 );
 
-/// Logic's shortcuts, where it has one. While a name is being typed the workspace's context is
+/// The keyboard shortcuts. While a name is being typed the workspace's context is
 /// "Naming", so these keys type instead.
 /// The window's shortcuts. Those with no ⌘, ⌃ or ⌥ stand down while a text field has the
 /// keyboard, so typing "a" types it rather than showing automation.
@@ -135,7 +135,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("k", ToggleMetronome, Some("Arrange && !TextInput")),
         KeyBinding::new("f", ToggleSamples, Some("Arrange && !TextInput")),
         KeyBinding::new("shift-f", ToggleSamplesPage, Some("Arrange && !TextInput")),
-        // In the sample browser, as Splice: the next sound plays as it's picked.
+        // In the sample browser: the next sound plays as it's picked.
         // Arrows walk the results while their search is typed.
         KeyBinding::new("up", PreviousSample, Some("Samples")),
         KeyBinding::new("down", NextSample, Some("Samples")),
@@ -195,7 +195,7 @@ pub enum Edge {
     End,
     /// The end, time-stretching what's in it rather than trimming it (⌥).
     Stretch,
-    /// The top of the end: loops it out to where it's dragged, as Logic's loop tool does.
+    /// The top of the end: loops it out to where it's dragged.
     Loop,
 }
 
@@ -643,8 +643,8 @@ pub struct Naming {
     _subscriptions: [Subscription; 2],
 }
 
-/// Which track is armed, to record and to hear the MIDI keyboard: the selected one, as Logic
-/// does until you arm one yourself; one you armed; or none.
+/// Which track is armed, to record and to hear the MIDI keyboard: the selected one, until
+/// you arm one yourself; one you armed; or none.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Arm {
     Selected,
@@ -764,9 +764,9 @@ pub struct RollSettings {
     pub scale: bool,
     /// Notes drawn and moved land on the key's notes.
     pub in_key: bool,
-    /// A chord drawn for each note, as FL Studio's stamps.
+    /// A chord stamped for each note.
     pub stamp: crate::pianoroll::Stamp,
-    /// Notes coloured by velocity, cool to hot, as Logic does; else the track's colour.
+    /// Notes coloured by velocity, cool to hot; else the track's colour.
     pub by_velocity: bool,
     /// The length a new note is drawn at: the last note picked or stretched (0, the grid).
     pub length: u64,
@@ -856,7 +856,7 @@ pub struct Workspace {
     pub trying: Option<(usize, crate::looks::Trying)>,
     pub tool: Tool,
     pub snap: Snap,
-    /// Playing the selected region alone, looped, as FL Studio's pattern mode; and the region it
+    /// Playing the selected region alone, looped (pattern mode); and the region it
     /// plays, with the start and length it had then.
     pub pattern_mode: bool,
     pub pattern: Option<(At, u64, u64)>,
@@ -2315,7 +2315,7 @@ impl Workspace {
         if let Some(r) = self.steps_pick.take() {
             self.steps_row = r;
         }
-        // A lane made taller is the song's to keep (as Logic keeps it), not an undo step.
+        // A lane made taller is the song's to keep, not an undo step.
         if let Some(Drag::LaneHeight { .. }) = self.drag {
             self.session.edited = true;
         }
@@ -2526,7 +2526,7 @@ impl Workspace {
     pub fn play_stop(&mut self, cx: &mut Context<Self>) {
         if self.player.playing() || self.recording.is_some() {
             self.stop(cx);
-            // Back where play started, as Logic's Return to Last Play Position.
+            // Back where play started.
             if self.settings.return_on_stop {
                 let from = self.play_from;
                 self.locate_tick(from, cx);
@@ -2670,7 +2670,7 @@ impl Workspace {
         });
     }
 
-    /// Splits the selected region at the playhead, as Logic's ⌘T does.
+    /// Splits the selected region at the playhead (⌘T).
     fn split(&mut self, cx: &mut Context<Self>) {
         let (Some(at), tick) = (self.region, self.playhead()) else {
             return;
@@ -2763,7 +2763,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Musical typing, as in Logic: A to K are white keys from C, W E T Y U O P the black ones;
+    /// Musical typing: A to K are white keys from C, W E T Y U O P the black ones;
     /// Z and X shift the octave.
     fn type_key(&mut self, e: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         // Typing in a field (a search, a question for the agent) is typing, not notes.
@@ -3162,7 +3162,7 @@ impl Workspace {
         self.load = (self.player.load()).max(self.load * 0.5f32.powf(since.as_secs_f32() / 0.5));
     }
 
-    /// Keeps the playhead on screen while playing, a page at a time, as Logic does.
+    /// Keeps the playhead on screen while playing, a page at a time.
     fn follow_playhead(&mut self) {
         let width = f32::from(self.lanes_bounds.get().size.width);
         let x = self.playhead() as f32 * self.px_per_tick() - self.scroll_x;
@@ -3462,7 +3462,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &PreviousSample, _, cx| ws.step_sample(-1, cx)))
             .on_action(cx.listener(|ws, _: &NextSample, _, cx| ws.step_sample(1, cx)))
             .on_action(cx.listener(|ws, _: &CreateStack, _, cx| {
-                // A summing stack of the selected tracks, as Logic's ⇧⌘D makes of the selection.
+                // A summing stack of the selected tracks (⇧⌘D).
                 let tracks = ws.picked_tracks();
                 if !tracks.is_empty() {
                     ws.make_stack(&tracks, cx);
@@ -3545,7 +3545,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &StudySong, _, cx| ws.open_study(cx)))
             .on_action(cx.listener(|ws, _: &ShowSettings, _, cx| ws.open_settings(cx)))
             .on_action(cx.listener(|ws, _: &ToolMenu, _, cx| {
-                // Under the toolbar, as Logic opens it at the pointer.
+                // Under the toolbar, where the pointer would be.
                 let x = if ws.show_inspector { ws.side_w() } else { 0.0 } + 14.0;
                 ws.tool_menu(gpui::point(px(x), px(CONTROL_BAR_H + TOP_H)), cx);
             }))

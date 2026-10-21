@@ -1,4 +1,4 @@
-//! The step sequencer, as Maschine's and Push's: a pattern region's sounds as pads (tap one to
+//! The step sequencer: a pattern region's sounds as pads (tap one to
 //! hear it and pick it, right-click for its menu, an empty one adds a sound) beside every sound's
 //! steps, each in its own colour (a kick warm, hats cool). Click a step on or off and drag across
 //! to paint more (or rub them out); option-click for an accent (a white dot). How hard a step hits
@@ -122,8 +122,8 @@ pub enum RowOp {
     Remove,
 }
 
-/// What the lane under the picked sound shows and draws, as Logic's step sequencer's edit
-/// modes: each step's velocity, chance, pitch, ratchet, gate or nudge.
+/// What the lane under the picked sound shows and draws, its edit
+/// mode: each step's velocity, chance, pitch, ratchet, gate or nudge.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum LaneMode {
     #[default]
@@ -666,7 +666,7 @@ impl Workspace {
         )
     }
 
-    /// The step sequencer, as Maschine's and Push's: the sounds as pads (tap one to hear it and
+    /// The step sequencer: the sounds as pads (tap one to hear it and
     /// pick it), every sound's steps in its own colour, the picked one opened on its velocities,
     /// and what can be done to it in a bar under them.
     pub fn steps_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1341,7 +1341,7 @@ impl Workspace {
             );
 
         // The track's modulators, to drag onto a sound's lane (or any knob of the track); and
-        // its parameter rows (steps modulators, as Logic's automation rows), painted in time with
+        // its parameter rows (steps modulators, as automation rows), painted in time with
         // the pattern.
         let t = at.0;
         let track_mods = self.session.project.mods_of(t);

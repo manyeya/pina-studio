@@ -1208,7 +1208,7 @@ impl PluginApi for AuPlugin {
                 .map(|p| (text(p.presetName).trim().to_string(), p.presetNumber))
                 .collect()
         });
-        // One unnamed program is no list at all (JUCE units all have it).
+        // One unnamed program is no list at all (many units have just that).
         if !matches!(&factory[..], [(name, _)] if name.is_empty()) {
             out.extend(factory.into_iter().map(|(name, number)| Preset {
                 name: match name.is_empty() {

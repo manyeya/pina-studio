@@ -53,7 +53,7 @@ fn mono(s: impl Into<SharedString>) -> Div {
 }
 
 /// The parameters of an instrument plugin worth having at hand: its filter's cutoff and
-/// resonance, and its amp's attack and release, as Logic's Smart Controls map them; else the
+/// resonance, and its amp's attack and release; else the
 /// first ones it has.
 // ponytail: a name match; plugins with their own smart-control maps would do better.
 pub fn smart_params(params: &[PluginParam]) -> Vec<(u32, String)> {
@@ -274,7 +274,7 @@ impl Workspace {
                         }),
                     ),
             ));
-        // What MIDI plays, its notes untouched: as Logic's region parameters.
+        // What MIDI plays, its notes untouched: the region's playback settings.
         if region.content.is_midi() && !matches!(region.content, Content::Takes { .. }) {
             let q = region.quantize;
             let signed = |v: i8| match v {
@@ -399,7 +399,7 @@ impl Workspace {
                             .overflow_hidden()
                             .whitespace_nowrap(),
                     ))
-                    // How it's stretched, as Logic's Flex mode or Ableton's warp mode.
+                    // How it's stretched: its flex mode.
                     .child(row(
                         "Flex",
                         dropdown(flex.name(), 22.)
@@ -794,8 +794,7 @@ fn stepper(
 }
 
 impl Workspace {
-    /// Writes a region's playback settings into its notes, as Logic's "Apply Quantization
-    /// Settings Destructively" and "Normalize Region Parameters" do, and clears them.
+    /// Writes a region's playback settings into its notes for good, and clears them.
     pub fn apply_region_settings(&mut self, at: pina_engine::project::At, cx: &mut Context<Self>) {
         self.edit(cx, |ws| {
             let r = &mut ws.session.project.tracks[at.0].regions[at.1];

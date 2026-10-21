@@ -11,7 +11,7 @@ Room Reverb, which have to be installed (`pina plugins` lists them).
 The keys loop the beat is built on plays a ninth chord on every beat, C9 Eb9 F9 G9, so
 everything else follows that: the bass and 808 take each beat's root, the pad holds the notes
 two chords share, and the hook's whistle lead picks notes from each chord. (Note names here are
-scientific, middle C being C4; Pina Studio's piano roll calls it C3, as Logic does.)
+scientific, middle C being C4; Pina Studio's piano roll calls it C3.)
 """
 
 import json

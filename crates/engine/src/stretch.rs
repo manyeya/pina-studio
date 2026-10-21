@@ -1,4 +1,4 @@
-//! Fitting audio to a new length, as Logic's Flex and Ableton's Warp do, three ways:
+//! Fitting audio to a new length, three ways:
 //!
 //! - Polyphonic, the default: Rubber Band's finer engine (R3), the best open stretcher, run
 //!   offline over the whole file so it hears all of it first, its hits' times pinned. Around
@@ -13,7 +13,7 @@
 //! - Speed: as a turntable or a sampler, faster is higher; nothing is stretched.
 //!
 //! Each can be warped: beats pinned where warp markers move them, the audio between stretched to
-//! fit, as Logic's flex markers and Ableton's warp markers do. Moved in pitch, the recording
+//! fit, as flex markers do. Moved in pitch, the recording
 //! around the hits is moved as a sampler would (unless the formants are kept, for a voice).
 
 use serde::{Deserialize, Serialize};
@@ -608,8 +608,7 @@ mod tests {
             channels: drums(&times, 1.0),
         };
         let hits = onsets(&input.channels, RATE);
-        // The third hit 60 ms late, the hits either side pinned where they are, as in Logic or
-        // Ableton: the audio between them stretches and squeezes to fit.
+        // The third hit 60 ms late, the hits either side pinned where they are: the audio between them stretches and squeezes to fit.
         let moved = hits[2] + (0.06 * RATE) as usize;
         for flex in Flex::ALL {
             let fit = Fit {

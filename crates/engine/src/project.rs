@@ -1,4 +1,4 @@
-//! A project: what's on the timeline and how it's mixed. It's a folder, like Logic's `.logicx`:
+//! A project: what's on the timeline and how it's mixed. It's a folder:
 //! `project.json` plus the audio it uses under `Audio Files/`. The JSON is the source of truth, so
 //! people and agents can read, diff and edit it.
 
@@ -15,7 +15,7 @@ use crate::modulate::{MAX_MODS, ModKind, Modulator};
 
 pub use crate::stretch::Flex;
 
-/// Ticks per quarter note, as in Logic.
+/// Ticks per quarter note.
 pub const PPQ: u64 = 960;
 /// The notes a time signature's beat can be: a whole note to a sixteenth.
 pub const BEAT_UNITS: [u64; 5] = [1, 2, 4, 8, 16];
@@ -46,7 +46,7 @@ pub struct Project {
     /// Plugins on the master, after its built-in effects.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub master_inserts: Vec<PluginRef>,
-    /// How panning keeps level (Logic's pan law).
+    /// How panning keeps level (the pan law).
     #[serde(default, skip_serializing_if = "PanLaw::is_flat")]
     pub pan_law: PanLaw,
     pub tracks: Vec<Track>,
@@ -1030,7 +1030,7 @@ impl Place {
     }
 }
 
-/// How a track's pan places it, as Logic's pan modes do.
+/// How a track's pan places it.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PanMode {
@@ -1119,7 +1119,7 @@ pub struct Track {
     /// -1 is hard left, 1 hard right.
     #[serde(default)]
     pub pan: f32,
-    /// How the pan places it, as Logic's: balance, stereo pan (each side placed, `spread`
+    /// How the pan places it: balance, stereo pan (each side placed, `spread`
     /// apart), or binaural (around the head).
     #[serde(default, skip_serializing_if = "PanMode::is_balance")]
     pub pan_mode: PanMode,
@@ -1372,7 +1372,7 @@ pub enum Which {
     Insert(usize),
 }
 
-/// How a track uses its automation, as Logic's modes: Read plays it; Touch and Latch play it and
+/// How a track uses its automation: Read plays it; Touch and Latch play it and
 /// also record what's moved while the song plays (Touch until the control is let go, Latch until
 /// playback stops); Trim records as Touch does, but moves the line that's there up or down rather
 /// than drawing a new one; Write records every automated control from where playback starts, over
@@ -1536,7 +1536,7 @@ pub struct AutoClip {
     pub lanes: Vec<(Param, Vec<AutoPoint>)>,
 }
 
-/// A shape drawn into automation, a cycle every so often: as Ableton's and Studio One's.
+/// A shape drawn into automation, a cycle every so often.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AutoShape {
@@ -2248,7 +2248,7 @@ impl Instrument {
     }
 }
 
-/// The built-in sampler, as Logic's Sampler or an MPC's pads: a sample on each note, as a drum
+/// The built-in sampler: a sample on each note, as a drum
 /// kit; one sample played across a range of notes, repitched, as an 808 or a bass; a loop sliced
 /// across the keys; or layers by velocity and round robins. How every voice plays (envelopes,
 /// filter, LFO, mono and glide) is the instrument's.
@@ -2635,7 +2635,7 @@ pub struct Region {
     /// Plays over and over, until the next region on its track or the end of the song.
     #[serde(default, rename = "loop", skip_serializing_if = "std::ops::Not::not")]
     pub looped: bool,
-    /// Where its loops stop, in ticks from its start, as Logic's loop tool drags them out (the
+    /// Where its loops stop, in ticks from its start, as the loop tool drags them out (the
     /// next region still stops them); none runs them on to the next region or the song's end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_length: Option<u64>,
@@ -2647,7 +2647,7 @@ pub struct Region {
     pub fade_in: u64,
     #[serde(default, skip_serializing_if = "is_none_u64")]
     pub fade_out: u64,
-    /// Playback settings, as Logic's region inspector has: MIDI plays moved by `transpose`
+    /// Playback settings, as the region inspector shows them: MIDI plays moved by `transpose`
     /// semitones, `velocity` louder, and started on a `quantize` grid (ticks), its notes kept as
     /// they are. Audio is moved by `transpose` too, its length kept.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -2721,12 +2721,12 @@ pub enum Content {
         /// Moved in pitch, its formants kept, as a voice wants.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         formants: bool,
-        /// Warp markers, as Logic's flex markers: [a frame of the file, where it plays in the
+        /// Warp markers: [a frame of the file, where it plays in the
         /// stretched audio], both at the project's rate. The audio between is fitted to them.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warps: Vec<[u64; 2]>,
     },
-    /// A step pattern, as Logic's step sequencer makes: rows of steps, looped over the region.
+    /// A step pattern, as the step sequencer makes: rows of steps, looped over the region.
     Pattern {
         /// Ticks per step: 240 is a sixteenth.
         #[serde(default = "sixteenth")]
@@ -2784,7 +2784,7 @@ pub struct PatternRow {
     /// Silent, its steps kept.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mute: bool,
-    /// Each step's own settings, as Logic's step sequencer's edit modes and Elektron's locks: the
+    /// Each step's own settings (parameter locks): the
     /// chance it plays (0 to 100), semitones up or down, how many times it hits in its step (a
     /// ratchet, 1 to 4), how long it holds (% of a step) and how far off the grid it is (% of a
     /// step, -50 to 50). Missing steps (or an empty lane) are as usual: 100, 0, 1, 75, 0.
@@ -2988,7 +2988,7 @@ impl Content {
     }
 
     /// Its notes (and controllers) or steps, played `ratio` times as long: a MIDI or pattern
-    /// region time-stretched, as Logic's ⌥-drag of a region's end does. Audio flexes instead.
+    /// region time-stretched, as ⌥-dragging a region's end does. Audio flexes instead.
     pub fn stretched(&self, ratio: f64) -> Option<Content> {
         let at = |t: i64| (t as f64 * ratio).round() as i64;
         match self {
@@ -3073,7 +3073,7 @@ pub struct Note {
     /// Ticks from the start of the region. Notes outside the region (after trimming it) are kept
     /// but don't play, so extending it again brings them back.
     pub start: i64,
-    /// Notes play their full length, even past the region's end, as in Logic.
+    /// Notes play their full length, even past the region's end.
     pub length: u64,
     pub pitch: u8,
     pub velocity: u8,
@@ -3384,10 +3384,10 @@ impl Project {
         }
     }
 
-    /// Adds an aux on the next free bus, as Logic does when a send picks a new bus; returns the
+    /// Adds an aux on the next free bus, as a send picking a new bus makes; returns the
     /// bus.
     /// Makes a summing stack of these tracks: a stack channel they all play into, and the tracks
-    /// moved together under the first of them, as Logic does. Returns its bus, and where each
+    /// moved together under the first of them. Returns its bus, and where each
     /// track is now, by where it was.
     pub fn add_stack(&mut self, tracks: &[usize]) -> (u32, Vec<usize>) {
         let bus = self.add_aux();
@@ -3427,7 +3427,7 @@ impl Project {
         moved
     }
 
-    /// Undoes a stack, as Logic's Flatten Stack: its tracks play into the master again, and the
+    /// Undoes a stack (Flatten Stack): its tracks play into the master again, and the
     /// stack goes, with the modulators it shared.
     pub fn flatten_stack(&mut self, bus: u32) {
         while self
@@ -3790,7 +3790,7 @@ impl Project {
     }
 
     /// Flex: stretches a plain audio region to `length` ticks, its audio slower or faster and its
-    /// pitch kept, as option-dragging its end does in Logic. From a quarter to four times as long
+    /// pitch kept, as option-dragging its end does. From a quarter to four times as long
     /// as it was recorded.
     pub fn flex(&mut self, at: At, length: u64) -> Result<(), String> {
         let r = &mut self.tracks[at.0].regions[at.1];
@@ -4106,7 +4106,7 @@ impl Project {
     }
 
     /// Splits a region at `tick`, if that's inside it, and returns where the second half went.
-    /// Notes stay with the half they start in, as Logic's "Keep" does.
+    /// Notes stay with the half they start in.
     pub fn split_region(&mut self, at: At, tick: u64) -> Option<At> {
         let r = self.region(at);
         if tick <= r.start || tick >= r.start + r.length {

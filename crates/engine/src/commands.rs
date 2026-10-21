@@ -67,7 +67,7 @@ pub enum Command {
         volume_db: Option<f32>,
         #[serde(default)]
         pan: Option<f32>,
-        /// Logic's pan modes: balance, stereo (each side placed, `spread` apart) or binaural.
+        /// The pan modes: balance, stereo (each side placed, `spread` apart) or binaural.
         #[serde(default)]
         pan_mode: Option<PanMode>,
         #[serde(default)]

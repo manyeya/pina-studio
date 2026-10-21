@@ -1,5 +1,5 @@
 //! The New Track palette, under the "+" over the track headers (and ⌥⌘N): one search across
-//! everything a track can start as, as Bitwig's and Raycast's are, with the kinds of track as tiles
+//! everything a track can start as, with the kinds of track as tiles
 //! when nothing's typed. Instruments (Pina Studio's and every plugin installed), their presets (their own
 //! programs and preset files, as the sounds tool reads them), kits made from the sample library's
 //! packs, and single sounds (an 808, a bass note) played across the keys on a sampler. Arrows pick,

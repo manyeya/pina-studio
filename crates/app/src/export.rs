@@ -1,5 +1,5 @@
-//! The Bounce sheet (⌘B, or Export in the control bar), as Logic's Bounce and FL Studio's Export
-//! windows are, in one sheet: what to bounce (the mix, each track as a stem, or each marked
+//! The Bounce sheet (⌘B, or Export in the control bar), bouncing and exporting in one sheet:
+//! what to bounce (the mix, each track as a stem, or each marked
 //! section) over which range (the song, the cycle, any bars), on the left; how (formats, several
 //! at once; bits, sample rate, the MP3's and AAC's bitrate; level: as it plays, to a peak, or to a
 //! loudness under a ceiling; the tail; dither; stems through the master or not), on the right;

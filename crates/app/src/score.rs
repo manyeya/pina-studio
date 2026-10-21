@@ -1,4 +1,4 @@
-//! The score editor, as in Logic's linear view: the selected MIDI region as notation on a grand
+//! The score editor, a linear view: the selected MIDI region as notation on a grand
 //! staff (middle C and up on the treble, below on the bass), in the pane under the tracks and in
 //! time with them, in the song's key: its signature at the start of the staves, and notes spelled
 //! by it, with accidentals where they leave it. Click a note to select (and hear) it; delete deletes

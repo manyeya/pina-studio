@@ -1,4 +1,4 @@
-//! Bouncing a song to files, as Logic's Bounce and FL Studio's Export do: the mix, each track as a
+//! Bouncing a song to files: the mix, each track as a
 //! stem, or each marked section; over the song, the cycle or any bars; with the tail its reverbs
 //! and delays leave (found, up to ten seconds, then trimmed where it falls silent); at any sample
 //! rate (rendered at it, not converted after); levelled to a peak or to a loudness (LUFS, under a

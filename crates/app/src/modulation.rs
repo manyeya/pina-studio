@@ -1,4 +1,4 @@
-//! Modulation, as Bitwig's: a track's modulators as cards in the Modulation pane (an LFO, steps,
+//! Modulation: a track's modulators as cards in the Modulation pane (an LFO, steps,
 //! an envelope its notes set off, a follower of another track's level, random, a macro), each
 //! moving as it plays. Drag a card's ↗ onto any knob or fader of its track (the header's fader
 //! and pan, Smart Controls, the EQ, compressor and saturator, the Sampler's knobs, sends) to map
