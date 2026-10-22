@@ -179,6 +179,35 @@ pub enum Icon {
     TiltShelf,
     FlatTilt,
     AllPass,
+    Dice,
+    ClearBox,
+    RotateLeft,
+    RotateRight,
+    ChevronUp,
+    Speaker,
+    MidiIn,
+    MidiOut,
+    Mono,
+    LiveRecord,
+    ArrowRight,
+    ArrowLeft,
+    PingPong,
+    Pendulum,
+    Wander,
+    Random,
+    AutoZoom,
+    StepNarrow,
+    StepWide,
+    Kick,
+    Snare,
+    HiHat,
+    Clap,
+    Tom,
+    Cymbal,
+    Percussion,
+    Note,
+    Curve,
+    Learn,
 }
 
 impl Icon {
@@ -304,6 +333,77 @@ impl Icon {
             Icon::PanelRight => {
                 r##"<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/>"##
             }
+            Icon::Dice => {
+                r##"<rect x="4" y="4" width="16" height="16" rx="3"/><circle fill="#000" stroke="none" cx="8.5" cy="8.5" r="1.3"/><circle fill="#000" stroke="none" cx="15.5" cy="8.5" r="1.3"/><circle fill="#000" stroke="none" cx="12" cy="12" r="1.3"/><circle fill="#000" stroke="none" cx="8.5" cy="15.5" r="1.3"/><circle fill="#000" stroke="none" cx="15.5" cy="15.5" r="1.3"/>"##
+            }
+            Icon::ClearBox => {
+                r##"<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9l6 6M15 9l-6 6"/>"##
+            }
+            Icon::RotateLeft => {
+                r##"<path fill="#000" stroke="none" d="M2.5 12l5-4v8z"/><rect x="11" y="6" width="9" height="12" rx="1.5"/>"##
+            }
+            Icon::RotateRight => {
+                r##"<rect x="4" y="6" width="9" height="12" rx="1.5"/><path fill="#000" stroke="none" d="M21.5 12l-5-4v8z"/>"##
+            }
+            Icon::ChevronUp => r##"<path d="M6 15l6-6 6 6"/>"##,
+            Icon::Speaker => {
+                r##"<path d="M11 5L6.5 9H3.5v6h3l4.5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"/>"##
+            }
+            Icon::MidiIn => {
+                r##"<path d="M2.5 8.5l3.5 3.5-3.5 3.5"/><circle cx="15" cy="12" r="6.5"/><circle fill="#000" stroke="none" cx="12" cy="11" r=".9"/><circle fill="#000" stroke="none" cx="18" cy="11" r=".9"/><circle fill="#000" stroke="none" cx="15" cy="9" r=".9"/><circle fill="#000" stroke="none" cx="12.8" cy="14" r=".9"/><circle fill="#000" stroke="none" cx="17.2" cy="14" r=".9"/>"##
+            }
+            Icon::MidiOut => {
+                r##"<circle cx="9" cy="12" r="6.5"/><circle fill="#000" stroke="none" cx="6" cy="11" r=".9"/><circle fill="#000" stroke="none" cx="12" cy="11" r=".9"/><circle fill="#000" stroke="none" cx="9" cy="9" r=".9"/><circle fill="#000" stroke="none" cx="6.8" cy="14" r=".9"/><circle fill="#000" stroke="none" cx="11.2" cy="14" r=".9"/><path d="M18 8.5l3.5 3.5-3.5 3.5"/>"##
+            }
+            Icon::Mono => {
+                r##"<path d="M9.5 3.5l5 5M14.5 3.5l-5 5"/><rect x="7" y="12.5" width="10" height="8" rx="1.5"/>"##
+            }
+            Icon::LiveRecord => {
+                r##"<path d="M2.5 8.5l3.5 3.5-3.5 3.5"/><circle cx="15" cy="12" r="6.5"/><path d="M13 15.5v-7h2.4a2 2 0 0 1 0 4H13M15 12.5l2 3"/>"##
+            }
+            Icon::ArrowRight => r##"<path d="M4 12h15M14 7l5 5-5 5"/>"##,
+            Icon::ArrowLeft => r##"<path d="M20 12H5M10 7l-5 5 5 5"/>"##,
+            Icon::PingPong => r##"<path d="M4 8.5h15M16 5.5l3 3-3 3M20 15.5H5M8 12.5l-3 3 3 3"/>"##,
+            Icon::Pendulum => {
+                r##"<path d="M4 15a8 8 0 0 1 16 0"/><path d="M17 12.5l3 2.5 2-3M7 12.5l-3 2.5-2-3"/>"##
+            }
+            Icon::Wander => {
+                r##"<path d="M3 15c2.5-5 4.5 1 7-3s4.5 3 7-1"/><path d="M15 9.5l2.5 1.5 1-3"/>"##
+            }
+            Icon::Random => {
+                r##"<path d="M4 7h3.5c4.5 0 4.5 10 9 10H20M17.5 14.5L20 17l-2.5 2.5"/><circle fill="#000" stroke="none" cx="17" cy="7" r="1.5"/><circle fill="#000" stroke="none" cx="6" cy="17" r="1.5"/>"##
+            }
+            Icon::AutoZoom => {
+                r##"<path d="M5 4h14M5 20h14M12 7v10M9 9.5l3-3 3 3M9 14.5l3 3 3-3"/>"##
+            }
+            Icon::StepNarrow => r##"<rect x="8.5" y="5" width="7" height="14" rx="1.5"/>"##,
+            Icon::StepWide => r##"<rect x="3.5" y="6" width="17" height="12" rx="1.5"/>"##,
+            Icon::Kick => {
+                r##"<circle cx="12" cy="10" r="6.5"/><circle cx="12" cy="10" r="2"/><path d="M8 15.5l-2 5M16 15.5l2 5M10 20.5h4"/>"##
+            }
+            Icon::Snare => {
+                r##"<ellipse cx="12" cy="8" rx="8" ry="2.5"/><path d="M4 8v8c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5V8M7 10v7M12 10.5v8M17 10v7"/>"##
+            }
+            Icon::HiHat => r##"<path d="M3 8.5h18M5 10.5h14M12 6v14M9 20h6M10.5 6h3"/>"##,
+            Icon::Clap => {
+                r##"<path d="M8 12V6.5a1.5 1.5 0 0 1 3 0V11M11 10V5a1.5 1.5 0 0 1 3 0v6M14 10.5V7a1.5 1.5 0 0 1 3 0v6.5a6 6 0 0 1-6 6h-.5A5.5 5.5 0 0 1 5 14l-.8-2.6a1.5 1.5 0 0 1 2.8-1L8 12"/>"##
+            }
+            Icon::Tom => {
+                r##"<ellipse cx="12" cy="9" rx="6.5" ry="2.2"/><path d="M5.5 9v6c0 1.2 2.9 2.2 6.5 2.2s6.5-1 6.5-2.2V9"/>"##
+            }
+            Icon::Cymbal => {
+                r##"<path d="M2.5 10.5c3-2 16-2 19 0M7 9.5c1.5-1.5 8.5-1.5 10 0M12 11v9M9 20h6"/>"##
+            }
+            Icon::Percussion => r##"<path d="M7 20l3-14h4l3 14z"/><path d="M8.5 13h7"/>"##,
+            Icon::Note => {
+                r##"<path d="M9 17.5V5.5l10-2v12"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>"##
+            }
+            Icon::Curve => {
+                r##"<path d="M3 17c4 0 5-10 9-10s5 10 9 10"/><circle fill="#000" stroke="none" cx="12" cy="7" r="1.5"/>"##
+            }
+            Icon::Learn => {
+                r##"<circle cx="12" cy="12" r="7.5"/><circle fill="#000" stroke="none" cx="12" cy="12" r="3"/>"##
+            }
             Icon::Shuffle => {
                 r##"<path d="M4 7h3.5c4.5 0 4.5 10 9 10H20M17.5 14.5L20 17l-2.5 2.5M4 17h3.5c1.6 0 2.6-1.3 3.4-3M13.1 10c.8-1.7 1.8-3 3.4-3H20M17.5 4.5L20 7l-2.5 2.5"/>"##
             }
@@ -313,7 +413,7 @@ impl Icon {
     fn svg(self) -> &'static [u8] {
         // Built once per icon and kept: the SVG renderer caches by the bytes' hash.
         use std::sync::OnceLock;
-        static CACHE: [OnceLock<Vec<u8>>; 96] = [const { OnceLock::new() }; 96];
+        static CACHE: [OnceLock<Vec<u8>>; 160] = [const { OnceLock::new() }; 160];
         CACHE[self as usize].get_or_init(|| {
             format!(
                 r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">{}</svg>"##,

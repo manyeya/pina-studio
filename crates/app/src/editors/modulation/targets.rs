@@ -108,8 +108,8 @@ impl Workspace {
         let regions = shown.into_iter().chain(0..track.regions.len());
         let pitch = regions
             .filter_map(|i| match &track.regions.get(i)?.content {
-                pina_engine::song::project::Content::Pattern { rows, .. } => {
-                    rows.get(r).map(|row| row.pitch)
+                pina_engine::song::project::Content::Pattern(p) => {
+                    p.rows.get(r).map(|row| row.pitch)
                 }
                 _ => None,
             })
@@ -149,7 +149,7 @@ impl Workspace {
             .pattern()
             .filter(|at| at.0 == t)
             .and_then(|at| match &track.regions[at.1].content {
-                pina_engine::song::project::Content::Pattern { rows, .. } => Some(rows.len()),
+                pina_engine::song::project::Content::Pattern(p) => Some(p.rows.len()),
                 _ => None,
             })
             .unwrap_or(0);

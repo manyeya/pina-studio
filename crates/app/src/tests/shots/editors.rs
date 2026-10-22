@@ -70,7 +70,10 @@ pub(super) fn set_up(
             ws.editor_h = 380.0;
             ws.show_bottom(Bottom::Steps, cx);
         }
-        "steps" | "steps-mod" => {
+        "steps" | "steps-velocity" | "steps-sub" | "steps-inspector" | "steps-browser"
+        | "steps-loop" => {
+            use crate::editors::steps::{EditMode, InspectorTab, Pane};
+            use pina_engine::song::project::{Lane, PatternRow, RowTarget};
             ws.session
                 .project
                 .tracks
@@ -81,66 +84,54 @@ pub(super) fn set_up(
                 });
             ws.session.project.assign_ids();
             ws.track = ws.session.project.tracks.len() - 1;
-            ws.editor_h = 380.0;
+            ws.editor_h = 520.0;
             ws.new_pattern(cx);
-            // A groove to look at: kick, snare, hats with accents, a three-step perc.
+            // A groove to look at: kick, snare, hats with accents, an open hat, a clap on its
+            // own three-step loop; and a cutoff row.
             let at = ws.pattern().unwrap();
-            if let Content::Pattern { rows, .. } =
-                &mut ws.session.project.tracks[at.0].regions[at.1].content
+            if let Content::Pattern(p) = &mut ws.session.project.tracks[at.0].regions[at.1].content
             {
-                rows[0].cells = vec![120, 0, 0, 0, 0, 0, 90, 0, 110, 0, 0, 0, 0, 0, 70, 0];
-                rows[1].cells = vec![0, 0, 0, 0, 127, 0, 0, 0, 0, 0, 0, 0, 127, 0, 0, 40];
-                rows[2].cells = (0..16).map(|k| if k % 2 == 0 { 100 } else { 55 }).collect();
-                rows[3].cells = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0];
-                rows[4].cells = vec![90, 0, 0];
-                rows[4].mute = false;
+                p.set_length(32);
+                let r = &mut p.rows;
+                r[0].cells = [120, 0, 0, 0, 0, 0, 90, 0, 110, 0, 0, 0, 0, 0, 70, 0].repeat(2);
+                r[1].cells = [0, 0, 0, 0, 127, 0, 0, 0, 0, 0, 0, 0, 127, 0, 0, 40].repeat(2);
+                r[2].cells = (0..32).map(|k| if k % 2 == 0 { 100 } else { 55 }).collect();
+                r[3].cells = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0].repeat(2);
+                r[4].cells = [90, 0, 0].repeat(11)[..32].to_vec();
+                r[4].loop_end = Some(3);
+                r[0].repeat = [1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 3, 1].repeat(2);
+                r[0].tie = vec![false; 32];
+                r[1].chance = [
+                    100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 50,
+                ]
+                .repeat(2);
+                r[2].gate = (0..32).map(|k| if k % 4 == 0 { 100 } else { 45 }).collect();
+                r[2].open = page == "steps-sub";
+                r[2].subrows = vec![Lane::Velocity, Lane::Repeat, Lane::Tie, Lane::Gate];
+                r[2].repeat = (0..32).map(|k| if k % 8 == 6 { 3 } else { 1 }).collect();
+                let mut cutoff = PatternRow::automation(RowTarget::Cc(74), 32, 0.5);
+                cutoff.cells = vec![100; 32];
+                cutoff.value = (0..32)
+                    .map(|k| 0.2 + 0.6 * ((k % 8) as f32 / 7.0))
+                    .collect();
+                p.rows.push(cutoff);
+                p.tidy();
             }
-            ws.steps_row = 2;
-            if page == "steps-mod" {
-                use pina_engine::dsp::modulate::{
-                    LfoShape, ModKind, ModRate, ModRoute, ModTarget, Modulator, SoundParam,
-                };
-                if let Content::Pattern { rows, .. } =
-                    &mut ws.session.project.tracks[at.0].regions[at.1].content
-                {
-                    rows[0].repeat = vec![1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 3, 1];
-                    rows[1].chance = vec![
-                        100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
-                        50,
-                    ];
-                    rows[2].transpose = vec![0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 7, 0];
+            ws.steps.row = 2;
+            ws.steps.mode = match page {
+                "steps-velocity" | "steps-sub" | "steps-inspector" => {
+                    EditMode::Lane(Lane::Velocity)
                 }
-                let t = &mut ws.session.project.tracks[at.0];
-                t.modulators = vec![
-                    Modulator {
-                        kind: ModKind::Lfo {
-                            shape: LfoShape::Sine,
-                            rate: ModRate::Beats(2.0),
-                            phase: 0.0,
-                            unipolar: false,
-                        },
-                        routes: vec![ModRoute {
-                            target: ModTarget::Sound(2, SoundParam::Velocity),
-                            depth: -40.0,
-                        }],
-                    },
-                    Modulator {
-                        kind: ModKind::Steps {
-                            values: vec![
-                                1.0, 0.2, 0.6, 0.2, 0.9, 0.2, 0.6, 0.35, 1.0, 0.2, 0.6, 0.2, 0.9,
-                                0.4, 0.7, 0.3,
-                            ],
-                            rate: ModRate::Beats(0.25),
-                            glide: 0.0,
-                        },
-                        routes: vec![ModRoute {
-                            target: ModTarget::Volume,
-                            depth: -12.0,
-                        }],
-                    },
-                ];
-                ws.editor_h = 470.0;
-            }
+                "steps-loop" => EditMode::Loop,
+                _ => EditMode::OnOff,
+            };
+            ws.steps.pane = match page {
+                "steps-inspector" => Some(Pane::Inspector),
+                "steps-browser" => Some(Pane::Browser),
+                _ => None,
+            };
+            ws.steps.tab = InspectorTab::Row;
+            ws.steps.folder = vec!["Drums".into()];
         }
         // The tracks with the sample browser beside them and the piano roll under them,
         // no inspector: the columns' edges, to line up.

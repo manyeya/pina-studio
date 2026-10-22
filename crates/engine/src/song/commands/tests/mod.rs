@@ -26,6 +26,63 @@ fn a_drum_pattern() {
     assert_eq!(starts, [960, 2160, 3360]);
 }
 
+#[test]
+fn a_patterns_settings_and_an_automation_row() {
+    let mut p = Project::new(48_000);
+    run(
+        &mut p,
+        r#"{"op": "add_track", "name": "Bass", "instrument": "synth"}"#,
+    )
+    .unwrap();
+    run(
+        &mut p,
+        r#"{"op": "add_pattern_region", "track": 0, "start": 0, "length": 3840, "steps": 8,
+            "rows": [{"pitch": 36, "cells": [100, 0, 0, 0]}]}"#,
+    )
+    .unwrap();
+    let pattern = |p: &Project| match &p.region((0, 0)).content {
+        Content::Pattern(pt) => pt.clone(),
+        _ => unreachable!(),
+    };
+    assert_eq!(pattern(&p).steps(), 8);
+    // Longer rows than it had: it's as long as they are.
+    let set = r#"{"op": "set_pattern", "track": 0, "region": 0, "mode": "ping_pong",
+        "scale": "dorian", "key": 2, "rows": [
+            {"pitch": 38, "cells": [100, 0, 100, 0, 100, 0, 100, 0, 100, 0, 100, 0, 100, 0, 100, 0],
+             "tie": [true]},
+            {"target": {"cc": 74}, "pitch": 0, "cells": [100, 0, 0, 0], "value": [0.8], "slide": true}
+        ]}"#;
+    run(&mut p, set).unwrap();
+    let pt = pattern(&p);
+    assert_eq!(pt.steps(), 16);
+    assert_eq!(
+        (pt.mode, pt.scale, pt.key),
+        (pina_mode(), Some(crate::song::project::Scale::Dorian), 2)
+    );
+    assert_eq!(
+        pt.rows[1].target,
+        Some(crate::song::project::RowTarget::Cc(74))
+    );
+    assert!(
+        run(
+            &mut p,
+            r#"{"op": "set_pattern", "track": 0, "region": 0, "scale": "jazz"}"#
+        )
+        .is_err()
+    );
+    assert!(
+        run(
+            &mut p,
+            r#"{"op": "set_pattern", "track": 0, "region": 0, "steps": 65}"#
+        )
+        .is_err()
+    );
+}
+
+fn pina_mode() -> crate::song::project::PlayMode {
+    crate::song::project::PlayMode::PingPong
+}
+
 fn run(p: &mut Project, json: &str) -> Result<Value, String> {
     let cmd: Command = serde_json::from_str(json).map_err(|e| e.to_string())?;
     apply(p, Path::new("/nonexistent"), cmd)

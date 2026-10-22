@@ -7,8 +7,7 @@ use gpui::{
 use pina_engine::{
     song::commands::{self, ChannelRef, Command, PresetChoice},
     song::project::{
-        At, AuxSend, Comp, Content, Eq, Input, Instrument, PatternRow, PluginRef, Preset,
-        Saturator, Which,
+        At, AuxSend, Comp, Content, Eq, Input, Instrument, PluginRef, Preset, Saturator, Which,
     },
 };
 
@@ -136,11 +135,6 @@ pub enum MenuAction {
         track: usize,
         bus: Option<u32>,
     },
-    /// Adds a row for a sound to a pattern.
-    AddRow {
-        at: At,
-        pitch: u8,
-    },
     /// The song's key, or None to work it out from the notes; the music moves into a new key
     /// unless that's been turned off.
     Key(Option<String>),
@@ -153,17 +147,8 @@ pub enum MenuAction {
     Roll(crate::editors::pianoroll::RollOp),
     /// What a click in the piano roll writes: a note or a chord.
     Stamp(crate::editors::pianoroll::Stamp),
-    /// A step pattern's swing.
-    PatternSwing {
-        at: pina_engine::song::project::At,
-        swing: f32,
-    },
-    /// Something done to a row of a step pattern.
-    Row {
-        at: pina_engine::song::project::At,
-        row: usize,
-        op: crate::editors::steps::RowOp,
-    },
+    /// Something the step sequencer does.
+    Steps(crate::editors::steps::StepsOp),
     /// The Sampler's picked zone cut into slices across the keys.
     Slice(crate::editors::sampler::Slicing),
     /// An automation lane's or point's item, on a track by id.
@@ -419,18 +404,6 @@ impl Workspace {
             MenuAction::Output { track, bus } => self.edit(cx, |ws| {
                 ws.session.project.tracks[track].output = bus;
             }),
-            MenuAction::AddRow { at, pitch } => self.edit(cx, |ws| {
-                let r = &mut ws.session.project.tracks[at.0].regions[at.1];
-                if let Content::Pattern { rows, .. } = &mut r.content {
-                    let steps = rows.iter().map(|r| r.cells.len()).max().unwrap_or(16);
-                    rows.push(PatternRow {
-                        pitch,
-                        cells: vec![0; steps],
-                        mute: false,
-                        ..Default::default()
-                    });
-                }
-            }),
             MenuAction::Key(key) => {
                 let key = key.as_deref().and_then(pina_engine::music::Key::parse);
                 let moves = self.key_moves_notes;
@@ -445,19 +418,7 @@ impl Workspace {
             MenuAction::Roll(op) => self.roll_op(op, cx),
             MenuAction::Stamp(stamp) => self.roll.stamp = stamp,
             MenuAction::Slice(how) => self.slice_zone(how, cx),
-            MenuAction::Row { at, row, op } => self.row_op(at, row, op, cx),
-            MenuAction::PatternSwing { at, swing } => self.edit(cx, |ws| {
-                if let Some(r) = ws
-                    .session
-                    .project
-                    .tracks
-                    .get_mut(at.0)
-                    .and_then(|t| t.regions.get_mut(at.1))
-                    && let Content::Pattern { swing: s, .. } = &mut r.content
-                {
-                    *s = swing;
-                }
-            }),
+            MenuAction::Steps(op) => self.steps_op(op, cx),
             MenuAction::Auto(track, op) => self.auto_op(track, op, cx),
             MenuAction::Palette(op) => self.palette_op(op, cx),
             MenuAction::Eq(op) => self.eq_op(op, cx),

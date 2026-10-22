@@ -78,6 +78,7 @@ actions!(
 /// keyboard, so typing "a" types it rather than showing automation.
 pub fn bind_keys(cx: &mut App) {
     crate::ui::text::bind_keys(cx);
+    crate::editors::steps::keys::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("space", PlayStop, Some("Workspace && !TextInput")),
         KeyBinding::new("enter", GoToStart, Some("Workspace && !TextInput")),
@@ -85,7 +86,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-z", Redo, Some("Workspace")),
         KeyBinding::new("backspace", Delete, Some("Workspace && !TextInput")),
         KeyBinding::new("delete", Delete, Some("Workspace && !TextInput")),
-        KeyBinding::new("cmd-backspace", DeleteTrack, Some("Workspace")),
+        KeyBinding::new("cmd-backspace", DeleteTrack, Some("Workspace && !Steps")),
         KeyBinding::new("cmd-t", Split, Some("Workspace")),
         // Letters are notes while musical typing is on, so these only work in the arrangement.
         KeyBinding::new("x", ToggleMixer, Some("Arrange && !TextInput")),
@@ -120,10 +121,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-left", ZoomOut, Some("Workspace")),
         // The piano roll's notes, while it's open.
         // Regions, while the piano roll doesn't have them.
-        KeyBinding::new("cmd-c", CopyRegion, Some("Arrange && !Roll")),
-        KeyBinding::new("cmd-x", CutRegion, Some("Arrange && !Roll")),
-        KeyBinding::new("cmd-v", PasteRegion, Some("Arrange && !Roll")),
-        KeyBinding::new("cmd-r", RepeatRegion, Some("Arrange && !Roll")),
+        KeyBinding::new("cmd-c", CopyRegion, Some("Arrange && !Roll && !Steps")),
+        KeyBinding::new("cmd-x", CutRegion, Some("Arrange && !Roll && !Steps")),
+        KeyBinding::new("cmd-v", PasteRegion, Some("Arrange && !Roll && !Steps")),
+        KeyBinding::new("cmd-r", RepeatRegion, Some("Arrange && !Roll && !Steps")),
         KeyBinding::new("ctrl-m", MuteRegion, Some("Arrange && !Roll")),
         KeyBinding::new("cmd-a", SelectAllNotes, Some("Roll")),
         KeyBinding::new("cmd-a", EqSelectAll, Some("Eq")),

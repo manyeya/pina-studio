@@ -99,18 +99,42 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   tuning moves make an 808 slide. A region starting part-way, or looping, starts with each
   controller where it stood.
 - `add_pattern_region` `{"track": 0, "start": 0, "length": 3840, "step": 240, "swing": 58, "rows": [{"pitch": 36, "cells": [110, 0, 0, 0, 100, 0, 0, 0, 110, 0, 0, 0, 100, 0, 0, 0]}]}`:
-  a step-sequencer pattern: each row a note, each cell a step's velocity (0 rests), looping over
-  the region. `step` is ticks per step (240, a sixteenth, by default); `swing` (50 straight, up
-  to 75) makes every second step late, as an MPC does. A row shorter than the others loops on
-  its own length (a polymeter); `"mute": true` silences a row and keeps its steps. On a `"drums"` track:
-  36 kick, 38 snare, 37 side stick, 39 clap, 42 closed hat, 46 open hat, 41/45/48 toms, 49 crash.
-  A row's steps can each have their own settings, as lanes as long as `cells` (left out, as
-  usual): `"chance"` (0 to 100 that it plays, rolled afresh each time round), `"transpose"`
-  (semitones), `"repeat"` (a ratchet: 1 to 4 hits in the step), `"gate"` (how long it holds, % of
-  a step; 75 by default) and `"nudge"` (% of a step off the grid, -50 to 50): `{"pitch": 42,
-  "cells": [...], "chance": [100, 60, 100, 40], "repeat": [1, 1, 1, 3]}`.
-- `set_pattern` `{"track": 0, "region": 0, "rows": […], "swing": 62}`: replaces a pattern's
-  rows, or its swing.
+  a step-sequencer pattern: each row a note, each cell a step's velocity (0 off), looping over
+  the region. `step` is ticks per step (240, a sixteenth, by default; 480 an eighth, 160 a
+  sixteenth triplet, 360 a dotted sixteenth); `swing` (50 straight, up to 75) makes every
+  second sixteenth late (`"swing_eighths": true`: every second eighth). On a
+  `"drums"` track: 36 kick, 38 snare, 37 side stick, 39 clap, 42 closed hat, 46 open hat,
+  41/45/48 toms, 49 crash.
+  The pattern's own settings, all optional: `"steps"` (how many it has, 1 to 64; as long as its
+  longest row by default), `"mode"` (how its rows run through their steps: `"forward"`,
+  `"backward"`, `"ping_pong"`, `"pendulum"`, `"wander"`, `"shuffle"`, `"random"`), `"legato"`
+  (a step held its whole length runs into the next), `"key"` (0 C to 11 B) and `"scale"`
+  (`"major"`, `"minor"`, `"harmonic_minor"`, `"melodic_minor"`, `"dorian"`, `"phrygian"`,
+  `"lydian"`, `"mixolydian"`, `"locrian"`, `"major_pentatonic"`, `"minor_pentatonic"`,
+  `"blues"`, or `"chromatic"`).
+  A row's own settings: `"mute"`, `"solo"`, `"name"`; its loop, `"loop_start"` and `"loop_end"`
+  (steps from 0, the end not played: a row of 16 looping on its first 3 is a polymeter; a row
+  shorter than the others loops on its own length too); its own `"rate"` (ticks) and `"mode"`.
+  `"melodic": true` makes a row whose steps each play their own note. A row with a `"target"`
+  is an automation row: its steps set a parameter instead of playing notes, `"value"` 0 to 1
+  each (`{"target": "volume"}`, `"pan"`, `{"target": {"send": {"bus": 1}}}`,
+  `{"target": {"plugin": {"plugin": "instrument", "param": 4}}}`, `{"target": {"cc": 74}}`,
+  `"pitch_bend"`, `"pressure"`), held to the next step that's on, or sliding to it with
+  `"slide": true`.
+  Each step's settings, as lanes as long as `cells` (left out, as usual): `"chance"` (0 to 100
+  that it plays, rolled afresh each time round), `"transpose"` (its note, -12 to 12 semitones)
+  and `"octave"` (octaves up or down), `"repeat"` (hits in the step, 1 to 16), `"gate"` (how
+  long it holds, % of a step, 1 to 100; 100 by default), `"tie"` (true: it holds on through
+  the next step, which doesn't play again), `"nudge"` (its offset, % of a step off the grid,
+  -50 to 50), `"rates"` (its own length in ticks, 0 the row's), `"skip"` (true: the row jumps
+  over it), `"condition"` (`"always"`, `"recurrence"`, `"first_loop"`, `"last_loop"`) with
+  `"every"` (`[2, 3]`: the second pass of every three), and for repeats `"ramp"` and `"curve"`
+  (velocity across them, %) and `"spread"` (+% the first longest, -% the last): `{"pitch": 42,
+  "cells": [...], "chance": [100, 60, 100, 40], "repeat": [1, 1, 1, 3], "tie": [false, true,
+  false, false]}`.
+- `set_pattern` `{"track": 0, "region": 0, "rows": […], "swing": 62, "steps": 32, "mode":
+  "ping_pong"}`: replaces a pattern's rows, or sets its swing, `step`, or any of the settings
+  above.
 - `add_audio_region` `{"track": 2, "file": "/path/take.wav", "start": 0, "offset": 0, "length": 7680}`:
   a WAV, AIFF, FLAC or MP3 (at any sample rate: it's converted to the project's), copied into
   `Audio Files`; `offset`

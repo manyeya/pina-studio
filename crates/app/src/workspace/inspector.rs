@@ -363,14 +363,14 @@ impl Workspace {
                     .child(row("Range", mono(range)))
                     .child(row("Notes", mono(format!("{}", notes.len()))));
             }
-            Content::Pattern { step, rows, .. } => {
-                let steps = rows.iter().map(|r| r.cells.len()).max().unwrap_or(0);
+            Content::Pattern(p) => {
+                let steps = p.steps();
                 d = d
                     .child(row(
                         "Steps",
-                        mono(format!("{steps} × {}", grid_name(*step))),
+                        mono(format!("{steps} × {}", grid_name(p.step))),
                     ))
-                    .child(row("Sounds", mono(format!("{}", rows.len()))));
+                    .child(row("Rows", mono(format!("{}", p.rows.len()))));
             }
             Content::Audio {
                 file,
@@ -810,8 +810,8 @@ impl Workspace {
                     }
                 }
                 // A pattern is on its grid already: it takes the transpose and velocity.
-                Content::Pattern { rows, .. } => {
-                    for row in rows.iter_mut() {
+                Content::Pattern(p) => {
+                    for row in p.rows.iter_mut().filter(|r| !r.is_automation()) {
                         row.pitch =
                             (row.pitch as i16 + played.transpose as i16).clamp(0, 127) as u8;
                         for c in row.cells.iter_mut().filter(|c| **c > 0) {

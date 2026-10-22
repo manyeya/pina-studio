@@ -223,7 +223,7 @@ pub const SILENT_DB: f32 = -144.0;
 
 /// A step's lanes, as usual when it has none.
 pub const CHANCE: u8 = 100;
-pub const GATE: u8 = 75;
+pub const GATE: u8 = 100;
 
 /// Where a region is: its track and its index there.
 pub type At = (usize, usize);
@@ -310,6 +310,7 @@ impl Project {
         }
         p.assign_ids();
         p.resolve_sources();
+        p.upgrade_patterns();
         Ok(p)
     }
 
@@ -456,8 +457,8 @@ impl Project {
                             *p = from.move_pitch(*p, to);
                         }
                     }
-                    Content::Pattern { rows, .. } => {
-                        for row in rows {
+                    Content::Pattern(p) => {
+                        for row in p.rows.iter_mut().filter(|r| !r.is_automation()) {
                             row.pitch = from.move_pitch(row.pitch, to);
                         }
                     }

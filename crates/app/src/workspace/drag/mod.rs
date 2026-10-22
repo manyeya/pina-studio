@@ -164,13 +164,8 @@ pub enum Drag {
         y: f32,
         height: f32,
     },
-    /// Steps painted in the step sequencer: each the mouse passes over takes `paint` (0 a rest).
-    Steps {
-        at: At,
-        paint: u8,
-    },
-    /// The step sequencer's velocity lane, drawn.
-    StepVelocity,
+    /// Something in the step sequencer: steps painted or set, a loop, a row moved.
+    StepSeq(crate::editors::steps::StepDrag),
     /// A mark on the Sampler's waveform: a zone's start, end or loop point; `left` and `width`
     /// where the waveform is.
     Mark {
@@ -388,6 +383,7 @@ impl Workspace {
                 | Drag::EqPress { .. }
                 | Drag::EqScale { .. }
                 | Drag::EqSketch
+                | Drag::StepSeq(crate::editors::steps::StepDrag::Zoom)
         );
         if edits {
             self.session.checkpoint();

@@ -288,7 +288,7 @@ pub fn music(p: &Project) -> Vec<Issue> {
             .sum::<f32>()
             / list.len() as f32)
             .sqrt();
-        let accents_written = p.tracks[t].regions.iter().any(|r| matches!(&r.content, Content::Pattern { rows, .. } if rows.iter().any(|row| row.cells.iter().any(|&c| c > 0 && c < 60))));
+        let accents_written = p.tracks[t].regions.iter().any(|r| matches!(&r.content, Content::Pattern(pat) if pat.rows.iter().any(|row| row.cells.iter().any(|&c| c > 0 && c < 60))));
         if spread < 3.0 && !accents_written {
             out.push(issue("improve", "rhythm", format!("every note at velocity {mean:.0}: it sounds programmed"),
                 Some(track_name(p, t)),
@@ -301,7 +301,7 @@ pub fn music(p: &Project) -> Vec<Issue> {
                 p.tracks[t]
                     .regions
                     .iter()
-                    .any(|r| matches!(&r.content, Content::Pattern { swing, .. } if *swing < 52.0))
+                    .any(|r| matches!(&r.content, Content::Pattern(pat) if pat.swing < 52.0))
             })
             .collect();
         if let Some(&t) = straight.first() {

@@ -141,8 +141,24 @@ pub enum Command {
         /// 50 (straight) to 75.
         #[serde(default)]
         swing: Option<f32>,
+        /// How many steps it has (1 to 64); how its rows run through them ("forward",
+        /// "backward", "ping_pong", "pendulum", "wander", "shuffle", "random"); legato; swing on
+        /// eighths rather than sixteenths; its key (0 C to 11 B) and scale ("major", "minor",
+        /// "dorian"…, or "chromatic").
+        #[serde(default)]
+        steps: Option<usize>,
+        #[serde(default)]
+        mode: Option<crate::song::project::PlayMode>,
+        #[serde(default)]
+        legato: Option<bool>,
+        #[serde(default)]
+        swing_eighths: Option<bool>,
+        #[serde(default)]
+        key: Option<u8>,
+        #[serde(default)]
+        scale: Option<String>,
     },
-    /// Replaces a pattern region's rows, or sets its swing.
+    /// Replaces a pattern region's rows, or sets its swing or its other settings.
     SetPattern {
         track: usize,
         region: usize,
@@ -150,6 +166,25 @@ pub enum Command {
         rows: Option<Vec<PatternRow>>,
         #[serde(default)]
         swing: Option<f32>,
+        /// Ticks per step.
+        #[serde(default)]
+        step: Option<u64>,
+        /// How many steps it has (1 to 64); how its rows run through them ("forward",
+        /// "backward", "ping_pong", "pendulum", "wander", "shuffle", "random"); legato; swing on
+        /// eighths rather than sixteenths; its key (0 C to 11 B) and scale ("major", "minor",
+        /// "dorian"…, or "chromatic").
+        #[serde(default)]
+        steps: Option<usize>,
+        #[serde(default)]
+        mode: Option<crate::song::project::PlayMode>,
+        #[serde(default)]
+        legato: Option<bool>,
+        #[serde(default)]
+        swing_eighths: Option<bool>,
+        #[serde(default)]
+        key: Option<u8>,
+        #[serde(default)]
+        scale: Option<String>,
     },
     /// A WAV file, copied into the project's `Audio Files` if it's elsewhere.
     AddAudioRegion {

@@ -5,7 +5,7 @@
 //! do the same from a terminal.
 
 mod cards;
-mod files;
+pub(crate) mod files;
 mod page;
 mod songs;
 

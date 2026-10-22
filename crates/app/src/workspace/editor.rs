@@ -63,7 +63,7 @@ impl Workspace {
                 let r = &t.regions[at.1];
                 let detail = match &r.content {
                     Content::Midi { notes, .. } => format!("{} notes", notes.len()),
-                    Content::Pattern { rows, .. } => format!("{} sounds", rows.len()),
+                    Content::Pattern(p) => format!("{} rows", p.rows.len()),
                     Content::Takes { takes, .. } => format!("{} takes", takes.len()),
                     Content::Audio { .. } => "Audio".into(),
                 };
@@ -81,7 +81,6 @@ impl Workspace {
         };
         let controls = match pane {
             Bottom::PianoRoll => Some(self.roll_controls(cx)),
-            Bottom::Steps => self.steps_controls(cx),
             Bottom::Sampler => self.sampler_controls(cx),
             _ => None,
         };

@@ -180,6 +180,10 @@ pub struct Track {
     /// default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<Input>,
+    /// The pattern a new pattern region on it starts as (its rows and settings, no steps on),
+    /// stored from the step sequencer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern_template: Option<super::Pattern>,
 }
 
 /// Input channels to record from.

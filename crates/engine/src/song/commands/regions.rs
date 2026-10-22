@@ -53,6 +53,12 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             step,
             rows,
             swing,
+            steps,
+            mode,
+            legato,
+            swing_eighths,
+            key,
+            scale,
         } => {
             let tr = track(p, t)?;
             if tr.instrument.is_none() {
@@ -60,11 +66,16 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
                     "track {t} is an audio track: patterns go on instrument tracks"
                 ));
             }
-            let content = Content::Pattern {
-                step: step.unwrap_or(PPQ / 4).max(1),
+            let mut pattern = crate::song::project::Pattern::new(
+                step.unwrap_or(PPQ / 4).max(1),
                 rows,
-                swing: finite("swing", swing.unwrap_or(50.0))?.clamp(50.0, 75.0),
-            };
+                finite("swing", swing.unwrap_or(50.0))?.clamp(50.0, 75.0),
+            );
+            settle(
+                &mut pattern,
+                (steps, mode, legato, swing_eighths, key, scale),
+            )?;
+            let content = Content::Pattern(pattern);
             tr.regions.push(Region {
                 start,
                 length: length.max(1),
@@ -78,16 +89,30 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             region: r,
             rows: new,
             swing: new_swing,
+            step,
+            steps,
+            mode,
+            legato,
+            swing_eighths,
+            key,
+            scale,
         } => {
             region_at(p, t, r)?;
             match &mut p.tracks[t].regions[r].content {
-                Content::Pattern { rows, swing, .. } => {
+                Content::Pattern(p) => {
                     if let Some(new) = new {
-                        *rows = new;
+                        // As long as the rows given (unless `steps` says otherwise).
+                        p.rows = new;
+                        p.length = 0;
                     }
                     if let Some(v) = new_swing {
-                        *swing = finite("swing", v)?.clamp(50.0, 75.0);
+                        p.swing = finite("swing", v)?.clamp(50.0, 75.0);
                     }
+                    if let Some(step) = step {
+                        p.step = step.max(1);
+                    }
+                    p.tidy();
+                    settle(p, (steps, mode, legato, swing_eighths, key, scale))?;
                 }
                 _ => return Err("that isn't a pattern region".into()),
             }
@@ -327,4 +352,48 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
         _ => unreachable!("not one of the regions commands"),
     }
     Ok(json!({}))
+}
+
+/// A pattern's settings from a command, each as given (or left).
+type Settings = (
+    Option<usize>,
+    Option<crate::song::project::PlayMode>,
+    Option<bool>,
+    Option<bool>,
+    Option<u8>,
+    Option<String>,
+);
+
+fn settle(p: &mut crate::song::project::Pattern, s: Settings) -> Result<(), String> {
+    let (steps, mode, legato, eighths, key, scale) = s;
+    if let Some(n) = steps {
+        if !(1..=crate::song::project::MAX_STEPS).contains(&n) {
+            return Err(format!("steps {n}: a pattern has 1 to 64"));
+        }
+        p.set_length(n);
+    }
+    if let Some(m) = mode {
+        p.mode = m;
+    }
+    if let Some(l) = legato {
+        p.legato = l;
+    }
+    if let Some(e) = eighths {
+        p.swing_eighths = e;
+    }
+    if let Some(k) = key {
+        p.key = k % 12;
+    }
+    if let Some(s) = scale {
+        p.scale = match s.as_str() {
+            "chromatic" | "" => None,
+            name => Some(
+                serde_json::from_value(serde_json::Value::String(name.into())).map_err(|_| {
+                    format!("{name:?} isn't a scale: major, minor, dorian, blues… or chromatic")
+                })?,
+            ),
+        };
+    }
+    p.tidy();
+    Ok(())
 }

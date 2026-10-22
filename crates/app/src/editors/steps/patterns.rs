@@ -7,7 +7,7 @@ impl Workspace {
     /// playhead, else its first.
     pub fn pattern(&self) -> Option<At> {
         let p = &self.session.project;
-        let is = |at: At| matches!(p.region(at).content, Content::Pattern { .. });
+        let is = |at: At| matches!(p.region(at).content, Content::Pattern(_));
         self.region.filter(|&at| is(at)).or_else(|| {
             let track = p.tracks.get(self.track)?;
             let tick = self.playhead();
@@ -59,53 +59,26 @@ impl Workspace {
         }
         let bar = self.session.project.bar();
         let start = at.map_or_else(|| self.free_bar(self.track, bar), |t| self.snap(t as f64));
-        // A drum kit starts with kick, snare and hats; anything else with the key's chord.
-        let instrument = tracks[self.track].instrument.as_ref();
-        let starting: Vec<u8> = match (instrument, kit_sounds(instrument)) {
-            (Some(Instrument::Drums), _) => STARTING_ROWS.to_vec(),
-            // A sampler kit: its first few sounds.
-            (_, Some(sounds)) => sounds.iter().take(6).map(|s| s.0).collect(),
-            _ => {
-                let key = self.session.project.song_key().unwrap_or(Key {
-                    root: 0,
-                    minor: false,
-                });
-                let root = 60 + key.root;
-                let third = if key.minor { 3 } else { 4 };
-                vec![root + 12, root + 7, root + third, root]
-            }
-        };
-        let steps = (bar / (PPQ / 4)).max(1) as usize;
-        let rows = starting
-            .iter()
-            .map(|&pitch| PatternRow {
-                pitch,
-                cells: vec![0; steps],
-                mute: false,
-                ..Default::default()
-            })
-            .collect();
         let t = self.track;
+        let pattern = self.starting_pattern(t);
+        let length = (pattern.step * pattern.steps() as u64).max(1);
         self.edit(cx, |ws| {
             let regions = &mut ws.session.project.tracks[t].regions;
             regions.push(Region {
                 start,
-                length: bar,
-                content: Content::Pattern {
-                    step: PPQ / 4,
-                    rows,
-                    swing: 50.0,
-                },
+                length,
+                content: Content::Pattern(pattern),
                 ..Default::default()
             });
             ws.region = Some((t, regions.len() - 1));
             ws.bottom = Some(Bottom::Steps);
-            ws.steps_row = 0;
+            ws.steps.row = 0;
         });
     }
 
     /// A MIDI region made a pattern region: a row a pitch, each note on its nearest sixteenth,
-    /// its velocity kept; up to four bars long, looped over the region.
+    /// its velocity kept, how far off the step as its offset, how long as ties and a gate; up to
+    /// four bars (64 steps) long, looped over the region.
     pub fn midi_to_pattern(&mut self, at: At, cx: &mut Context<Self>) {
         let r = self.session.project.region(at).clone();
         let Content::Midi { notes, .. } = &r.content else {
@@ -124,22 +97,21 @@ impl Workspace {
             2 => 2,
             _ => 4,
         };
-        let steps = ((bar * bars) / step) as usize;
+        let steps = ((bar * bars) / step).min(64) as usize;
         let rows = to_pattern(notes, step, steps);
         if rows.is_empty() {
             self.status = Some("That region has no notes to make steps of.".into());
             cx.notify();
             return;
         }
+        let mut pattern = Pattern::new(step, rows, 50.0);
+        pattern.length = steps;
+        pattern.tidy();
         self.edit(cx, |ws| {
-            ws.session.project.tracks[at.0].regions[at.1].content = Content::Pattern {
-                step,
-                rows,
-                swing: 50.0,
-            };
+            ws.session.project.tracks[at.0].regions[at.1].content = Content::Pattern(pattern);
             ws.region = Some(at);
             ws.bottom = Some(Bottom::Steps);
-            ws.steps_row = 0;
+            ws.steps.row = 0;
         });
         self.status = Some(format!("A pattern now: {steps} steps"));
     }
@@ -147,10 +119,10 @@ impl Workspace {
     /// A pattern region made a MIDI region, to edit in the piano roll.
     pub fn pattern_to_midi(&mut self, at: At, cx: &mut Context<Self>) {
         let r = self.session.project.region(at).clone();
-        let Content::Pattern { step, rows, swing } = &r.content else {
+        let Content::Pattern(p) = &r.content else {
             return;
         };
-        let notes = pattern_notes(*step, rows, r.length, *swing);
+        let notes = pina_engine::song::project::pattern_notes(p, r.length);
         self.edit(cx, |ws| {
             ws.session.project.tracks[at.0].regions[at.1].content = Content::Midi {
                 notes,
@@ -160,32 +132,5 @@ impl Workspace {
             ws.picked.clear();
         });
         self.show_bottom(Bottom::PianoRoll, cx);
-    }
-
-    /// The pattern's length in steps: every row taken to it, a row's steps repeated when it
-    /// grows (so a bar's groove fills two), cut when it shrinks; the region at least a pass long.
-    pub(crate) fn set_pattern_steps(&mut self, at: At, steps: usize, cx: &mut Context<Self>) {
-        self.edit(cx, |ws| {
-            let r = &mut ws.session.project.tracks[at.0].regions[at.1];
-            if let Content::Pattern { rows, step, .. } = &mut r.content {
-                for row in rows.iter_mut() {
-                    let had = row.cells.len().max(1);
-                    row.cells = (0..steps)
-                        .map(|k| row.cells.get(k % had).copied().unwrap_or(0))
-                        .collect();
-                }
-                r.length = r.length.max(*step * steps as u64);
-            }
-        });
-    }
-
-    pub(crate) fn set_pattern_rate(&mut self, at: At, rate: u64, cx: &mut Context<Self>) {
-        self.edit(cx, |ws| {
-            if let Content::Pattern { step, .. } =
-                &mut ws.session.project.tracks[at.0].regions[at.1].content
-            {
-                *step = rate;
-            }
-        });
     }
 }

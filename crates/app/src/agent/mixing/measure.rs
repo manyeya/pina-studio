@@ -33,7 +33,12 @@ pub(crate) fn lowest_hz(p: &Project, t: usize) -> Option<f32> {
         .iter()
         .filter_map(|r| match &r.content {
             Content::Midi { notes, .. } => notes.iter().map(|n| n.pitch).min(),
-            Content::Pattern { rows, .. } => rows.iter().map(|r| r.pitch).min(),
+            Content::Pattern(p) => p
+                .rows
+                .iter()
+                .filter(|r| !r.is_automation())
+                .map(|r| r.pitch)
+                .min(),
             _ => None,
         })
         .min()?;

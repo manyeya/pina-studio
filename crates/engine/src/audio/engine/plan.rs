@@ -379,6 +379,9 @@ pub fn compile(
         let (mut clips, mut events, mut controls) = (Vec::new(), Vec::new(), Vec::new());
         // Its modulators as patterns' sounds hear them: shared ones as the stack's.
         let ahead = project.mods_of(i);
+        // What patterns' automation rows set on the track's own parameters, pass by pass: it
+        // takes the place of the track's automation while the region plays.
+        let mut stepped: Vec<(Param, u64, u64, Vec<AutoPoint>)> = Vec::new();
         for (r, region) in t.regions.iter().enumerate().filter(|(_, r)| !r.mute) {
             // A looped region plays again from each multiple of its length, the last time cut
             // short where the loop stops.
@@ -404,6 +407,23 @@ pub fn compile(
                     &mut clips,
                     &mut problems,
                 );
+                if let Content::Pattern(p) = &pass.content {
+                    let set = crate::song::project::pattern_automation(p, pass.length, pass.start);
+                    for (target, points) in set {
+                        let Some(param) = target.param() else {
+                            continue;
+                        };
+                        let points = points
+                            .into_iter()
+                            .map(|pt| AutoPoint {
+                                tick: pass.start + pt.tick,
+                                value: param.from_unit(pt.value),
+                                ..pt
+                            })
+                            .collect();
+                        stepped.push((param, pass.start, pass.start + pass.length, points));
+                    }
+                }
                 start += region.length.max(1);
             }
         }
@@ -453,8 +473,23 @@ pub fn compile(
                 .map(|p| AutoPoint { tick: at(p), ..*p })
                 .collect()
         };
-        // With its automation off, a track follows its faders and knobs.
-        let auto = (t.automation.mode != AutoMode::Off).then_some(&t.automation);
+        // With its automation off, a track follows its faders and knobs (and its patterns'
+        // automation rows).
+        let mut own = None;
+        if !stepped.is_empty() {
+            let mut a = match t.automation.mode {
+                AutoMode::Off => crate::song::project::Automation::default(),
+                _ => t.automation.clone(),
+            };
+            for (param, from, to, points) in stepped {
+                a.replace(param, from, to, points);
+            }
+            own = Some(a);
+        }
+        let auto = match &own {
+            Some(a) => Some(a),
+            None => (t.automation.mode != AutoMode::Off).then_some(&t.automation),
+        };
         plans.push(Plan {
             slot,
             events,
@@ -707,12 +742,10 @@ pub(crate) fn play_region(
         Content::Midi { .. } | Content::Pattern { .. } => {
             let notes = match content {
                 // A pattern as it plays: its lanes, and the modulators on its sounds.
-                Content::Pattern { step, rows, swing } => {
+                Content::Pattern(p) => {
                     std::borrow::Cow::Owned(crate::song::project::pattern_played(
-                        *step,
-                        rows,
+                        p,
                         (to as i64 - at).max(0) as u64,
-                        *swing,
                         (region.start as i64 + at).max(0) as u64,
                         mods,
                         project.tempo,
@@ -739,6 +772,46 @@ pub(crate) fn play_region(
                     pitch,
                     velocity: 0.0,
                 });
+            }
+            // A pattern's automation rows on MIDI controllers, pitch bend and pressure: a move
+            // at each step that plays, or a slide to the next in 64ths.
+            if let Content::Pattern(p) = content {
+                use crate::song::project::RowTarget;
+                let span = (to as i64 - at).max(0) as u64;
+                let begin = (region.start as i64 + at).max(0) as u64;
+                for (target, points) in crate::song::project::pattern_automation(p, span, begin) {
+                    let kind = |v: f32| match target {
+                        RowTarget::Cc(number) => Some(ControlKind::Cc { number, value: v }),
+                        RowTarget::PitchBend => Some(ControlKind::PitchBend(v * 2.0 - 1.0)),
+                        RowTarget::Pressure => Some(ControlKind::Aftertouch(v)),
+                        _ => None,
+                    };
+                    for (k, pt) in points.iter().enumerate() {
+                        let mut moves = vec![(pt.tick, pt.value)];
+                        if let Some(next) = points.get(k + 1).filter(|_| !pt.step) {
+                            let n =
+                                ((next.tick - pt.tick) / (crate::song::project::PPQ / 16)).max(1);
+                            moves.extend((1..n).map(|s| {
+                                let f = s as f32 / n as f32;
+                                (
+                                    pt.tick + s * (next.tick - pt.tick) / n,
+                                    pt.value + (next.value - pt.value) * f,
+                                )
+                            }));
+                        }
+                        for (tick, v) in moves {
+                            let t = at + tick as i64;
+                            if (from as i64..to as i64).contains(&t)
+                                && let Some(kind) = kind(v)
+                            {
+                                controls.push(ControlEvent {
+                                    at: project.samples(region.start + t as u64, rate),
+                                    kind,
+                                });
+                            }
+                        }
+                    }
+                }
             }
             // Controllers as they stand where this part starts, then their moves; a note's own
             // moves follow it when the region transposes it.

@@ -1,6 +1,6 @@
 mod automation;
 mod files;
-mod patterns;
+
 mod regions;
 mod takes;
 mod tracks;

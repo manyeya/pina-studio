@@ -339,26 +339,32 @@ In the app:
   the list to theirs; Sampler, Audio and Beat, a kit with a pattern open in the step sequencer, add
   one at once), then what's been used lately and the favourites. ⌥⌘P makes a step pattern region on the
   selected instrument track (at the first free bar from the playhead); double-click one for the
-  step sequencer: the sounds as pads (tap one to hear and pick it,
-  right-click for its menu, an empty pad adds a sound) beside every sound's steps in its own
-  colour. Click a step on or off and drag across to paint more (or rub them out), option-click for
-  an accent (a white dot; again to take it off); a step is as bright as it hits hard, and the
-  picked sound's velocities open under its steps, drawn with the mouse. M mutes a sound. Under the
-  grid, the picked sound's actions in sight: fill every 1, 2, 4 or 8, shift ← →, reverse,
-  randomize, Euclid (so many hits spread evenly), a length of its own (three steps against
-  sixteen: a polymeter, its repeats drawn faint), clear, remove. Each step has its own settings
-  too: in the lane under the picked sound, Velocity, Chance (it plays that
-  often, rolled afresh each time round), Pitch, Repeat (a ratchet of up to four hits), Gate and
-  Nudge, drawn a bar a step; the grid marks them (a ratchet split, a chance faded, a pitch moved).
-  MODULATE above the grid: the track's modulators, to drag onto a sound's lane (an LFO swaying the
-  hats' velocity, random on the snare's pitch, its dots showing where each step lands) or onto
-  any knob of the track; + LFO, + Random; and + Parameter row: a row under the sounds that steps
-  any setting in time with the pattern (a filter, the volume, a plugin's knob), like
-  automation rows, picked from a menu and painted. The editor's bar sets the
-  pattern's length (8 to 64 steps, repeating the groove as it grows), its rate (1/8, 1/16, 1/32)
-  and swing; To MIDI turns it
-  into notes for the piano roll, and on a track with MIDI (the drums an agent wrote) the step
-  sequencer makes a pattern of it in a click. Patterns loop over their region.
+  step sequencer. Across its top: Edit, Functions and View; the pattern browser and the inspector;
+  MIDI In (step input: notes played go on the selected step, which moves on when the keys come
+  up), MIDI Out (hear what's edited) and Mono (one sound a step); the edit mode, On/Off beside
+  the last of Velocity / Value, Gate, Tie, Note, Octave, Loop, Repeat, Chance, Offset, Step Rate
+  and Skip; live recording (⇧R: notes played as the pattern plays go on the nearest steps, with
+  their velocity, length and timing as Functions → Live Record Options say), Preview (the
+  pattern on its own, round and round), and the zoom (row height, fit, narrow or wide steps,
+  pages). Each row has an arrow to open its subrows (other settings of its steps, one a line),
+  its sound's icon (click to hear it), its assignment (a drum, a note, Melodic, or a parameter:
+  an automation row), M and S, its own rate (/16, triplets, dotted, 4 bars to /64) and playback
+  mode (forward, backward, ping-pong, pendulum, wander, shuffle, random), and buttons to rotate,
+  nudge down or up, randomize (⌃-click for how) and clear its steps in the edit mode; the
+  pattern has the same over every row, and its length (in fours, threes, fives and sevens, up
+  to 64, the groove repeating as it grows), key and scale (Q puts stray notes on it). Click a
+  step on or off and drag to paint more; in a value mode drag up or down (across for more);
+  ⌥-click resets a step (⌥-drag several), ⌥⇧-drag draws a ramp, ⌘⌥-drag ties steps into one
+  long note, ⇧-click picks steps for the Step inspector, copy and paste; in Loop mode drag a
+  row's loop (a polymeter: three steps against sixteen). Steps can play only on some passes
+  (the second of every three, the first, the last), repeat up to 16 times with a ramp, a curve
+  and a distribution, be skipped, or run at their own rate. Automation rows step a track's
+  volume, pan, sends, EQ, a plugin's parameters, a MIDI controller, pitch bend or pressure
+  (held, or sliding). Learn makes rows from notes played and controls moved. The browser has
+  grooves, bass lines, melodies, experiments and templates, and keeps your own patterns and
+  templates in folders. Right-click a pattern region to convert it to MIDI, or a MIDI region
+  to a pattern (timing kept as offsets, lengths as ties and gates). Patterns loop over their
+  region.
 - Modulation (its tab in the editor, or a track's right-click menu): a track's modulators as
   cards, each moving as it plays in its own colour: an LFO (sine, triangle, saw up or down,
   square; in time with the song, 4 bars to 1/32 with dotted and triplet notes, or free in Hz; its

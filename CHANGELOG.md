@@ -9,6 +9,30 @@ first for changes that break songs or commands made before.
 
 ## [Unreleased]
 
+### Changed
+
+- The step sequencer, rebuilt. A menu bar (Edit, Functions, View; the pattern browser and
+  inspector; MIDI In for step input, MIDI Out, Mono; the edit mode; live recording, Preview,
+  zoom), a row header per row (its subrows, icon, assignment, mute and solo, its own rate and
+  playback mode, rotate, down and up, randomize, clear), and every step with its own velocity
+  (or value), gate, tie, note, octave, repeat (up to 16, with velocity ramp, curve and
+  distribution), chance and condition (always, every so many passes, first or last pass),
+  offset, rate and skip, each shown on the steps or on a subrow of its own. Rows have their own
+  loops, rates and playback modes (forward, backward, ping-pong, pendulum, wander, shuffle,
+  random); patterns up to 64 steps with a key, a scale, legato and swing on sixteenths or
+  eighths. Automation rows step a track's parameters, MIDI controllers, pitch bend and
+  pressure. A pattern browser of grooves, bass lines, melodies and templates, with your own
+  saved in folders; Learn makes rows from what's played or moved; copy and paste steps, rows,
+  pages and row settings; a default template per track; the shortcuts to go with it all. The
+  pads, the Modulate strip and the Fill, Reverse and Euclid buttons are gone (a sound's
+  velocity, pitch and chance can still be modulated from the Modulation pane).
+- A new pattern's steps hold their whole length (patterns made before still hold 75%, as they
+  did). Agents' `add_pattern_region` and `set_pattern` take the new settings: `steps`, `mode`,
+  `legato`, `swing_eighths`, `key`, `scale`, and per row and step everything above.
+- Region menus say Convert to Pattern Region, Convert to MIDI Region and Create Pattern Region.
+  Converting MIDI to a pattern keeps each note's timing as its offset and its length as ties and
+  a gate.
+
 ### Added
 
 - Pina Studio is open source, under the MIT license, and has a website:

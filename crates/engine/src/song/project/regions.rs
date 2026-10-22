@@ -109,16 +109,7 @@ pub enum Content {
         warps: Vec<[u64; 2]>,
     },
     /// A step pattern, as the step sequencer makes: rows of steps, looped over the region.
-    Pattern {
-        /// Ticks per step: 240 is a sixteenth.
-        #[serde(default = "sixteenth")]
-        step: u64,
-        rows: Vec<PatternRow>,
-        /// How late every second step comes, as MPC swing: 50 is straight, 66 a triplet feel,
-        /// up to 75.
-        #[serde(default = "straight", skip_serializing_if = "is_straight")]
-        swing: f32,
-    },
+    Pattern(Pattern),
     /// A take folder: every take recorded over the region, and the comp of them that plays.
     Takes {
         takes: Vec<Take>,
@@ -166,9 +157,7 @@ impl Content {
     pub fn notes(&self, length: u64) -> Option<Cow<'_, [Note]>> {
         match self {
             Content::Midi { notes, .. } => Some(Cow::Borrowed(notes)),
-            Content::Pattern { step, rows, swing } => {
-                Some(Cow::Owned(pattern_notes(*step, rows, length, *swing)))
-            }
+            Content::Pattern(p) => Some(Cow::Owned(pattern_notes(p, length))),
             _ => None,
         }
     }
@@ -195,18 +184,25 @@ impl Content {
                     })
                     .collect(),
             }),
-            Content::Pattern { step, rows, swing } => Some(Content::Pattern {
-                step: ((*step as f64 * ratio).round() as u64).max(1),
-                rows: rows.clone(),
-                swing: *swing,
-            }),
+            Content::Pattern(p) => {
+                let at = |t: u64| ((t as f64 * ratio).round() as u64).max(1);
+                let mut p = p.clone();
+                p.step = at(p.step);
+                for row in &mut p.rows {
+                    row.rate = row.rate.map(at);
+                    for r in row.rates.iter_mut().filter(|r| **r > 0) {
+                        *r = at(*r);
+                    }
+                }
+                Some(Content::Pattern(p))
+            }
             Content::Audio { .. } | Content::Takes { .. } => None,
         }
     }
 
     pub fn is_midi(&self) -> bool {
         match self {
-            Content::Midi { .. } | Content::Pattern { .. } => true,
+            Content::Midi { .. } | Content::Pattern(_) => true,
             Content::Audio { .. } => false,
             Content::Takes { takes, .. } => takes.first().is_some_and(|t| t.content.is_midi()),
         }

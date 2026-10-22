@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::{
     music::Key,
     music::theory::{self, BassStyle, Chord, ChordRhythm, MelodyStyle, Span, Voicing},
-    song::project::{ChordSpan, Content, Instrument, Note, PatternRow, Project, Region},
+    song::project::{ChordSpan, Content, Instrument, Note, Pattern, PatternRow, Project, Region},
 };
 
 /// The song's key, which numerals and melodies need.
@@ -562,11 +562,7 @@ pub fn write_drums(p: &mut Project, w: DrumPart) -> Result<Value, String> {
     if rows.is_empty() {
         return Err(format!("track {} has no sound on any drum note", w.track));
     }
-    let content = Content::Pattern {
-        step: p.bar() / per_bar as u64,
-        rows,
-        swing: groove.swing,
-    };
+    let content = Content::Pattern(Pattern::new(p.bar() / per_bar as u64, rows, groove.swing));
     let mut out = place(p, w.track, start, end, "Drums", content);
     out["groove"] = json!(groove.id);
     out["swing"] = json!(groove.swing);

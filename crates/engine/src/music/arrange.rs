@@ -141,27 +141,15 @@ pub fn clip(p: &Project, r: &Region, from: u64, to: u64) -> Option<Region> {
                 })
                 .collect(),
         },
-        Content::Pattern { step, rows, swing } => {
-            let steps = rows.iter().map(|r| r.cells.len()).max().unwrap_or(1).max(1);
-            let turn = ((skip / (*step).max(1)) as usize) % steps;
-            Content::Pattern {
-                step: *step,
-                rows: rows
-                    .iter()
-                    .map(|row| {
-                        let mut cells = row.cells.clone();
-                        cells.resize(steps, 0);
-                        cells.rotate_left(turn);
-                        crate::song::project::PatternRow {
-                            pitch: row.pitch,
-                            cells,
-                            mute: row.mute,
-                            ..Default::default()
-                        }
-                    })
-                    .collect(),
-                swing: *swing,
+        Content::Pattern(p) => {
+            // Its rows turned to where the cut falls, so it plays on from there.
+            let mut p = p.clone();
+            let steps = p.steps();
+            let turn = ((skip / p.step.max(1)) as usize % steps) as i32;
+            for row in &mut p.rows {
+                row.rotate(steps, -turn, None);
             }
+            Content::Pattern(p)
         }
         Content::Audio {
             offset, stretch, ..

@@ -232,7 +232,7 @@ impl Workspace {
         };
         let (mute, looped, linked) = (region.mute, region.looped, region.link.is_some());
         let midi = matches!(region.content, Content::Midi { .. });
-        let pattern = matches!(region.content, Content::Pattern { .. });
+        let pattern = matches!(region.content, Content::Pattern(_));
         let tick = self.playhead();
         let inside = (region.start + 1..region.start + region.length).contains(&tick);
         let op = |label: &str, o: RegionOp| (label.to_string(), MenuAction::Region(r, o));
@@ -275,11 +275,11 @@ impl Workspace {
         if midi {
             items.push(op("Open in Piano Roll", RegionOp::Open));
             items.push(op("Quantize Notes", RegionOp::Quantize));
-            items.push(op("Make It a Step Pattern", RegionOp::ToPattern));
+            items.push(op("Convert to Pattern Region", RegionOp::ToPattern));
         }
         if pattern {
             items.push(op("Open in Step Sequencer", RegionOp::Open));
-            items.push(op("Make It MIDI", RegionOp::ToMidi));
+            items.push(op("Convert to MIDI Region", RegionOp::ToMidi));
         }
         items.push(op("Bounce in Place", RegionOp::Bounce));
         items.push(rule());
@@ -306,7 +306,7 @@ impl Workspace {
         )];
         if instrument {
             items.push(op("New MIDI Region Here", TrackOp::NewRegion(t, tick)));
-            items.push(op("New Step Pattern Here", TrackOp::NewPattern(t, tick)));
+            items.push(op("Create Pattern Region", TrackOp::NewPattern(t, tick)));
         } else {
             items.push(op("Add an Audio File Here…", TrackOp::Import(t, tick)));
         }

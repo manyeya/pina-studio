@@ -1,16 +1,46 @@
 //! The step sequencer.
 
-use super::*;
+use pina_engine::song::project::{Lane, Pattern, PatternRow, RowTarget};
 
-#[gpui::test]
-fn the_step_sequencer_paints_accents_mutes_fills_and_converts(cx: &mut TestAppContext) {
+use super::*;
+use crate::editors::steps::{EditMode, Learn, StepsOp};
+
+/// A drum track with a pattern on it, the step sequencer open on it.
+fn drums_pattern(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext, usize) {
     let (ws, cx) = open(cx);
     click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
     click_on(cx, "adder-Drums", Modifiers::none(), MouseButton::Left);
     click_on(cx, "adder-row-0", Modifiers::none(), MouseButton::Left); // Pina Studio's Drum Kit
     let track = ws.read_with(cx, |ws, _| ws.track);
-    // Two patterns from the same playhead: the second goes after the first, not on it.
     cx.simulate_keystrokes("cmd-alt-p");
+    ws.update(cx, |ws, cx| {
+        ws.editor_h = 620.0;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    (ws, cx, track)
+}
+
+fn shown(ws: &Entity<Workspace>, cx: &VisualTestContext) -> Pattern {
+    ws.read_with(cx, |ws, _| ws.shown_pattern().unwrap().1.clone())
+}
+
+fn at(cx: &mut VisualTestContext, name: String) -> Point<Pixels> {
+    cx.debug_bounds(Box::leak(name.into_boxed_str()))
+        .unwrap_or_else(|| panic!("not on screen"))
+        .center()
+}
+
+fn with(f: impl FnOnce(&mut Modifiers)) -> Modifiers {
+    let mut m = Modifiers::none();
+    f(&mut m);
+    m
+}
+
+#[gpui::test]
+fn steps_are_painted_rubbed_out_reset_and_rows_muted_rotated_and_filled(cx: &mut TestAppContext) {
+    let (ws, cx, track) = drums_pattern(cx);
+    // A second pattern from the same playhead goes after the first, not on it.
     ws.update(cx, |ws, cx| {
         ws.region = None;
         cx.notify();
@@ -24,70 +54,211 @@ fn the_step_sequencer_paints_accents_mutes_fills_and_converts(cx: &mut TestAppCo
             .collect::<Vec<_>>()
     });
     assert_eq!(starts, [0, BAR]);
-    let rows = |cx: &VisualTestContext| {
-        ws.read_with(cx, |ws, _| {
-            match &ws.session.project.region(ws.pattern().unwrap()).content {
-                Content::Pattern { rows, .. } => rows.clone(),
-                _ => panic!(),
-            }
-        })
-    };
     // Painting the kick row across four steps, then rubbing two out.
-    let from = cx.debug_bounds("step-0-0").unwrap().center();
-    let to = cx.debug_bounds("step-0-3").unwrap().center();
+    let from = at(cx, "step-0-0".into());
     cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
     for k in 1..=3 {
-        let at = cx
-            .debug_bounds(Box::leak(format!("step-0-{k}").into_boxed_str()))
-            .unwrap()
-            .center();
-        cx.simulate_mouse_move(at, MouseButton::Left, Modifiers::none());
+        let p = at(cx, format!("step-0-{k}"));
+        cx.simulate_mouse_move(p, MouseButton::Left, Modifiers::none());
     }
-    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(from, MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
-    assert_eq!(&rows(cx)[0].cells[..5], [100, 100, 100, 100, 0]);
-    let a = cx.debug_bounds("step-0-2").unwrap().center();
-    let b = cx.debug_bounds("step-0-3").unwrap().center();
+    assert_eq!(&shown(&ws, cx).rows[0].cells[..5], [100, 100, 100, 100, 0]);
+    let (a, b) = (at(cx, "step-0-2".into()), at(cx, "step-0-3".into()));
     drag(cx, a, b);
-    assert_eq!(&rows(cx)[0].cells[..5], [100, 100, 0, 0, 0]);
-    // ⌥: an accent, and ⌥ again takes it off.
-    let alt = Modifiers {
-        alt: true,
-        ..Modifiers::none()
-    };
-    click_on(cx, "step-1-4", alt, MouseButton::Left);
-    assert_eq!(rows(cx)[1].cells[4], 127);
-    click_on(cx, "step-1-4", alt, MouseButton::Left);
-    assert_eq!(rows(cx)[1].cells[4], 100);
-    // The hat row muted; filled every 2 steps from its menu; the clap three steps long.
-    click_on(cx, "row-mute-2", Modifiers::none(), MouseButton::Left);
-    assert!(rows(cx)[2].mute);
-    ws.update(cx, |ws, cx| {
-        let at = ws.pattern().unwrap();
-        ws.row_op(at, 2, crate::editors::steps::RowOp::Fill(2), cx);
-        ws.row_op(at, 4, crate::editors::steps::RowOp::Length(3), cx);
-    });
-    let r = rows(cx);
-    assert_eq!(&r[2].cells[..4], [100, 0, 100, 0]);
-    assert_eq!(r[4].cells.len(), 3);
-    // The kick's velocities drawn low in the lane (the kick picked by clicking it).
-    click_on(cx, "step-0-1", Modifiers::none(), MouseButton::Left); // off
-    click_on(cx, "step-0-1", Modifiers::none(), MouseButton::Left); // on again, kick picked
-    let lane = cx.debug_bounds("steps-lane").unwrap();
-    let bar = cx.debug_bounds("step-velocity-0").unwrap().center();
-    let low = point(bar.x, lane.origin.y + lane.size.height - px(12.));
-    drag(cx, low, low);
-    let kick = rows(cx)[0].cells[0];
-    assert!(kick > 0 && kick < 40, "{kick}");
+    assert_eq!(&shown(&ws, cx).rows[0].cells[..5], [100, 100, 0, 0, 0]);
+    // ⌥-click: back as usual (off).
+    click_on(cx, "step-0-1", with(|m| m.alt = true), MouseButton::Left);
+    assert_eq!(&shown(&ws, cx).rows[0].cells[..2], [100, 0]);
+    // The hats muted; every step of them on with the row's up button; the kick rotated on a
+    // step.
+    click_on(cx, "steps-m-2", Modifiers::none(), MouseButton::Left);
+    assert!(shown(&ws, cx).rows[2].mute);
+    click_on(cx, "steps-up-2", Modifiers::none(), MouseButton::Left);
+    assert!(shown(&ws, cx).rows[2].cells.iter().all(|&c| c > 0));
+    click_on(
+        cx,
+        "steps-rotate-right-0",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert_eq!(&shown(&ws, cx).rows[0].cells[..3], [0, 100, 0]);
     // 32 steps: the bar's groove twice.
-    click_on(cx, "steps-32", Modifiers::none(), MouseButton::Left);
-    let r = rows(cx);
-    assert_eq!(r[0].cells.len(), 32);
-    assert_eq!(r[0].cells[16..18], r[0].cells[0..2]);
-    // To MIDI: the piano roll, with the notes it played.
-    click_on(cx, "pattern-to-midi", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "steps-length", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "32 Steps");
+    let p = shown(&ws, cx);
+    assert_eq!((p.steps(), p.rows[0].cells.len()), (32, 32));
+    assert_eq!(p.rows[0].cells[16..18], p.rows[0].cells[0..2]);
+}
+
+#[gpui::test]
+fn values_are_dragged_ramped_and_tied_and_rows_open_on_their_subrows(cx: &mut TestAppContext) {
+    let (ws, cx, _) = drums_pattern(cx);
+    click_on(cx, "step-1-4", Modifiers::none(), MouseButton::Left);
+    // Velocity / Value: the snare's step dragged down.
+    click_on(cx, "steps-mode-value", Modifiers::none(), MouseButton::Left);
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.steps.mode),
+        EditMode::Lane(Lane::Velocity)
+    );
+    let s = at(cx, "step-1-4".into());
+    drag(cx, s, point(s.x, s.y + px(60.)));
+    let v = shown(&ws, cx).rows[1].cells[4];
+    assert!(v > 0 && v < 70, "{v}");
+    // ⌥⇧: a ramp from the first kick step (as usual: 100) to the fourth, dragged up.
+    let (a, b) = (at(cx, "step-0-0".into()), at(cx, "step-0-3".into()));
+    drag_with(
+        cx,
+        a,
+        point(b.x, b.y - px(100.)),
+        with(|m| (m.alt, m.shift) = (true, true)),
+    );
+    let kick = shown(&ws, cx).rows[0].clone();
+    let ramp: Vec<u8> = (0..4).map(|i| kick.velocity_at(i)).collect();
+    assert!(
+        ramp.windows(2).all(|w| w[0] <= w[1]) && ramp[3] > 100,
+        "{ramp:?}"
+    );
+    // ⌘⌥: the hats' first three steps tied.
+    let (a, b) = (at(cx, "step-2-0".into()), at(cx, "step-2-2".into()));
+    drag_with(cx, a, b, with(|m| (m.platform, m.alt) = (true, true)));
+    let hats = shown(&ws, cx).rows[2].clone();
+    assert_eq!(
+        (hats.tie_at(0), hats.tie_at(1), hats.tie_at(2)),
+        (true, true, false)
+    );
+    assert!((0..3).all(|i| hats.on(i)));
+    // The snare's subrows, its chance among them: one drawn low.
+    click_on(cx, "steps-open-1", Modifiers::none(), MouseButton::Left);
+    let snare = shown(&ws, cx).rows[1].clone();
+    assert!(snare.open && snare.subrows.contains(&Lane::Chance));
+    let c = at(cx, "step-1-Chance-4".into());
+    drag(cx, c, point(c.x, c.y + px(120.)));
+    let chance = shown(&ws, cx).rows[1].chance_at(4);
+    assert!(chance < 40, "{chance}");
+    // A subrow added after the last shows a setting the row hasn't one for.
+    let k = snare.subrows.len() - 1;
+    ws.update(cx, |ws, cx| ws.steps_op(StepsOp::AddSubrow(1, k), cx));
+    let subrows = shown(&ws, cx).rows[1].subrows.clone();
+    assert_eq!(subrows.len(), k + 2);
+    let mut seen = subrows.clone();
+    seen.sort_by_key(|l| format!("{l:?}"));
+    seen.dedup();
+    assert_eq!(seen.len(), subrows.len());
+}
+
+#[gpui::test]
+fn rows_loop_rate_and_play_their_own_way_and_are_added_and_copied(cx: &mut TestAppContext) {
+    let (ws, cx, _) = drums_pattern(cx);
+    // Loop: a click nearer the end of the hats' loop moves the end there, nearer the start the
+    // start.
+    ws.update(cx, |ws, cx| ws.steps_op(StepsOp::Mode(EditMode::Loop), cx));
+    cx.run_until_parked();
+    click_on(cx, "step-2-11", Modifiers::none(), MouseButton::Left);
+    assert_eq!(shown(&ws, cx).rows[2].loop_range(16), (0, 12));
+    click_on(cx, "step-2-3", Modifiers::none(), MouseButton::Left);
+    assert_eq!(shown(&ws, cx).rows[2].loop_range(16), (3, 12));
+    // The pattern at eighths; the snare at its own sixteenth triplets; the kick backwards.
+    click_on(
+        cx,
+        "steps-pattern-rate",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    pick(cx, &ws, "/8");
+    assert_eq!(shown(&ws, cx).step, PPQ / 2);
+    click_on(cx, "steps-rate-1", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "16T");
+    assert_eq!(shown(&ws, cx).rows[1].rate, Some(PPQ / 6));
+    click_on(cx, "steps-play-0", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Backward");
+    assert_eq!(
+        shown(&ws, cx).rows[0].mode,
+        Some(pina_engine::song::project::PlayMode::Backward)
+    );
+    // A crash from Add Row's notes, and an automation row of the track's volume.
+    let rows = shown(&ws, cx).rows.len();
+    click_on(cx, "steps-add-row", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Notes");
+    pick(cx, &ws, "Crash");
+    let p = shown(&ws, cx);
+    assert_eq!((p.rows.len(), p.rows[rows].pitch), (rows + 1, 49));
+    click_on(cx, "steps-add-row", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Automation");
+    pick(cx, &ws, "Volume");
+    let p = shown(&ws, cx);
+    assert_eq!(p.rows[rows + 1].target, Some(RowTarget::Volume));
+    // The kick copied to a new row: the same steps.
+    ws.update(cx, |ws, cx| {
+        ws.steps_op(StepsOp::CopyRow(0), cx);
+        ws.steps_op(StepsOp::PasteToNewRow, cx);
+    });
+    let p = shown(&ws, cx);
+    assert_eq!(p.rows.last().unwrap().cells, p.rows[0].cells);
+}
+
+#[gpui::test]
+fn notes_played_learn_rows_and_go_in_step_by_step(cx: &mut TestAppContext) {
+    let (ws, cx, _) = drums_pattern(cx);
+    // MIDI in: the kick on the cursor's step, then a chord on the next; a note with no row
+    // makes one.
+    ws.update(cx, |ws, cx| {
+        ws.steps.midi_in = true;
+        ws.steps.cursor = Some((0, 0));
+        ws.steps_input(&[(0, 36, 90)], cx);
+        ws.steps_input(&[(0, 36, 0)], cx);
+        ws.steps_input(&[(0, 36, 80), (0, 50, 70)], cx);
+        ws.steps_input(&[(0, 36, 0), (0, 50, 0)], cx);
+    });
+    let p = shown(&ws, cx);
+    assert_eq!(&p.rows[0].cells[..3], [90, 80, 0]);
+    let tom = p
+        .rows
+        .iter()
+        .position(|r| r.pitch == 50)
+        .expect("a row for 50");
+    assert!(p.rows[tom].on(1));
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.steps.cursor.map(|c| c.1)),
+        Some(2)
+    );
+    // Learn (Assign): the picked row becomes the note played.
+    ws.update(cx, |ws, cx| {
+        ws.steps.midi_in = false;
+        ws.steps.row = 4;
+        ws.steps_op(StepsOp::Learn(Some(Learn::Assign)), cx);
+        ws.steps_input(&[(0, 56, 100)], cx);
+    });
+    assert_eq!(shown(&ws, cx).rows[4].pitch, 56);
+    assert!(ws.read_with(cx, |ws, _| ws.steps.learn.is_none()));
+}
+
+#[gpui::test]
+fn shortcuts_edit_modes_rows_and_the_pattern(cx: &mut TestAppContext) {
+    let (ws, cx, _) = drums_pattern(cx);
+    click_on(cx, "step-0-0", Modifiers::none(), MouseButton::Left);
+    cx.simulate_keystrokes("ctrl-alt-g");
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.steps.mode),
+        EditMode::Lane(Lane::Gate)
+    );
+    cx.simulate_keystrokes("ctrl-alt-s");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.steps.mode), EditMode::OnOff);
+    // ⌘D: the kick again on the next sound; ⌥↑ everything a semitone up.
+    let rows = shown(&ws, cx).rows.len();
+    ws.update(cx, |ws, _| ws.steps.row = 0);
+    cx.simulate_keystrokes("cmd-d");
+    let p = shown(&ws, cx);
+    assert_eq!(p.rows.len(), rows + 1);
+    assert_eq!(p.rows[1].cells, p.rows[0].cells);
+    let pitches: Vec<u8> = p.rows.iter().map(|r| r.pitch).collect();
+    cx.simulate_keystrokes("alt-up");
+    let up: Vec<u8> = shown(&ws, cx).rows.iter().map(|r| r.pitch).collect();
+    assert_eq!(up, pitches.iter().map(|p| p + 1).collect::<Vec<_>>());
+    // Converted to MIDI (the piano roll, with what it played), and back.
+    let at = ws.read_with(cx, |ws, _| ws.pattern().unwrap());
+    ws.update(cx, |ws, cx| ws.pattern_to_midi(at, cx));
     let (bottom, notes) = ws.read_with(cx, |ws, _| {
-        let at = ws.region.unwrap();
         (
             ws.bottom,
             ws.session
@@ -100,168 +271,39 @@ fn the_step_sequencer_paints_accents_mutes_fills_and_converts(cx: &mut TestAppCo
     });
     assert_eq!(bottom, Some(Bottom::PianoRoll));
     assert!(notes.unwrap() > 0);
-    // And back: a MIDI region made a pattern.
-    let at = ws.read_with(cx, |ws, _| ws.region.unwrap());
     ws.update(cx, |ws, cx| ws.midi_to_pattern(at, cx));
     assert!(ws.read_with(cx, |ws, _| matches!(
         ws.session.project.region(at).content,
-        Content::Pattern { .. }
+        Content::Pattern(_)
     )));
-}
-
-#[gpui::test]
-fn a_drum_track_and_a_step_pattern(cx: &mut TestAppContext) {
-    let (ws, cx) = open(cx);
-    click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
-    click_on(cx, "adder-Drums", Modifiers::none(), MouseButton::Left);
-    click_on(cx, "adder-row-0", Modifiers::none(), MouseButton::Left); // Pina Studio's Drum Kit
-    let (track, instrument) = ws.read_with(cx, |ws, _| {
-        (
-            ws.track,
-            ws.session.project.tracks[ws.track].instrument.clone(),
-        )
-    });
-    assert_eq!(
-        instrument,
-        Some(pina_engine::song::project::Instrument::Drums)
-    );
-
-    cx.simulate_keystrokes("cmd-alt-p");
-    assert_eq!(ws.read_with(cx, |ws, _| ws.bottom), Some(Bottom::Steps));
-    click_on(cx, "step-0-0", Modifiers::none(), MouseButton::Left); // kick on 1
-    click_on(cx, "step-0-8", Modifiers::none(), MouseButton::Left); // and 3
-    click_on(
-        cx,
-        "step-1-4",
-        Modifiers {
-            alt: true,
-            ..Modifiers::none()
-        },
-        MouseButton::Left,
-    ); // snare accent
-    click_on(cx, "pad-5", Modifiers::none(), MouseButton::Left); // the first empty pad: + a sound
-    click_on(cx, "menu-9", Modifiers::none(), MouseButton::Left); // Crash
-    let rows = ws.read_with(cx, |ws, _| {
-        match &ws.session.project.tracks[track].regions[0].content {
-            Content::Pattern { rows, .. } => rows.clone(),
-            _ => panic!("not a pattern"),
-        }
-    });
-    assert_eq!(
-        (rows[0].pitch, rows[0].cells[0], rows[0].cells[8]),
-        (36, 100, 100)
-    );
-    assert_eq!((rows[1].pitch, rows[1].cells[4]), (38, 127));
-    assert_eq!((rows.len(), rows[5].pitch), (6, 49));
-
-    // A pad picks its sound; the bar under the grid does things to it: every 4, then Euclid's
-    // three hits over sixteen.
-    let row = |cx: &VisualTestContext, r: usize| {
-        ws.read_with(cx, |ws, _| {
-            match &ws.session.project.tracks[track].regions[0].content {
-                Content::Pattern { rows, .. } => rows[r].cells.clone(),
-                _ => panic!("not a pattern"),
-            }
-        })
-    };
-    click_on(cx, "pad-2", Modifiers::none(), MouseButton::Left);
-    assert_eq!(ws.read_with(cx, |ws, _| ws.steps_row), 2);
-    click_on(cx, "row-op-fill-4", Modifiers::none(), MouseButton::Left);
-    assert_eq!(&row(cx, 2)[..8], [100, 0, 0, 0, 100, 0, 0, 0]);
-    click_on(cx, "row-op-euclid", Modifiers::none(), MouseButton::Left);
-    pick(cx, &ws, "3 hits");
-    let hits: Vec<usize> = (0..16).filter(|&k| row(cx, 2)[k] > 0).collect();
-    assert_eq!(hits, [0, 6, 11]);
-
-    // Each step's own settings, in the hats' lane: the first step's chance drawn low, its pitch
-    // high.
-    let pattern = |cx: &VisualTestContext| {
-        ws.read_with(cx, |ws, _| {
-            match &ws.session.project.tracks[track].regions[0].content {
-                Content::Pattern { rows, .. } => rows[2].clone(),
-                _ => panic!("not a pattern"),
-            }
-        })
-    };
-    let draw = |cx: &mut VisualTestContext, lane: &'static str, high: bool| {
-        click_on(cx, lane, Modifiers::none(), MouseButton::Left);
-        let bar = cx.debug_bounds("step-velocity-0").unwrap();
-        let y = if high {
-            bar.top() + px(3.)
-        } else {
-            bar.bottom() - px(3.)
-        };
-        let at = point(bar.center().x, y);
-        drag(cx, at, at);
-    };
-    draw(cx, "lane-Chance", false);
-    draw(cx, "lane-Pitch", true);
-    let hats = pattern(cx);
-    assert!(hats.chance_at(0) <= 10, "{}", hats.chance_at(0));
-    assert!(hats.transpose_at(0) >= 10, "{}", hats.transpose_at(0));
-    assert_eq!(hats.chance_at(6), 100); // the rest as usual
-
-    // An LFO from the strip above the grid, dragged onto the hats' velocity lane.
-    click_on(cx, "lane-Velocity", Modifiers::none(), MouseButton::Left);
-    click_on(cx, "steps-add-LFO", Modifiers::none(), MouseButton::Left);
-    let chip = cx.debug_bounds("steps-mod-0").unwrap().center();
-    let lane = cx.debug_bounds("steps-lane").unwrap().center();
-    drag(cx, chip, lane);
-    let routes = ws.read_with(cx, |ws, _| {
-        ws.session.project.tracks[track].modulators[0]
-            .routes
-            .iter()
-            .map(|r| r.target)
-            .collect::<Vec<_>>()
-    });
-    use pina_engine::dsp::modulate::{ModKind, ModTarget, SoundParam};
-    assert_eq!(routes, [ModTarget::Sound(2, SoundParam::Velocity)]);
-
-    // A parameter row: mapped to the volume from its menu, its first step painted low.
-    click_on(cx, "add-param", Modifiers::none(), MouseButton::Left);
-    pick(cx, &ws, "Volume");
-    let (kind, target) = ws.read_with(cx, |ws, _| {
-        let m = &ws.session.project.tracks[track].modulators[1];
-        (m.kind.clone(), m.routes.first().map(|r| r.target))
-    });
-    assert!(matches!(kind, ModKind::Steps { .. }));
-    assert_eq!(target, Some(ModTarget::Volume));
-    // (A taller editor, so the row's in sight.)
-    ws.update(cx, |ws, cx| {
-        ws.editor_h = 620.0;
-        cx.notify();
-    });
-    cx.run_until_parked();
-    let cells = cx.debug_bounds("param-cells-1").unwrap();
-    let low = point(cells.left() + px(4.), cells.bottom() - px(1.));
-    drag(cx, low, low);
-    let first = ws.read_with(cx, |ws, _| {
-        match &ws.session.project.tracks[track].modulators[1].kind {
-            ModKind::Steps { values, .. } => values[0],
-            _ => 1.0,
-        }
-    });
-    assert!(first < 0.1, "{first}");
 }
 
 #[gpui::test]
 fn a_pattern_on_a_synth_has_rows_of_notes_in_the_key(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     ws.update(cx, |ws, cx| ws.new_pattern(cx));
-    let rows = ws.read_with(cx, |ws, _| {
-        let at = ws.region.unwrap();
-        match &ws.session.project.region(at).content {
-            Content::Pattern { rows, .. } => rows.iter().map(|r| r.pitch).collect::<Vec<_>>(),
-            _ => unreachable!(),
-        }
-    });
+    cx.run_until_parked();
+    let rows = shown(&ws, cx)
+        .rows
+        .iter()
+        .map(|r| r.pitch)
+        .collect::<Vec<_>>();
     let key = ws
         .read_with(cx, |ws, _| ws.session.project.song_key())
         .unwrap();
     assert_eq!(rows.len(), 4);
     assert!(rows.iter().all(|&p| key.contains(p)), "{rows:?}");
-    cx.run_until_parked();
-    click_on(cx, "pad-4", Modifiers::none(), MouseButton::Left); // the first empty pad
+    click_on(cx, "steps-add-row", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Notes");
     let first = ws.read_with(cx, |ws, _| ws.menu.as_ref().unwrap().items[0].0.clone());
     assert!(!first.contains("Kick"), "{first}");
+    // Melodic: a row of its own notes.
+    ws.update(cx, |ws, cx| {
+        ws.menu = None;
+        cx.notify();
+    });
+    click_on(cx, "steps-add-row", Modifiers::none(), MouseButton::Left);
+    pick(cx, &ws, "Melodic");
+    let last: PatternRow = shown(&ws, cx).rows.last().unwrap().clone();
+    assert!(last.melodic);
 }

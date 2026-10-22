@@ -116,6 +116,9 @@ impl Workspace {
     /// are dropped.
     pub fn capture(&mut self, cx: &mut Context<Self>) {
         let played = self.player.played();
+        let notes: Vec<(u64, u8, u8)> =
+            played.iter().map(|p| (p.at, p.pitch, p.velocity)).collect();
+        self.steps_input(&notes, cx);
         let project = &self.session.project;
         match &mut self.recording {
             Some(Recording::Midi {

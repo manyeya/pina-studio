@@ -333,19 +333,13 @@ pub struct Workspace {
     /// The New Track palette, when it's open; and the presets it searches.
     pub adder: Option<crate::arrange::adder::Adder>,
     pub sounds: crate::arrange::adder::Sounds,
-    /// The step sequencer's picked row (its velocities in the lane), and where its lane was drawn;
-    /// and a row picked by pressing a step, picked when the mouse comes up (so the lane doesn't
-    /// move the rows under a drag).
-    pub steps_row: usize,
-    pub steps_pick: Option<usize>,
+    /// The step sequencer's view: its edit mode, picked row and steps, page, panes, input.
+    pub steps: crate::editors::steps::StepsView,
     /// What the window shows, kept for every song (Settings, ⌘,); the page's section shown;
     /// where play last started (to go back to on stop, if Settings say).
     pub settings: crate::pages::settings::Settings,
     pub settings_section: crate::pages::settings::Section,
     pub play_from: u64,
-    /// What the lane under the picked sound shows.
-    pub steps_lane_mode: crate::editors::steps::LaneMode,
-    pub steps_lane: Rc<Cell<Bounds<Pixels>>>,
     /// The Sampler editor: the zone picked and the waveforms read; where its waveform was drawn.
     pub sampler_ui: crate::editors::sampler::SamplerUi,
     pub sampler_wave_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -534,13 +528,10 @@ impl Workspace {
             pending_look: None,
             adder: None,
             sounds: Default::default(),
-            steps_row: 0,
-            steps_pick: None,
-            steps_lane_mode: Default::default(),
+            steps: Default::default(),
             settings: crate::pages::settings::Settings::load(),
             settings_section: Default::default(),
             play_from: 0,
-            steps_lane: Rc::new(Cell::new(Bounds::default())),
             sampler_ui: Default::default(),
             sampler_wave_bounds: Rc::new(Cell::new(Bounds::default())),
             roll_scroll_y: crate::editors::pianoroll::scroll_to(72),
@@ -690,6 +681,9 @@ impl Render for Workspace {
         if let Some((track, at)) = self.pending_look.take() {
             self.open_picker(track, at, window, cx);
         }
+        if let Some(what) = self.steps.ask.take() {
+            self.start_naming(what, window, cx);
+        }
         if let Some(dir) = self.opening.take() {
             self.open_song(dir, window, cx);
         }
@@ -762,7 +756,7 @@ impl Render for Workspace {
             self.title = title;
         }
 
-        div()
+        self.steps_actions(div(), cx)
             .size_full()
             .flex()
             .flex_col()
@@ -788,6 +782,13 @@ impl Render for Workspace {
                         && !self.browser_open() =>
                     {
                         "Workspace Arrange Roll"
+                    }
+                    // The step sequencer open: its shortcuts.
+                    _ if self.view == View::Arrange
+                        && self.bottom == Some(Bottom::Steps)
+                        && !self.browser_open() =>
+                    {
+                        "Workspace Arrange Steps"
                     }
                     _ => "Workspace Arrange",
                 };

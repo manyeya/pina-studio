@@ -88,9 +88,7 @@ impl Workspace {
         {
             self.drop_modulator(track, index, at, cx);
         }
-        if let Some(r) = self.steps_pick.take() {
-            self.steps_row = r;
-        }
+        self.steps_release();
         // A lane made taller is the song's to keep, not an undo step.
         if let Some(Drag::LaneHeight { .. }) = self.drag {
             self.session.edited = true;

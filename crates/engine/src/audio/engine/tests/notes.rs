@@ -28,11 +28,7 @@ fn a_pattern_loops_over_its_region() {
     let region = Region {
         start: 0,
         length: PPQ * 3 / 2,
-        content: Content::Pattern {
-            step: PPQ / 4,
-            rows,
-            swing: 50.0,
-        },
+        content: Content::Pattern(crate::song::project::Pattern::new(PPQ / 4, rows, 50.0)),
         ..Default::default()
     };
     let track = Track {
@@ -59,6 +55,60 @@ fn a_pattern_loops_over_its_region() {
     let sixteenth = BEAT as u64 / 4;
     assert_eq!(ons, [0, 2 * sixteenth, 4 * sixteenth]);
     assert!(peak(&render(&project(vec![track]), Path::new("."), BEAT)[0]) > 0.1); // the kit plays it
+}
+
+#[test]
+fn a_patterns_automation_rows_move_the_track_and_send_controllers() {
+    use crate::song::project::{Param, Pattern, PatternRow, RowTarget, value_at};
+    // A volume row: quiet on the first step, loud on the third (held between); and the mod
+    // wheel on the second step.
+    let mut volume = PatternRow::automation(RowTarget::Volume, 4, 0.0);
+    volume.cells = vec![100, 0, 100, 0];
+    volume.value = vec![
+        Param::Volume.to_unit(-24.0),
+        0.5,
+        Param::Volume.to_unit(0.0),
+        0.5,
+    ];
+    let mut wheel = PatternRow::automation(RowTarget::Cc(1), 4, 0.0);
+    wheel.cells = vec![0, 100, 0, 0];
+    wheel.value = vec![0.0, 0.75, 0.0, 0.0];
+    let region = Region {
+        start: 0,
+        length: PPQ,
+        content: Content::Pattern(Pattern::new(PPQ / 4, vec![volume, wheel], 50.0)),
+        ..Default::default()
+    };
+    let track = Track {
+        name: "d".into(),
+        instrument: Some(Instrument::Drums),
+        regions: vec![region],
+        ..Default::default()
+    };
+    let p = project(vec![track]);
+    let mut files = AudioFiles::new(Path::new("."), RATE);
+    let (arrangement, _) = compile(&p, RATE, &[(0, 0)], &[], None, &mut files);
+    let plan = &arrangement.plans[0];
+    let sixteenth = BEAT as f64 / 4.0;
+    let db = |at: f64| value_at(&plan.volume, at).unwrap();
+    assert!(
+        (db(sixteenth * 0.5) + 24.0).abs() < 0.5,
+        "{}",
+        db(sixteenth * 0.5)
+    );
+    assert!((db(sixteenth * 1.5) + 24.0).abs() < 0.5); // held to the next step that's on
+    assert!(db(sixteenth * 2.5).abs() < 0.5);
+    let wheel: Vec<(u64, f32)> = plan
+        .controls
+        .iter()
+        .filter_map(|c| match c.kind {
+            crate::plugin::ControlKind::Cc { number: 1, value } => Some((c.at, value)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(wheel.len(), 1);
+    assert_eq!(wheel[0].0, BEAT as u64 / 4);
+    assert!((wheel[0].1 - 0.75).abs() < 1e-6);
 }
 
 #[test]

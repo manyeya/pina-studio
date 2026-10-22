@@ -250,8 +250,7 @@ impl Workspace {
                     t.spread = Some(to);
                 }
             }
-            // Each step, and each bar of the lane, paints itself as the mouse comes over it.
-            Some(Drag::Steps { .. } | Drag::StepVelocity) => return,
+            Some(Drag::StepSeq(_)) => return self.steps_drag_to(p, cx),
             Some(Drag::Auto {
                 track,
                 param,

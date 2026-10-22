@@ -14,6 +14,12 @@ pub enum Name {
     Pan(usize),
     /// A value of the EQ window's: a band's (by id; 0 the EQ's own), typed.
     Eq(u16, crate::mix::eq::EqKnob),
+    /// A step pattern's row, by its region and place; the pattern browser's search; a pattern
+    /// (or template) saved, and a folder made, by the name typed.
+    PatternRow(At, usize),
+    PatternSearch,
+    PatternSave(bool),
+    PatternFolder,
 }
 
 /// A name being typed, in a text field where the name shows.
@@ -42,6 +48,22 @@ impl Workspace {
             }),
             Name::Pan(i) => p.tracks.get(i).map(|t| strip::pan_label(t.pan)),
             Name::Eq(id, knob) => Some(self.eq_value_text(id, knob)),
+            Name::PatternRow(at, r) => p
+                .tracks
+                .get(at.0)
+                .and_then(|t| t.regions.get(at.1))
+                .and_then(|reg| match &reg.content {
+                    pina_engine::song::project::Content::Pattern(pt) => pt.rows.get(r),
+                    _ => None,
+                })
+                .map(|row| row.name.clone()),
+            Name::PatternSearch => Some(self.steps.query.clone()),
+            Name::PatternSave(_) => self
+                .shown_pattern()
+                .map(|(at, _)| self.session.project.region(at).name.clone())
+                .filter(|n| !n.is_empty())
+                .or_else(|| Some("Pattern".into())),
+            Name::PatternFolder => Some("New Folder".into()),
         }
         .unwrap_or_default()
     }
@@ -83,6 +105,49 @@ impl Workspace {
         };
         self.refocus = true;
         let what = naming.what;
+        // The step sequencer's: a row's name (empty goes back to its sound's), the browser's
+        // search, a pattern or folder to save or make.
+        match (what, text.as_ref()) {
+            (Name::PatternRow(at, r), Some(text)) => {
+                let text = text.trim().to_string();
+                self.edit(cx, |ws| {
+                    if let Some(pina_engine::song::project::Content::Pattern(p)) = ws
+                        .session
+                        .project
+                        .tracks
+                        .get_mut(at.0)
+                        .and_then(|t| t.regions.get_mut(at.1))
+                        .map(|reg| &mut reg.content)
+                        && let Some(row) = p.rows.get_mut(r)
+                    {
+                        row.name = text;
+                    }
+                });
+                return;
+            }
+            (Name::PatternSearch, text) => {
+                if let Some(t) = text {
+                    self.steps.query = t.trim().to_string();
+                }
+                cx.notify();
+                return;
+            }
+            (Name::PatternSave(template), Some(text)) if !text.trim().is_empty() => {
+                self.write_pattern(text.trim(), template);
+                cx.notify();
+                return;
+            }
+            (Name::PatternFolder, Some(text)) if !text.trim().is_empty() => {
+                self.make_pattern_folder(text.trim());
+                cx.notify();
+                return;
+            }
+            (Name::PatternRow(..) | Name::PatternSave(_) | Name::PatternFolder, _) => {
+                cx.notify();
+                return;
+            }
+            _ => {}
+        }
         let text = text.filter(|t| *t != self.name_of(what));
         if let (Name::Eq(id, knob), Some(text)) = (what, &text) {
             self.eq_value_typed(id, knob, text, cx);
@@ -116,7 +181,13 @@ impl Workspace {
                     Name::Aux(i) => p.auxes[i].name = text,
                     Name::Marker(i) => p.markers[i].name = text,
                     Name::Region(at) => p.tracks[at.0].regions[at.1].name = text,
-                    Name::Volume(_) | Name::Pan(_) | Name::Eq(..) => {}
+                    Name::Volume(_)
+                    | Name::Pan(_)
+                    | Name::Eq(..)
+                    | Name::PatternRow(..)
+                    | Name::PatternSearch
+                    | Name::PatternSave(_)
+                    | Name::PatternFolder => {}
                 }
             });
         }

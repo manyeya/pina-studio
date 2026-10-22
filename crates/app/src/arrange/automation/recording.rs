@@ -63,6 +63,10 @@ impl Workspace {
     /// A control on a track has been moved by hand to `value` (and set there): what that does
     /// to its automation, by the track's mode, playing or not.
     pub fn moved(&mut self, track: usize, param: Param, value: f32) {
+        // The step sequencer learning: what's moved can become an automation row.
+        if self.steps.learn.is_some() {
+            self.steps.learned = Some((track, param));
+        }
         let Some(t) = self.session.project.tracks.get(track) else {
             return;
         };
