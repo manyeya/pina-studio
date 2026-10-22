@@ -183,10 +183,18 @@ impl Library {
                                     .file_stem()
                                     .map(|s| s.to_string_lossy().into_owned())
                                     .unwrap_or_default(),
+                                // "Pack/Drums" on every platform: what's said of
+                                // it (its pack, the first) reads it by `/`.
                                 folder: path
                                     .parent()
                                     .and_then(|p| p.strip_prefix(root).ok())
-                                    .map(|p| p.to_string_lossy().into_owned())
+                                    .map(|p| {
+                                        let parts: Vec<_> = p
+                                            .components()
+                                            .map(|c| c.as_os_str().to_string_lossy())
+                                            .collect();
+                                        parts.join("/")
+                                    })
                                     .unwrap_or_default(),
                                 modified,
                                 size,

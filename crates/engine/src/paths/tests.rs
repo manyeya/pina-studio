@@ -1,5 +1,7 @@
 use super::*;
 
+// tempo was only ever on macOS, so only there is what it kept moved (and linked back).
+#[cfg(target_os = "macos")]
 #[test]
 fn what_tempo_kept_moves_to_pina_studio_once_and_its_old_paths_still_lead_there() {
     let home = std::env::temp_dir().join(format!("pina-test-paths-{}", std::process::id()));
