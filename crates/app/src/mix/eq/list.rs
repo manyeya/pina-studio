@@ -830,7 +830,8 @@ impl Workspace {
     }
 }
 
-#[cfg(test)]
+// For the shots test, which draws on macOS only.
+#[cfg(all(test, target_os = "macos"))]
 impl Workspace {
     /// Every row's spectrum as if the song were playing, each its own sound: for pictures.
     pub fn pretend_list(&mut self) {

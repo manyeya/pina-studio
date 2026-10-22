@@ -12,14 +12,17 @@ fn the_palette_says_what_each_sound_is_its_part_and_whether_its_in() {
     let drums = dir.join("Audio Files/drums.wav");
     let other = dir.join("loop.wav");
     std::fs::copy(&drums, &other).unwrap();
-    let set = format!(
-        r#"{{"op": "set_palette", "sounds": [{{"path": "{}", "role": "drum loop"}}, {{"path": "{}"}}],
-            "devices": [{{"name": "Room", "plugin": {{"class": "Room", "path": "/p/Room.vst3"}}, "role": "vocal"}},
-            {{"name": "Drum Kit", "instrument": true, "own": "drums"}}], "only": true}}"#,
-        drums.display(),
-        other.display()
-    );
-    crate::cli::edit_with(&dir, serde_json::from_str(&set).unwrap()).unwrap();
+    // Built as JSON, not text: a Windows path's backslashes would need escaping.
+    let set = serde_json::json!({
+        "op": "set_palette",
+        "sounds": [{ "path": drums, "role": "drum loop" }, { "path": other }],
+        "devices": [
+            { "name": "Room", "plugin": { "class": "Room", "path": "/p/Room.vst3" }, "role": "vocal" },
+            { "name": "Drum Kit", "instrument": true, "own": "drums" },
+        ],
+        "only": true,
+    });
+    crate::cli::edit_with(&dir, serde_json::from_value(set).unwrap()).unwrap();
     let v = palette(&dir).unwrap();
     assert_eq!(v["only"], true);
     assert!(v["how"].as_str().unwrap().contains("no other"));

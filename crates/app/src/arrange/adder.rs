@@ -230,7 +230,7 @@ impl Workspace {
     }
 
     /// The presets kept from before, read now (for the shots test, which has no background).
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub fn presets_now(&mut self) {
         for d in self
             .catalog

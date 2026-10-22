@@ -156,18 +156,38 @@ pub fn duplicate(dir: &Path) -> Result<PathBuf, String> {
     let parent = dir.parent().ok_or("no folder above it")?;
     let name = dir.file_name().ok_or("no name")?.to_string_lossy();
     let to = parent.join(unique_name(parent, &format!("{name} copy")));
-    let status = std::process::Command::new("cp")
-        .arg("-cR")
-        .arg(dir)
-        .arg(&to)
-        .status()
-        .map_err(|e| e.to_string())?;
+    // On macOS a clone, which takes no space until it changes; elsewhere a copy.
+    let copied = match cfg!(target_os = "macos") {
+        true => std::process::Command::new("cp")
+            .arg("-cR")
+            .arg(dir)
+            .arg(&to)
+            .status()
+            .is_ok_and(|s| s.success()),
+        false => copy_dir(dir, &to).is_ok(),
+    };
     // Unsaved edits kept from the original stay with it.
     let _ = std::fs::remove_dir_all(to.join(pina_engine::song::project::RECOVERY_DIR));
-    match status.success() {
+    match copied {
         true => Ok(to),
         false => Err(format!("couldn't copy {}", dir.display())),
     }
+}
+
+/// A folder and everything in it, copied.
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        match entry.file_type()?.is_dir() {
+            true => copy_dir(&entry.path(), &target)?,
+            false => {
+                std::fs::copy(entry.path(), target)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Renames a song's folder (its name is its folder's).

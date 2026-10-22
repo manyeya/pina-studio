@@ -371,7 +371,8 @@ impl Quick {
     }
 }
 
-#[cfg(test)]
+// For the shots test, which draws on macOS only.
+#[cfg(all(test, target_os = "macos"))]
 impl EqView {
     /// A mix's spectrum, as if it were playing through `eq`: for pictures.
     pub fn pretend(&mut self, eq: &Eq, rate: f64) {
