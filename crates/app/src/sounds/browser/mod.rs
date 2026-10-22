@@ -77,8 +77,8 @@ const PANEL_MIN_W: f32 = 260.0;
 /// The lanes keep at least this much beside the compact browser.
 const LANES_MIN_W: f32 = 240.0;
 const PANEL_ROW_H: f32 = 44.0;
-const DETAILS_W: f32 = 312.0;
-const ROW_H: f32 = 44.0;
+pub(crate) const DETAILS_W: f32 = 312.0;
+pub(crate) const ROW_H: f32 = 44.0;
 const WAVE_W: f32 = 104.0;
 // The list's columns, lined up under their heads.
 const KEY_W: f32 = 84.0;

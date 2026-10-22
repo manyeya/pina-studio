@@ -51,6 +51,9 @@ impl Catalog {
         });
         // Enter puts the picked row in; Escape clears the search.
         let done = cx.subscribe(&search, |ws, input, e: &TextEvent, cx| match e {
+            TextEvent::Confirm(_) if ws.view == crate::workspace::View::Plugins => {
+                ws.add_picked_plugin(cx)
+            }
             TextEvent::Confirm(_) => ws.use_picked(false, cx),
             TextEvent::Cancel => input.update(cx, |i, cx| i.set_text("", cx)),
         });

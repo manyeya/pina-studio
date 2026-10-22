@@ -1,23 +1,19 @@
-//! The library's cards: a plugin's picture of itself (or, until it has one, a face drawn for it)
-//! with its format on it and its name under it; laid out in columns, each card as tall as its
-//! picture.
+//! What's found, as pictures: a plugin's picture of its own window (or, until it has one, a face
+//! drawn for it) with its format on it and its name, kind and maker under it; laid out in
+//! columns, each card as tall as its picture.
 
-use gpui::{
-    AnyElement, Div, FontWeight, MouseButton, MouseDownEvent, MouseUpEvent, ObjectFit, StyledImage,
-    div, img, px, rgb,
-};
+use gpui::{AnyElement, Div, FontWeight, MouseButton, ObjectFit, StyledImage, div, img, px, rgb};
 
 use super::*;
 use crate::{
     sounds::catalog::Target,
     ui::{looks::hsl, menu::MenuAction, theme::*},
-    workspace::{Drag, pt},
 };
 
 /// The narrowest a card is drawn, the gap between them, and the height of the name under one.
-pub(crate) const CARD_MIN: f32 = 196.0;
-pub(crate) const CARD_GAP: f32 = 18.0;
-const LABEL_H: f32 = 30.0;
+pub(crate) const CARD_MIN: f32 = 180.0;
+pub(crate) const CARD_GAP: f32 = 14.0;
+const LABEL_H: f32 = 34.0;
 
 /// How many columns go across `width`, and how wide each is.
 pub(crate) fn columns(width: f32, min: f32, gap: f32) -> (usize, f32) {
@@ -61,27 +57,26 @@ impl Workspace {
         }
     }
 
-    /// A card: its picture, format and name; picked, loading, a preset's.
-    pub(crate) fn plugin_card(&mut self, card: &Card, w: f32, cx: &mut Context<Self>) -> Div {
+    /// A card: its picture with its format on it, and its name, kind and maker under it.
+    pub(crate) fn plugin_card(
+        &self,
+        card: &Card,
+        pos: usize,
+        w: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<Div> {
         let d = card.device();
-        let dev = self.catalog.devices[d].clone();
+        let dev = &self.catalog.devices[d];
+        let page = &self.plugin_page;
         let h = (w * self.picture_ratio(&dev.key)).round();
-        let picked = self.plugin_page.picked.as_deref() == Some(dev.key.as_str());
-        let loading = self
-            .plugin_page
-            .loading
-            .as_ref()
-            .is_some_and(|(k, at)| *k == dev.key && at.elapsed().as_millis() < 1400);
+        let selected = page.picked.as_deref() == Some(dev.key.as_str())
+            && page.preset.as_ref() == super::page::card_preset(card);
         let badge = match (card, dev.own.is_some()) {
-            (Card::Preset(..), _) => "PRESET".to_string(),
-            (_, true) => "PINA".into(),
+            (Card::Preset(..), _) => "Preset".to_string(),
+            (_, true) => "Built in".into(),
             _ => dev.badges().first().copied().unwrap_or("").to_string(),
         };
-        let failed = self
-            .plugin_page
-            .facts
-            .get(&dev.key)
-            .is_some_and(|f| f.failed.is_some());
+        let failed = page.facts.get(&dev.key).is_some_and(|f| f.failed.is_some());
         let mapped = self
             .catalog
             .keys
@@ -89,82 +84,58 @@ impl Workspace {
             .find(|(_, k)| *k == dev.key)
             .map(|(key, _)| key_label(key));
         let (title, under) = match card {
-            Card::Preset(_, p) => (p.name.clone(), Some(dev.name.clone())),
-            Card::Device(_) => (dev.name.clone(), None),
-        };
-        let preset = match card {
-            Card::Preset(_, p) => Some(p.clone()),
-            Card::Device(_) => None,
+            Card::Preset(_, p) => (p.name.clone(), dev.name.clone()),
+            Card::Device(_) => (
+                dev.name.clone(),
+                match (subcategory(dev), dev.own) {
+                    (Some(k), None) => format!("{k} · {}", dev.vendor),
+                    (Some(k), Some(_)) => format!("{k} · Pina Studio"),
+                    (None, None) => dev.vendor.clone(),
+                    (None, Some(_)) => "Pina Studio".to_string(),
+                },
+            ),
         };
         let key = dev.key.clone();
-        let art = self.card_art(&dev, w, h);
-        let tag = |text: String, bg: gpui::Hsla, fg: u32| {
-            div()
-                .h(px(17.))
-                .px(px(6.))
-                .flex()
-                .items_center()
-                .rounded(px(5.))
-                .bg(bg)
-                .text_size(px(9.5))
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(fg))
-                .child(text)
-        };
+        let color = dev.cat.color();
+        let art = self.card_art(dev, w, h);
+        let tag = |text: String, color: u32| chip(text, color).bg(alpha(BG, 0.85));
         div()
+            .id(("plugin-card", pos))
             .w(px(w))
             .flex()
             .flex_col()
-            .gap(px(7.))
+            .gap(px(6.))
+            .cursor_pointer()
             .debug_selector(move || format!("plugin-card-{key}"))
             .child(
                 div()
                     .relative()
                     .w(px(w))
                     .h(px(h))
-                    .rounded(px(9.))
+                    .rounded(px(8.))
                     .overflow_hidden()
-                    .border_2()
-                    .border_color(if picked {
-                        rgb(0xffffff).into()
-                    } else {
-                        alpha(0xffffff, 0.0)
-                    })
-                    .shadow(vec![gpui::BoxShadow {
-                        color: alpha(0x000000, 0.45),
-                        offset: gpui::point(px(0.), px(6.)),
-                        blur_radius: px(16.),
-                        spread_radius: px(0.),
-                        inset: false,
-                    }])
-                    .cursor_pointer()
-                    .hover(|s| s.border_color(alpha(0xffffff, if picked { 1.0 } else { 0.35 })))
-                    .child(art)
-                    .when(failed, |d| d.opacity(0.45))
+                    .bg(rgb(CARD))
+                    .border_1()
+                    .border_color(rgb(if selected { ACCENT } else { LINE }))
+                    .when(!selected, |d| d.hover(|s| s.border_color(rgb(LINE_STRONG))))
+                    .child(div().when(failed, |d| d.opacity(0.45)).child(art))
                     .child(
                         div()
                             .absolute()
-                            .top(px(7.))
-                            .right(px(7.))
+                            .top(px(6.))
+                            .right(px(6.))
                             .flex()
                             .gap(px(4.))
-                            .children(mapped.map(|k| tag(k, alpha(ACCENT, 0.92), 0xffffff)))
-                            .when(!badge.is_empty(), |d| {
-                                d.child(tag(badge, alpha(0x0c0c0f, 0.78), TEXT_2))
-                            }),
+                            .children(mapped.map(|k| tag(k, ACCENT_TEXT)))
+                            .when(!badge.is_empty(), |d| d.child(tag(badge, TEXT_2))),
                     )
-                    .when(loading, |d| {
+                    .when(failed, |d| {
                         d.child(
                             div()
                                 .absolute()
-                                .inset_0()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .bg(alpha(0x000000, 0.55))
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child("Loading…"),
+                                .left(px(6.))
+                                .bottom(px(6.))
+                                .child(tag("Won't load".into(), RECORD)),
                         )
                     }),
             )
@@ -173,87 +144,50 @@ impl Workspace {
                     .h(px(LABEL_H))
                     .flex()
                     .flex_col()
+                    .gap(px(2.))
                     .child(
                         div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(TEXT))
+                            .text_size(px(12.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(if selected { TEXT } else { TEXT_2 }))
                             .whitespace_nowrap()
                             .overflow_hidden()
                             .text_ellipsis()
                             .child(title),
                     )
-                    .children(under.map(|u| {
+                    .child(
                         div()
-                            .text_size(px(11.))
-                            .text_color(rgb(TEXT_3))
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(u)
-                    })),
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .size(px(6.))
+                                    .flex_none()
+                                    .rounded(px(3.))
+                                    .bg(rgb(color)),
+                            )
+                            .child(
+                                div()
+                                    .min_w(px(0.))
+                                    .text_size(px(10.5))
+                                    .text_color(rgb(TEXT_3))
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(under),
+                            ),
+                    ),
             )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                    let p = pt(e.position);
-                    ws.drag = Some(Drag::Device {
-                        device: d,
-                        from: p,
-                        at: p,
-                        moved: false,
-                    });
-                    cx.notify();
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(move |ws, e: &MouseUpEvent, _, cx| {
-                    if let Some(Drag::Device { moved: false, .. }) = ws.drag {
-                        ws.drag = None;
-                        ws.card_clicked(d, preset.clone(), e.modifiers.alt, cx);
-                    }
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                    let key = ws.catalog.devices[d].key.clone();
-                    ws.plugin_page.picked = Some(key);
-                    let items = ws.card_menu(d, e.position);
-                    ws.menu = Some(crate::ui::menu::Menu {
-                        at: e.position,
-                        items,
-                        ..Default::default()
-                    });
-                    cx.notify();
-                }),
-            )
+            .on_hover({
+                let key = self.catalog.devices[d].key.clone();
+                cx.listener(move |ws, over: &bool, _, cx| ws.hover_plugin(&key, *over, cx))
+            })
+            .on_mouse_down(MouseButton::Left, self.plugin_press(card.clone(), cx))
+            .on_mouse_down(MouseButton::Right, self.plugin_menu_press(d, cx))
     }
 
-    /// A card clicked: on the map, picked (or put on the key waiting); else put on the selected
-    /// track (⌥: a new track of its own).
-    pub(crate) fn card_clicked(
-        &mut self,
-        d: usize,
-        preset: Option<pina_engine::song::project::Preset>,
-        new_track: bool,
-        cx: &mut Context<Self>,
-    ) {
-        let key = self.catalog.devices[d].key.clone();
-        if self.plugin_page.tab == Tab::Map {
-            match self.plugin_page.armed.take() {
-                Some(k) => self.map_key(&k, &key),
-                None => self.plugin_page.picked = Some(key),
-            }
-            cx.notify();
-            return;
-        }
-        self.plugin_page.picked = Some(key.clone());
-        self.load_plugin_card(d, preset, new_track, cx);
-    }
-
-    /// A device put on the selected track (or a new one), its card showing it loading.
+    /// A device put on the selected track (or a new one), its window opening.
     pub(crate) fn load_plugin_card(
         &mut self,
         d: usize,
@@ -262,7 +196,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let key = self.catalog.devices[d].key.clone();
-        self.plugin_page.loading = Some((key.clone(), Instant::now()));
         *self.catalog.uses.entry(key).or_default() += 1;
         self.catalog.save();
         let target = match new_track || self.session.project.tracks.is_empty() {
@@ -270,18 +203,14 @@ impl Workspace {
             false => Target::Track(self.track),
         };
         let name = self.catalog.devices[d].name.clone();
+        let status = self.status.clone();
         self.use_device(d, target, preset, cx);
-        if let Some(t) = self.session.project.tracks.get(self.track) {
-            self.status = Some(format!("{name} on {}", t.name));
+        // Said where it went, unless putting it there had something else to say.
+        if self.status == status
+            && let Some(t) = self.session.project.tracks.get(self.track)
+        {
+            self.status = Some(format!("{name} is on {}", t.name));
         }
-        // The loading veil lifts on its own.
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(1450))
-                .await;
-            this.update(cx, |_, cx| cx.notify()).ok();
-        })
-        .detach();
         cx.notify();
     }
 
@@ -291,14 +220,15 @@ impl Workspace {
         let width = if width > 0.0 {
             width
         } else {
-            (self.viewport_w - 300.0).max(400.0)
+            (self.viewport_w - self.header_w - 340.0).max(400.0)
         };
         let (n, w) = columns(width, CARD_MIN, CARD_GAP);
-        let mut cols: Vec<(f32, Vec<Div>)> = (0..n).map(|_| (0.0, Vec::new())).collect();
-        for card in &cards {
-            let key = self.catalog.devices[card.device()].key.clone();
-            let h = w * self.picture_ratio(&key) + LABEL_H + CARD_GAP;
-            let el = self.plugin_card(card, w, cx);
+        let mut cols: Vec<(f32, Vec<gpui::Stateful<Div>>)> =
+            (0..n).map(|_| (0.0, Vec::new())).collect();
+        for (pos, card) in cards.iter().enumerate() {
+            let key = &self.catalog.devices[card.device()].key;
+            let h = w * self.picture_ratio(key) + LABEL_H + CARD_GAP;
+            let el = self.plugin_card(card, pos, w, cx);
             let shortest = cols.iter_mut().min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
             shortest.0 += h;
             shortest.1.push(el);
@@ -317,11 +247,7 @@ impl Workspace {
     }
 
     /// A card's menu: where to put it, its collections, its key, its picture, its files.
-    pub(crate) fn card_menu(
-        &self,
-        d: usize,
-        at: gpui::Point<gpui::Pixels>,
-    ) -> Vec<(String, MenuAction)> {
+    pub(crate) fn card_menu(&self, d: usize) -> Vec<(String, MenuAction)> {
         let dev = &self.catalog.devices[d];
         let op = |label: String, op: PluginOp| (label, MenuAction::Plugins(op));
         let track = self
@@ -374,7 +300,6 @@ impl Workspace {
                 ));
             }
         }
-        let _ = at;
         items
     }
 }

@@ -405,7 +405,17 @@ impl Workspace {
                 }) = &mut self.drag
                 {
                     *at = p;
-                    *moved |= (p.x - from.x).hypot(p.y - from.y) > 4.0;
+                    let far = (p.x - from.x).hypot(p.y - from.y);
+                    *moved |= far > 4.0;
+                    // Dragged out of the Plugins page: the tracks come back to drop it on, the
+                    // compact browser beside them (on Keys it's for a key).
+                    if far > 40.0
+                        && self.view == View::Plugins
+                        && self.plugin_page.shown != crate::sounds::plugins::Shown::Keys
+                    {
+                        self.view = View::Arrange;
+                        self.show_browser = true;
+                    }
                 }
                 cx.notify();
                 return;

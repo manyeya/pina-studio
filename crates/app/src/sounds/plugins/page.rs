@@ -1,25 +1,33 @@
-//! The Plugins page laid out: the search and tabs across the top, the kind, source and formats
-//! under them, the sidebar (collections, categories, makers) and the library, the map or the
-//! library's health; and what its menus and buttons do.
+//! The Plugins page laid out as the sample library's: its bar (what it is, Grid, List or Keys,
+//! Compact), the filters, what's found and the one picked; how it opens from the Browser and goes
+//! back; and what its menus and buttons do.
+
+use std::ops::Range;
 
 use gpui::{
-    AnyElement, Bounds, Div, FontWeight, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, div,
-    px, rgb,
+    Bounds, Div, FontWeight, MouseButton, MouseDownEvent, Pixels, div, px, rgb, uniform_list,
 };
 
 use super::*;
 use crate::{
-    ui::{
-        menu::{Menu, MenuAction},
-        theme::*,
-    },
-    workspace::{Drag, Name, View},
+    sounds::browser::ROW_H,
+    ui::theme::*,
+    workspace::{Drag, Name, View, pt},
 };
+
+/// The list's columns: the kind, formats, load, size and songs.
+const KIND_W: f32 = 110.0;
+const FORMATS_W: f32 = 76.0;
+const CPU_W: f32 = 48.0;
+const SIZE_W: f32 = 58.0;
+const SONGS_W: f32 = 44.0;
 
 /// Something the page's menus and buttons do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PluginOp {
     Load(usize, bool),
+    /// On a track (none: a new one), as a preset or not.
+    AddTo(usize, Option<usize>, Option<Preset>),
     ToggleCollection(usize, usize),
     NewCollection(Option<usize>),
     RenameCollection(usize),
@@ -39,928 +47,739 @@ pub enum PluginOp {
     ),
 }
 
-/// A label over a part of the sidebar or the filters: "CATEGORY", "SOURCE".
-fn label(text: &'static str) -> Div {
-    div()
-        .text_size(px(10.5))
-        .font_weight(FontWeight::BOLD)
-        .text_color(rgb(TEXT_4))
-        .child(text)
-}
-
-/// A pill in a group of them, picked or not.
-fn pill(text: impl Into<gpui::SharedString>, on: bool) -> Div {
-    div()
-        .h(px(28.))
-        .px(px(13.))
-        .flex()
-        .items_center()
-        .rounded(px(14.))
-        .text_size(px(12.5))
-        .font_weight(FontWeight::MEDIUM)
-        .cursor_pointer()
-        .bg(if on {
-            rgb(0xf4f4f6).into()
-        } else {
-            alpha(0, 0.0)
-        })
-        .text_color(rgb(if on { 0x111114 } else { TEXT_2 }))
-        .when(!on, |d| d.hover(|s| s.bg(rgb(OFF))))
-        .child(text.into())
-}
-
-fn pills() -> Div {
-    div()
-        .p(px(3.))
-        .flex()
-        .items_center()
-        .gap(px(2.))
-        .rounded(px(17.))
-        .bg(rgb(0x18181d))
-        .border_1()
-        .border_color(rgb(LINE))
-}
-
-/// A sidebar row: a mark, a name, a count.
-fn side_row(mark: AnyElement, name: String, count: usize, on: bool, indent: f32) -> Div {
-    div()
-        .h(px(28.))
-        .pl(px(8. + indent))
-        .pr(px(8.))
-        .flex()
-        .items_center()
-        .gap(px(9.))
-        .rounded(px(7.))
-        .cursor_pointer()
-        .bg(if on {
-            rgb(RAISED).into()
-        } else {
-            alpha(0, 0.0)
-        })
-        .when(!on, |d| d.hover(|s| s.bg(rgb(0x1a1a20))))
-        .child(mark)
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .text_size(px(13.))
-                .font_weight(if on {
-                    FontWeight::SEMIBOLD
-                } else {
-                    FontWeight::NORMAL
-                })
-                .text_color(rgb(if on { TEXT } else { TEXT_2 }))
-                .whitespace_nowrap()
-                .overflow_hidden()
-                .text_ellipsis()
-                .child(name),
-        )
-        .child(
-            div()
-                .font_family(MONO)
-                .text_size(px(11.))
-                .text_color(rgb(TEXT_4))
-                .child(format!("{count}")),
-        )
-}
-
 impl Workspace {
-    /// The Plugins page in the tracks' place, or back to them.
+    /// The Plugins page in the tracks' place (on the Browser's tab, all if it was on Sounds), or
+    /// back to them.
     pub fn toggle_plugins_page(&mut self, cx: &mut Context<Self>) {
-        self.view = match self.view {
-            View::Plugins => View::Arrange,
-            _ => View::Plugins,
-        };
-        if self.view == View::Plugins {
-            self.refresh_plugin_facts(cx);
+        match self.view {
+            View::Plugins => self.view = View::Arrange,
+            _ => self.open_plugins_page(cx),
         }
         cx.notify();
     }
 
-    pub fn plugins_page(&mut self, cx: &mut Context<Self>) -> Div {
-        let top = self.plugins_top(cx);
-        let body: AnyElement = match self.plugin_page.tab {
-            Tab::Health => self.health_page(cx).into_any_element(),
-            tab => {
-                let filters = self.plugins_filters(cx);
-                let side = self.plugins_sidebar(cx);
-                let main = match tab {
-                    Tab::Map => self.plugins_map(cx),
-                    _ => self.plugins_library(cx),
-                };
-                div()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .flex()
-                    .flex_col()
-                    .child(filters)
-                    .child(div().flex_1().min_h(px(0.)).flex().child(side).child(main))
-                    .into_any_element()
-            }
-        };
-        div()
-            .flex_1()
-            .min_w(px(0.))
-            .flex()
-            .flex_col()
-            .bg(rgb(0x111114))
-            .child(top)
-            .child(body)
+    /// The Browser's instruments and effects as a page, the search and tab coming along.
+    pub fn open_plugins_page(&mut self, cx: &mut Context<Self>) {
+        if self.catalog.scope == Scope::Sounds {
+            self.catalog.scope = Scope::All;
+        }
+        self.view = View::Plugins;
+        self.refresh_plugin_facts(cx);
+        cx.notify();
     }
 
-    fn plugins_top(&mut self, cx: &mut Context<Self>) -> Div {
-        let tab = self.plugin_page.tab;
-        let indexing = self.plugin_page.indexing.is_some();
-        let tabs = [
-            (Tab::Library, "Library"),
-            (Tab::Map, "Map"),
-            (Tab::Health, "Health"),
-        ]
-        .map(|(t, name)| {
-            pill(name, tab == t)
-                .debug_selector(move || format!("plugins-tab-{name}"))
+    /// Compact: the tracks again, the Browser beside them on the page's tab.
+    pub fn compact_plugins(&mut self, cx: &mut Context<Self>) {
+        self.view = View::Arrange;
+        self.show_browser = true;
+        self.show_agent = false;
+        cx.notify();
+    }
+
+    /// The bar over the page: what it is and how many, Grid, List or Keys, and Compact.
+    fn plugins_bar(&mut self, cx: &mut Context<Self>) -> Div {
+        let shown = self.plugin_page.shown;
+        let view = |label: &'static str, s: Shown, cx: &mut Context<Self>| {
+            seg(label, shown == s, 24.)
+                .debug_selector(move || format!("plugins-view-{label}"))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |ws, _, _, cx| {
-                        ws.plugin_page.tab = t;
+                        ws.plugin_page.shown = s;
                         ws.plugin_page.armed = None;
-                        if t == Tab::Health {
-                            ws.refresh_plugin_facts(cx);
-                        }
                         cx.notify();
                     }),
                 )
-        });
-        let square = |i: Icon, name: &'static str, on: bool| {
-            div()
-                .size(px(34.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(9.))
-                .border_1()
-                .border_color(rgb(LINE))
-                .bg(rgb(if on { RAISED } else { 0x18181d }))
-                .cursor_pointer()
-                .hover(|s| s.bg(rgb(RAISED)))
-                .debug_selector(move || format!("plugins-{name}"))
-                .child(icon(i, 16.).text_color(rgb(TEXT_2)))
+        };
+        let detail = match &self.plugin_page.indexing {
+            Some(i) => format!("Pictures {} of {}", i.total - i.todo.len(), i.total),
+            None => format!("{} devices", self.catalog.devices.len()),
         };
         div()
-            .h(px(60.))
+            .h(px(40.))
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(12.))
-            .px(px(18.))
+            .gap(px(10.))
+            .px(px(16.))
+            .bg(rgb(SURFACE))
             .border_b_1()
             .border_color(rgb(LINE))
             .child(
                 div()
-                    .flex_1()
-                    .h(px(38.))
-                    .px(px(14.))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .rounded(px(10.))
-                    .bg(rgb(0x18181d))
-                    .border_1()
-                    .border_color(rgb(LINE))
-                    .text_size(px(16.))
-                    .child(icon(Icon::Search, 17.).text_color(rgb(TEXT_3)))
-                    .child(div().flex_1().child(self.plugin_page.search.clone())),
-            )
-            .child(pills().children(tabs))
-            .child(
-                div()
-                    .h(px(34.))
-                    .px(px(12.))
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .rounded(px(9.))
-                    .border_1()
-                    .border_color(rgb(LINE))
-                    .bg(rgb(if indexing { RAISED } else { 0x18181d }))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgb(RAISED)))
-                    .text_size(px(12.5))
-                    .font_weight(FontWeight::MEDIUM)
-                    .debug_selector(|| "plugins-index".into())
-                    .child(icon(Icon::Zoom, 15.).text_color(rgb(TEXT_2)))
-                    .child(if indexing { "Stop" } else { "Take Pictures" })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| ws.take_plugin_pictures(None, cx)),
-                    ),
-            )
-            .child(square(Icon::Rescan, "rescan", false).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|ws, _, _, cx| {
-                    ws.status = Some("Looking for new plugins…".into());
-                    ws.start_scan(cx);
-                    ws.refresh_plugin_facts(cx);
-                    cx.notify();
-                }),
-            ))
-            .child(square(Icon::Close, "close", false).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|ws, _, _, cx| ws.toggle_plugins_page(cx)),
-            ))
-    }
-
-    fn plugins_filters(&mut self, cx: &mut Context<Self>) -> Div {
-        let page = &self.plugin_page;
-        let (kind, source, off) = (page.kind, page.source, page.formats_off.clone());
-        let kinds = [
-            (Kind::Effects, "Effects"),
-            (Kind::Instruments, "Instruments"),
-        ]
-        .map(|(k, name)| {
-            pill(name, kind == k)
-                .debug_selector(move || format!("plugins-kind-{name}"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        let page = &mut ws.plugin_page;
-                        if page.kind != k {
-                            (page.kind, page.cat, page.sub) = (k, None, None);
-                        }
-                        cx.notify();
-                    }),
-                )
-        });
-        let sources = [
-            (Source::All, "All"),
-            (Source::Plugins, "Plugins"),
-            (Source::Stock, "Stock"),
-            (Source::Saved, "Saved"),
-        ]
-        .map(|(s, name)| {
-            pill(name, source == s)
-                .debug_selector(move || format!("plugins-source-{name}"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        ws.plugin_page.source = s;
-                        cx.notify();
-                    }),
-                )
-        });
-        let formats = [Format::Clap, Format::Vst3, Format::Au, Format::Vst2].map(|f| {
-            let on = !off.contains(&f);
-            let name = match f {
-                Format::Clap => "CLAP",
-                Format::Vst3 => "VST3",
-                Format::Au => "AU",
-                Format::Vst2 => "VST",
-            };
-            div()
-                .h(px(26.))
-                .px(px(10.))
-                .flex()
-                .items_center()
-                .rounded(px(13.))
-                .border_1()
-                .border_color(rgb(if on { 0xf4f4f6 } else { LINE_STRONG }))
-                .text_size(px(11.5))
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(if on { TEXT } else { TEXT_4 }))
-                .when(!on, |d| d.line_through())
-                .cursor_pointer()
-                .debug_selector(move || format!("plugins-format-{name}"))
-                .child(name)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        let off = &mut ws.plugin_page.formats_off;
-                        match off.iter().position(|x| *x == f) {
-                            Some(i) => drop(off.remove(i)),
-                            None => off.push(f),
-                        }
-                        cx.notify();
-                    }),
-                )
-        });
-        div()
-            .h(px(54.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(16.))
-            .px(px(18.))
-            .child(pills().children(kinds))
-            .child(label("SOURCE"))
-            .child(pills().children(sources))
-            .child(label("FORMAT"))
-            .child(div().flex().gap(px(6.)).children(formats))
-    }
-
-    fn plugins_sidebar(&mut self, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
-        let pool = self.plugin_pool(cx);
-        let page = &self.plugin_page;
-        let (cat, sub, maker, collection) =
-            (page.cat, page.sub, page.maker.clone(), page.collection);
-        let devices = &self.catalog.devices;
-        let in_pool: Vec<&Device> = pool.iter().map(|&i| &devices[i]).collect();
-        // Your collections, each with what of it is shown.
-        let mut yours: Vec<AnyElement> = self
-            .catalog
-            .collections
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                let n = in_pool
-                    .iter()
-                    .filter(|d| c.devices.contains(&d.key))
-                    .count();
-                let naming = self.name_field(Name::PluginCollection(i));
-                let row = match naming {
-                    Some(input) => div()
-                        .h(px(28.))
-                        .px(px(8.))
-                        .flex()
-                        .items_center()
-                        .child(input),
-                    None => side_row(
-                        div()
-                            .size(px(9.))
-                            .rounded(px(3.))
-                            .bg(rgb(c.color))
-                            .into_any_element(),
-                        c.name.clone(),
-                        n,
-                        collection == Some(i),
-                        0.0,
-                    ),
-                };
-                row.debug_selector(move || format!("plugins-collection-{i}"))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
-                            if e.click_count == 2 {
-                                ws.start_naming(Name::PluginCollection(i), window, cx);
-                                return;
-                            }
-                            let page = &mut ws.plugin_page;
-                            page.collection = if page.collection == Some(i) {
-                                None
-                            } else {
-                                Some(i)
-                            };
-                            cx.notify();
-                        }),
-                    )
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _: &MouseUpEvent, _, cx| {
-                            // A card dropped on it goes in.
-                            if let Some(Drag::Device {
-                                device,
-                                moved: true,
-                                ..
-                            }) = ws.drag
-                            {
-                                ws.drag = None;
-                                let key = ws.catalog.devices[device].key.clone();
-                                if let Some(c) = ws.catalog.collections.get_mut(i)
-                                    && !c.devices.contains(&key)
-                                {
-                                    c.devices.push(key);
-                                    ws.catalog.save();
-                                }
-                                cx.notify();
-                            }
-                        }),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                            let op =
-                                |l: &str, op: PluginOp| (l.to_string(), MenuAction::Plugins(op));
-                            let mut items = vec![op("Rename", PluginOp::RenameCollection(i))];
-                            items.push(("Colour".into(), MenuAction::Nothing));
-                            items.extend(COLLECTION_COLORS.iter().enumerate().map(|(k, &c)| {
-                                op(
-                                    &format!(
-                                        "  ● {}",
-                                        [
-                                            "Orange", "Blue", "Green", "Pink", "Violet", "Yellow",
-                                            "Sky", "Red"
-                                        ][k]
-                                    ),
-                                    PluginOp::CollectionColor(i, c),
-                                )
-                            }));
-                            items.push((String::new(), MenuAction::Nothing));
-                            items.push(op("Delete Collection", PluginOp::DeleteCollection(i)));
-                            ws.menu = Some(Menu {
-                                at: e.position,
-                                items,
-                                ..Default::default()
-                            });
-                            cx.notify();
-                        }),
-                    )
-                    .into_any_element()
-            })
-            .collect();
-        yours.push(
-            div()
-                .h(px(26.))
-                .px(px(8.))
-                .flex()
-                .items_center()
-                .text_size(px(12.5))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(TEXT_3))
-                .cursor_pointer()
-                .hover(|s| s.text_color(rgb(TEXT)))
-                .debug_selector(|| "plugins-new-collection".into())
-                .child("+ New")
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|ws, _, _, cx| ws.plugin_op(PluginOp::NewCollection(None), cx)),
-                )
-                .into_any_element(),
-        );
-        // The categories of the kind shown, each with what's in it; the picked one open on its
-        // kinds.
-        let all = side_row(
-            div().into_any_element(),
-            "All".into(),
-            in_pool.len(),
-            cat.is_none(),
-            0.0,
-        )
-        .debug_selector(|| "plugins-cat-all".into())
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|ws, _, _, cx| {
-                (ws.plugin_page.cat, ws.plugin_page.sub) = (None, None);
-                cx.notify();
-            }),
-        );
-        let mut cats: Vec<AnyElement> = vec![all.into_any_element()];
-        for &k in self.plugin_page.cats() {
-            let of: Vec<&&Device> = in_pool.iter().filter(|d| d.cat == k).collect();
-            if of.is_empty() {
-                continue;
-            }
-            let on = cat == Some(k);
-            cats.push(
-                side_row(
-                    k.glyph(14.).text_color(rgb(k.color())).into_any_element(),
-                    k.name().into(),
-                    of.len(),
-                    on && sub.is_none(),
-                    0.0,
-                )
-                .debug_selector(move || format!("plugins-cat-{}", k.name()))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        let page = &mut ws.plugin_page;
-                        (page.cat, page.sub) = (
-                            if page.cat == Some(k) && page.sub.is_none() {
-                                None
-                            } else {
-                                Some(k)
-                            },
-                            None,
-                        );
-                        cx.notify();
-                    }),
-                )
-                .into_any_element(),
-            );
-            if on {
-                let mut subs: Vec<(&'static str, usize)> = Vec::new();
-                for d in &of {
-                    if let Some(s) = subcategory(d) {
-                        match subs.iter_mut().find(|x| x.0 == s) {
-                            Some(x) => x.1 += 1,
-                            None => subs.push((s, 1)),
-                        }
-                    }
-                }
-                subs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-                for (s, n) in subs {
-                    cats.push(
-                        side_row(div().into_any_element(), s.into(), n, sub == Some(s), 18.0)
-                            .border_l_1()
-                            .border_color(rgb(LINE))
-                            .ml(px(16.))
-                            .debug_selector(move || format!("plugins-sub-{s}"))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |ws, _, _, cx| {
-                                    let page = &mut ws.plugin_page;
-                                    page.sub = if page.sub == Some(s) { None } else { Some(s) };
-                                    cx.notify();
-                                }),
-                            )
-                            .into_any_element(),
-                    );
-                }
-            }
-        }
-        // The makers, narrowed by what's typed over them.
-        let typed = self
-            .plugin_page
-            .makers
-            .read(cx)
-            .text()
-            .trim()
-            .to_lowercase();
-        let mut makers: Vec<(String, usize)> = Vec::new();
-        for d in &in_pool {
-            match makers.iter_mut().find(|m| m.0 == d.vendor) {
-                Some(m) => m.1 += 1,
-                None => makers.push((d.vendor.clone(), 1)),
-            }
-        }
-        makers.retain(|m| typed.is_empty() || m.0.to_lowercase().contains(&typed));
-        makers.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        let maker_rows = makers.into_iter().map(|(m, n)| {
-            let on = maker.as_deref() == Some(m.as_str());
-            let mark = div()
-                .size(px(18.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(5.))
-                .bg(rgb(crate::ui::looks::hsl(
-                    super::cards::maker_hue(&m),
-                    0.45,
-                    0.32,
-                )))
-                .text_size(px(8.5))
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(0xffffff))
-                .child(initials(&m));
-            let key = m.clone();
-            side_row(mark.into_any_element(), m, n, on, 0.0).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |ws, _, _, cx| {
-                    let page = &mut ws.plugin_page;
-                    page.maker = if page.maker.as_deref() == Some(key.as_str()) {
-                        None
-                    } else {
-                        Some(key.clone())
-                    };
-                    cx.notify();
-                }),
-            )
-        });
-        div()
-            .id("plugins-sidebar")
-            .w(px(250.))
-            .flex_none()
-            .h_full()
-            .overflow_y_scroll()
-            .px(px(12.))
-            .pb(px(20.))
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .border_r_1()
-            .border_color(rgb(LINE))
-            .child(div().pt(px(8.)).pb(px(6.)).px(px(8.)).child(label("YOURS")))
-            .children(yours)
-            .child(
-                div()
-                    .pt(px(16.))
-                    .pb(px(6.))
-                    .px(px(8.))
-                    .child(label("CATEGORY")),
-            )
-            .children(cats)
-            .child(
-                div()
-                    .pt(px(16.))
-                    .pb(px(6.))
-                    .px(px(8.))
-                    .child(label("MAKER")),
-            )
-            .child(
-                div()
-                    .h(px(30.))
-                    .mx(px(4.))
-                    .mb(px(6.))
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(8.))
-                    .bg(rgb(0x1c1c22))
-                    .text_size(px(12.))
-                    .child(self.plugin_page.makers.clone()),
-            )
-            .children(maker_rows)
-    }
-
-    /// Over the cards: where the library is (All › Dynamics · Compressor) and how many, Health's
-    /// set if one's shown, and the sort.
-    fn plugins_bar(&mut self, n: usize, cx: &mut Context<Self>) -> Div {
-        let page = &self.plugin_page;
-        let mut trail = vec!["All".to_string()];
-        if let Some(c) = page
-            .collection
-            .and_then(|c| self.catalog.collections.get(c))
-        {
-            trail.push(c.name.clone());
-        }
-        if let Some(c) = page.cat {
-            trail.push(match page.sub {
-                Some(s) => format!("{} · {s}", c.name()),
-                None => c.name().to_string(),
-            });
-        }
-        if let Some(m) = &page.maker {
-            trail.push(m.clone());
-        }
-        let (sort, descending) = (page.sort, page.descending);
-        let sorts = [
-            (Sort::Name, "Name"),
-            (Sort::Used, "Used"),
-            (Sort::Cpu, "CPU"),
-        ]
-        .map(|(s, name)| {
-            pill(name, sort == s)
-                .h(px(24.))
-                .debug_selector(move || format!("plugins-sort-{name}"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        let page = &mut ws.plugin_page;
-                        match page.sort == s {
-                            true => page.descending ^= true,
-                            false => (page.sort, page.descending) = (s, false),
-                        }
-                        cx.notify();
-                    }),
-                )
-        });
-        div()
-            .h(px(40.))
-            .flex()
-            .items_center()
-            .gap(px(10.))
-            .child(
-                div()
-                    .text_size(px(14.))
+                    .text_size(px(13.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(trail.join("  ›  ")),
+                    .child("Plugins"),
             )
             .child(
                 div()
                     .font_family(MONO)
-                    .text_size(px(12.))
+                    .text_size(px(11.))
                     .text_color(rgb(TEXT_3))
-                    .child(format!("{n}")),
+                    .child(detail),
             )
-            .children(page.set.map(|s| {
-                div()
-                    .h(px(24.))
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .rounded(px(12.))
-                    .bg(alpha(ACCENT, 0.18))
-                    .text_size(px(12.))
-                    .text_color(rgb(ACCENT_TEXT))
-                    .cursor_pointer()
-                    .child(s.name())
-                    .child("✕")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| {
-                            ws.plugin_page.set = None;
-                            cx.notify();
-                        }),
-                    )
-            }))
             .child(div().flex_1())
-            .child(label("SORT BY"))
-            .child(pills().children(sorts))
             .child(
-                div()
-                    .size(px(26.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .child(
-                        icon(
-                            if descending {
-                                Icon::ChevronUp
-                            } else {
-                                Icon::Chevron
-                            },
-                            14.,
-                        )
-                        .text_color(rgb(TEXT_2)),
-                    )
+                tray()
+                    .p(px(2.))
+                    .rounded(px(8.))
+                    .child(view("Grid", Shown::Grid, cx))
+                    .child(view("List", Shown::List, cx))
+                    .child(view("Keys", Shown::Keys, cx)),
+            )
+            .child(
+                button("Compact", false)
+                    .child(icon(Icon::PanelRight, 13.).text_color(rgb(TEXT_3)))
+                    .flex_row_reverse()
+                    .debug_selector(|| "plugins-compact".into())
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| {
-                            ws.plugin_page.descending ^= true;
-                            cx.notify();
-                        }),
+                        cx.listener(|ws, _, _, cx| ws.compact_plugins(cx)),
                     ),
             )
     }
 
-    /// Pictures being taken, or none yet: what it is, and the button.
-    fn pictures_banner(&mut self, cx: &mut Context<Self>) -> Option<Div> {
-        let page = &self.plugin_page;
-        let missing = self
-            .catalog
-            .devices
-            .iter()
-            .filter(|d| d.own.is_none())
-            .filter(|d| page.facts.get(&d.key).is_none_or(|f| f.wants_picture()))
-            .count();
-        let (text, progress) = match &page.indexing {
-            Some(i) => (
-                format!(
-                    "Taking pictures: {} of {}{}",
-                    i.total - i.todo.len(),
-                    i.total,
-                    i.now.as_ref().map_or(String::new(), |n| format!(" · {n}")),
-                ),
-                Some((i.total - i.todo.len()) as f32 / i.total.max(1) as f32),
-            ),
-            None if missing > 0 => (
-                format!(
-                    "{missing} plugins have no picture yet. Pina Studio opens each once to photograph its window, and times how hard it works the computer."
-                ),
-                None,
-            ),
-            None => return None,
+    pub fn plugins_page(&mut self, cx: &mut Context<Self>) -> Div {
+        self.plugin_page.cards = self.plugin_cards(cx);
+        let bar = self.plugins_bar(cx);
+        let middle = match self.plugin_page.shown {
+            Shown::Grid => self.plugin_results(false, cx),
+            Shown::List => self.plugin_results(true, cx),
+            Shown::Keys => self.plugin_keys(cx),
         };
-        let running = progress.is_some();
-        Some(
-            div()
-                .mb(px(14.))
-                .p(px(12.))
-                .flex()
-                .flex_col()
-                .gap(px(8.))
-                .rounded(px(10.))
-                .bg(rgb(0x18181d))
-                .border_1()
-                .border_color(rgb(LINE))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(12.))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_size(px(12.5))
-                                .text_color(rgb(TEXT_2))
-                                .child(text),
-                        )
-                        .child(
-                            crate::ui::theme::button(
-                                if running { "Stop" } else { "Take Pictures" },
-                                false,
-                            )
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|ws, _, _, cx| ws.take_plugin_pictures(None, cx)),
-                            ),
-                        ),
-                )
-                .children(progress.map(|p| {
-                    div().h(px(4.)).rounded(px(2.)).bg(rgb(RAISED)).child(
-                        div()
-                            .h_full()
-                            .w(gpui::relative(p.max(0.02)))
-                            .rounded(px(2.))
-                            .bg(rgb(ACCENT)),
-                    )
-                })),
-        )
-    }
-
-    fn plugins_library(&mut self, cx: &mut Context<Self>) -> Div {
-        let cards = self.plugin_cards(cx);
-        let bar = self.plugins_bar(cards.len(), cx);
-        let banner = self.pictures_banner(cx);
-        let empty = cards.is_empty();
-        let grid = self.plugin_grid(cards, cx);
-        let width = self.plugin_page.width.clone();
         div()
             .flex_1()
             .min_w(px(0.))
+            .h_full()
             .flex()
             .flex_col()
-            .px(px(22.))
             .child(bar)
             .child(
                 div()
-                    .id("plugins-grid")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .flex()
+                    .bg(rgb(LANE))
+                    .child(self.plugin_filters(cx))
+                    .child(div().flex_1().min_w(px(0.)).flex().flex_col().child(middle))
+                    .child(self.plugin_details(cx)),
+            )
+    }
+
+    /// Over what's found: how many, in what order; for the list, its columns.
+    fn plugin_results_header(&self, columns: bool, cx: &gpui::App) -> Div {
+        let n = self.plugin_page.cards.len();
+        let what = match (self.plugin_page.source, self.catalog.scope) {
+            (Source::Saved, _) => ("preset", "presets"),
+            (_, Scope::Instruments) => ("instrument", "instruments"),
+            (_, Scope::Effects) => ("effect", "effects"),
+            _ => ("device", "devices"),
+        };
+        let order = match (self.plugin_page.sort, self.plugin_page.descending) {
+            (Sort::Name, _) if !self.catalog_query(cx).is_empty() => "best match first",
+            (Sort::Name, false) => "by name",
+            (Sort::Name, true) => "by name, Z to A",
+            (Sort::Used, false) => "most used first",
+            (Sort::Used, true) => "least used first",
+            (Sort::Cpu, false) => "lightest first",
+            (Sort::Cpu, true) => "heaviest first",
+        };
+        let col = |label: &'static str, w: f32| {
+            div()
+                .w(px(w))
+                .flex_none()
+                .text_size(px(10.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(TEXT_4))
+                .child(label.to_uppercase())
+        };
+        div()
+            .h(px(34.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .px(px(12.))
+            .border_b_1()
+            .border_color(rgb(LINE_SOFT))
+            .child(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(6.))
+                    .whitespace_nowrap()
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(format!("{n} {}", if n == 1 { what.0 } else { what.1 })),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(TEXT_3))
+                            .child(order),
+                    ),
+            )
+            .child(div().flex_1())
+            .when(columns && n > 0, |d| {
+                d.child(col("Kind", KIND_W))
+                    .child(col("Format", FORMATS_W))
+                    .child(col("CPU", CPU_W))
+                    .child(col("Size", SIZE_W))
+                    .child(col("Songs", SONGS_W))
+            })
+    }
+
+    /// Nothing found: says why, and loosens what's narrowing it.
+    fn plugins_empty(&self, cx: &mut Context<Self>) -> Div {
+        let page = &self.plugin_page;
+        let narrowed = !page.cats.is_empty()
+            || !page.kinds.is_empty()
+            || !page.makers.is_empty()
+            || page.collection.is_some()
+            || page.set.is_some()
+            || page.starred
+            || page.source != Source::All
+            || !page.formats_off.is_empty();
+        let typed = !self.catalog_query(cx).is_empty();
+        let (title, body) = match (self.catalog.devices.is_empty(), narrowed || typed) {
+            (true, _) => (
+                "Looking for your plugins",
+                "Every plugin installed shows here once it's found.",
+            ),
+            (false, _) => (
+                "Nothing found",
+                "Nothing matches all of these filters. Loosen them to see more:",
+            ),
+        };
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(8.))
+            .p(px(24.))
+            .child(
+                div()
+                    .size(px(40.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(12.))
+                    .bg(rgb(CARD))
+                    .border_1()
+                    .border_color(rgb(LINE))
+                    .child(icon(Icon::Plug, 20.).text_color(rgb(TEXT_3))),
+            )
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title),
+            )
+            .child(
+                div()
+                    .max_w(px(420.))
+                    .text_size(px(12.))
+                    .text_color(rgb(TEXT_3))
+                    .text_center()
+                    .child(body),
+            )
+            .when(narrowed || typed, |d| {
+                d.child(
+                    button("Show everything", false)
+                        .mt(px(4.))
+                        .debug_selector(|| "plugins-loosen".into())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, _, _, cx| {
+                                let page = &mut ws.plugin_page;
+                                (page.cats, page.kinds, page.makers) =
+                                    (Vec::new(), Vec::new(), Vec::new());
+                                (page.collection, page.set, page.starred) = (None, None, false);
+                                page.source = Source::All;
+                                page.formats_off.clear();
+                                ws.catalog.search.update(cx, |i, cx| i.set_text("", cx));
+                                cx.notify();
+                            }),
+                        ),
+                )
+            })
+    }
+
+    /// What's found, as pictures or as a list, with the line under it.
+    fn plugin_results(&mut self, list: bool, cx: &mut Context<Self>) -> Div {
+        let n = self.plugin_page.cards.len();
+        let width = self.plugin_page.width.clone();
+        let body = match (n, list) {
+            (0, _) => self.plugins_empty(cx).into_any_element(),
+            (n, true) => uniform_list(
+                "plugin-list",
+                n,
+                cx.processor(|ws, range: Range<usize>, _, cx| ws.plugin_rows(range, cx)),
+            )
+            .track_scroll(&self.plugin_page.list)
+            .flex_1()
+            .into_any_element(),
+            (_, false) => {
+                let cards = self.plugin_page.cards.clone();
+                div()
+                    .id("plugin-grid")
                     .relative()
                     .flex_1()
                     .min_h(px(0.))
                     .overflow_y_scroll()
-                    .pb(px(30.))
-                    .child(
-                        gpui::canvas(
-                            move |b: Bounds<Pixels>, _, _| width.set(f32::from(b.size.width)),
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full(),
-                    )
-                    .children(banner)
-                    .child(grid)
-                    .when(empty, |d| {
-                        d.child(
-                            div()
-                                .pt(px(60.))
-                                .flex()
-                                .justify_center()
-                                .text_color(rgb(TEXT_3))
-                                .child("Nothing here: change the filters, or the search."),
-                        )
-                    }),
-            )
-    }
-
-    fn plugins_map(&mut self, cx: &mut Context<Self>) -> Div {
-        let keyboard = self.plugin_keyboard(cx);
-        let cards = self.plugin_cards(cx);
-        let bar = self.plugins_bar(cards.len(), cx);
-        let grid = self.plugin_grid(cards, cx);
-        let width = self.plugin_page.width.clone();
-        let armed = self.plugin_page.armed.clone();
+                    .p(px(14.))
+                    .child(measure(width))
+                    .child(self.plugin_grid(cards, cx))
+                    .into_any_element()
+            }
+        };
         div()
             .flex_1()
-            .min_w(px(0.))
+            .min_h(px(0.))
             .flex()
             .flex_col()
-            .px(px(22.))
+            .child(self.plugin_results_header(list, cx))
+            .child(body)
+            .child(self.plugin_info_line())
+    }
+
+    /// Keys: the keyboard, then what's found to put on it.
+    fn plugin_keys(&mut self, cx: &mut Context<Self>) -> Div {
+        let keyboard = self.plugin_keyboard(cx);
+        let cards = self.plugin_page.cards.clone();
+        let width = self.plugin_page.width.clone();
+        let mapped = self.catalog.keys.len();
+        div()
+            .flex_1()
+            .min_h(px(0.))
+            .flex()
+            .flex_col()
             .child(
                 div()
-                    .h(px(40.))
+                    .h(px(34.))
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .gap(px(12.))
+                    .gap(px(10.))
+                    .px(px(12.))
+                    .border_b_1()
+                    .border_color(rgb(LINE_SOFT))
                     .child(
                         div()
-                            .h(px(24.))
-                            .px(px(10.))
                             .flex()
-                            .items_center()
-                            .rounded(px(12.))
-                            .border_1()
-                            .border_color(rgb(0xd9a35a))
-                            .text_size(px(11.5))
-                            .text_color(rgb(0xd9a35a))
-                            .child("Mappings paused while you're here"),
+                            .items_baseline()
+                            .gap(px(6.))
+                            .whitespace_nowrap()
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(match mapped {
+                                        1 => "1 key".to_string(),
+                                        n => format!("{n} keys"),
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(TEXT_3))
+                                    .child("each puts its plugin on the selected track"),
+                            ),
+                    )
+                    .child(div().flex_1())
+                    .child(chip("Keys wait while this is open", TEXT_3)),
+            )
+            .child(
+                div()
+                    .id("plugin-keys")
+                    .relative()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .p(px(14.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .child(measure(width))
+                    .child(keyboard)
+                    .child(self.plugin_grid(cards, cx)),
+            )
+            .child(self.plugin_info_line())
+    }
+
+    /// Rows of the list, as the list draws them.
+    fn plugin_rows(
+        &mut self,
+        range: Range<usize>,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::Stateful<Div>> {
+        range
+            .filter_map(|pos| {
+                let card = self.plugin_page.cards.get(pos)?.clone();
+                Some(self.plugin_row(pos, &card, cx))
+            })
+            .collect()
+    }
+
+    fn plugin_row(&self, pos: usize, card: &Card, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        let d = card.device();
+        let dev = &self.catalog.devices[d];
+        let page = &self.plugin_page;
+        let selected = page.picked.as_deref() == Some(dev.key.as_str())
+            && page.preset.as_ref() == card_preset(card);
+        let f = page.facts.get(&dev.key);
+        let failed = f.is_some_and(|f| f.failed.is_some());
+        let mono = |s: String, w: f32, c: u32| {
+            div()
+                .w(px(w))
+                .flex_none()
+                .font_family(MONO)
+                .text_size(px(11.5))
+                .text_color(rgb(c))
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(s)
+        };
+        let (title, maker) = match card {
+            Card::Preset(_, p) => (p.name.clone(), dev.name.clone()),
+            Card::Device(_) => (
+                dev.name.clone(),
+                match dev.own {
+                    Some(_) => "Pina Studio".to_string(),
+                    None => dev.vendor.clone(),
+                },
+            ),
+        };
+        let songs = page
+            .songs
+            .as_ref()
+            .and_then(|s| s.used.get(&dev.key).copied());
+        let size = self.device_size(dev);
+        let key = dev.key.clone();
+        let thumb = self.card_art(dev, 64., 36.);
+        div()
+            .id(("plugin-row", pos))
+            .group("plugin-row")
+            .w_full()
+            .h(px(ROW_H))
+            .px(px(12.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .relative()
+            .border_b_1()
+            .border_color(rgb(LINE_SOFT))
+            .bg(if selected {
+                alpha(ACCENT, 0.12)
+            } else {
+                gpui::transparent_black()
+            })
+            .when(!selected, |d| d.hover(|s| s.bg(rgb(HEADERS))))
+            .cursor_pointer()
+            .debug_selector(move || format!("plugin-row-{pos}"))
+            .when(selected, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .w(px(2.))
+                        .h_full()
+                        .bg(rgb(ACCENT)),
+                )
+            })
+            .child(
+                div()
+                    .w(px(64.))
+                    .h(px(36.))
+                    .flex_none()
+                    .rounded(px(5.))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(rgb(LINE))
+                    .when(failed, |d| d.opacity(0.45))
+                    .child(thumb),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(if selected { TEXT } else { TEXT_2 }))
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(title),
                     )
                     .child(
-                        div().text_size(px(12.5)).text_color(rgb(TEXT_3)).child(match armed {
-                            Some(k) => format!("{} picked: click a card to put on it", super::map::key_label(&k)),
-                            None => "Press a key, click one, click a card and then a key, or drag a card onto one. Keys Pina Studio uses are marked in orange.".into(),
-                        }),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(chip(dev.cat.name(), dev.cat.color()).h(px(16.)).px(px(5.)))
+                            .when(failed, |d| {
+                                d.child(chip("Won't load", RECORD).h(px(16.)).px(px(5.)))
+                            })
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(rgb(TEXT_3))
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(maker),
+                            ),
                     ),
             )
             .child(
                 div()
-                    .id("plugins-map")
-                    .relative()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .overflow_y_scroll()
-                    .child(
-                        gpui::canvas(
-                            move |b: Bounds<Pixels>, _, _| width.set(f32::from(b.size.width)),
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full(),
-                    )
-                    .child(div().flex().justify_center().pb(px(18.)).child(keyboard))
-                    .child(bar)
-                    .child(grid),
+                    .w(px(KIND_W))
+                    .flex_none()
+                    .text_size(px(11.5))
+                    .text_color(rgb(TEXT_2))
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(subcategory(dev).unwrap_or(dev.cat.name())),
             )
+            .child(mono(
+                match dev.own {
+                    Some(_) => "Built in".into(),
+                    None => dev.badges().join(" "),
+                },
+                FORMATS_W,
+                TEXT_3,
+            ))
+            .child(mono(
+                f.and_then(|f| f.load)
+                    .map_or("—".into(), |l| format!("{:.1}%", l * 100.0)),
+                CPU_W,
+                TEXT_2,
+            ))
+            .child(mono(
+                match size {
+                    0 => "—".into(),
+                    s => size_text(s),
+                },
+                SIZE_W,
+                TEXT_3,
+            ))
+            .child(mono(
+                songs.map_or("—".into(), |n| n.to_string()),
+                SONGS_W,
+                if songs.is_some() { TEXT_2 } else { TEXT_4 },
+            ))
+            .on_hover(cx.listener(move |ws, over: &bool, _, cx| {
+                ws.hover_plugin(&key, *over, cx);
+            }))
+            .on_mouse_down(MouseButton::Left, self.plugin_press(card.clone(), cx))
+            .on_mouse_down(MouseButton::Right, self.plugin_menu_press(d, cx))
+    }
+
+    /// Under what's found: the plugin under the pointer (else the one picked) in a line.
+    fn plugin_info_line(&self) -> Div {
+        let page = &self.plugin_page;
+        let shown = page
+            .hovered
+            .as_deref()
+            .or(page.picked.as_deref())
+            .and_then(|k| self.catalog.device(k));
+        let armed = page.armed.as_deref().map(key_label);
+        let track = self
+            .session
+            .project
+            .tracks
+            .get(self.track)
+            .map_or("a new track".to_string(), |t| t.name.clone());
+        div()
+            .h(px(28.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .px(px(12.))
+            .border_t_1()
+            .border_color(rgb(LINE_SOFT))
+            .bg(rgb(SURFACE))
+            .text_size(px(11.))
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .children(armed.clone().map(|k| {
+                div()
+                    .text_color(rgb(ACCENT_TEXT))
+                    .child(format!("{k} picked: click a plugin to put on it"))
+            }))
+            .when(armed.is_none(), |d| {
+                d.children(shown.map(|i| {
+                    let dev = &self.catalog.devices[i];
+                    let mut parts = vec![match dev.own {
+                        Some(_) => "Pina Studio".to_string(),
+                        None => dev.vendor.clone(),
+                    }];
+                    parts.push(match subcategory(dev) {
+                        Some(k) => format!("{} · {k}", dev.cat.name()),
+                        None => dev.cat.name().to_string(),
+                    });
+                    if dev.own.is_none() {
+                        parts.push(dev.badges().join(" "));
+                    }
+                    if let Some(l) = page.facts.get(&dev.key).and_then(|f| f.load) {
+                        parts.push(format!("CPU {:.1}%", l * 100.0));
+                    }
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .min_w(px(0.))
+                        .child(
+                            div()
+                                .size(px(6.))
+                                .flex_none()
+                                .rounded(px(3.))
+                                .bg(rgb(dev.cat.color())),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(TEXT))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(dev.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(TEXT_2))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(parts.join(" · ")),
+                        )
+                }))
+                .when(shown.is_none(), |d| {
+                    d.text_color(rgb(TEXT_4)).child(format!(
+                        "Click a plugin to see it · double-click puts it on {track} · drag one out onto a track"
+                    ))
+                })
+            })
+    }
+
+    /// A plugin under the pointer, or not any more.
+    pub(crate) fn hover_plugin(&mut self, key: &str, over: bool, cx: &mut Context<Self>) {
+        let now = over.then(|| key.to_string());
+        let page = &mut self.plugin_page;
+        if page.hovered != now && (over || page.hovered.as_deref() == Some(key)) {
+            page.hovered = now;
+            cx.notify();
+        }
+    }
+
+    /// Pressed on a plugin: picked (on Keys, put on the key waiting), a double-click puts it on
+    /// the selected track (⌥: a new one), and it's ready to drag.
+    pub(crate) fn plugin_press(
+        &self,
+        card: Card,
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&MouseDownEvent, &mut gpui::Window, &mut gpui::App) + 'static {
+        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+            let d = card.device();
+            let key = ws.catalog.devices[d].key.clone();
+            let preset = card_preset(&card).cloned();
+            if ws.plugin_page.shown == Shown::Keys
+                && let Some(k) = ws.plugin_page.armed.take()
+            {
+                ws.map_key(&k, &key);
+            }
+            ws.plugin_page.picked = Some(key);
+            ws.plugin_page.preset = preset.clone();
+            if e.click_count == 2 {
+                ws.load_plugin_card(d, preset, e.modifiers.alt, cx);
+                return;
+            }
+            let at = pt(e.position);
+            ws.drag = Some(Drag::Device {
+                device: d,
+                from: at,
+                at,
+                moved: false,
+            });
+            cx.notify();
+        })
+    }
+
+    /// Right-pressed on a plugin: picked, and its menu.
+    pub(crate) fn plugin_menu_press(
+        &self,
+        d: usize,
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&MouseDownEvent, &mut gpui::Window, &mut gpui::App) + 'static {
+        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+            ws.plugin_page.picked = Some(ws.catalog.devices[d].key.clone());
+            ws.plugin_page.preset = None;
+            ws.menu = Some(crate::ui::menu::Menu {
+                at: e.position,
+                items: ws.card_menu(d),
+                ..Default::default()
+            });
+            cx.notify();
+        })
+    }
+
+    /// ↑ ↓ (and ← → on the pictures): the next plugin picked, scrolled to in the list.
+    pub fn step_plugin(&mut self, by: isize, cx: &mut Context<Self>) {
+        let page = &self.plugin_page;
+        let n = page.cards.len();
+        if n == 0 {
+            return;
+        }
+        let at = page.cards.iter().position(|c| {
+            page.picked.as_deref() == Some(self.catalog.devices[c.device()].key.as_str())
+                && page.preset.as_ref() == card_preset(c)
+        });
+        let next = match at {
+            Some(at) => (at as isize + by).clamp(0, n as isize - 1) as usize,
+            None if by > 0 => 0,
+            None => n - 1,
+        };
+        let card = page.cards[next].clone();
+        self.plugin_page.picked = Some(self.catalog.devices[card.device()].key.clone());
+        self.plugin_page.preset = card_preset(&card).cloned();
+        self.plugin_page
+            .list
+            .scroll_to_item(next, gpui::ScrollStrategy::Center);
+        cx.notify();
+    }
+
+    /// Enter: the plugin picked goes on the selected track.
+    pub fn add_picked_plugin(&mut self, cx: &mut Context<Self>) {
+        let d = self.picked_plugin().or_else(|| {
+            // Typed and Enter: the best match.
+            self.plugin_page.cards.first().map(|c| c.device())
+        });
+        if let Some(d) = d {
+            let preset = self.plugin_page.preset.clone();
+            self.load_plugin_card(d, preset, false, cx);
+        }
     }
 
     /// What the page's menus and buttons do.
     pub fn plugin_op(&mut self, op: PluginOp, cx: &mut Context<Self>) {
         match op {
             PluginOp::Load(d, new) => self.load_plugin_card(d, None, new, cx),
+            PluginOp::AddTo(d, track, preset) => match track {
+                Some(t) => {
+                    self.track = t;
+                    self.load_plugin_card(d, preset, false, cx)
+                }
+                None => self.load_plugin_card(d, preset, true, cx),
+            },
             PluginOp::ToggleCollection(d, i) => {
                 let key = self.catalog.devices[d].key.clone();
                 if let Some(c) = self.catalog.collections.get_mut(i) {
@@ -1004,7 +823,7 @@ impl Workspace {
             }
             PluginOp::MapCard(d) => {
                 self.plugin_page.picked = Some(self.catalog.devices[d].key.clone());
-                self.plugin_page.tab = Tab::Map;
+                self.plugin_page.shown = Shown::Keys;
                 self.status = Some("Press the key to put it on, or click one.".into());
             }
             PluginOp::Favourite(d) => {
@@ -1046,9 +865,28 @@ impl Workspace {
                     ),
                 });
                 self.start_scan(cx);
-                self.refresh_plugin_facts(cx);
             }
         }
         cx.notify();
     }
+}
+
+/// A card's preset, if it's one.
+pub(crate) fn card_preset(card: &Card) -> Option<&Preset> {
+    match card {
+        Card::Preset(_, p) => Some(p),
+        Card::Device(_) => None,
+    }
+}
+
+/// Records how wide its parent is drawn, for the pictures' columns.
+fn measure(width: Rc<Cell<f32>>) -> impl IntoElement {
+    gpui::canvas(
+        move |b: Bounds<Pixels>, _, _| width.set(f32::from(b.size.width) - 28.0),
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
 }

@@ -137,6 +137,9 @@ impl Workspace {
             this.update(cx, |ws, cx| {
                 ws.plugins = Some(plugins);
                 ws.catalog_plugins();
+                if ws.view == View::Plugins {
+                    ws.refresh_plugin_facts(cx);
+                }
                 cx.notify();
             })
             .ok();

@@ -1,10 +1,14 @@
-//! The Plugins page: its filters, a card put on the selected track, keys mapped to plugins,
-//! collections, the checkup, and the picker a mixer slot opens.
+//! The Plugins page: opened from the Browser and back, its filters, a plugin picked and put on a
+//! track (Add, double-click, Enter, dragged out onto one), keys, collections, Health and the
+//! checkup, and the picker a mixer slot opens.
 
 use pina_engine::song::project::{Format, Which};
 
 use super::*;
-use crate::sounds::plugins::{Fact, FileFacts, PluginOp, subcategory};
+use crate::sounds::{
+    catalog::Scope,
+    plugins::{Fact, FileFacts, PluginOp, Shown, subcategory},
+};
 
 const DELAY: &str = "plugin:apple/audelay";
 const GRAPHIC: &str = "plugin:apple/augraphiceq";
@@ -84,11 +88,32 @@ fn device(ws: &Entity<Workspace>, cx: &VisualTestContext, key: &str) -> usize {
     ws.read_with(cx, |ws, _| ws.catalog.device(key).expect(key))
 }
 
+fn inserts(ws: &Entity<Workspace>, cx: &VisualTestContext, t: usize) -> Vec<String> {
+    ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[t]
+            .inserts
+            .iter()
+            .map(|p| p.class.clone())
+            .collect()
+    })
+}
+
 #[gpui::test]
-fn the_plugins_page_filters_and_puts_a_card_on_the_track(cx: &mut TestAppContext) {
+fn the_browser_expands_into_the_plugins_page_and_back(cx: &mut TestAppContext) {
     let (ws, cx) = open_plugins(cx);
-    cx.simulate_keystrokes("ctrl-alt-d");
+    ws.update(cx, |ws, cx| {
+        ws.show_browser = true;
+        ws.catalog.scope = Scope::Effects;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    // Typed in the Browser, then expanded: the page has the same search and tab.
+    let field = ws.read_with(cx, |ws, _| ws.catalog.search.clone());
+    field.update(cx, |i, cx| i.set_text("echo", cx));
+    click_on(cx, "plugins-page", Modifiers::none(), MouseButton::Left);
     assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Plugins);
+    assert_eq!(cards(&ws, cx), ["AUDelay"]);
+    field.update(cx, |i, cx| i.set_text("", cx));
     // What each is, within its category.
     let kinds: Vec<_> = [DELAY, GRAPHIC, BELL]
         .map(|k| {
@@ -104,29 +129,16 @@ fn the_plugins_page_filters_and_puts_a_card_on_the_track(cx: &mut TestAppContext
         Modifiers::none(),
         MouseButton::Left,
     );
-    assert!(cards(&ws, cx).contains(&"AUDelay".to_string()));
-    assert!(!cards(&ws, cx).contains(&"AUGraphicEQ".to_string()));
+    assert_eq!(cards(&ws, cx), ["AUDelay"]);
     click_on(
         cx,
         "plugins-format-AU",
         Modifiers::none(),
         MouseButton::Left,
     );
-    assert!(!cards(&ws, cx).contains(&"AUDelay".to_string()));
-    click_on(
-        cx,
-        "plugins-format-AU",
-        Modifiers::none(),
-        MouseButton::Left,
-    );
-    // Clicked, it goes on the selected track, and counts as used.
-    press(cx, "plugin-card-plugin:apple/audelay");
-    let inserts = ws.read_with(cx, |ws, _| ws.session.project.tracks[1].inserts.clone());
-    assert_eq!(inserts.last().map(|p| p.class.as_str()), Some("AUDelay"));
-    assert_eq!(
-        ws.read_with(cx, |ws, _| ws.catalog.uses.get(DELAY).copied()),
-        Some(1)
-    );
+    assert!(cards(&ws, cx).is_empty());
+    click_on(cx, "plugins-loosen", Modifiers::none(), MouseButton::Left);
+    assert!(cards(&ws, cx).len() > 2);
     // Instruments: the synth, once for its two formats; Pina Studio's own have none of it.
     click_on(
         cx,
@@ -139,22 +151,99 @@ fn the_plugins_page_filters_and_puts_a_card_on_the_track(cx: &mut TestAppContext
     assert!(!synths.contains(&"AUDelay".to_string()));
     click_on(
         cx,
-        "plugins-source-Stock",
+        "plugins-source-Built in",
         Modifiers::none(),
         MouseButton::Left,
     );
     assert!(!cards(&ws, cx).contains(&"Bell FM".to_string()));
+    // Compact: the tracks, the Browser beside them on the page's tab.
+    click_on(cx, "plugins-compact", Modifiers::none(), MouseButton::Left);
+    let (view, browser, scope) =
+        ws.read_with(cx, |ws, _| (ws.view, ws.show_browser, ws.catalog.scope));
+    assert_eq!(
+        (view, browser, scope),
+        (View::Arrange, true, Scope::Instruments)
+    );
+}
+
+#[gpui::test]
+fn a_plugin_picked_goes_on_a_track(cx: &mut TestAppContext) {
+    let (ws, cx) = open_plugins(cx);
+    cx.simulate_keystrokes("ctrl-alt-d");
+    // A click picks it: its details, nothing added yet.
+    press(cx, "plugin-card-plugin:apple/audelay");
+    let picked = ws.read_with(cx, |ws, _| ws.plugin_page.picked.clone());
+    assert_eq!(picked.as_deref(), Some(DELAY));
+    assert!(inserts(&ws, cx, 1).is_empty());
+    // Add puts it on the selected track; so does a double-click, and Enter.
+    press(cx, "plugin-add");
+    assert_eq!(inserts(&ws, cx, 1), ["AUDelay"]);
+    let card = cx
+        .debug_bounds("plugin-card-plugin:apple/augraphiceq")
+        .unwrap()
+        .center();
+    double_click(cx, card);
+    assert_eq!(inserts(&ws, cx, 1), ["AUDelay", "AUGraphicEQ"]);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        inserts(&ws, cx, 1),
+        ["AUDelay", "AUGraphicEQ", "AUGraphicEQ"]
+    );
+    // The arrows pick the next; On a New Track makes one for it.
+    cx.simulate_keystrokes("up");
+    let picked = ws.read_with(cx, |ws, _| ws.plugin_page.picked.clone());
+    assert_eq!(picked.as_deref(), Some(DELAY));
+    let tracks = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    press(cx, "plugin-add-new");
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks.len()),
+        tracks + 1
+    );
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.catalog.uses.get(DELAY).copied()),
+        Some(2)
+    );
+}
+
+#[gpui::test]
+fn a_plugin_dragged_out_of_the_page_lands_on_a_track(cx: &mut TestAppContext) {
+    let (ws, cx) = open_plugins(cx);
+    cx.simulate_keystrokes("ctrl-alt-d");
+    let card = cx
+        .debug_bounds("plugin-card-plugin:apple/audelay")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(card, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    // Out of the page: the tracks come back, the Browser beside them.
+    cx.simulate_mouse_move(
+        card + point(px(120.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Arrange);
+    let lead = spot(&ws, cx, 960, 1);
+    cx.simulate_mouse_move(lead, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(lead, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(inserts(&ws, cx, 1), ["AUDelay"]);
 }
 
 #[gpui::test]
 fn keys_put_plugins_on_the_track(cx: &mut TestAppContext) {
     let (ws, cx) = open_plugins(cx);
     cx.simulate_keystrokes("ctrl-alt-d");
-    click_on(cx, "plugins-tab-Map", Modifiers::none(), MouseButton::Left);
-    // A key, then a card.
+    click_on(
+        cx,
+        "plugins-view-Keys",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    // A key, then a plugin.
     click_on(cx, "key-f13", Modifiers::none(), MouseButton::Left);
     press(cx, "plugin-card-plugin:apple/audelay");
-    // A card, then a key pressed.
+    // A plugin, then a key pressed.
     press(cx, "plugin-card-plugin:apple/augraphiceq");
     cx.simulate_keystrokes("f14");
     let keys = ws.read_with(cx, |ws, _| ws.catalog.keys.clone());
@@ -169,24 +258,74 @@ fn keys_put_plugins_on_the_track(cx: &mut TestAppContext) {
         keys,
         [("f13".into(), DELAY.into()), ("f15".into(), GRAPHIC.into())]
     );
-    // A card dragged onto a key.
+    // A plugin dragged onto a key: on Keys, the page stays.
     let card = cx
         .debug_bounds("plugin-card-plugin:apple/audelay")
         .unwrap()
         .center();
     let key = cx.debug_bounds("key-f16").unwrap().center();
     drag(cx, card, key);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Plugins);
     let keys = ws.read_with(cx, |ws, _| ws.catalog.keys.clone());
     assert_eq!(
         keys,
         [("f15".into(), GRAPHIC.into()), ("f16".into(), DELAY.into())]
     );
-    // Away from the map, the key puts it on the selected track; nothing went on while mapping.
+    // Away from the page, the key puts it on the selected track; nothing went on while mapping.
     cx.simulate_keystrokes("ctrl-alt-d");
-    assert!(ws.read_with(cx, |ws, _| ws.session.project.tracks[1].inserts.is_empty()));
+    assert!(inserts(&ws, cx, 1).is_empty());
     cx.simulate_keystrokes("f16");
-    let inserts = ws.read_with(cx, |ws, _| ws.session.project.tracks[1].inserts.clone());
-    assert_eq!(inserts.last().map(|p| p.class.as_str()), Some("AUDelay"));
+    assert_eq!(inserts(&ws, cx, 1), ["AUDelay"]);
+}
+
+#[gpui::test]
+fn health_and_collections_narrow_the_page(cx: &mut TestAppContext) {
+    let (ws, cx) = open_plugins(cx);
+    ws.update(cx, |ws, _| {
+        let failed = Fact {
+            failed: Some("it stopped while opening".into()),
+            ..Default::default()
+        };
+        ws.plugin_page
+            .facts
+            .insert("plugin:maker/broken".into(), failed);
+    });
+    cx.simulate_keystrokes("ctrl-alt-d");
+    click_on(
+        cx,
+        "plugins-health-WontLoad",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert_eq!(cards(&ws, cx), ["Broken"]);
+    click_on(
+        cx,
+        "plugins-health-WontLoad",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    let (delay, graphic) = (device(&ws, cx, DELAY), device(&ws, cx, GRAPHIC));
+    ws.update(cx, |ws, cx| {
+        ws.plugin_op(PluginOp::NewCollection(Some(delay)), cx);
+        ws.plugin_page.ask = None;
+        ws.plugin_op(PluginOp::ToggleCollection(graphic, 0), cx);
+        ws.plugin_op(PluginOp::ToggleCollection(delay, 0), cx);
+    });
+    let c = ws.read_with(cx, |ws, _| ws.catalog.collections[0].clone());
+    assert_eq!(
+        (c.name.as_str(), c.devices),
+        ("Collection 1", vec![GRAPHIC.to_string()])
+    );
+    click_on(
+        cx,
+        "plugins-collection-0",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert_eq!(cards(&ws, cx), ["AUGraphicEQ"]);
+    ws.update(cx, |ws, cx| ws.plugin_op(PluginOp::DeleteCollection(0), cx));
+    assert!(ws.read_with(cx, |ws, _| ws.catalog.collections.is_empty()));
+    assert!(ws.read_with(cx, |ws, _| ws.plugin_page.shown == Shown::Grid));
 }
 
 #[gpui::test]
@@ -208,24 +347,8 @@ fn a_browser_row_clicked_goes_on_the_track(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn collections_and_the_checkup(cx: &mut TestAppContext) {
+fn the_checkup_finds_what_can_go(cx: &mut TestAppContext) {
     let (ws, cx) = open_plugins(cx);
-    let (delay, graphic) = (device(&ws, cx, DELAY), device(&ws, cx, GRAPHIC));
-    ws.update(cx, |ws, cx| {
-        ws.plugin_op(PluginOp::NewCollection(Some(delay)), cx);
-        ws.plugin_page.ask = None;
-        ws.plugin_op(PluginOp::ToggleCollection(graphic, 0), cx);
-        ws.plugin_op(PluginOp::ToggleCollection(delay, 0), cx);
-        ws.plugin_page.collection = Some(0);
-    });
-    let c = ws.read_with(cx, |ws, _| ws.catalog.collections[0].clone());
-    assert_eq!(
-        (c.name.as_str(), c.devices),
-        ("Collection 1", vec![GRAPHIC.to_string()])
-    );
-    assert_eq!(cards(&ws, cx), ["AUGraphicEQ"]);
-    ws.update(cx, |ws, cx| ws.plugin_op(PluginOp::DeleteCollection(0), cx));
-    assert!(ws.read_with(cx, |ws, _| ws.catalog.collections.is_empty()));
     // The checkup: what's spare is a second format, and a file only plugins that won't load
     // use. A bundle a plugin that loads is in stays; macOS's own are never spare.
     let checkup = ws.update(cx, |ws, _| {

@@ -1,7 +1,7 @@
-//! Map: plugins on keys. The keyboard drawn, each key with what Pina Studio does with it or the
-//! plugin it's mapped to; a press of a mapped key (anywhere else in Pina Studio) puts its plugin
-//! on the selected track. Press a key, click one, click a card and then a key, or drag a card
-//! onto one.
+//! Keys: plugins on keys of their own. The keyboard drawn, each key with what Pina Studio does
+//! with it or the plugin it's on; a press of one (anywhere else in Pina Studio) puts its plugin
+//! on the selected track. Pick a plugin and press a key or click one, click a key and then a
+//! plugin, or drag a plugin onto a key.
 
 use gpui::{
     AnyElement, Div, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, MouseUpEvent,
@@ -55,14 +55,14 @@ pub const ROWS: [&[(&str, &str, f32)]; 6] = [
         ("0", "0", 1.0),
         ("-", "-", 1.0),
         ("=", "=", 1.0),
-        ("backspace", "delete", 1.5),
+        ("backspace", "⌫", 1.5),
         ("", "", 0.4),
         ("insert", "help", 1.0),
         ("home", "home", 1.0),
-        ("pageup", "page up", 1.0),
+        ("pageup", "⇞", 1.0),
     ],
     &[
-        ("tab", "tab", 1.5),
+        ("tab", "⇥", 1.5),
         ("q", "Q", 1.0),
         ("w", "W", 1.0),
         ("e", "E", 1.0),
@@ -79,10 +79,10 @@ pub const ROWS: [&[(&str, &str, f32)]; 6] = [
         ("", "", 0.4),
         ("delete", "del", 1.0),
         ("end", "end", 1.0),
-        ("pagedown", "page down", 1.0),
+        ("pagedown", "⇟", 1.0),
     ],
     &[
-        ("", "caps lock", 1.75),
+        ("", "⇪", 1.75),
         ("a", "A", 1.0),
         ("s", "S", 1.0),
         ("d", "D", 1.0),
@@ -94,10 +94,10 @@ pub const ROWS: [&[(&str, &str, f32)]; 6] = [
         ("l", "L", 1.0),
         (";", ";", 1.0),
         ("'", "'", 1.0),
-        ("enter", "return", 1.75),
+        ("enter", "↩", 1.75),
     ],
     &[
-        ("", "shift", 2.25),
+        ("", "⇧", 2.25),
         ("z", "Z", 1.0),
         ("x", "X", 1.0),
         ("c", "C", 1.0),
@@ -108,18 +108,18 @@ pub const ROWS: [&[(&str, &str, f32)]; 6] = [
         (",", ",", 1.0),
         (".", ".", 1.0),
         ("/", "/", 1.0),
-        ("", "shift", 2.25),
+        ("", "⇧", 2.25),
         ("", "", 1.4),
         ("up", "↑", 1.0),
     ],
     &[
-        ("", "control", 1.25),
-        ("", "option", 1.25),
-        ("", "command", 1.5),
+        ("", "⌃", 1.25),
+        ("", "⌥", 1.25),
+        ("", "⌘", 1.5),
         ("space", "", 6.0),
-        ("", "command", 1.5),
-        ("", "option", 1.25),
-        ("", "control", 1.25),
+        ("", "⌘", 1.5),
+        ("", "⌥", 1.25),
+        ("", "⌃", 1.25),
         ("", "", 0.4),
         ("left", "←", 1.0),
         ("down", "↓", 1.0),
@@ -190,7 +190,7 @@ impl Workspace {
             return false;
         }
         // On the map, a key pressed is picked to map.
-        if self.view == View::Plugins && self.plugin_page.tab == Tab::Map {
+        if self.view == View::Plugins && self.plugin_page.shown == Shown::Keys {
             let key = e.keystroke.key.clone();
             if ROWS
                 .iter()
@@ -224,19 +224,23 @@ impl Workspace {
         true
     }
 
-    /// The keyboard: each key's cap, what Pina Studio does with it, or its plugin.
+    /// The keyboard: each key's cap, what Pina Studio does with it, or its plugin; as wide as
+    /// there's room for.
     pub(crate) fn plugin_keyboard(&mut self, cx: &mut Context<Self>) -> Div {
+        const GAP: f32 = 4.0;
+        // The widest row: 20.8 keys and 21 gaps, inside the board's padding.
+        let room = self.plugin_page.width.get().max(400.0) - 24.0;
+        let unit = ((room - GAP * 21.0) / 20.8).clamp(24.0, 46.0);
         let used = self.keys_in_use(cx);
-        let unit = 50.0;
         let armed = self.plugin_page.armed.clone();
         let rows: Vec<Div> = ROWS
             .iter()
             .map(|row| {
                 div()
                     .flex()
-                    .gap(px(5.))
+                    .gap(px(GAP))
                     .children(row.iter().map(|&(key, label, w)| {
-                        let width = unit * w + 5.0 * (w - 1.0).max(0.0);
+                        let width = unit * w + GAP * (w - 1.0).max(0.0);
                         if key.is_empty() && label.is_empty() {
                             return div().w(px(width)).h(px(unit)).into_any_element();
                         }
@@ -245,14 +249,14 @@ impl Workspace {
             })
             .collect();
         div()
-            .p(px(18.))
-            .rounded(px(16.))
-            .bg(rgb(0x18181d))
-            .border_1()
-            .border_color(rgb(LINE))
+            .p(px(12.))
             .flex()
             .flex_col()
-            .gap(px(5.))
+            .gap(px(GAP))
+            .rounded(px(10.))
+            .bg(rgb(SURFACE))
+            .border_1()
+            .border_color(rgb(LINE))
             .children(rows)
     }
 
@@ -267,145 +271,171 @@ impl Workspace {
         armed: Option<&str>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let modifier = key.is_empty();
+        if modifier {
+            return div()
+                .w(px(w))
+                .h(px(h))
+                .p(px(4.))
+                .rounded(px(5.))
+                .bg(rgb(BG))
+                .border_1()
+                .border_color(rgb(LINE_SOFT))
+                .text_size(px(9.))
+                .text_color(rgb(TEXT_4))
+                .child(label)
+                .into_any_element();
+        }
         let mapped = self
             .catalog
             .keys
             .iter()
             .find(|(k, _)| k == key)
             .and_then(|(_, d)| self.catalog.device(d));
-        let pina = used.get(key).filter(|_| !key.is_empty()).cloned();
-        let modifier = key.is_empty();
-        let is_armed = armed == Some(key) && !modifier;
-        let picture = mapped.and_then(|d| {
-            let k = &self.catalog.devices[d].key;
-            let f = self.plugin_page.facts.get(k)?;
-            Some(pictures_dir().join(f.picture.as_ref()?))
-        });
+        let pina = used.get(key).cloned();
+        let in_use = pina.is_some();
+        let is_armed = armed == Some(key);
+        let picture = mapped
+            .and_then(|d| {
+                let f = self.plugin_page.facts.get(&self.catalog.devices[d].key)?;
+                Some(pictures_dir().join(f.picture.as_ref()?))
+            })
+            .filter(|p| p.exists());
         let name = mapped.map(|d| self.catalog.devices[d].name.clone());
+        let device_key = mapped.map(|d| self.catalog.devices[d].key.clone());
+        let roomy = h >= 38.0;
+        let (bg, border) = match (is_armed, mapped.is_some()) {
+            (true, _) => (alpha(ACCENT, 0.22), rgb(ACCENT).into()),
+            (false, true) => (alpha(ACCENT, 0.16), alpha(ACCENT, 0.7)),
+            (false, false) => (rgb(CARD).into(), rgb(LINE).into()),
+        };
         let mut cap = div()
+            .id(gpui::SharedString::from(format!("key-{key}")))
             .relative()
             .w(px(w))
             .h(px(h))
-            .rounded(px(7.))
-            .overflow_hidden()
-            .bg(rgb(if modifier { 0x202027 } else { 0x2a2a32 }))
-            .border_1()
-            .border_color(if is_armed {
-                rgb(ACCENT).into()
-            } else {
-                alpha(0x000000, 0.4)
-            })
-            .shadow(vec![gpui::BoxShadow {
-                color: alpha(0x000000, 0.5),
-                offset: gpui::point(px(0.), px(2.)),
-                blur_radius: px(0.),
-                spread_radius: px(0.),
-                inset: false,
-            }])
-            .p(px(5.))
+            .p(px(4.))
             .flex()
             .flex_col()
             .justify_between()
-            .text_size(px(10.))
-            .text_color(rgb(if modifier { TEXT_4 } else { TEXT_2 }));
-        if let Some(path) = picture.filter(|p| p.exists()) {
+            .rounded(px(5.))
+            .overflow_hidden()
+            .bg(bg)
+            .border_1()
+            .border_color(border)
+            .cursor_pointer()
+            .hover(|s| s.border_color(rgb(LINE_STRONG)))
+            .debug_selector(move || format!("key-{key}"));
+        if let Some(path) = picture {
             cap = cap.child(
                 img(path)
                     .absolute()
                     .inset_0()
                     .size_full()
                     .object_fit(ObjectFit::Cover)
-                    .opacity(0.85),
+                    .opacity(0.9),
             );
-        } else if mapped.is_some() {
-            cap = cap.bg(alpha(ACCENT, 0.35));
         }
-        cap = cap
-            .child(
-                div()
-                    .relative()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .when(mapped.is_some(), |d| d.text_color(rgb(0xffffff)))
-                    .child(label),
-            )
-            .children(name.map(|n| {
-                div()
-                    .relative()
-                    .px(px(3.))
-                    .rounded(px(3.))
-                    .bg(alpha(0x000000, 0.6))
-                    .text_size(px(9.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(0xffffff))
-                    .whitespace_nowrap()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(n)
-            }))
-            .when(mapped.is_none(), |d| {
-                d.children(pina.map(|what| {
+        let label_el = div().relative().flex().child(
+            div()
+                .px(px(if mapped.is_some() { 3. } else { 0. }))
+                .rounded(px(3.))
+                .when(mapped.is_some(), |d| d.bg(alpha(BG, 0.85)))
+                .font_family(MONO)
+                .text_size(px(9.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(match (mapped.is_some(), in_use) {
+                    (true, _) => ACCENT_TEXT,
+                    (false, true) => TEXT_4,
+                    (false, false) => TEXT_2,
+                }))
+                .child(label),
+        );
+        cap = cap.child(label_el).when(roomy, |d| {
+            d.children(match (&name, &pina) {
+                (Some(n), _) if mapped.is_some() => Some(
                     div()
+                        .relative()
+                        .px(px(3.))
+                        .rounded(px(3.))
+                        .bg(alpha(BG, 0.85))
                         .text_size(px(8.5))
-                        .text_color(rgb(0xd9a35a))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(TEXT))
                         .whitespace_nowrap()
                         .overflow_hidden()
                         .text_ellipsis()
-                        .child(what)
-                }))
-            });
-        if modifier {
-            return cap.into_any_element();
-        }
-        let in_use = used.contains_key(key);
-        cap.cursor_pointer()
-            .hover(|s| s.border_color(alpha(ACCENT, 0.7)))
-            .debug_selector(move || format!("key-{key}"))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |ws, _, _, cx| {
-                    match ws.plugin_page.picked.clone() {
-                        Some(device) if !in_use => {
-                            ws.map_key(key, &device);
-                            ws.plugin_page.armed = None;
-                        }
-                        Some(_) => {
+                        .child(n.clone()),
+                ),
+                (_, Some(what)) => Some(
+                    div()
+                        .text_size(px(8.))
+                        .text_color(rgb(TEXT_4))
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(what.clone()),
+                ),
+                _ => None,
+            })
+        });
+        cap.when_some(device_key, |d, k| {
+            d.on_hover(cx.listener(move |ws, over: &bool, _, cx| ws.hover_plugin(&k, *over, cx)))
+        })
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |ws, _, _, cx| {
+                match ws.plugin_page.picked.clone() {
+                    Some(device) if !in_use => {
+                        ws.map_key(key, &device);
+                        ws.plugin_page.armed = None;
+                    }
+                    Some(_) => {
+                        ws.status = Some(format!(
+                            "Pina Studio uses {} already: pick another key",
+                            key_label(key)
+                        ))
+                    }
+                    None => ws.plugin_page.armed = Some(key.to_string()),
+                }
+                cx.notify();
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |ws, _: &MouseUpEvent, _, cx| {
+                // A plugin dragged onto the key.
+                if let Some(Drag::Device {
+                    device,
+                    moved: true,
+                    ..
+                }) = ws.drag
+                {
+                    ws.drag = None;
+                    match in_use {
+                        true => {
                             ws.status = Some(format!(
                                 "Pina Studio uses {} already: pick another key",
                                 key_label(key)
                             ))
                         }
-                        None => ws.plugin_page.armed = Some(key.to_string()),
-                    }
-                    cx.notify();
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(move |ws, _: &MouseUpEvent, _, cx| {
-                    // A card dragged onto the key.
-                    if let Some(Drag::Device {
-                        device,
-                        moved: true,
-                        ..
-                    }) = ws.drag
-                    {
-                        ws.drag = None;
-                        if !in_use {
+                        false => {
                             let k = ws.catalog.devices[device].key.clone();
                             ws.map_key(key, &k);
                         }
-                        cx.notify();
                     }
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |ws, _: &MouseDownEvent, _, cx| {
-                    ws.catalog.keys.retain(|(k, _)| k != key);
-                    ws.catalog.save();
                     cx.notify();
-                }),
-            )
-            .into_any_element()
+                }
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |ws, _: &MouseDownEvent, _, cx| {
+                ws.catalog.keys.retain(|(k, _)| k != key);
+                ws.catalog.save();
+                cx.notify();
+            }),
+        )
+        .into_any_element()
     }
 }

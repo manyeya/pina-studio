@@ -15,6 +15,9 @@ actions!(
         BrowserUp,
         BrowserDown,
         BrowserNewTrack,
+        PreviousPlugin,
+        NextPlugin,
+        AddPlugin,
         GoToStart,
         Undo,
         Redo,
@@ -104,6 +107,12 @@ pub fn bind_keys(cx: &mut App) {
         // Arrows walk the results while their search is typed.
         KeyBinding::new("up", PreviousSample, Some("Samples")),
         KeyBinding::new("down", NextSample, Some("Samples")),
+        // On the Plugins page: the arrows pick, Enter puts the one picked on the track.
+        KeyBinding::new("up", PreviousPlugin, Some("Plugins")),
+        KeyBinding::new("down", NextPlugin, Some("Plugins")),
+        KeyBinding::new("left", PreviousPlugin, Some("Plugins && !TextInput")),
+        KeyBinding::new("right", NextPlugin, Some("Plugins && !TextInput")),
+        KeyBinding::new("enter", AddPlugin, Some("Plugins && !TextInput")),
         KeyBinding::new("r", Record, Some("Workspace && !TextInput")),
         KeyBinding::new("cmd-k", ToggleTyping, Some("Workspace")),
         KeyBinding::new("cmd-l", ToggleAgent, None),

@@ -214,13 +214,14 @@ In the app:
   plugin's arrow shows its preset files. Click puts it on the selected track (an instrument in
   place of its own, an effect after its others), double-click or ⇧↵ on a new track, or drag it
   onto any track; ↑ ↓ and ↵ work from the search.
-- The Plugins page (⌃⌥D): every instrument and effect as a card with a picture of its window,
-  filtered by kind, source, format, category and its kind within it (an opto compressor, a plate
-  reverb, an FM synth), maker and your own collections, sorted by name, use or load. Click puts
-  it on the selected track. Take Pictures opens each plugin once, in a process of its own, to
-  photograph its window and time how hard it works. The Map puts plugins on keys of their own;
-  Health shows the disk they take, what the songs use and miss, what needs Rosetta, what's never
-  used, what's installed twice or won't load, and moves spare files to the Trash.
+- The Plugins page (the Browser's Expand, or ⌃⌥D): its instruments and effects as a page, laid
+  out as the sample library's. Filters on the left (search, kind, starred, source, formats,
+  order; chips for categories and the kinds in them, makers, collections and what Health found;
+  the library's size, spare files and pictures), what's found in the middle as pictures of each
+  plugin's window, a list or the keyboard, and the one picked on the right with Add to a track.
+  Double-click or ↵ adds it; drag it out to drop it on a track. Take pictures opens each plugin
+  once, in a process of its own, to photograph its window and time it. Keys puts plugins on keys
+  of their own.
 - Songs (⌘O, or the song's name in the top bar): where Pina Studio starts when no song is named (the
   whole window, nothing to play yet). On the left a new song: its name, tempo, key and time, then
   a click on how to start it (empty, or a beat, band, lo-fi or electronic set of tracks) makes it

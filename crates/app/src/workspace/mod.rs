@@ -693,6 +693,12 @@ impl Render for Workspace {
         if let Some((ch, which, at)) = self.plugin_page.mini_pending.take() {
             self.open_mini(ch, which, at, window, cx);
         }
+        // The Plugins page's search: the Browser's own field.
+        let devices = self.catalog.search.focus_handle(cx);
+        if std::mem::take(&mut self.plugin_page.focus_search) {
+            window.focus(&devices, cx);
+        }
+        self.plugin_page.searching = self.view == View::Plugins && devices.is_focused(window);
         if let Some(dir) = self.opening.take() {
             self.open_song(dir, window, cx);
         }
@@ -806,6 +812,9 @@ impl Render for Workspace {
                     true => format!("{context} Samples"),
                     false => context.to_string(),
                 };
+                if self.view == View::Plugins && self.naming.is_none() {
+                    context += " Plugins";
+                }
                 // The EQ window clicked in last: ⌘A and Escape are its bands'.
                 if self.naming.is_none() && self.eq_view.as_ref().is_some_and(|v| v.focused) {
                     context += " Eq";
@@ -834,6 +843,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &Record, _, cx| ws.record(cx)))
             .on_action(cx.listener(|ws, _: &NewPattern, _, cx| ws.new_pattern(cx)))
             .on_action(cx.listener(|ws, _: &TogglePlugins, _, cx| ws.toggle_plugins_page(cx)))
+            .on_action(cx.listener(|ws, _: &PreviousPlugin, _, cx| ws.step_plugin(-1, cx)))
+            .on_action(cx.listener(|ws, _: &NextPlugin, _, cx| ws.step_plugin(1, cx)))
+            .on_action(cx.listener(|ws, _: &AddPlugin, _, cx| ws.add_picked_plugin(cx)))
             .on_action(
                 cx.listener(|ws, _: &ToggleScore, _, cx| ws.toggle_bottom(Bottom::Score, cx)),
             )

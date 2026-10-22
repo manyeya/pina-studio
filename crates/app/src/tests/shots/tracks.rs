@@ -15,7 +15,10 @@ pub(super) fn set_up(
         // The Plugins page, on the plugins as last scanned; their pictures from a folder
         // PINA_SHOT_PICTURES names (index.json in it: key → picture, size, load).
         p if p.starts_with("plugins") => {
-            use crate::sounds::plugins::{Fact, Kind, Tab};
+            use crate::sounds::{
+                catalog::Scope,
+                plugins::{Fact, HealthSet, Shown},
+            };
             let cached: serde_json::Value = std::fs::read(pina_engine::plugin::scan::cache_file())
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok())
@@ -76,20 +79,28 @@ pub(super) fn set_up(
                 ("f13".into(), "plugin:apple/augraphiceq".into()),
             ];
             ws.view = View::Plugins;
+            ws.catalog.scope = Scope::Effects;
             ws.refresh_plugin_facts(cx);
             let page = &mut ws.plugin_page;
+            page.picked = Some("plugin:apple/aumatrixreverb".into());
             match p {
-                "plugins-map" => page.tab = Tab::Map,
-                "plugins-health" => page.tab = Tab::Health,
-                "plugins-instruments" => page.kind = Kind::Instruments,
-                "plugins-reverb" => page.cat = Some(crate::sounds::catalog::Cat::Reverb),
+                "plugins-list" => page.shown = Shown::List,
+                "plugins-keys" => page.shown = Shown::Keys,
+                "plugins-health" => {
+                    page.shown = Shown::List;
+                    page.set = Some(HealthSet::NeverInASong);
+                }
+                "plugins-instruments" => {
+                    ws.catalog.scope = Scope::Instruments;
+                    ws.plugin_page.picked = None;
+                }
+                "plugins-reverb" => page.cats = vec![crate::sounds::catalog::Cat::Reverb],
                 _ => {}
             }
             // The Browser beside the tracks, its effects with their pictures.
             if p == "plugins-browser" {
                 ws.view = View::Arrange;
                 ws.show_browser = true;
-                ws.catalog.scope = crate::sounds::catalog::Scope::Effects;
             }
             if p == "plugins-mini" {
                 ws.view = View::Mixer;

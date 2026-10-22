@@ -35,20 +35,22 @@ first for changes that break songs or commands made before.
 
 ### Added
 
-- The Plugins page (⌃⌥D, or the plug in the top bar): every instrument and effect as a card
-  with a picture of its own window, in a grid. Effects or Instruments; all, plugins, Pina
-  Studio's own or saved presets; formats turned off and on; categories with what's in them
-  (a compressor's kind, a reverb's, a synth's), makers, your own coloured collections; sorted by
-  name, use or how hard each works the computer. Click puts it on the selected track (⌥: a new
-  track), drag onto a collection; right-click for its collections, key, files and picture.
-  **Take Pictures** opens each plugin once in a process of its own to photograph its window and
-  time it; one that crashes or hangs is marked as not loading, and Pina Studio carries on. A
-  plugin opened in a song has its picture taken then, if it has none.
-- The Map: a keyboard, the keys Pina Studio uses marked; put a plugin on any other key (press a
-  key, click one, or drag a card onto it), and that key puts it on the selected track.
-- Health: how much disk the plugins take and how much could come back, which plugins the songs
-  use and which they miss, those that need Rosetta, that no song uses, that are installed in more
-  than one format and that won't load (try again), and spare files moved to the Trash at once.
+- The Plugins page: the Browser's instruments and effects as a page of their own, as the sample
+  library has one. Expand in the Browser (or ⌃⌥D) opens it on the Browser's tab with its search,
+  Compact goes back. On the left the search; all, instruments or effects; the starred ones;
+  where from, the formats and the order; chips for the categories (and the kinds in them: a
+  compressor's opto or FET, a reverb's plate or hall), the makers, your collections and what
+  Health found (what won't load, needs Rosetta, is installed in two formats, is in no song); and
+  the library, its size, what could go to the Trash and the pictures. In the middle what's found
+  as pictures of each plugin's own window, as a list (its kind, formats, CPU, size and songs), or
+  on the keyboard. On the right the one picked: its picture, what it is, Add to a track (or a new
+  one), the tracks it's on, its files, key and collections. A double-click or ↵ puts it on the
+  selected track; dragged out of the page the tracks come back to drop it on.
+- Take pictures opens each plugin once in a process of its own to photograph its window and time
+  how hard it works; one that crashes or hangs is marked as not loading, and Pina Studio carries
+  on. A plugin opened in a song has its picture taken then, if it has none.
+- Keys: put a plugin on a key of its own (pick it and press the key, click a key and then a
+  plugin, or drag one onto a key), and that key puts it on the selected track.
 - A mixer slot, Add effect and an instrument's Change open a picker: a search, the categories,
   each plugin with its picture; ↑ ↓ pick, ↵ puts it in.
 - The Browser's rows show each plugin's picture, and its kind (Graphic, Shelf, Opto…). A new

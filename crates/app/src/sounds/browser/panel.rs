@@ -166,17 +166,26 @@ impl Workspace {
                     .overflow_hidden()
                     .child(detail),
             )
-            // The sample library has a page of its own, with its map and kits.
-            .when(sounds, |d| {
-                d.child(
-                    icon_seg(Icon::Expand, false, 26.)
-                        .debug_selector(|| "samples-page".into())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|ws, _, _, cx| ws.toggle_samples_page(cx)),
-                        ),
-                )
-            })
+            // A page of its own: the sample library's (its map and kits), or the instruments' and
+            // effects' (their pictures, keys and health).
+            .child(
+                icon_seg(Icon::Expand, false, 26.)
+                    .debug_selector(move || {
+                        if sounds {
+                            "samples-page"
+                        } else {
+                            "plugins-page"
+                        }
+                        .into()
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| match sounds {
+                            true => ws.toggle_samples_page(cx),
+                            false => ws.open_plugins_page(cx),
+                        }),
+                    ),
+            )
             .child(
                 icon_seg(Icon::Close, false, 26.)
                     .debug_selector(|| "close-samples".into())

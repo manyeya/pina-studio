@@ -22,6 +22,9 @@ impl Workspace {
             (View::Samples, ..) if self.browser.view == crate::sounds::browser::Results::Map => {
                 "Hover a dot to hear it · click to pick it · drag a box to keep what's in it · ⌘-scroll to zoom"
             }
+            (View::Plugins, ..) => {
+                "Click a plugin to see it · double-click or ↵ puts it on the selected track · drag one out onto a track · F for the compact browser"
+            }
             (View::Samples, ..) => {
                 "Click a sound to hear it · ↑ ↓ for the next · drag one out to put it on a track · F for the compact browser"
             }

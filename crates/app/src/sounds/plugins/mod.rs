@@ -1,18 +1,19 @@
-//! The Plugins page: every plugin installed, and Pina Studio's own devices, as pictures of
-//! themselves, found by what they are, who made them and what they're in.
+//! The Plugins page: the Browser's instruments and effects as a page of its own, as the sample
+//! library has one. It opens from the Browser's Expand (or ⌃⌥D) and goes back with Compact, the
+//! Browser's search and tab coming with it either way.
 //!
-//! Across the top, a search; Library, Map and Health; taking every plugin's picture; and the
-//! kind (effects or instruments), where from (plugins, Pina Studio's own, saved presets) and the
-//! formats shown. On the left, your collections, the categories (each with what's in it, a
-//! compressor down to an opto or a FET) and the makers. In the middle, a card for each, its own
-//! window's picture: a click puts it on the selected track, in the next free slot. Map puts
-//! plugins on keys, a press of one putting its plugin on the track; Health says what can go
-//! (copies in several formats, what won't load, what this Mac can't run) and what the songs use
-//! and miss. The pictures, and how hard each plugin works the computer, are taken by opening
-//! each one's window once.
+//! On the left what to look for: the search, all, instruments or effects, the starred ones,
+//! where from, the formats and the order; then the categories (and, with one picked, the kinds in
+//! it: a compressor's opto or FET), the makers, your collections, what Health found (what won't
+//! load, needs Rosetta, is installed twice or is in no song) and the library itself (its size,
+//! what could go, the pictures). In the middle what's found, as pictures of each plugin's own
+//! window, as a list, or on the keyboard to put plugins on keys. On the right the one picked: its
+//! picture, what it is, Add to a track, its files, key and collections.
 
 mod cards;
+mod details;
 mod facts;
+mod filters;
 mod health;
 mod index;
 mod map;
@@ -25,37 +26,29 @@ pub use map::*;
 pub use mini::Mini;
 pub use page::PluginOp;
 
-use std::{cell::Cell, collections::HashMap, path::PathBuf, rc::Rc, time::Instant};
+use std::{cell::Cell, collections::HashMap, path::PathBuf, rc::Rc};
 
-use gpui::{Context, Entity, Subscription, prelude::*};
+use gpui::{Context, Entity, Subscription, UniformListScrollHandle, prelude::*};
 use pina_engine::song::project::{Format, Preset};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    sounds::catalog::{Cat, Device, EFFECT_CATS, INSTRUMENT_CATS},
+    sounds::catalog::{Cat, Device, EFFECT_CATS, INSTRUMENT_CATS, Scope},
     ui::text::TextInput,
     workspace::Workspace,
 };
 
-/// What the page shows: the library, the keys, or the library's health.
+/// What the middle shows: pictures, a list, or the keyboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Tab {
+pub enum Shown {
     #[default]
-    Library,
-    Map,
-    Health,
-}
-
-/// Effects or instruments.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Kind {
-    #[default]
-    Effects,
-    Instruments,
+    Grid,
+    List,
+    Keys,
 }
 
 /// Where what's shown comes from: plugins and Pina Studio's own, plugins only, Pina Studio's
-/// own (stock), or saved presets.
+/// own (built in), or saved presets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Source {
     #[default]
@@ -73,24 +66,43 @@ pub enum Sort {
     Cpu,
 }
 
-/// A set Health points to, shown as the library ("See all").
+/// What Health finds about a plugin, a filter of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HealthSet {
-    InSongs,
-    NeverInASong,
-    Copies,
     WontLoad,
     NeedsRosetta,
+    Copies,
+    NeverInASong,
+    InSongs,
 }
 
 impl HealthSet {
+    pub const ALL: [HealthSet; 5] = [
+        HealthSet::WontLoad,
+        HealthSet::NeedsRosetta,
+        HealthSet::Copies,
+        HealthSet::NeverInASong,
+        HealthSet::InSongs,
+    ];
+
     pub fn name(self) -> &'static str {
         match self {
-            HealthSet::InSongs => "In your songs",
-            HealthSet::NeverInASong => "Never in a song",
-            HealthSet::Copies => "In more than one format",
             HealthSet::WontLoad => "Won't load",
             HealthSet::NeedsRosetta => "Needs Rosetta",
+            HealthSet::Copies => "In two formats",
+            HealthSet::NeverInASong => "In no song",
+            HealthSet::InSongs => "In your songs",
+        }
+    }
+
+    pub fn color(self) -> u32 {
+        use crate::ui::theme::*;
+        match self {
+            HealthSet::WontLoad => RECORD,
+            HealthSet::NeedsRosetta => AMBER,
+            HealthSet::Copies => TEAL,
+            HealthSet::NeverInASong => SLATE,
+            HealthSet::InSongs => MINT,
         }
     }
 }
@@ -109,7 +121,7 @@ pub const COLLECTION_COLORS: [u32; 8] = [
     0xff9f43, 0x5b8cff, 0x3ddc97, 0xf472b6, 0xa78bfa, 0xffc53d, 0x38bdf8, 0xff6b6b,
 ];
 
-/// A card shown: a device, or one of its presets.
+/// A plugin shown: a device, or one of its presets.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Card {
     Device(usize),
@@ -124,29 +136,36 @@ impl Card {
     }
 }
 
-/// The page's state: what's picked to filter by, how it's sorted, its searches, the facts
-/// about each plugin, and the picture-taking under way.
+/// The page's state: what's picked to filter by and how it's ordered, the one picked, the facts
+/// about each plugin, and the pictures being taken.
 pub struct PluginPage {
-    pub tab: Tab,
-    pub kind: Kind,
+    pub shown: Shown,
     pub source: Source,
+    pub starred: bool,
     /// Formats left out.
     pub formats_off: Vec<Format>,
-    pub cat: Option<Cat>,
-    pub sub: Option<&'static str>,
-    pub maker: Option<String>,
+    pub cats: Vec<Cat>,
+    pub kinds: Vec<&'static str>,
+    pub makers: Vec<String>,
+    /// Every maker listed, not just the biggest.
+    pub all_makers: bool,
     pub collection: Option<usize>,
     pub set: Option<HealthSet>,
     pub sort: Sort,
     pub descending: bool,
-    pub search: Entity<TextInput>,
-    pub makers: Entity<TextInput>,
-    /// The card picked (by the keyboard, or to map), by its device's key.
+    /// The plugin picked, by its device's key, and its preset if it's one; the one under the
+    /// pointer.
     pub picked: Option<String>,
-    /// The card just clicked, loading, since when.
-    pub loading: Option<(String, Instant)>,
-    /// A key picked on the map, waiting for a card.
+    pub preset: Option<Preset>,
+    pub hovered: Option<String>,
+    /// A key picked on the keyboard, waiting for a plugin.
     pub armed: Option<String>,
+    /// What's shown, in order, as last drawn.
+    pub cards: Vec<Card>,
+    pub list: UniformListScrollHandle,
+    /// The search field has the keyboard; it's to have it next frame.
+    pub searching: bool,
+    pub focus_search: bool,
     /// What's known of each device (its picture, its load), by key; and of each plugin file.
     pub facts: HashMap<String, Fact>,
     pub files: HashMap<PathBuf, FileFacts>,
@@ -154,7 +173,7 @@ pub struct PluginPage {
     pub songs: Option<SongsUse>,
     /// Pictures being taken.
     pub indexing: Option<Indexing>,
-    /// How wide the grid was drawn last, to lay its columns out.
+    /// How wide the results were drawn last, to lay the pictures out.
     pub width: Rc<Cell<f32>>,
     /// The picker a mixer slot opened, and its search; one asked for from a menu (which has
     /// no window to focus it in) next frame.
@@ -172,12 +191,8 @@ pub struct PluginPage {
 
 impl PluginPage {
     pub fn new(cx: &mut Context<Workspace>) -> Self {
-        let search = cx.new(|cx| TextInput::search("search", cx));
-        let makers = cx.new(|cx| TextInput::search("Filter makers", cx));
         let mini_search = cx.new(|cx| TextInput::search("Search plugins", cx));
         let subs = vec![
-            cx.observe(&search, |_, _, cx| cx.notify()),
-            cx.observe(&makers, |_, _, cx| cx.notify()),
             cx.observe(&mini_search, |ws, _, cx| {
                 if let Some(m) = ws.plugin_page.mini.as_mut() {
                     m.picked = 0;
@@ -198,22 +213,26 @@ impl PluginPage {
             ),
         ];
         PluginPage {
-            tab: Tab::Library,
-            kind: Kind::Effects,
+            shown: Shown::Grid,
             source: Source::All,
+            starred: false,
             formats_off: Vec::new(),
-            cat: None,
-            sub: None,
-            maker: None,
+            cats: Vec::new(),
+            kinds: Vec::new(),
+            makers: Vec::new(),
+            all_makers: false,
             collection: None,
             set: None,
             sort: Sort::Name,
             descending: false,
-            search,
-            makers,
             picked: None,
-            loading: None,
+            preset: None,
+            hovered: None,
             armed: None,
+            cards: Vec::new(),
+            list: UniformListScrollHandle::new(),
+            searching: false,
+            focus_search: false,
             facts: facts::load_facts(),
             files: HashMap::new(),
             songs: None,
@@ -226,13 +245,18 @@ impl PluginPage {
             _subs: subs,
         }
     }
+}
 
-    /// The categories of the kind shown.
-    pub fn cats(&self) -> &'static [Cat] {
-        match self.kind {
-            Kind::Effects => &EFFECT_CATS,
-            Kind::Instruments => &INSTRUMENT_CATS,
-        }
+/// The categories a scope shows.
+pub fn scope_cats(scope: Scope) -> Vec<Cat> {
+    match scope {
+        Scope::Instruments => INSTRUMENT_CATS.to_vec(),
+        Scope::Effects => EFFECT_CATS.to_vec(),
+        _ => INSTRUMENT_CATS
+            .iter()
+            .chain(&EFFECT_CATS)
+            .copied()
+            .collect(),
     }
 }
 
@@ -443,45 +467,29 @@ pub fn subcategory(d: &Device) -> Option<&'static str> {
     table.iter().find(|(_, words)| has(words)).map(|(n, _)| *n)
 }
 
-/// A maker's initials, for its mark beside its name.
-pub fn initials(vendor: &str) -> String {
-    let words: Vec<&str> = vendor
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .collect();
-    match words.as_slice() {
-        [] => "?".into(),
-        [one] => one.chars().take(2).collect::<String>(),
-        [a, b, ..] => format!(
-            "{}{}",
-            a.chars().next().unwrap_or(' '),
-            b.chars().next().unwrap_or(' ')
-        ),
-    }
-    .to_uppercase()
-}
-
 impl Workspace {
-    /// Whether a device belongs on the page as it's filtered (its kind, source and formats).
+    /// Whether a device is in the kind (the Browser's tab), source, formats and starred shown.
     fn plugin_kind_fits(&self, d: &Device) -> bool {
         let page = &self.plugin_page;
-        let kind = match page.kind {
-            Kind::Effects => !d.instrument(),
-            Kind::Instruments => d.instrument(),
+        let kind = match self.catalog.scope {
+            Scope::Instruments => d.instrument(),
+            Scope::Effects => !d.instrument(),
+            _ => true,
         };
         let source = match page.source {
-            Source::All | Source::Saved => true,
-            Source::Plugins => d.own.is_none(),
+            Source::All => true,
+            Source::Plugins | Source::Saved => d.own.is_none(),
             Source::Stock => d.own.is_some(),
         };
         let formats = d.own.is_some()
             || d.formats
                 .iter()
                 .any(|p| !page.formats_off.contains(&p.format));
-        kind && source && formats
+        let starred = !page.starred || self.catalog.favourites.contains(&d.key);
+        kind && source && formats && starred
     }
 
-    /// Whether a device is in the set Health points to.
+    /// Whether a device is in a set Health found.
     pub(crate) fn in_set(&self, d: &Device, set: HealthSet) -> bool {
         let page = &self.plugin_page;
         let fact = page.facts.get(&d.key);
@@ -506,45 +514,56 @@ impl Workspace {
         }
     }
 
-    /// The devices the page shows before its category, maker and collection: the kind, source,
-    /// formats, search and Health's set.
+    /// The devices before the chips narrow them: the kind, source, formats, starred and the
+    /// search.
     pub(crate) fn plugin_pool(&self, cx: &gpui::App) -> Vec<usize> {
-        let page = &self.plugin_page;
-        let query = page.search.read(cx).text().trim().to_lowercase();
+        let query = self.catalog_query(cx);
         self.catalog
             .devices
             .iter()
             .enumerate()
             .filter(|(_, d)| self.plugin_kind_fits(d))
-            .filter(|(_, d)| page.set.is_none_or(|s| self.in_set(d, s)))
             .filter(|(_, d)| query.is_empty() || crate::sounds::catalog::score(d, &query).is_some())
             .map(|(i, _)| i)
             .collect()
     }
 
-    /// The cards shown, filtered and sorted.
-    pub(crate) fn plugin_cards(&mut self, cx: &gpui::App) -> Vec<Card> {
-        let pool = self.plugin_pool(cx);
+    /// Whether a device passes the chips, all but `skip`'s (to count what each would find).
+    pub(crate) fn plugin_chips_fit(&self, d: &Device, skip: Chips) -> bool {
         let page = &self.plugin_page;
         let collection = page
             .collection
-            .and_then(|c| self.catalog.collections.get(c))
-            .map(|c| c.devices.clone());
-        let mut list: Vec<usize> = pool
-            .into_iter()
-            .filter(|&d| {
-                let dev = &self.catalog.devices[d];
-                page.cat.is_none_or(|c| dev.cat == c)
-                    && page.sub.is_none_or(|s| subcategory(dev) == Some(s))
-                    && page.maker.as_ref().is_none_or(|m| &dev.vendor == m)
-                    && collection.as_ref().is_none_or(|c| c.contains(&dev.key))
-            })
-            .collect();
+            .and_then(|c| self.catalog.collections.get(c));
+        (skip == Chips::Cats || page.cats.is_empty() || page.cats.contains(&d.cat))
+            && (skip == Chips::Kinds
+                || page.kinds.is_empty()
+                || subcategory(d).is_some_and(|s| page.kinds.contains(&s)))
+            && (skip == Chips::Makers || page.makers.is_empty() || page.makers.contains(&d.vendor))
+            && (skip == Chips::Collection || collection.is_none_or(|c| c.devices.contains(&d.key)))
+            && (skip == Chips::Health || page.set.is_none_or(|s| self.in_set(d, s)))
+    }
+
+    /// What's shown, filtered and in order.
+    pub(crate) fn plugin_cards(&mut self, cx: &gpui::App) -> Vec<Card> {
+        let query = self.catalog_query(cx);
+        let page = &self.plugin_page;
         let devices = &self.catalog.devices;
+        let mut list: Vec<usize> = self
+            .plugin_pool(cx)
+            .into_iter()
+            .filter(|&d| self.plugin_chips_fit(&devices[d], Chips::None))
+            .collect();
         let uses = &self.catalog.uses;
         let facts = &page.facts;
         let name = |d: usize| devices[d].name.to_lowercase();
         match page.sort {
+            // What's typed: the best match first.
+            Sort::Name if !query.is_empty() => list.sort_by_key(|&d| {
+                (
+                    std::cmp::Reverse(crate::sounds::catalog::score(&devices[d], &query)),
+                    name(d),
+                )
+            }),
             Sort::Name => list.sort_by_key(|&d| name(d)),
             Sort::Used => list.sort_by(|&a, &b| {
                 let u = |d: usize| uses.get(&devices[d].key).copied().unwrap_or(0);
@@ -573,4 +592,49 @@ impl Workspace {
         }
         out
     }
+
+    /// The device picked, if it's still there.
+    pub(crate) fn picked_plugin(&self) -> Option<usize> {
+        self.catalog.device(self.plugin_page.picked.as_deref()?)
+    }
+
+    /// The tracks this song has a device on, by name.
+    pub(crate) fn tracks_with(&self, d: &Device) -> Vec<String> {
+        use crate::sounds::catalog::Own;
+        use pina_engine::song::project::Instrument;
+        let is = |r: &pina_engine::song::project::PluginRef| {
+            d.formats
+                .iter()
+                .any(|f| f.class == r.class && f.path == r.path)
+        };
+        self.session
+            .project
+            .tracks
+            .iter()
+            .filter(|t| match d.own {
+                Some(Own::Eq) => t.eq.is_some(),
+                Some(Own::Comp) => t.comp.is_some(),
+                Some(Own::Sat) => t.sat.is_some(),
+                Some(Own::Synth) => matches!(t.instrument, Some(Instrument::Synth)),
+                Some(Own::Drums) => matches!(t.instrument, Some(Instrument::Drums)),
+                Some(Own::Sampler) => matches!(t.instrument, Some(Instrument::Sampler(_))),
+                None => {
+                    matches!(&t.instrument, Some(Instrument::Plugin(r)) if is(r))
+                        || t.inserts.iter().any(is)
+                }
+            })
+            .map(|t| t.name.clone())
+            .collect()
+    }
+}
+
+/// A group of the page's chips, left out when counting what each of its chips would find.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Chips {
+    None,
+    Cats,
+    Kinds,
+    Makers,
+    Collection,
+    Health,
 }
