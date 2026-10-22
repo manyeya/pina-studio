@@ -70,6 +70,14 @@ fn shots() {
                     ws.px_per_beat = z;
                     cx.notify();
                 }
+                // PINA_SHOT_BAR: the bar the tracks start at, in 4/4.
+                if let Some(b) = std::env::var("PINA_SHOT_BAR")
+                    .ok()
+                    .and_then(|b| b.parse::<f32>().ok())
+                {
+                    ws.scroll_x = (b - 1.0) * 4.0 * ws.px_per_beat;
+                    cx.notify();
+                }
                 let shot = Shot {
                     page: &page,
                     song: song.as_deref(),
