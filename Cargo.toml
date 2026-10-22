@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 
 # Dependencies optimized even in dev builds: unoptimized gpui and DSP can't keep up with the

@@ -9,6 +9,8 @@ first for changes that break songs or commands made before.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-22
+
 ### Added
 
 - Pina Studio for Windows: an installer (per user, no administrator) with the app, the `pina`

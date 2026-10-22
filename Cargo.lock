@@ -4190,7 +4190,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pina"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "futures",
  "gpui-pre",
@@ -4207,7 +4207,7 @@ dependencies = [
 
 [[package]]
 name = "pina-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "block2 0.6.2",
  "clap-sys",
@@ -4234,7 +4234,7 @@ dependencies = [
 
 [[package]]
 name = "pina-installer"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "gpui-pre",
  "gpui-pre-apple",
