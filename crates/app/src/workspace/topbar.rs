@@ -413,6 +413,14 @@ impl Workspace {
                         ),
                     )
                     .child(
+                        icon_seg(Icon::Plug, self.view == View::Plugins, 30.)
+                            .debug_selector(|| "plugins".into())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|ws, _, _, cx| ws.toggle_plugins_page(cx)),
+                            ),
+                    )
+                    .child(
                         icon_seg(Icon::Settings, self.view == View::Settings, 30.)
                             .debug_selector(|| "settings".into())
                             .on_mouse_down(

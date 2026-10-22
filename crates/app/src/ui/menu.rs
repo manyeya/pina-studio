@@ -149,6 +149,8 @@ pub enum MenuAction {
     Stamp(crate::editors::pianoroll::Stamp),
     /// Something the step sequencer does.
     Steps(crate::editors::steps::StepsOp),
+    /// Something the Plugins page does.
+    Plugins(crate::sounds::plugins::PluginOp),
     /// The Sampler's picked zone cut into slices across the keys.
     Slice(crate::editors::sampler::Slicing),
     /// An automation lane's or point's item, on a track by id.
@@ -419,6 +421,7 @@ impl Workspace {
             MenuAction::Stamp(stamp) => self.roll.stamp = stamp,
             MenuAction::Slice(how) => self.slice_zone(how, cx),
             MenuAction::Steps(op) => self.steps_op(op, cx),
+            MenuAction::Plugins(op) => self.plugin_op(op, cx),
             MenuAction::Auto(track, op) => self.auto_op(track, op, cx),
             MenuAction::Palette(op) => self.palette_op(op, cx),
             MenuAction::Eq(op) => self.eq_op(op, cx),

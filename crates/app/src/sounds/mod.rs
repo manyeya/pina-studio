@@ -4,3 +4,4 @@ pub mod audition;
 pub mod browser;
 pub mod catalog;
 pub mod palette;
+pub mod plugins;

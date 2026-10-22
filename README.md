@@ -208,12 +208,19 @@ In the app:
   (CLAP, VST3, AU, VST2 shown as badges, the best used), in the categories the plugin says it
   belongs to (VST3 subcategories, CLAP features, an Audio Unit's type, VST2's category; its name
   where those are silent): Synths, Samplers, Drums, Keys, Orchestral, EQ, Dynamics, Reverb,
-  Delay, Distortion, Modulation, Filter, Pitch, Stereo & space, Utility. Words that mean a thing
+  Delay, Distortion, Modulation, Filter, Pitch, Stereo & space, Multi FX, Utility. Words that mean a thing
   find it ("echo" a delay, "space" a reverb, "glue" a compressor); sounds from the sample library
   and songs come up too. Favourites (★), what's in this song and what's used lately come first. A
   plugin's arrow shows its preset files. Click puts it on the selected track (an instrument in
   place of its own, an effect after its others), double-click or ⇧↵ on a new track, or drag it
   onto any track; ↑ ↓ and ↵ work from the search.
+- The Plugins page (⌃⌥D): every instrument and effect as a card with a picture of its window,
+  filtered by kind, source, format, category and its kind within it (an opto compressor, a plate
+  reverb, an FM synth), maker and your own collections, sorted by name, use or load. Click puts
+  it on the selected track. Take Pictures opens each plugin once, in a process of its own, to
+  photograph its window and time how hard it works. The Map puts plugins on keys of their own;
+  Health shows the disk they take, what the songs use and miss, what needs Rosetta, what's never
+  used, what's installed twice or won't load, and moves spare files to the Trash.
 - Songs (⌘O, or the song's name in the top bar): where Pina Studio starts when no song is named (the
   whole window, nothing to play yet). On the left a new song: its name, tempo, key and time, then
   a click on how to start it (empty, or a beat, band, lo-fi or electronic set of tracks) makes it
@@ -397,9 +404,9 @@ In the app:
 - ⇧⌘D makes a summing stack of the selected track: a stack channel (in the mixer) it plays
   into, its name shown on the track. A strip's "→" row routes a track into any stack or aux, or
   back to Stereo Out.
-- On a channel strip, click a plugin to open its editor; click an empty slot, or right-click any,
-  to choose a plugin or the built-in Channel EQ, Compressor and Saturator (drive, tone, mix,
-  output). The master takes plugins too, after its built-ins. In the mixer the selected channel's
+- On a channel strip, click a plugin to open its editor; click an empty slot for a picker of
+  every plugin and the built-in Channel EQ, Compressor and Saturator (drive, tone, mix, output),
+  or right-click any. The master takes plugins too, after its built-ins. In the mixer the selected channel's
   chain shows on the right: the EQ's curve, the compressor's knobs and gain reduction, the
   saturator's drive and curve.
 - The Channel EQ is a full EQ in a window of its own (click a strip's EQ curve, or the

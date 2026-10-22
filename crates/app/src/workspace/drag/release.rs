@@ -4,6 +4,20 @@ use super::*;
 
 impl Workspace {
     pub(crate) fn end_drag(&mut self, cx: &mut Context<Self>) {
+        // A device let go on a card, a Browser row, a key or a collection is theirs to take:
+        // their mouse-ups come after this one. What none took lands on the tracks after them.
+        if let Some(Drag::Device { .. }) = self.drag {
+            let this = cx.entity().downgrade();
+            cx.defer(move |cx| {
+                this.update(cx, |ws, cx| {
+                    let drag = ws.drag.take();
+                    ws.drop_device(drag, cx);
+                    cx.notify();
+                })
+                .ok();
+            });
+            return;
+        }
         // With "Automation moves with regions", a region moved takes what's under it along.
         if self.settings.carry_automation
             && let Some(Drag::Region {
@@ -224,10 +238,6 @@ impl Workspace {
         if let Some(Drag::Sample { .. } | Drag::MapBox { .. }) = self.drag {
             let drag = self.drag.take();
             self.drop_sample(drag, cx);
-        }
-        if let Some(Drag::Device { .. }) = self.drag {
-            let drag = self.drag.take();
-            self.drop_device(drag, cx);
         }
         // Release whatever note the drag was sounding.
         match self.drag {

@@ -6,6 +6,7 @@
 #[cfg(target_os = "macos")]
 pub mod au;
 pub mod clap;
+pub mod picture;
 pub mod platform;
 pub mod scan;
 pub mod vst2;
@@ -137,6 +138,44 @@ pub type Processor = Box<dyn ProcessorApi>;
 
 /// Most parameters one plugin follows automation for, per block.
 pub const AUTOMATED: usize = 32;
+
+/// How much of the time a plugin takes to run, 0 to 1 (1: all of it, in real time): blocks of
+/// quiet noise through it (an instrument holding a chord), timed after a few to settle.
+pub fn load(p: &mut Processor, instrument: bool, rate: f64, max_block: usize) -> f32 {
+    let (mut l, mut r) = (vec![0f32; max_block], vec![0f32; max_block]);
+    let mut seed = 0x9e37_79b9u32;
+    let chord: Vec<Note> = [48u8, 55, 60, 64, 67]
+        .iter()
+        .map(|&pitch| Note {
+            offset: 0,
+            pitch,
+            velocity: 0.8,
+        })
+        .collect();
+    let mut time = std::time::Duration::ZERO;
+    let blocks = 160;
+    for k in 0..blocks + 8 {
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            *a = if instrument {
+                0.0
+            } else {
+                (seed as f32 / u32::MAX as f32 - 0.5) * 0.2
+            };
+            *b = *a;
+        }
+        let notes: &[Note] = if instrument && k == 0 { &chord } else { &[] };
+        let t = std::time::Instant::now();
+        p.process([&mut l, &mut r], max_block, notes, &[], None);
+        if k >= 8 {
+            time += t.elapsed();
+        }
+    }
+    let real = blocks as f64 * max_block as f64 / rate;
+    (time.as_secs_f64() / real) as f32
+}
 
 /// Applies what's waiting: runs silent blocks until the main thread's edits are all in, so a
 /// render starts with the sound the project sets.

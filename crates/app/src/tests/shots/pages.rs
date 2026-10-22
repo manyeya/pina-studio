@@ -33,6 +33,11 @@ pub(super) fn set_up(
             ws.settings_section = crate::pages::settings::Section::Automation;
             ws.open_settings(cx);
         }
+        // The sample browser's page, on the library as it was last read.
+        "samples" => {
+            ws.set_library(pina_engine::samples::library::Library::load(), cx);
+            ws.toggle_samples_page(cx);
+        }
         "settings" => {
             ws.settings.hidden = vec!["score".into(), "takes".into(), "live_loops".into()];
             ws.open_settings(cx);

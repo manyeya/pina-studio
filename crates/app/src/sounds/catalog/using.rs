@@ -204,6 +204,9 @@ impl Workspace {
     /// The track a device dragged to `p` goes on: the row under it, headers or lanes; under the
     /// tracks, a new one.
     pub fn device_target(&self, p: gpui::Point<f32>) -> Option<Target> {
+        if self.view != crate::workspace::View::Arrange {
+            return None;
+        }
         let b = self.lanes_bounds.get();
         let (left, top) = (f32::from(b.origin.x) - self.header_w, f32::from(b.origin.y));
         let (w, h) = (

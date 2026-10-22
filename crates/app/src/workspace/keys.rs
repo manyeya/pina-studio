@@ -69,6 +69,7 @@ actions!(
         PasteRegion,
         RepeatRegion,
         MuteRegion,
+        TogglePlugins,
     ]
 );
 
@@ -146,6 +147,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("up", AdderUp, Some("Adder")),
         KeyBinding::new("down", AdderDown, Some("Adder")),
         KeyBinding::new("cmd-,", ShowSettings, None),
+        KeyBinding::new("ctrl-alt-d", TogglePlugins, Some("Workspace")),
         KeyBinding::new("t", ToolMenu, Some("Arrange && !TextInput")),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-w", Quit, None),

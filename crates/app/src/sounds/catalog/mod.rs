@@ -36,7 +36,7 @@ use crate::{
     workspace::{Drag, Workspace, pt},
 };
 
-pub const EFFECT_CATS: [Cat; 10] = [
+pub const EFFECT_CATS: [Cat; 11] = [
     Cat::Eq,
     Cat::Dynamics,
     Cat::Reverb,
@@ -46,6 +46,7 @@ pub const EFFECT_CATS: [Cat; 10] = [
     Cat::Filter,
     Cat::Pitch,
     Cat::Space,
+    Cat::MultiFx,
     Cat::Utility,
 ];
 pub const INSTRUMENT_CATS: [Cat; 5] = [

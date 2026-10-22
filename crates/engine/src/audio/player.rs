@@ -343,6 +343,15 @@ impl Player {
         Ok(())
     }
 
+    /// A picture of a plugin's open window, as a JPEG at `out`, and its size in pixels.
+    pub fn editor_picture(&self, id: u64, which: Which, out: &Path) -> Result<(u32, u32), String> {
+        self.editors
+            .get(&(id, which))
+            .ok_or("its window isn't open")?
+            .window
+            .picture(out)
+    }
+
     /// Writes every plugin's settings into `Plugin States/` and points the project at them, so
     /// saving the project saves them. Files no longer used are removed.
     pub fn save_states(&self, project: &mut Project) -> Result<(), String> {

@@ -15,6 +15,7 @@ pub enum Cat {
     Pitch,
     Space,
     Utility,
+    MultiFx,
     OtherFx,
     Synth,
     Sampler,
@@ -37,6 +38,7 @@ impl Cat {
             Cat::Pitch => "Pitch",
             Cat::Space => "Stereo & space",
             Cat::Utility => "Utility",
+            Cat::MultiFx => "Multi FX",
             Cat::OtherFx => "Effect",
             Cat::Synth => "Synths",
             Cat::Sampler => "Samplers",
@@ -152,6 +154,14 @@ impl Cat {
                 "network",
                 "isolation",
             ],
+            Cat::MultiFx => &[
+                "multi-effects",
+                "multi-fx",
+                "multifx",
+                "multi fx",
+                "fx rack",
+                "suite",
+            ],
             Cat::OtherFx => &["fx", "effect", "audio-effect"],
             Cat::Synth => &[
                 "synth",
@@ -198,6 +208,7 @@ impl Cat {
             Cat::Pitch => 318.0,
             Cat::Space => 92.0,
             Cat::Utility | Cat::OtherFx => 220.0,
+            Cat::MultiFx => 28.0,
             Cat::Synth => 202.0,
             Cat::Sampler => 30.0,
             Cat::Drums => 6.0,
@@ -222,7 +233,7 @@ impl Cat {
             Cat::Keys => Some("keys"),
             Cat::Orchestral => Some("strings"),
             Cat::OtherInstrument => Some("midi"),
-            Cat::OtherFx => Some("fx"),
+            Cat::OtherFx | Cat::MultiFx => Some("fx"),
             _ => None,
         };
         if let Some(id) = track {

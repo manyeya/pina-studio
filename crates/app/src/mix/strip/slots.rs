@@ -90,13 +90,12 @@ pub(crate) fn plugin_slot(
         })
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+            cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 if used && !(which == Which::Instrument && ws.has_builtin_instrument(ch)) {
                     ws.open_editor(ch, which, cx);
                 } else {
-                    ws.menu = Some(ws.plugin_menu(ch, which, e.position));
-                    cx.notify();
+                    ws.open_mini(ch, which, e.position, window, cx);
                 }
             }),
         )

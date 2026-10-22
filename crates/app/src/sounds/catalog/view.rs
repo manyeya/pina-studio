@@ -1,5 +1,7 @@
 //! The Browser, drawn: its search, rows and the device being dragged.
 
+use gpui::StyledImage;
+
 use super::*;
 
 impl Workspace {
@@ -170,33 +172,58 @@ impl Workspace {
         let fav_key = key.clone();
         let open_key = key.clone();
         let plugin = dev.own.is_none();
+        let kind = crate::sounds::plugins::subcategory(&dev).unwrap_or(dev.cat.name());
         let sub = match (&dev.own, dev.badges().as_slice()) {
-            (Some(_), _) => format!("Pina Studio · {}", dev.cat.name()),
-            (None, b) => format!("{} · {}", dev.vendor, b.join(" ")),
+            (Some(_), _) => format!("Pina Studio · {kind}"),
+            (None, b) => format!("{} · {kind} · {}", dev.vendor, b.join(" ")),
+        };
+        // Its picture, once it's had it taken (the Plugins page).
+        let picture = self
+            .plugin_page
+            .facts
+            .get(&dev.key)
+            .and_then(|f| f.picture.clone())
+            .map(|n| crate::sounds::plugins::pictures_dir().join(n))
+            .filter(|p| p.exists());
+        let mark = match picture {
+            Some(p) => div()
+                .w(px(52.))
+                .h(px(32.))
+                .flex_none()
+                .rounded(px(6.))
+                .overflow_hidden()
+                .border_1()
+                .border_color(rgb(LINE_STRONG))
+                .child(
+                    gpui::img(p)
+                        .w(px(52.))
+                        .h(px(32.))
+                        .object_fit(gpui::ObjectFit::Cover),
+                ),
+            None => div()
+                .w(px(52.))
+                .h(px(32.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.))
+                .bg(alpha(color, 0.14))
+                .child(dev.cat.glyph(15.).text_color(rgb(color))),
         };
         div()
             .group("device-row")
             .flex()
             .items_center()
             .gap(px(9.))
-            .h(px(38.))
+            .h(px(44.))
             .px(px(6.))
             .rounded(px(8.))
             .cursor_pointer()
             .when(on, |d| d.bg(alpha(ACCENT, 0.16)))
             .when(!on, |d| d.hover(|d| d.bg(rgb(OFF))))
             .debug_selector(move || format!("device-{key}"))
-            .child(
-                div()
-                    .size(px(26.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(7.))
-                    .bg(alpha(color, 0.14))
-                    .child(dev.cat.glyph(15.).text_color(rgb(color))),
-            )
+            .child(mark)
             .child(
                 div()
                     .flex_1()

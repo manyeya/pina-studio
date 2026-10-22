@@ -9,6 +9,7 @@ mod mix;
 mod modulation;
 mod pages;
 mod piano_roll;
+mod plugins;
 mod regions;
 #[cfg(target_os = "macos")]
 mod shots;

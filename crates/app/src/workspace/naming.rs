@@ -20,6 +20,8 @@ pub enum Name {
     PatternSearch,
     PatternSave(bool),
     PatternFolder,
+    /// A collection on the Plugins page.
+    PluginCollection(usize),
 }
 
 /// A name being typed, in a text field where the name shows.
@@ -64,6 +66,7 @@ impl Workspace {
                 .filter(|n| !n.is_empty())
                 .or_else(|| Some("Pattern".into())),
             Name::PatternFolder => Some("New Folder".into()),
+            Name::PluginCollection(i) => self.catalog.collections.get(i).map(|c| c.name.clone()),
         }
         .unwrap_or_default()
     }
@@ -142,7 +145,21 @@ impl Workspace {
                 cx.notify();
                 return;
             }
-            (Name::PatternRow(..) | Name::PatternSave(_) | Name::PatternFolder, _) => {
+            (Name::PluginCollection(i), Some(text)) if !text.trim().is_empty() => {
+                if let Some(c) = self.catalog.collections.get_mut(i) {
+                    c.name = text.trim().to_string();
+                }
+                self.catalog.save();
+                cx.notify();
+                return;
+            }
+            (
+                Name::PatternRow(..)
+                | Name::PatternSave(_)
+                | Name::PatternFolder
+                | Name::PluginCollection(_),
+                _,
+            ) => {
                 cx.notify();
                 return;
             }
@@ -187,7 +204,8 @@ impl Workspace {
                     | Name::PatternRow(..)
                     | Name::PatternSearch
                     | Name::PatternSave(_)
-                    | Name::PatternFolder => {}
+                    | Name::PatternFolder
+                    | Name::PluginCollection(_) => {}
                 }
             });
         }

@@ -61,6 +61,7 @@ pub fn categorize(p: &PluginInfo) -> Cat {
             Cat::Synth,
         ],
         false => &[
+            Cat::MultiFx,
             Cat::Reverb,
             Cat::Delay,
             Cat::Eq,

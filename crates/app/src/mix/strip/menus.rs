@@ -6,9 +6,12 @@ impl Workspace {
     /// Opens a plugin's editor, saying why not if it can't.
     pub fn open_editor(&mut self, ch: Channel, which: Which, cx: &mut Context<Self>) {
         let id = self.owner_id(ch);
-        if let Err(e) = self.player.open_editor(id, which) {
-            self.status = Some(e);
-            cx.notify();
+        match self.player.open_editor(id, which) {
+            Ok(()) => self.picture_when_shown(ch, which, cx),
+            Err(e) => {
+                self.status = Some(e);
+                cx.notify();
+            }
         }
     }
 
@@ -19,7 +22,13 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             for _ in 0..50 {
                 let opened = this
-                    .update(cx, |ws, _| ws.player.open_editor(id, which).is_ok())
+                    .update(cx, |ws, cx| {
+                        let ok = ws.player.open_editor(id, which).is_ok();
+                        if ok {
+                            ws.picture_when_shown(ch, which, cx);
+                        }
+                        ok
+                    })
                     .unwrap_or(true);
                 if opened {
                     break;
@@ -41,10 +50,9 @@ impl Workspace {
         }
     }
 
-    /// The plugins that can go in a slot: instruments for the instrument slot, effects (and the
-    /// built-in ones a channel doesn't have yet) for inserts, by name.
+    /// A slot's menu: Pina Studio's instruments, taking its plugin out, the plugin's presets, and
+    /// the picker for every plugin and built-in.
     pub fn plugin_menu(&self, ch: Channel, which: Which, at: Point<Pixels>) -> Menu {
-        let instrument = which == Which::Instrument;
         let mut items = Vec::new();
         match (ch, which) {
             (Channel::Track(track), Which::Instrument) => {
@@ -87,60 +95,11 @@ impl Workspace {
                 items.push((label, action));
             }
         }
-        for p in self
-            .plugins
-            .iter()
-            .flatten()
-            .filter(|p| p.instrument == instrument)
-        {
-            let plugin = p.plugin_ref();
-            let action = match (ch, which) {
-                (Channel::Track(track), Which::Instrument) => MenuAction::Instrument {
-                    track,
-                    instrument: Instrument::Plugin(plugin),
-                },
-                (_, Which::Insert(index)) => MenuAction::Insert {
-                    channel: ch,
-                    index,
-                    plugin: Some(plugin),
-                },
-                _ => continue,
-            };
-            items.push((
-                format!("{} — {} · {}", p.class, p.vendor, p.format.name()),
-                action,
-            ));
-        }
-        if !instrument {
-            let (eq, comp) = self.strip_dsp(ch);
-            if eq.is_none() {
-                items.push((
-                    "Channel EQ (built in)".into(),
-                    MenuAction::AddBuiltin {
-                        channel: ch,
-                        builtin: Builtin::Eq,
-                    },
-                ));
-            }
-            if comp.is_none() {
-                items.push((
-                    "Compressor (built in)".into(),
-                    MenuAction::AddBuiltin {
-                        channel: ch,
-                        builtin: Builtin::Comp,
-                    },
-                ));
-            }
-            if self.sat(ch).is_none() {
-                items.push((
-                    "Saturator (built in)".into(),
-                    MenuAction::AddBuiltin {
-                        channel: ch,
-                        builtin: Builtin::Sat,
-                    },
-                ));
-            }
-        }
+        // Every plugin and built-in, with pictures, in the picker.
+        items.push((
+            "Choose a Plug-in…".to_string(),
+            MenuAction::Plugins(crate::sounds::plugins::PluginOp::OpenMini(ch, which, at)),
+        ));
         if self.plugins.is_none() {
             items.push(("Looking for plugins…".to_string(), MenuAction::Nothing));
         }

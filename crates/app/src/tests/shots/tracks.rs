@@ -12,6 +12,97 @@ pub(super) fn set_up(
     let Shot { page, song, out } = *shot;
     let _ = (song, out, &window);
     match page {
+        // The Plugins page, on the plugins as last scanned; their pictures from a folder
+        // PINA_SHOT_PICTURES names (index.json in it: key → picture, size, load).
+        p if p.starts_with("plugins") => {
+            use crate::sounds::plugins::{Fact, Kind, Tab};
+            let cached: serde_json::Value = std::fs::read(pina_engine::plugin::scan::cache_file())
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or_default();
+            let plugins: Vec<PluginInfo> = cached
+                .as_object()
+                .map(|m| {
+                    m.values()
+                        .flat_map(|c| {
+                            serde_json::from_value::<Vec<PluginInfo>>(c["plugins"].clone())
+                                .unwrap_or_default()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            ws.plugins = Some(plugins);
+            ws.catalog_plugins();
+            if let Some(dir) = std::env::var_os("PINA_SHOT_PICTURES") {
+                let index: serde_json::Value =
+                    std::fs::read(std::path::Path::new(&dir).join("index.json"))
+                        .ok()
+                        .and_then(|b| serde_json::from_slice(&b).ok())
+                        .unwrap_or_default();
+                for (key, v) in index.as_object().into_iter().flatten() {
+                    ws.plugin_page.facts.insert(
+                        key.clone(),
+                        Fact {
+                            picture: v["picture"].as_str().map(String::from),
+                            w: v["w"].as_u64().unwrap_or(0) as u32,
+                            h: v["h"].as_u64().unwrap_or(0) as u32,
+                            load: v["load"].as_f64().map(|l| l as f32),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            ws.catalog.collections = vec![
+                crate::sounds::plugins::Collection {
+                    name: "Mix bus".into(),
+                    color: 0xff9f43,
+                    devices: vec![
+                        "own:eq".into(),
+                        "own:comp".into(),
+                        "plugin:apple/aupeaklimiter".into(),
+                    ],
+                },
+                crate::sounds::plugins::Collection {
+                    name: "Vocal chain".into(),
+                    color: 0x5b8cff,
+                    devices: vec![
+                        "plugin:apple/aureverb2".into(),
+                        "plugin:apple/audelay".into(),
+                    ],
+                },
+            ];
+            ws.catalog.keys = vec![
+                ("g".into(), "plugin:apple/aumatrixreverb".into()),
+                ("f13".into(), "plugin:apple/augraphiceq".into()),
+            ];
+            ws.view = View::Plugins;
+            ws.refresh_plugin_facts(cx);
+            let page = &mut ws.plugin_page;
+            match p {
+                "plugins-map" => page.tab = Tab::Map,
+                "plugins-health" => page.tab = Tab::Health,
+                "plugins-instruments" => page.kind = Kind::Instruments,
+                "plugins-reverb" => page.cat = Some(crate::sounds::catalog::Cat::Reverb),
+                _ => {}
+            }
+            // The Browser beside the tracks, its effects with their pictures.
+            if p == "plugins-browser" {
+                ws.view = View::Arrange;
+                ws.show_browser = true;
+                ws.catalog.scope = crate::sounds::catalog::Scope::Effects;
+            }
+            if p == "plugins-mini" {
+                ws.view = View::Mixer;
+                let ch = crate::mix::strip::Channel::Track(0);
+                ws.open_mini(
+                    ch,
+                    pina_engine::song::project::Which::Insert(0),
+                    gpui::point(px(240.), px(300.)),
+                    window,
+                    cx,
+                );
+            }
+        }
         p if p.starts_with("adder") => {
             // The plugins as last scanned, their presets as last read, the library.
             let cached: serde_json::Value = std::fs::read(pina_engine::plugin::scan::cache_file())

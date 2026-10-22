@@ -9,6 +9,14 @@ pub(crate) struct Kept {
     pub(crate) favourites: Vec<String>,
     #[serde(default)]
     pub(crate) recent: Vec<String>,
+    /// The Plugins page's: your collections, plugins on keys (key, device), and how often each
+    /// device has been put on a track.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) collections: Vec<crate::sounds::plugins::Collection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) keys: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub(crate) uses: HashMap<String, u32>,
 }
 
 pub(crate) fn kept_file() -> PathBuf {
@@ -27,6 +35,9 @@ pub struct Catalog {
     pub(crate) presets: HashMap<String, Vec<Preset>>,
     pub favourites: Vec<String>,
     pub recent: Vec<String>,
+    pub collections: Vec<crate::sounds::plugins::Collection>,
+    pub keys: Vec<(String, String)>,
+    pub uses: HashMap<String, u32>,
     pub(crate) _typed: Subscription,
     pub(crate) _done: Subscription,
 }
@@ -60,6 +71,9 @@ impl Catalog {
             presets: HashMap::new(),
             favourites: kept.favourites,
             recent: kept.recent,
+            collections: kept.collections,
+            keys: kept.keys,
+            uses: kept.uses,
             _typed: typed,
             _done: done,
         }
@@ -72,6 +86,9 @@ impl Catalog {
         let kept = Kept {
             favourites: self.favourites.clone(),
             recent: self.recent.clone(),
+            collections: self.collections.clone(),
+            keys: self.keys.clone(),
+            uses: self.uses.clone(),
         };
         let file = kept_file();
         let _ = std::fs::create_dir_all(file.parent().unwrap());

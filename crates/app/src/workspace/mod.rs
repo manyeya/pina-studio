@@ -335,6 +335,8 @@ pub struct Workspace {
     pub sounds: crate::arrange::adder::Sounds,
     /// The step sequencer's view: its edit mode, picked row and steps, page, panes, input.
     pub steps: crate::editors::steps::StepsView,
+    /// The Plugins page: its filters, the facts about each plugin, pictures being taken.
+    pub plugin_page: crate::sounds::plugins::PluginPage,
     /// What the window shows, kept for every song (Settings, ⌘,); the page's section shown;
     /// where play last started (to go back to on stop, if Settings say).
     pub settings: crate::pages::settings::Settings,
@@ -529,6 +531,7 @@ impl Workspace {
             adder: None,
             sounds: Default::default(),
             steps: Default::default(),
+            plugin_page: crate::sounds::plugins::PluginPage::new(cx),
             settings: crate::pages::settings::Settings::load(),
             settings_section: Default::default(),
             play_from: 0,
@@ -684,6 +687,12 @@ impl Render for Workspace {
         if let Some(what) = self.steps.ask.take() {
             self.start_naming(what, window, cx);
         }
+        if let Some(what) = self.plugin_page.ask.take() {
+            self.start_naming(what, window, cx);
+        }
+        if let Some((ch, which, at)) = self.plugin_page.mini_pending.take() {
+            self.open_mini(ch, which, at, window, cx);
+        }
         if let Some(dir) = self.opening.take() {
             self.open_song(dir, window, cx);
         }
@@ -803,7 +812,15 @@ impl Render for Workspace {
                 }
                 gpui::KeyContext::parse(&context).unwrap_or_default()
             })
-            .on_key_down(cx.listener(|ws, e: &KeyDownEvent, window, cx| ws.type_key(e, window, cx)))
+            .on_key_down(cx.listener(|ws, e: &KeyDownEvent, window, cx| {
+                // A key a plugin's mapped to puts it on the track (not while typing in a field).
+                if !ws.browser.searching && !ws.typing_in_field(window, cx) && ws.mapped_key(e, cx)
+                {
+                    cx.stop_propagation();
+                    return;
+                }
+                ws.type_key(e, window, cx)
+            }))
             .on_key_up(cx.listener(|ws, e: &KeyUpEvent, _, cx| ws.release_key(e, cx)))
             .on_action(
                 cx.listener(|ws, _: &TogglePianoRoll, _, cx| {
@@ -816,6 +833,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|ws, _: &Record, _, cx| ws.record(cx)))
             .on_action(cx.listener(|ws, _: &NewPattern, _, cx| ws.new_pattern(cx)))
+            .on_action(cx.listener(|ws, _: &TogglePlugins, _, cx| ws.toggle_plugins_page(cx)))
             .on_action(
                 cx.listener(|ws, _: &ToggleScore, _, cx| ws.toggle_bottom(Bottom::Score, cx)),
             )
@@ -971,6 +989,9 @@ impl Render for Workspace {
                     .when(self.view == View::Settings, |d| {
                         d.child(self.settings_page(cx))
                     })
+                    .when(self.view == View::Plugins, |d| {
+                        d.child(self.plugins_page(cx))
+                    })
                     .when(self.view == View::Arrange, |d| {
                         d.when(self.show_inspector, |d| d.child(self.inspector(cx)))
                             .child(
@@ -1002,6 +1023,7 @@ impl Render for Workspace {
             .children(self.panner_view(cx))
             .children(self.mod_ghost())
             .children(self.eq_window(cx))
+            .children(self.mini_view(cx))
             .children(self.menu_view(cx))
             .children(self.adder_view(cx))
             .children(self.export_view(cx))

@@ -169,6 +169,11 @@ impl Window {
     }
 
     /// What the plugin's view goes in: the window itself.
+    /// A picture of what the window shows: macOS's for now.
+    pub fn picture(&self, _out: &Path) -> Result<(u32, u32), String> {
+        Err("pictures of plugins are taken on macOS".into())
+    }
+
     pub fn parent(&self) -> *mut c_void {
         self.0
     }

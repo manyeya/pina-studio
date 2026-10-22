@@ -35,9 +35,32 @@ first for changes that break songs or commands made before.
 
 ### Added
 
+- The Plugins page (⌃⌥D, or the plug in the top bar): every instrument and effect as a card
+  with a picture of its own window, in a grid. Effects or Instruments; all, plugins, Pina
+  Studio's own or saved presets; formats turned off and on; categories with what's in them
+  (a compressor's kind, a reverb's, a synth's), makers, your own coloured collections; sorted by
+  name, use or how hard each works the computer. Click puts it on the selected track (⌥: a new
+  track), drag onto a collection; right-click for its collections, key, files and picture.
+  **Take Pictures** opens each plugin once in a process of its own to photograph its window and
+  time it; one that crashes or hangs is marked as not loading, and Pina Studio carries on. A
+  plugin opened in a song has its picture taken then, if it has none.
+- The Map: a keyboard, the keys Pina Studio uses marked; put a plugin on any other key (press a
+  key, click one, or drag a card onto it), and that key puts it on the selected track.
+- Health: how much disk the plugins take and how much could come back, which plugins the songs
+  use and which they miss, those that need Rosetta, that no song uses, that are installed in more
+  than one format and that won't load (try again), and spare files moved to the Trash at once.
+- A mixer slot, Add effect and an instrument's Change open a picker: a search, the categories,
+  each plugin with its picture; ↑ ↓ pick, ↵ puts it in.
+- The Browser's rows show each plugin's picture, and its kind (Graphic, Shelf, Opto…). A new
+  category, Multi FX, for plugins that do several things.
 - Pina Studio is open source, under the MIT license, and has a website:
   https://manyeya.github.io/pina-studio/ (its downloads, Midnight Drive and Corner Store Blues to
   play track by track, and an agent building Corner Store Blues one command at a time).
+
+### Fixed
+
+- Clicking a device in the Browser puts it on the selected track again (letting go of the click
+  ended it as a drag first).
 
 ## [0.3.0] - 2026-10-22
 

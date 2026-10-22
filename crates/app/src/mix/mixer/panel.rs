@@ -151,13 +151,12 @@ impl Workspace {
                         .child(
                             button(if opens { "Open" } else { "Change" }, true).on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
                                     if opens {
                                         ws.open_editor(ch, Which::Instrument, cx);
                                     } else {
-                                        ws.menu =
-                                            Some(ws.plugin_menu(ch, Which::Instrument, e.position));
-                                        cx.notify();
+                                        ws.open_mini(ch, Which::Instrument, e.position, window, cx);
                                     }
                                 }),
                             ),
@@ -241,9 +240,9 @@ impl Workspace {
                 .debug_selector(|| "add-effect".into())
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                        ws.menu = Some(ws.plugin_menu(ch, Which::Insert(index), e.position));
-                        cx.notify();
+                    cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        ws.open_mini(ch, Which::Insert(index), e.position, window, cx);
                     }),
                 )
         });

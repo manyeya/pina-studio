@@ -45,19 +45,21 @@ fn a_plugin_that_wont_load_is_reported_and_removable(cx: &mut TestAppContext) {
         instrument: false,
         categories: Vec::new(),
     };
-    ws.update(cx, |ws, _| ws.plugins = Some(vec![missing]));
-    // The Keys strip's empty insert slot offers No Plug-in and the effect.
+    ws.update(cx, |ws, _| {
+        ws.plugins = Some(vec![missing]);
+        ws.catalog_plugins();
+    });
+    // The Keys strip's empty insert slot opens the picker: the effect found, Enter puts it in.
     click_on(
         cx,
         "slot-Track(0)-Insert(0)",
         Modifiers::none(),
         MouseButton::Left,
     );
-    // The effect, and the built-in EQ, compressor and saturator: nothing to take out of an empty
-    // slot.
-    let items = ws.read_with(cx, |ws, _| ws.menu.as_ref().unwrap().items.len());
-    assert_eq!(items, 4);
-    click_on(cx, "menu-0", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.plugin_page.mini.is_some()));
+    cx.simulate_input("missing");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
     let (inserts, status) = ws.read_with(cx, |ws, _| {
         (
             ws.session.project.tracks[0].inserts.len(),
@@ -106,15 +108,11 @@ fn the_mixer_shapes_a_channel_with_its_eq_and_compressor(cx: &mut TestAppContext
     assert!(b.shape == Shape::Bell && b.gain_db > 3.0, "{b:?}");
     click_on(cx, "eq-close", Modifiers::none(), MouseButton::Left);
     assert!(ws.read_with(cx, |ws, _| ws.eq_view.is_none()));
-    // A compressor from the add-effect menu, then its threshold turned down.
+    // A compressor from the add-effect picker, then its threshold turned down.
     click_on(cx, "add-effect", Modifiers::none(), MouseButton::Left);
-    let items = ws.read_with(cx, |ws, _| ws.menu.as_ref().unwrap().items.clone());
-    let comp = items
-        .iter()
-        .position(|(label, _)| label.starts_with("Compressor"))
-        .unwrap();
-    let name: &'static str = Box::leak(format!("menu-{comp}").into_boxed_str());
-    click_on(cx, name, Modifiers::none(), MouseButton::Left);
+    cx.simulate_input("compressor");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
     let knob = cx.debug_bounds("comp-Threshold").unwrap().center();
     drag(cx, knob, knob + point(px(0.), px(30.)));
     let threshold = ws.read_with(cx, |ws, _| {

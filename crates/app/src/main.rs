@@ -294,6 +294,11 @@ fn main() {
         // What a plugin bundle holds, as JSON: run by the plugin scan, one bundle per process.
         ["__scan", bundle] => pina_engine::plugin::scan::inspect(p(bundle))
             .map(|found| println!("{}", serde_json::to_string(&found).unwrap())),
+        // A plugin's picture and load, as JSON: one plugin per process, for the Plugins page.
+        ["__picture", plugin, kind, out] => serde_json::from_str(plugin)
+            .map_err(|e| e.to_string())
+            .and_then(|r| pina_engine::plugin::picture::take(&r, *kind == "instrument", p(out)))
+            .map(|s| println!("{}", serde_json::to_string(&s).unwrap())),
         ["-h" | "--help" | "help"] => {
             println!("{USAGE}");
             Ok(())

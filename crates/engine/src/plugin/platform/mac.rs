@@ -32,6 +32,48 @@ unsafe extern "C" {
         encoding: u32,
     ) -> *const c_void;
     fn CFRelease(cf: *const c_void);
+    fn CFNumberCreate(a: *const c_void, kind: isize, value: *const c_void) -> *const c_void;
+    fn CFDictionaryCreate(
+        a: *const c_void,
+        keys: *const *const c_void,
+        values: *const *const c_void,
+        n: isize,
+        key_callbacks: *const c_void,
+        value_callbacks: *const c_void,
+    ) -> *const c_void;
+    static kCFTypeDictionaryKeyCallBacks: c_void;
+    static kCFTypeDictionaryValueCallBacks: c_void;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CgRect {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGWindowListCreateImage(bounds: CgRect, list: u32, window: u32, image: u32) -> *mut c_void;
+    fn CGImageCreateWithImageInRect(image: *mut c_void, rect: CgRect) -> *mut c_void;
+    fn CGImageGetWidth(image: *mut c_void) -> usize;
+    fn CGImageGetHeight(image: *mut c_void) -> usize;
+    fn CGImageRelease(image: *mut c_void);
+}
+
+#[link(name = "ImageIO", kind = "framework")]
+unsafe extern "C" {
+    fn CGImageDestinationCreateWithURL(
+        url: *const c_void,
+        kind: *const c_void,
+        count: usize,
+        options: *const c_void,
+    ) -> *mut c_void;
+    fn CGImageDestinationAddImage(dest: *mut c_void, image: *mut c_void, props: *const c_void);
+    fn CGImageDestinationFinalize(dest: *mut c_void) -> bool;
+    static kCGImageDestinationLossyCompressionQuality: *const c_void;
 }
 
 /// A plugin's binary, loaded: its bundle. Never unloaded.
@@ -163,5 +205,95 @@ impl Window {
     /// The `NSWindow` itself, for what only macOS does with it.
     pub fn ns(&self) -> &NSWindow {
         &self.0
+    }
+
+    /// A picture of what the window shows (its title bar left off), as a JPEG at `out`; its
+    /// size in pixels. A window of this app's own is photographed without asking.
+    pub fn picture(&self, out: &Path) -> Result<(u32, u32), String> {
+        let id = self.0.windowNumber();
+        if id <= 0 {
+            return Err("the window isn't on screen".into());
+        }
+        let frame = self.0.frame();
+        let content = self.0.contentRectForFrameRect(frame);
+        let title = (frame.size.height - content.size.height).max(0.0);
+        // In front of nothing, just this window, at its full resolution.
+        let null = CgRect {
+            x: f64::INFINITY,
+            y: f64::INFINITY,
+            w: 0.0,
+            h: 0.0,
+        };
+        unsafe {
+            let whole = CGWindowListCreateImage(null, 1 << 3, id as u32, 1 | 1 << 3);
+            if whole.is_null() {
+                return Err("macOS gave no picture of the window".into());
+            }
+            let (w, h) = (
+                CGImageGetWidth(whole) as f64,
+                CGImageGetHeight(whole) as f64,
+            );
+            let scale = h / frame.size.height.max(1.0);
+            let top = (title * scale).round();
+            let image = CGImageCreateWithImageInRect(
+                whole,
+                CgRect {
+                    x: 0.0,
+                    y: top,
+                    w,
+                    h: (h - top).max(1.0),
+                },
+            );
+            CGImageRelease(whole);
+            if image.is_null() {
+                return Err("the picture couldn't be cropped".into());
+            }
+            let size = (
+                CGImageGetWidth(image) as u32,
+                CGImageGetHeight(image) as u32,
+            );
+            let path = out.as_os_str().as_encoded_bytes();
+            let url = CFURLCreateFromFileSystemRepresentation(
+                ptr::null(),
+                path.as_ptr(),
+                path.len() as isize,
+                0,
+            );
+            let kind = CFStringCreateWithCString(ptr::null(), c"public.jpeg".as_ptr(), 0x0800_0100);
+            let quality = 0.86f64;
+            // kCFNumberFloat64Type
+            let number = CFNumberCreate(ptr::null(), 6, &quality as *const f64 as *const c_void);
+            let keys = [kCGImageDestinationLossyCompressionQuality];
+            let values = [number];
+            let props = CFDictionaryCreate(
+                ptr::null(),
+                keys.as_ptr(),
+                values.as_ptr(),
+                1,
+                &raw const kCFTypeDictionaryKeyCallBacks,
+                &raw const kCFTypeDictionaryValueCallBacks,
+            );
+            let dest = CGImageDestinationCreateWithURL(url, kind, 1, ptr::null());
+            let done = !dest.is_null() && {
+                CGImageDestinationAddImage(dest, image, props);
+                CGImageDestinationFinalize(dest)
+            };
+            for cf in [props, number, kind, url] {
+                if !cf.is_null() {
+                    CFRelease(cf);
+                }
+            }
+            if !dest.is_null() {
+                CFRelease(dest as *const c_void);
+            }
+            CGImageRelease(image);
+            match done {
+                true => Ok(size),
+                false => Err(format!(
+                    "{}: the picture couldn't be written",
+                    out.display()
+                )),
+            }
+        }
     }
 }

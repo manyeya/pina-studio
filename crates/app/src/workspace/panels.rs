@@ -28,6 +28,8 @@ pub enum View {
     Study,
     /// What the window shows (⌘,).
     Settings,
+    /// Every plugin, as pictures: to find, map to keys, and keep healthy.
+    Plugins,
 }
 
 impl Workspace {
