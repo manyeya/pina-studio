@@ -289,19 +289,3 @@ impl Browser {
         (self.map.len() == self.library.samples.len()).then_some(&self.map[..])
     }
 }
-
-impl Workspace {
-    // The library.
-
-    // Finding.
-
-    // Hearing and choosing.
-
-    // Into the song.
-
-    // The kit.
-
-    // The map.
-
-    // The views.
-}
