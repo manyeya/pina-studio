@@ -90,7 +90,10 @@ impl PluginApi for Shown {
     fn save_preset(&self, _: &str) -> Result<PathBuf, String> {
         Err("no".into())
     }
-    fn open_editor(&self, _: objc2::MainThreadMarker) -> Result<crate::plugin::Editor, String> {
+    fn open_editor(
+        &self,
+        _: crate::plugin::MainThreadMarker,
+    ) -> Result<crate::plugin::Editor, String> {
         Err("no".into())
     }
 }
