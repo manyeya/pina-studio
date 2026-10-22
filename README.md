@@ -674,3 +674,7 @@ The engine's tests that need a real plugin are opt-in, each format by its own va
     PINA_TEST_AU="aumu SgXT VmbA" cargo test -p pina-engine -- --ignored
 
 Apple's own Audio Units (AUSampler, AUDelay, AULowpass…) are tested on every run.
+
+## License
+
+MIT, in `LICENSE`.
