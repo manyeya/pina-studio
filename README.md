@@ -94,7 +94,21 @@ and staples the disk image; without them it's signed ad hoc, and the window says
 anyway. `PINA_SHOT=<dir> cargo test -p pina-installer shots -- --ignored` draws its screens.
 The icon, a metronome on a dark squircle on Apple's grid, is drawn by `scripts/icon.py`
 (`crates/app/icon/pina.svg`) and packed into `pina.icns` by `cargo run -p pina --example
-icon`; macOS 26 draws it in its own glass, not in a gray box.
+icon`; macOS 26 draws it in its own glass, not in a gray box. The same example writes `pina.ico`
+for Windows.
+
+On Windows, Pina Studio is built by `.github/workflows/windows.yml` on every push to `dev`, `main`
+and `feat/*`: `Pina Studio.exe` (the app, with no console window; built with the `windows-gui`
+feature) and `pina.exe` (the command line agents and scripts run), packed into
+`dist/PinaStudio-<version>-windows-x64-setup.exe` (`scripts/windows/pina.iss`, Inno Setup) and a
+zip, both downloadable from the run; a `vX.Y.Z` tag puts them on its release. The installer is per
+user (no administrator): Pina Studio in `AppData\Local\Programs`, a Start menu entry, and if you
+like `pina` on the PATH. On Windows, VST3, CLAP and VST2 plugins are found in Windows' plugin
+folders and their editors open in windows of their own; settings and caches are in `AppData`;
+deleted songs go to the Recycle Bin. Audio Units are macOS's; bouncing writes WAV and MP3 (AIFF,
+FLAC, AAC and ALAC use macOS's encoder); the agents' mix uses a reverb only if Dragonfly Reverb
+is installed, and mastering needs macOS's limiter for now. What differs by platform is in
+`crates/engine/src/plugin/platform/` and `crates/app/src/platform.rs`.
 
 `examples/midnight-drive` was made entirely with `pina do` commands, as an agent would make it.
 So is Corner Store Blues, a 95 BPM boom-bap beat on real samples (MusicRadar's free 90s Hip Hop

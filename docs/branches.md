@@ -33,8 +33,10 @@ own, then why, if it isn't obvious. They don't name other products, and they don
 1. On `dev`: set the version in `Cargo.toml` (`[workspace.package]`), and in `CHANGELOG.md` turn
    **Unreleased** into `## [x.y.z] - YYYY-MM-DD`, with a new empty Unreleased above it.
 2. `git switch main && git merge --ff-only dev`, then `git tag vx.y.z` and push `main` and the tag.
-3. The downloads: the Mac disk image from `scripts/release-mac.sh` (it lands in `dist/`), put on
-   the release for the tag.
+3. The downloads: the tag's push builds the Windows installer and zip and puts them on its
+   release (`.github/workflows/windows.yml`); add the Mac disk image from
+   `scripts/release-mac.sh` (it lands in `dist/`). Every push to `dev`, `main` and `feat/*`
+   also builds the Windows downloads, kept with the run, to try before a release.
 
 The version follows semantic versioning: the third number for fixes, the second for features, the
 first for changes that break songs or commands made with an earlier version.

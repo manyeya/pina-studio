@@ -9,6 +9,13 @@ first for changes that break songs or commands made before.
 
 ## [Unreleased]
 
+### Added
+
+- Pina Studio for Windows: an installer (per user, no administrator) with the app, the `pina`
+  command and a Start menu entry. VST3, CLAP and VST2 plugins, with their editors; settings in
+  AppData; deleted songs to the Recycle Bin. Audio Units stay macOS's; bounces are WAV and MP3
+  there; mastering needs macOS's limiter for now.
+
 ## [0.2.0] - 2026-10-22
 
 ### Added
