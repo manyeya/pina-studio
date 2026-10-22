@@ -48,7 +48,9 @@ fn shots() {
             .unwrap();
         bind_keys(cx);
     });
-    let session = Session::open(&demo()).unwrap();
+    // PINA_SHOT_PROJECT: a song of its own to open instead of the demo.
+    let project = std::env::var_os("PINA_SHOT_PROJECT").map_or_else(demo, PathBuf::from);
+    let session = Session::open(&project).unwrap();
     let player = Player::silent(&session.project, &session.dir);
     let window = cx
         .open_window(gpui::size(px(1440.), px(tall)), |window, cx| {
@@ -60,6 +62,14 @@ fn shots() {
     cx.update(|cx| {
         window
             .update(cx, |ws, window, cx| {
+                // PINA_SHOT_ZOOM: the tracks' pixels per beat, to show more of the song.
+                if let Some(z) = std::env::var("PINA_SHOT_ZOOM")
+                    .ok()
+                    .and_then(|z| z.parse().ok())
+                {
+                    ws.px_per_beat = z;
+                    cx.notify();
+                }
                 let shot = Shot {
                     page: &page,
                     song: song.as_deref(),
