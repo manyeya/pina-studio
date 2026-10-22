@@ -12,9 +12,9 @@
 //! - `--scan`: times a whole-library scan of the 90s pack on every core.
 //! - `--time`: times analysis file by file on one core.
 //! - `--tempo`, `--keys`: tempo, or key, alone, for files whose names give one.
-//! - `--fit <model.rs>`: fits the classifiers, the embedding and the traits' statistics on the
-//!   labelled packs given (the 90s pack is held out, only measured) and writes them to
-//!   `model.rs`. `LOPO=1` also scores each pack by a model fitted on the others; `CONFUSION=1`
+//! - `--fit <model folder>`: fits the classifiers, the embedding and the traits' statistics on
+//!   the labelled packs given (the 90s pack is held out, only measured) and writes them to
+//!   `src/samples/model/`, a file for each table. `LOPO=1` also scores each pack by a model fitted on the others; `CONFUSION=1`
 //!   and `KNN=1` print what the held-out pack's sounds are taken for, and their neighbours.
 //! - `--cache <file>`: keeps every file's measures there, to fit again without analysing again.
 
@@ -2019,8 +2019,68 @@ fn fit(rows: &[Row], out: &Path) {
         );
     }
     code += "];\n";
-    std::fs::write(out, code).unwrap();
+    write_model(out, &code);
     println!("wrote {}", out.display());
+}
+
+/// Writes the fitted model to the folder `dir`: what a net is in `mod.rs`, and each table (its doc
+/// comment and the statics under it) in a file of its own, so no one file holds them all.
+fn write_model(dir: &Path, code: &str) {
+    let lines: Vec<&str> = code.lines().collect();
+    // Each table starts at the doc comment over its first static.
+    let mut cuts = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        if l.starts_with("pub static ") && i > 0 && lines[i - 1].starts_with("///") {
+            let mut s = i;
+            while s > 0 && lines[s - 1].starts_with("///") {
+                s -= 1;
+            }
+            cuts.push(s);
+        }
+    }
+    std::fs::create_dir_all(dir).unwrap();
+    let mut files = Vec::new();
+    for (k, &s) in cuts.iter().enumerate() {
+        let e = cuts.get(k + 1).copied().unwrap_or(lines.len());
+        let first = lines[s..e]
+            .iter()
+            .find(|l| l.starts_with("pub static "))
+            .unwrap();
+        let name = first["pub static ".len()..]
+            .split(':')
+            .next()
+            .unwrap()
+            .to_lowercase();
+        let file = match name.as_str() {
+            "loop" => "loops".to_string(),
+            "trait_stats" => "traits".to_string(),
+            n if n.starts_with("embed") => "embed".to_string(),
+            n => n.to_string(),
+        };
+        let body = lines[s..e].join("\n");
+        // What a net is, for the tables of nets.
+        let uses = match body.contains("Net") || body.contains("Category") {
+            true => "use super::*;\n\n",
+            false => "",
+        };
+        std::fs::write(
+            dir.join(format!("{file}.rs")),
+            format!(
+                "// Fitted numbers, some near a constant by chance.\n#![allow(clippy::approx_constant)]\n\n{uses}{}\n",
+                body.trim_end()
+            ),
+        )
+        .unwrap();
+        files.push(file);
+    }
+    let decls: String = files.iter().map(|f| format!("mod {f};\n")).collect();
+    let uses: String = files.iter().map(|f| format!("pub use {f}::*;\n")).collect();
+    let head = lines[..cuts[0]].join("\n");
+    std::fs::write(
+        dir.join("mod.rs"),
+        format!("{}\n\n{decls}\n{uses}", head.trim_end()),
+    )
+    .unwrap();
 }
 
 /// How long analysing takes on one core, file by file (read, then analyse).
