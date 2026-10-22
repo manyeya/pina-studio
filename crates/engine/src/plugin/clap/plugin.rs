@@ -379,7 +379,7 @@ impl PluginApi for ClapPlugin {
                 self.set_state(&bytes)
             }
             PresetSource::File { file } => {
-                let path = CString::new(file.as_os_str().as_bytes())
+                let path = CString::new(file.as_os_str().as_encoded_bytes())
                     .map_err(|_| format!("{}: bad path", file.display()))?;
                 self.load_from(CLAP_PRESET_DISCOVERY_LOCATION_FILE, Some(&path), None)
             }
@@ -409,11 +409,15 @@ impl PluginApi for ClapPlugin {
     fn open_editor(&self, mtm: MainThreadMarker) -> Result<Editor, String> {
         let fail = |why: &str| format!("{}: {why}", self.name);
         let gui = self.gui.ok_or_else(|| fail("no editor"))?;
+        // The kind of window this platform's editors go in.
+        #[cfg(target_os = "macos")]
         let api = CLAP_WINDOW_API_COCOA.as_ptr();
+        #[cfg(windows)]
+        let api = CLAP_WINDOW_API_WIN32.as_ptr();
         let plugin = self.plugin;
         unsafe {
             if !gui.is_api_supported.is_some_and(|f| f(plugin, api, false)) {
-                return Err(fail("editor isn't an NSView"));
+                return Err(fail("its editor can't open in a window here"));
             }
             if self.inst.gui.load(SeqCst) {
                 return Err(fail("its editor is already open"));
@@ -433,20 +437,21 @@ impl PluginApi for ClapPlugin {
                 fail(why)
             };
             // Cocoa sizes are in points, so there's no scale to set.
+            // ponytail: Windows' are pixels; set the monitor's scale if editors look small.
             let (mut w, mut h) = (0u32, 0u32);
             if !get_size(plugin, &mut w, &mut h) {
                 return Err(closing("editor has no size"));
             }
-            let window = editor_window(mtm, &self.name, (w as f64, h as f64));
-            let Some(content) = window.contentView() else {
-                return Err(closing("window has no content view"));
+            let window = Window::new(mtm, &self.name, (w as f64, h as f64));
+            #[cfg(target_os = "macos")]
+            let specific = clap_window_handle {
+                cocoa: window.parent(),
             };
-            let parent = clap_window {
-                api,
-                specific: clap_window_handle {
-                    cocoa: Retained::as_ptr(&content) as *mut c_void,
-                },
+            #[cfg(windows)]
+            let specific = clap_window_handle {
+                win32: window.parent(),
             };
+            let parent = clap_window { api, specific };
             if !set_parent(plugin, &parent) {
                 return Err(closing("editor wouldn't attach"));
             }
@@ -454,7 +459,7 @@ impl PluginApi for ClapPlugin {
                 show(plugin);
             }
             *self.inst.window.lock().unwrap() = Some(EditorWindow(window.clone()));
-            window.makeKeyAndOrderFront(None);
+            window.show();
             let inst = self.inst.clone();
             Ok(Editor::new(window, move || {
                 inst.window.lock().unwrap().take();

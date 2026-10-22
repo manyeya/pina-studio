@@ -391,8 +391,13 @@ impl PluginApi for Vst3Plugin {
         unsafe {
             let view = ComPtr::from_raw(self.controller.createView(ViewType::kEditor))
                 .ok_or_else(|| fail("no editor"))?;
-            if view.isPlatformTypeSupported(kPlatformTypeNSView) != kResultTrue {
-                return Err(fail("editor isn't an NSView"));
+            // The kind of view this platform's windows hold.
+            #[cfg(target_os = "macos")]
+            let kind = kPlatformTypeNSView;
+            #[cfg(windows)]
+            let kind = kPlatformTypeHWND;
+            if view.isPlatformTypeSupported(kind) != kResultTrue {
+                return Err(fail("its editor can't open in a window here"));
             }
             let mut rect: ViewRect = std::mem::zeroed();
             view.getSize(&mut rect);
@@ -400,22 +405,15 @@ impl PluginApi for Vst3Plugin {
                 (rect.right - rect.left) as f64,
                 (rect.bottom - rect.top) as f64,
             );
-            let window = editor_window(mtm, &self.name, size);
+            let window = Window::new(mtm, &self.name, size);
             let frame = ComWrapper::new(PlugFrame {
                 window: window.clone(),
             });
             view.setFrame(com_ptr::<_, IPlugFrame>(&frame));
-            let content = window
-                .contentView()
-                .ok_or_else(|| fail("window has no content view"))?;
-            if view.attached(
-                Retained::as_ptr(&content) as *mut c_void,
-                kPlatformTypeNSView,
-            ) != kResultOk
-            {
+            if view.attached(window.parent(), kind) != kResultOk {
                 return Err(fail("editor wouldn't attach"));
             }
-            window.makeKeyAndOrderFront(None);
+            window.show();
             Ok(Editor::new(window, move || {
                 view.removed();
                 drop(frame);

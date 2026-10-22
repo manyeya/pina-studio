@@ -60,6 +60,7 @@ fn modulators_are_added_mapped_by_dragging_and_their_depth_set(cx: &mut TestAppC
     assert!(matches!(left[0].kind, ModKind::Steps { .. }));
 }
 
+#[cfg(target_os = "macos")]
 #[gpui::test]
 fn a_modulator_learns_the_plugin_parameter_turned_next_and_lists_every_one(
     cx: &mut TestAppContext,

@@ -103,6 +103,7 @@ fn a_stem_is_its_track_alone_and_sections_split_at_markers() {
     assert_eq!(tracks_with_regions(&p), [0, 1]);
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn files_are_written_in_every_format_asked() {
     let p = song();

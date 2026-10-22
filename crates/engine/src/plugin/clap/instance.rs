@@ -54,7 +54,7 @@ pub(crate) struct Instance {
 
 /// An open editor's window, kept for the plugin's requests to resize or show it. Used on the
 /// main thread only.
-pub(crate) struct EditorWindow(pub(crate) Retained<NSWindow>);
+pub(crate) struct EditorWindow(pub(crate) Window);
 
 unsafe impl Send for EditorWindow {}
 
@@ -115,7 +115,7 @@ impl Instance {
     }
 
     /// Its editor's window, on the main thread.
-    pub(crate) fn window(&self) -> Option<Retained<NSWindow>> {
+    pub(crate) fn window(&self) -> Option<Window> {
         MainThreadMarker::new()?;
         let window = self.window.lock().unwrap();
         window.as_ref().map(|w| w.0.clone())
@@ -129,7 +129,7 @@ impl Instance {
         let size = self.resize.swap(0, SeqCst);
         if size != 0 {
             let (w, h) = ((size >> 32) as f64, (size & 0xffff_ffff) as f64);
-            window.setContentSize(NSSize::new(w, h));
+            window.set_content_size(w, h);
         }
     }
 }

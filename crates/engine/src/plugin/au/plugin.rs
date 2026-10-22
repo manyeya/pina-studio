@@ -399,8 +399,9 @@ impl PluginApi for AuPlugin {
             true => (size.width, size.height),
             false => (480.0, 320.0),
         };
-        let window = editor_window(mtm, &self.name, size);
+        let window = Window::new(mtm, &self.name, size);
         let content = window
+            .ns()
             .contentView()
             .ok_or_else(|| format!("{}: window has no content view", self.name))?;
         // The view sizes itself and the window follows; the window never sizes the view, which
@@ -412,8 +413,8 @@ impl PluginApi for AuPlugin {
         let (w, v) = (window.clone(), view.clone());
         let resized = RcBlock::new(move |_: NonNull<NSNotification>| {
             let size = v.frame().size;
-            if w.contentRectForFrameRect(w.frame()).size != size {
-                w.setContentSize(size);
+            if w.ns().contentRectForFrameRect(w.ns().frame()).size != size {
+                w.set_content_size(size.width, size.height);
             }
         });
         let center = NSNotificationCenter::defaultCenter();
@@ -425,7 +426,7 @@ impl PluginApi for AuPlugin {
                 &resized,
             )
         };
-        window.makeKeyAndOrderFront(None);
+        window.show();
         Ok(Editor::new(window, move || {
             unsafe { center.removeObserver(observer.as_ref()) };
             view.removeFromSuperview();

@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// The agent chosen last, in `~/Library/Application Support/Pina Studio/agent`; Claude Code at first.
+/// The agent chosen last, in `agent` in Pina Studio's settings folder; Claude Code at first.
 /// How an agent runs: the model it uses and how hard it thinks (its effort). None leaves either
 /// to the agent's own settings.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
@@ -46,9 +46,7 @@ pub fn effort_name(effort: &str) -> String {
 pub(crate) fn codex_home() -> PathBuf {
     std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".codex")
-        })
+        .unwrap_or_else(|| crate::platform::home().join(".codex"))
 }
 
 /// Codex's models, from the list it keeps (`models_cache.json`): those it shows, in its order.

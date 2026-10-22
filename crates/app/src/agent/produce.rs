@@ -110,11 +110,7 @@ pub fn edit_playbooks(genre: Option<&str>) -> Result<(), String> {
     for p in problems {
         eprintln!("{p}");
     }
-    let mut open = std::process::Command::new("open");
-    if target.is_file() {
-        open.arg("-t");
-    }
-    open.arg(&target).status().map_err(|e| e.to_string())?;
+    crate::platform::open(&target).map_err(|e| e.to_string())?;
     println!("{}", target.display());
     Ok(())
 }
@@ -643,6 +639,10 @@ pub fn master(dir: &Path, lufs: Option<f32>) -> Result<Value, String> {
         .unwrap_or(-10.0);
     if !(-30.0..=-4.0).contains(&target) {
         return Err("lufs is -30 to -4".into());
+    }
+    // ponytail: the limiter is macOS's own; a built-in one would let Windows master too.
+    if !cfg!(target_os = "macos") {
+        return Err("mastering uses macOS's peak limiter, which isn't here".into());
     }
     // Its tonal balance towards what it aims at, before the limiter hears it.
     let tonal = crate::agent::mixing::tonal_balance(dir)?;

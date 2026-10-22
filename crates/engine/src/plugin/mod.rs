@@ -1,9 +1,12 @@
-//! Hosting plugins (macOS): VST3, CLAP, VST2 and Audio Units, behind one interface. Each format
-//! loads a plugin as two halves: a `Plugin` on the main thread (its parameters, settings,
-//! presets and editor) and a `Processor` the audio thread runs.
+//! Hosting plugins: VST3, CLAP and VST2 (and on macOS, Audio Units), behind one interface. Each
+//! format loads a plugin as two halves: a `Plugin` on the main thread (its parameters, settings,
+//! presets and editor) and a `Processor` the audio thread runs. What differs by platform (loading
+//! a plugin's binary, its editor's window) is in `platform`.
 
+#[cfg(target_os = "macos")]
 pub mod au;
 pub mod clap;
+pub mod platform;
 pub mod scan;
 pub mod vst2;
 pub mod vst3;
@@ -13,9 +16,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use objc2::{MainThreadMarker, rc::Retained};
-use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+pub use platform::{MainThreadMarker, Window};
 
 use crate::song::project::PluginRef;
 pub use crate::song::project::{ExpressionKind, Format, Preset, PresetSource};
@@ -175,19 +176,22 @@ pub fn instantiate(
         Format::Vst3 => vst3::instantiate(&mut libs.vst3, r, rate, max_block, state),
         Format::Clap => clap::instantiate(&mut libs.clap, r, rate, max_block, state),
         Format::Vst2 => vst2::instantiate(&mut libs.vst2, r, rate, max_block, state),
+        #[cfg(target_os = "macos")]
         Format::Au => au::instantiate(r, rate, max_block, state),
+        #[cfg(not(target_os = "macos"))]
+        Format::Au => Err(format!("{}: Audio Units are macOS's", r.class)),
     }
 }
 
 /// An open editor: its window, and what closes the plugin's view. Dropping it closes both.
 pub struct Editor {
-    pub window: Retained<NSWindow>,
+    pub window: Window,
     close: Option<Box<dyn FnOnce()>>,
 }
 
 impl Editor {
     /// `close` detaches the plugin's view; it runs before the window closes.
-    pub fn new(window: Retained<NSWindow>, close: impl FnOnce() + 'static) -> Editor {
+    pub fn new(window: Window, close: impl FnOnce() + 'static) -> Editor {
         Editor {
             window,
             close: Some(Box::new(close)),
@@ -196,7 +200,7 @@ impl Editor {
 
     /// Brings the window back, if it was closed.
     pub fn show(&self) {
-        self.window.makeKeyAndOrderFront(None);
+        self.window.show();
     }
 }
 
@@ -207,24 +211,6 @@ impl Drop for Editor {
         }
         self.window.close();
     }
-}
-
-/// A window for a plugin's editor, `size` points inside, titled with its name.
-pub fn editor_window(mtm: MainThreadMarker, title: &str, size: (f64, f64)) -> Retained<NSWindow> {
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(
-            mtm.alloc(),
-            NSRect::new(NSPoint::new(200.0, 200.0), NSSize::new(size.0, size.1)),
-            NSWindowStyleMask::Titled
-                | NSWindowStyleMask::Closable
-                | NSWindowStyleMask::Miniaturizable,
-            NSBackingStoreType::Buffered,
-            false,
-        )
-    };
-    unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(&NSString::from_str(title));
-    window
 }
 
 /// Parameter edits from the main thread (Pina Studio's, or the plugin's own editor's) to the audio
@@ -431,19 +417,25 @@ fn scale(s: &str) -> f64 {
     }
 }
 
-/// Where a format's preset files for a plugin live: `~/Library/Audio/Presets/<vendor>/<name>`
-/// and the same under `/Library`, the user's first.
+/// Where a format's preset files for a plugin live, the user's first: on macOS
+/// `~/Library/Audio/Presets/<vendor>/<name>` and the same under `/Library`; on Windows
+/// `Documents\VST3 Presets\<vendor>\<name>` and the same under `ProgramData`.
 pub fn preset_dirs(vendor: &str, name: &str) -> Vec<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    [
-        home.join("Library/Audio/Presets"),
-        PathBuf::from("/Library/Audio/Presets"),
-    ]
-    .into_iter()
-    .map(|d| d.join(vendor).join(name))
-    .collect()
+    let var = |v: &str| std::env::var_os(v).map(PathBuf::from).unwrap_or_default();
+    let roots = match cfg!(windows) {
+        true => [
+            var("USERPROFILE").join("Documents").join("VST3 Presets"),
+            var("PROGRAMDATA").join("VST3 Presets"),
+        ],
+        false => [
+            var("HOME").join("Library/Audio/Presets"),
+            PathBuf::from("/Library/Audio/Presets"),
+        ],
+    };
+    roots
+        .into_iter()
+        .map(|d| d.join(vendor).join(name))
+        .collect()
 }
 
 /// Every file ending in `ext` under `dirs`, in subfolders too, as presets named by their files.

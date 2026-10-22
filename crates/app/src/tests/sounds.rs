@@ -425,6 +425,7 @@ fn the_sound_map_boxes_in_samples_and_similar_weighs_aspects(cx: &mut TestAppCon
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(target_os = "macos")]
 #[gpui::test]
 fn the_browser_finds_by_words_and_puts_devices_on_tracks(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);

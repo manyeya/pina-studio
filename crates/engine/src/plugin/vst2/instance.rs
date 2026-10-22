@@ -21,7 +21,7 @@ pub(crate) struct Instance {
     /// when nothing's waiting): the plugin has it only then.
     pub(crate) sent: Box<[AtomicU64]>,
     /// The editor's window while one is open, for the plugin to resize.
-    pub(crate) window: AtomicPtr<NSWindow>,
+    pub(crate) window: AtomicPtr<c_void>,
 }
 
 // The plugin is called from the main and audio threads, as VST2 plugins expect.
@@ -261,8 +261,7 @@ impl Instance {
         if window.is_null() || MainThreadMarker::new().is_none() {
             return false;
         }
-        let size = NSSize::new(width as f64, height as f64);
-        unsafe { (*window).setContentSize(size) };
+        unsafe { Window::resize_raw(window, width as f64, height as f64) };
         true
     }
 }

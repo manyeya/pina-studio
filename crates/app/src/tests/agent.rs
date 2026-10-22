@@ -55,6 +55,7 @@ fn agents_edit_the_open_project_through_its_socket(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[cfg(unix)]
 #[gpui::test]
 fn the_agent_panel_shows_claude_working_as_it_goes(cx: &mut TestAppContext) {
     use crate::agent::chat::{Item, Step};

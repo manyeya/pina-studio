@@ -1,5 +1,7 @@
-//! Where Pina Studio keeps things on this Mac: songs in `~/Music/Pina Studio`, settings in
-//! `~/Library/Application Support/Pina Studio`, caches in `~/Library/Caches/Pina Studio`.
+//! Where Pina Studio keeps things: songs in `Music/Pina Studio` in the home folder; on macOS
+//! settings in `~/Library/Application Support/Pina Studio` and caches in
+//! `~/Library/Caches/Pina Studio`, on Windows in `%APPDATA%\Pina Studio` and
+//! `%LOCALAPPDATA%\Pina Studio`.
 //!
 //! Before it was Pina Studio it was called tempo, and kept them under that name. `migrate` moves
 //! them across once, puts the new places in the paths it had written down (songs opened lately,
@@ -15,7 +17,11 @@ use std::{
 pub const NAME: &str = "Pina Studio";
 
 fn home() -> PathBuf {
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+    var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+}
+
+fn var(name: &str) -> PathBuf {
+    PathBuf::from(std::env::var_os(name).unwrap_or_default())
 }
 
 /// Where songs are kept (`PINA_SONGS` says elsewhere).
@@ -29,12 +35,18 @@ pub fn songs() -> PathBuf {
 /// Settings, and what's learned and kept: agents, playbooks, presets, the sample library's
 /// folders, songs opened lately.
 pub fn support() -> PathBuf {
-    home().join("Library/Application Support").join(NAME)
+    match cfg!(windows) {
+        true => var("APPDATA").join(NAME),
+        false => home().join("Library/Application Support").join(NAME),
+    }
 }
 
 /// What can be made again: the plugin scan, the sample index, studies.
 pub fn caches() -> PathBuf {
-    home().join("Library/Caches").join(NAME)
+    match cfg!(windows) {
+        true => var("LOCALAPPDATA").join(NAME),
+        false => home().join("Library/Caches").join(NAME),
+    }
 }
 
 /// tempo's places, and Pina Studio's for each.
@@ -56,7 +68,11 @@ fn moves(home: &Path) -> [(PathBuf, PathBuf); 3] {
 /// writes the songs' new place into the lists that named the old one, and leaves a link behind.
 /// What moved.
 pub fn migrate() -> Vec<PathBuf> {
-    migrate_in(&home())
+    // tempo was only ever on macOS.
+    match cfg!(target_os = "macos") {
+        true => migrate_in(&home()),
+        false => Vec::new(),
+    }
 }
 
 fn migrate_in(home: &Path) -> Vec<PathBuf> {
@@ -92,6 +108,7 @@ fn migrate_in(home: &Path) -> Vec<PathBuf> {
                 continue;
             }
         }
+        #[cfg(unix)]
         let _ = std::os::unix::fs::symlink(&new, &old);
         moved.push(new);
     }

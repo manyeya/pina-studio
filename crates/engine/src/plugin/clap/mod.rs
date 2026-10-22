@@ -1,5 +1,5 @@
-//! Hosting CLAP plugins (`.clap` bundles, macOS): load a bundle's entry, run a plugin's process
-//! on the audio thread, and open its editor in a window of its own.
+//! Hosting CLAP plugins (`.clap` bundles on macOS, DLLs on Windows): load one's entry, run a
+//! plugin's process on the audio thread, and open its editor in a window of its own.
 //!
 //! A plugin is shared by its two halves (and an open editor): whichever goes last shuts it down.
 //! Edits from the main thread reach it through its processor while that runs; when nothing is
@@ -27,7 +27,6 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     ffi::{CStr, CString, OsStr, c_char, c_void},
-    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     ptr,
     rc::Rc,
@@ -59,14 +58,11 @@ use clap_sys::{
     universal_plugin_id::clap_universal_plugin_id,
     version::{CLAP_VERSION, clap_version_is_compatible},
 };
-use objc2::{MainThreadMarker, rc::Retained};
-use objc2_app_kit::NSWindow;
-use objc2_foundation::NSSize;
 
 use super::{
-    AUTOMATED, Control, ControlKind, EditReceiver, EditSender, Editor, ExpressionKind, Note,
-    Plugin, PluginApi, PluginParam, Preset, PresetSource, Processor, ProcessorApi, edit_queue,
-    editor_window,
+    AUTOMATED, Control, ControlKind, EditReceiver, EditSender, Editor, ExpressionKind,
+    MainThreadMarker, Note, Plugin, PluginApi, PluginParam, Preset, PresetSource, Processor,
+    ProcessorApi, Window, edit_queue, platform::Binary,
 };
 use crate::{
     plugin::scan::PluginInfo,
@@ -88,25 +84,6 @@ const VERSION: &CStr =
         Ok(v) => v,
         Err(_) => c"0",
     };
-
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFURLCreateFromFileSystemRepresentation(
-        a: *const c_void,
-        buf: *const u8,
-        len: isize,
-        dir: u8,
-    ) -> *const c_void;
-    fn CFBundleCreate(a: *const c_void, url: *const c_void) -> *const c_void;
-    fn CFBundleLoadExecutable(bundle: *const c_void) -> u8;
-    fn CFBundleGetDataPointerForName(bundle: *const c_void, name: *const c_void) -> *const c_void;
-    fn CFStringCreateWithCString(
-        a: *const c_void,
-        s: *const c_char,
-        encoding: u32,
-    ) -> *const c_void;
-    fn CFRelease(cf: *const c_void);
-}
 
 // Who's in a plugin's processing side.
 const IDLE: u8 = 0;

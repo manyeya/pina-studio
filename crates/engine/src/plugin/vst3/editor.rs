@@ -4,7 +4,7 @@ use super::*;
 
 /// Lets an editor resize its window.
 pub struct PlugFrame {
-    pub(crate) window: Retained<NSWindow>,
+    pub(crate) window: Window,
 }
 
 impl Class for PlugFrame {
@@ -17,10 +17,8 @@ impl IPlugFrameTrait for PlugFrame {
             return kInvalidArgument;
         };
         let r = unsafe { *size };
-        self.window.setContentSize(NSSize::new(
-            (r.right - r.left) as f64,
-            (r.bottom - r.top) as f64,
-        ));
+        self.window
+            .set_content_size((r.right - r.left) as f64, (r.bottom - r.top) as f64);
         unsafe { view.onSize(size) };
         kResultOk
     }

@@ -37,7 +37,7 @@ impl Found {
             return None;
         }
         let location = self.location.as_ref()?;
-        Some(PathBuf::from(OsStr::from_bytes(location.to_bytes())))
+        Some(PathBuf::from(location.to_string_lossy().into_owned()))
     }
 }
 
@@ -129,9 +129,12 @@ pub(crate) unsafe extern "C" fn declare_location(
     };
     let path =
         (l.kind == CLAP_PRESET_DISCOVERY_LOCATION_FILE && !l.location.is_null()).then(|| {
-            PathBuf::from(OsStr::from_bytes(
-                unsafe { CStr::from_ptr(l.location) }.to_bytes(),
-            ))
+            // CLAP's locations are UTF-8.
+            PathBuf::from(
+                unsafe { CStr::from_ptr(l.location) }
+                    .to_string_lossy()
+                    .into_owned(),
+            )
         });
     let locations = &unsafe { indexer(i) }.locations;
     locations.borrow_mut().push((l.kind, path));

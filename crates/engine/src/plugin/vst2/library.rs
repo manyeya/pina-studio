@@ -12,32 +12,12 @@ pub struct Library {
 impl Library {
     pub fn load(path: &Path) -> Result<Library, String> {
         let fail = |why: &str| format!("{}: {why}", path.display());
-        unsafe {
-            let p =
-                CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| fail("bad path"))?;
-            let url = CFURLCreateFromFileSystemRepresentation(
-                ptr::null(),
-                p.as_ptr().cast(),
-                p.as_bytes().len() as isize,
-                1,
-            );
-            if url.is_null() {
-                return Err(fail("bad path"));
-            }
-            let bundle = CFBundleCreate(ptr::null(), url);
-            CFRelease(url);
-            if bundle.is_null() {
-                return Err(fail("not a bundle"));
-            }
-            if CFBundleLoadExecutable(bundle) == 0 {
-                return Err(fail("couldn't load its binary (wrong architecture?)"));
-            }
-            let entry = [c"VSTPluginMain", c"main_macho", c"main"]
-                .into_iter()
-                .find_map(|name| symbol(bundle, name))
-                .ok_or_else(|| fail("no VSTPluginMain"))?;
-            Ok(Library { entry })
-        }
+        let binary = Binary::load(path)?;
+        let entry = [c"VSTPluginMain", c"main_macho", c"main"]
+            .into_iter()
+            .find_map(|name| unsafe { binary.function(name) })
+            .ok_or_else(|| fail("no VSTPluginMain"))?;
+        Ok(Library { entry })
     }
 
     /// A new instance of its plugin, opened: for a shell, of the plugin `uid` in it (0, any).
@@ -83,16 +63,6 @@ impl Library {
         unsafe { (*effect).resvd1 = Arc::as_ptr(&instance) as isize };
         instance.call(eff::OPEN, 0, 0, ptr::null_mut(), 0.0);
         Ok(instance)
-    }
-}
-
-pub(crate) unsafe fn symbol<F: Copy>(bundle: *const c_void, name: &CStr) -> Option<F> {
-    const UTF8: u32 = 0x0800_0100;
-    unsafe {
-        let s = CFStringCreateWithCString(ptr::null(), name.as_ptr(), UTF8);
-        let f = CFBundleGetFunctionPointerForName(bundle, s);
-        CFRelease(s);
-        (!f.is_null()).then(|| std::mem::transmute_copy(&f))
     }
 }
 

@@ -328,23 +328,13 @@ impl PluginApi for Vst2Plugin {
         }
         // Some editors know their size only once open.
         let size = i.editor_size();
-        let window = editor_window(mtm, &self.name, size.unwrap_or((400.0, 300.0)));
-        let content = window
-            .contentView()
-            .ok_or_else(|| fail("window has no content view"))?;
-        i.window
-            .store(Retained::as_ptr(&window) as *mut NSWindow, Relaxed);
-        i.call(
-            eff::EDIT_OPEN,
-            0,
-            0,
-            Retained::as_ptr(&content) as *mut c_void,
-            0.0,
-        );
+        let window = Window::new(mtm, &self.name, size.unwrap_or((400.0, 300.0)));
+        i.window.store(window.as_raw(), Relaxed);
+        i.call(eff::EDIT_OPEN, 0, 0, window.parent(), 0.0);
         if let Some(opened) = i.editor_size().filter(|&s| Some(s) != size) {
-            window.setContentSize(NSSize::new(opened.0, opened.1));
+            window.set_content_size(opened.0, opened.1);
         }
-        window.makeKeyAndOrderFront(None);
+        window.show();
         let instance = i.clone();
         Ok(Editor::new(window, move || {
             instance.window.store(ptr::null_mut(), Relaxed);

@@ -359,43 +359,48 @@ impl Workspace {
             );
 
         // How.
-        let formats = FORMATS.map(|f| {
-            let on = e
-                .formats
-                .iter()
-                .any(|o| std::mem::discriminant(o) == std::mem::discriminant(&f));
-            div()
-                .h(px(30.))
-                .px(px(10.))
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .rounded(px(8.))
-                .border_1()
-                .border_color(if on {
-                    alpha(ACCENT, 0.7)
-                } else {
-                    rgb(LINE).into()
-                })
-                .bg(if on {
-                    alpha(ACCENT, 0.12)
-                } else {
-                    rgb(WELL).into()
-                })
-                .cursor_pointer()
-                .debug_selector(move || format!("bounce-format-{}", f.name()))
-                .child(check(on, ACCENT))
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(f.name()),
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| ws.toggle_format(f, cx)),
-                )
-        });
+        // Those this platform can write.
+        let formats = FORMATS
+            .into_iter()
+            .filter(|f| f.available())
+            .map(|f| {
+                let on = e
+                    .formats
+                    .iter()
+                    .any(|o| std::mem::discriminant(o) == std::mem::discriminant(&f));
+                div()
+                    .h(px(30.))
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(if on {
+                        alpha(ACCENT, 0.7)
+                    } else {
+                        rgb(LINE).into()
+                    })
+                    .bg(if on {
+                        alpha(ACCENT, 0.12)
+                    } else {
+                        rgb(WELL).into()
+                    })
+                    .cursor_pointer()
+                    .debug_selector(move || format!("bounce-format-{}", f.name()))
+                    .child(check(on, ACCENT))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(f.name()),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| ws.toggle_format(f, cx)),
+                    )
+            })
+            .collect::<Vec<_>>();
         let bits = [Bits::I16, Bits::I24, Bits::F32].map(|b| {
             seg(
                 match b {
@@ -673,10 +678,7 @@ impl Workspace {
                                     d.child(button("Show", false).on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |_, _, _, _| {
-                                            let _ = std::process::Command::new("open")
-                                                .arg("-R")
-                                                .arg(&f)
-                                                .spawn();
+                                            crate::platform::reveal(&f);
                                         }),
                                     ))
                                 })
@@ -854,7 +856,7 @@ impl Workspace {
                         d.child(button("Show Folder", false).on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |_, _, _, _| {
-                                let _ = std::process::Command::new("open").arg(&folder).spawn();
+                                let _ = crate::platform::open(&folder);
                             }),
                         ))
                     })

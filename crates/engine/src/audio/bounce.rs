@@ -66,6 +66,11 @@ impl Format {
         }
     }
 
+    /// Whether this platform can write it: AIFF, FLAC, AAC and ALAC need macOS's encoder.
+    pub fn available(self) -> bool {
+        cfg!(target_os = "macos") || matches!(self, Format::Wav | Format::Mp3 { .. } | Format::Midi)
+    }
+
     fn extension(self) -> &'static str {
         match self {
             Format::Wav => "wav",
@@ -396,6 +401,11 @@ fn write(l: &[f32], r: &[f32], opts: &Options, f: Format, file: &Path) -> Result
         Format::Wav => write_wav(l, r, opts.rate, opts.bits, opts.dither, file),
         Format::Mp3 { kbps } => write_mp3(l, r, opts.rate, kbps, file),
         Format::Midi => Ok(()),
+        _ if !f.available() => Err(format!(
+            "{}: {} needs macOS's encoder; WAV and MP3 work here",
+            file.display(),
+            f.name()
+        )),
         _ => {
             // macOS's encoder, from a WAV: integer for the lossless ones (24-bit for a float
             // mix), float for AAC to encode from.

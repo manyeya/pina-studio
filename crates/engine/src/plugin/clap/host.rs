@@ -187,18 +187,18 @@ pub(crate) unsafe extern "C" fn request_resize(
 
 pub(crate) unsafe extern "C" fn request_show(host: *const clap_host) -> bool {
     let window = unsafe { instance(host) }.window();
-    window.map(|w| w.makeKeyAndOrderFront(None)).is_some()
+    window.map(|w| w.show()).is_some()
 }
 
 pub(crate) unsafe extern "C" fn request_hide(host: *const clap_host) -> bool {
     let window = unsafe { instance(host) }.window();
-    window.map(|w| w.orderOut(None)).is_some()
+    window.map(|w| w.hide()).is_some()
 }
 
 pub(crate) unsafe extern "C" fn gui_closed(host: *const clap_host, _was_destroyed: bool) {
     // Its editor is gone from the window; closing the window destroys what's left.
     if let Some(w) = unsafe { instance(host) }.window() {
-        w.orderOut(None);
+        w.hide();
     }
 }
 

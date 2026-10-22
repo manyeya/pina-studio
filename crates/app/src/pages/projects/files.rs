@@ -187,18 +187,44 @@ pub fn rename(dir: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(to)
 }
 
-/// Moves a song to the Trash, where it can be taken back from: as the Finder does, so it works
-/// on any volume and without special access. (Tests remove it instead: they never touch the
-/// person's Trash.)
+/// Moves a song to the Trash (on Windows, the Recycle Bin), where it can be taken back from: as
+/// the Finder or Explorer does, so it works on any volume and without special access. (Tests
+/// remove it instead: they never touch the person's Trash.)
 pub fn trash(dir: &Path) -> Result<(), String> {
     if cfg!(test) {
         return std::fs::remove_dir_all(dir).map_err(|e| e.to_string());
     }
-    use objc2_foundation::{NSFileManager, NSString, NSURL};
-    let url = NSURL::fileURLWithPath(&NSString::from_str(&dir.to_string_lossy()));
-    NSFileManager::defaultManager()
-        .trashItemAtURL_resultingItemURL_error(&url, None)
-        .map_err(|e| e.localizedDescription().to_string())
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::{NSFileManager, NSString, NSURL};
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&dir.to_string_lossy()));
+        NSFileManager::defaultManager()
+            .trashItemAtURL_resultingItemURL_error(&url, None)
+            .map_err(|e| e.localizedDescription().to_string())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::{
+            FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+            SHFILEOPSTRUCTW, SHFileOperationW,
+        };
+        // A list of one path: two nulls end it.
+        let from: Vec<u16> = dir.as_os_str().encode_wide().chain([0, 0]).collect();
+        let mut op = SHFILEOPSTRUCTW {
+            wFunc: FO_DELETE,
+            pFrom: from.as_ptr(),
+            fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT) as u16,
+            ..unsafe { std::mem::zeroed() }
+        };
+        match unsafe { SHFileOperationW(&mut op) } {
+            0 => Ok(()),
+            e => Err(format!(
+                "{}: couldn't move it to the Recycle Bin ({e})",
+                dir.display()
+            )),
+        }
+    }
 }
 
 /// A new song not made yet, where songs are kept: what a window with no song open has.
@@ -207,12 +233,9 @@ pub fn scratch() -> PathBuf {
     root.join(unique_name(&root, "Untitled"))
 }
 
-/// Shows a song's folder in the Finder.
+/// Shows a song's folder in the Finder (on Windows, Explorer).
 pub fn reveal(dir: &Path) {
-    let _ = std::process::Command::new("open")
-        .arg("-R")
-        .arg(dir)
-        .spawn();
+    crate::platform::reveal(dir);
 }
 
 /// "Today 08:23", "Yesterday", "12 Oct".

@@ -3,6 +3,10 @@ name = "pina"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# Windows: the app without a console window ("Pina Studio.exe"); `pina.exe` is built without it.
+windows-gui = []
+
 [dependencies]
 pina-engine = { path = "../engine" }
 serde_json = "1"
@@ -14,12 +18,21 @@ futures = "0.3"
 gpui = { package = "gpui-pre", version = "=0.3.9" }
 # runtime_shaders: compile Metal shaders at launch, so building doesn't need full Xcode. font-kit: text.
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["runtime_shaders", "font-kit"] }
+
 # Songs go to the Trash as the Finder sends them (any volume, no special access).
+[target.'cfg(target_os = "macos")'.dependencies]
 objc2-foundation = "0.3"
+
+# Windows: the socket `pina` reaches a running app by, and songs to the Recycle Bin.
+[target.'cfg(windows)'.dependencies]
+uds_windows = "1.2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell"] }
 
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
-# The `shots` test: pages drawn to PNGs by the headless Metal renderer, no window shown.
-gpui_apple = { package = "gpui-pre-apple", version = "=0.3.9", features = ["runtime_shaders", "font-kit", "test-support"] }
 # examples/icon: the app icon's SVG to PNGs (gpui draws SVGs with it too).
 resvg = "0.46"
+
+# The `shots` test: pages drawn to PNGs by the headless Metal renderer, no window shown.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_apple = { package = "gpui-pre-apple", version = "=0.3.9", features = ["runtime_shaders", "font-kit", "test-support"] }

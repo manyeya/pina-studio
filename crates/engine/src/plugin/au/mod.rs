@@ -71,7 +71,7 @@ use objc2_foundation::{NSBundle, NSNotification, NSNotificationCenter, NSPoint, 
 
 use super::{
     AUTOMATED, Control, ControlKind, Editor, Note, Plugin, PluginApi, PluginParam, Preset,
-    PresetSource, Processor, ProcessorApi, editor_window,
+    PresetSource, Processor, ProcessorApi, Window,
 };
 use crate::{
     plugin::scan::PluginInfo,

@@ -59,17 +59,7 @@ impl Kind {
         if let Some(p) = std::env::var_os(format!("PINA_{}", bin.to_uppercase())) {
             return Some(p.into());
         }
-        let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        std::env::split_paths(&path)
-            .chain([
-                home.join(".local/bin"),
-                home.join(".claude/local"),
-                "/opt/homebrew/bin".into(),
-                "/usr/local/bin".into(),
-            ])
-            .map(|d| d.join(bin))
-            .find(|p| p.is_file())
+        crate::platform::find_command(bin, &crate::platform::tool_folders())
     }
 
     /// Whether it can work: installed, and signed in. Asks the agent, so takes a moment.

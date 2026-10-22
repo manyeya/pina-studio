@@ -1,0 +1,62 @@
+# Pina Studio for Windows: on every push to dev, main and feat/* branches, the app is built and
+# packaged as an installer (downloadable from the run's artifacts), then tested. A tag vX.Y.Z
+# also puts the installer on that tag's release.
+name: Windows
+
+on:
+  push:
+    branches: [main, dev, "feat/**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      # The C runtime linked in, so the app runs on a PC without Visual C++'s installed.
+      RUSTFLAGS: -C target-feature=+crt-static
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the app and the pina command
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force staging | Out-Null
+          # "Pina Studio.exe" opens without a console; pina.exe is the command line.
+          cargo build --release -p pina --features windows-gui
+          Copy-Item target\release\pina.exe "staging\Pina Studio.exe"
+          cargo build --release -p pina
+          Copy-Item target\release\pina.exe staging\pina.exe
+
+      - name: Make the installer
+        shell: pwsh
+        run: |
+          $version = ((cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'pina').version
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DVersion=$version" "/DSource=$PWD\staging" scripts\windows\pina.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path staging\* -DestinationPath "dist\PinaStudio-$version-windows-x64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PinaStudio-windows-x64
+          path: dist/*
+
+      - name: Put it on the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+
+      - name: Test
+        run: cargo test -p pina-engine -p pina

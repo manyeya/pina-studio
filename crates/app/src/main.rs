@@ -1,9 +1,14 @@
+// On Windows, "Pina Studio.exe" (built with `windows-gui`) opens without a console window;
+// `pina.exe`, built without it, is the command line agents and scripts run.
+#![cfg_attr(all(windows, feature = "windows-gui"), windows_subsystem = "windows")]
+
 mod agent;
 mod arrange;
 mod cli;
 mod editors;
 mod mix;
 mod pages;
+mod platform;
 mod sounds;
 #[cfg(test)]
 mod tests;

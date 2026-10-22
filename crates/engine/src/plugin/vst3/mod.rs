@@ -1,5 +1,5 @@
-//! Hosting VST3 plugins (macOS): load a `.vst3` bundle, run its processor on the audio thread,
-//! and open its editor in a window of its own.
+//! Hosting VST3 plugins: load a `.vst3` bundle, run its processor on the audio thread, and open
+//! its editor in a window of its own.
 
 mod editor;
 mod module;
@@ -17,14 +17,11 @@ mod com;
 
 use std::{
     collections::HashMap,
-    ffi::{CStr, CString, c_char, c_void},
+    ffi::{c_char, c_void},
     path::{Path, PathBuf},
     ptr,
 };
 
-use objc2::{MainThreadMarker, rc::Retained};
-use objc2_app_kit::NSWindow;
-use objc2_foundation::NSSize;
 use vst3::{
     Class, ComPtr, ComRef, ComWrapper, Interface,
     Steinberg::{
@@ -39,35 +36,14 @@ use vst3::{
 use com::*;
 
 use super::{
-    AUTOMATED, Control, ControlKind, EditReceiver, Editor, ExpressionKind, Note, Plugin, PluginApi,
-    PluginParam, Preset, PresetSource, Processor, ProcessorApi, edit_queue, editor_window,
+    AUTOMATED, Control, ControlKind, EditReceiver, Editor, ExpressionKind, MainThreadMarker, Note,
+    Plugin, PluginApi, PluginParam, Preset, PresetSource, Processor, ProcessorApi, Window,
+    edit_queue, platform::Binary,
 };
 use crate::{plugin::scan::PluginInfo, song::project::PluginRef};
 
 /// The category of a plugin's processor class.
 pub const AUDIO_MODULE: &str = "Audio Module Class";
-
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFURLCreateFromFileSystemRepresentation(
-        a: *const c_void,
-        buf: *const u8,
-        len: isize,
-        dir: u8,
-    ) -> *const c_void;
-    fn CFBundleCreate(a: *const c_void, url: *const c_void) -> *const c_void;
-    fn CFBundleLoadExecutable(bundle: *const c_void) -> u8;
-    fn CFBundleGetFunctionPointerForName(
-        bundle: *const c_void,
-        name: *const c_void,
-    ) -> *const c_void;
-    fn CFStringCreateWithCString(
-        a: *const c_void,
-        s: *const c_char,
-        encoding: u32,
-    ) -> *const c_void;
-    fn CFRelease(cf: *const c_void);
-}
 
 /// Loads the plugin `r` names, from its bundle (loaded once into `modules`).
 pub fn instantiate(

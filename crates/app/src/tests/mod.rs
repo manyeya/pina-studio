@@ -10,6 +10,7 @@ mod modulation;
 mod pages;
 mod piano_roll;
 mod regions;
+#[cfg(target_os = "macos")]
 mod shots;
 mod sounds;
 mod steps;

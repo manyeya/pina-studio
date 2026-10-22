@@ -235,7 +235,12 @@ impl Workspace {
                             .whitespace_nowrap()
                             .overflow_hidden()
                             .text_ellipsis()
-                            .child("~/Library/Application Support/Pina Studio/playbooks"),
+                            .child(
+                                pina_engine::paths::support()
+                                    .join("playbooks")
+                                    .display()
+                                    .to_string(),
+                            ),
                     )
                     .on_mouse_down(
                         MouseButton::Left,

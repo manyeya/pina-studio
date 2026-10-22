@@ -4,12 +4,14 @@
 
 use std::{
     io::{BufRead, BufReader, Write},
-    os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
     sync::mpsc,
     thread,
     time::Instant,
 };
+
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener, UnixStream};
 
 use futures::StreamExt;
 use gpui::{App, Context, WeakEntity};
@@ -21,6 +23,8 @@ use pina_engine::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+#[cfg(windows)]
+use uds_windows::{UnixListener, UnixStream};
 
 use crate::{
     mix::strip::Channel,

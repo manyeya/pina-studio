@@ -22,33 +22,27 @@ pub struct ClassInfo {
 impl Module {
     pub fn load(path: &Path) -> Result<Module, String> {
         let fail = |why: &str| format!("{}: {why}", path.display());
+        let binary = Binary::load(path)?;
         unsafe {
-            let p =
-                CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| fail("bad path"))?;
-            let url = CFURLCreateFromFileSystemRepresentation(
-                ptr::null(),
-                p.as_ptr().cast(),
-                p.as_bytes().len() as isize,
-                1,
-            );
-            if url.is_null() {
-                return Err(fail("bad path"));
+            // Its entry point: on macOS handed its bundle; on Windows `InitDll`, if it has one.
+            #[cfg(target_os = "macos")]
+            {
+                let entry: unsafe extern "C" fn(*const c_void) -> bool = binary
+                    .function(c"bundleEntry")
+                    .ok_or_else(|| fail("no bundleEntry"))?;
+                if !entry(binary.handle()) {
+                    return Err(fail("bundleEntry failed"));
+                }
             }
-            let bundle = CFBundleCreate(ptr::null(), url);
-            CFRelease(url);
-            if bundle.is_null() {
-                return Err(fail("not a bundle"));
+            #[cfg(windows)]
+            if let Some(init) = binary.function::<unsafe extern "system" fn() -> bool>(c"InitDll")
+                && !init()
+            {
+                return Err(fail("InitDll failed"));
             }
-            if CFBundleLoadExecutable(bundle) == 0 {
-                return Err(fail("couldn't load its binary (wrong architecture?)"));
-            }
-            let entry: unsafe extern "C" fn(*const c_void) -> bool =
-                symbol(bundle, c"bundleEntry").ok_or_else(|| fail("no bundleEntry"))?;
-            let get_factory: unsafe extern "C" fn() -> *mut IPluginFactory =
-                symbol(bundle, c"GetPluginFactory").ok_or_else(|| fail("no GetPluginFactory"))?;
-            if !entry(bundle) {
-                return Err(fail("bundleEntry failed"));
-            }
+            let get_factory: unsafe extern "system" fn() -> *mut IPluginFactory = binary
+                .function(c"GetPluginFactory")
+                .ok_or_else(|| fail("no GetPluginFactory"))?;
             let factory =
                 ComPtr::from_raw(get_factory()).ok_or_else(|| fail("no plugin factory"))?;
             Ok(Module { factory })
@@ -102,16 +96,6 @@ impl Module {
                 .then(|| ComPtr::from_raw(obj.cast()))
                 .flatten()
         }
-    }
-}
-
-pub(crate) unsafe fn symbol<F: Copy>(bundle: *const c_void, name: &CStr) -> Option<F> {
-    const UTF8: u32 = 0x0800_0100;
-    unsafe {
-        let s = CFStringCreateWithCString(ptr::null(), name.as_ptr(), UTF8);
-        let f = CFBundleGetFunctionPointerForName(bundle, s);
-        CFRelease(s);
-        (!f.is_null()).then(|| std::mem::transmute_copy(&f))
     }
 }
 

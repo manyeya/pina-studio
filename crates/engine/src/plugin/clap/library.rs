@@ -46,29 +46,10 @@ impl Library {
 
     pub(crate) fn open(path: &Path) -> Result<Library, String> {
         let fail = |why: &str| format!("{}: {why}", path.display());
-        const UTF8: u32 = 0x0800_0100;
         let p = CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| fail("bad path"))?;
+        let binary = Binary::load(path)?;
         unsafe {
-            let url = CFURLCreateFromFileSystemRepresentation(
-                ptr::null(),
-                p.as_ptr().cast(),
-                p.as_bytes().len() as isize,
-                1,
-            );
-            if url.is_null() {
-                return Err(fail("bad path"));
-            }
-            let bundle = CFBundleCreate(ptr::null(), url);
-            CFRelease(url);
-            if bundle.is_null() {
-                return Err(fail("not a bundle"));
-            }
-            if CFBundleLoadExecutable(bundle) == 0 {
-                return Err(fail("couldn't load its binary (wrong architecture?)"));
-            }
-            let name = CFStringCreateWithCString(ptr::null(), c"clap_entry".as_ptr(), UTF8);
-            let entry = CFBundleGetDataPointerForName(bundle, name).cast::<clap_plugin_entry>();
-            CFRelease(name);
+            let entry = binary.data(c"clap_entry").cast::<clap_plugin_entry>();
             let e = entry.as_ref().ok_or_else(|| fail("no clap_entry"))?;
             if !clap_version_is_compatible(e.clap_version) {
                 let v = e.clap_version;
@@ -182,7 +163,9 @@ impl Library {
                             None => look(kind, None),
                             Some(place) => {
                                 for file in preset_paths(&place, &extensions) {
-                                    let Ok(file) = CString::new(file.as_os_str().as_bytes()) else {
+                                    let Ok(file) =
+                                        CString::new(file.as_os_str().as_encoded_bytes())
+                                    else {
                                         continue;
                                     };
                                     look(kind, Some(&file));

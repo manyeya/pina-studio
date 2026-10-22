@@ -1,4 +1,5 @@
-//! Finding the plugins installed: VST3, CLAP and VST2 bundles, and Audio Units. Each bundle is
+//! Finding the plugins installed: VST3, CLAP and VST2 (bundles on macOS, DLLs on Windows), and on
+//! macOS Audio Units. Each bundle is
 //! opened in a child process (`pina __scan <bundle>`, or `pina __scan au` for the Audio
 //! Units), so one that crashes takes only its scan down, and results are cached by bundle and
 //! modification time, so a scan only opens what's new.
@@ -65,15 +66,29 @@ struct Cached {
 const VERSION: u32 = 2;
 
 /// Where VST3, CLAP and VST2 plugins are installed, and the folders in `PINA_PLUGIN_PATH` (or,
-/// as before, `PINA_VST3_PATH`; colon-separated).
+/// as before, `PINA_VST3_PATH`; separated as the platform separates paths).
 pub fn folders() -> Vec<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
+    let var = |v: &str| std::env::var_os(v).map(PathBuf::from).unwrap_or_default();
     let mut dirs = Vec::new();
-    for kind in ["VST3", "CLAP", "VST"] {
-        dirs.push(PathBuf::from("/Library/Audio/Plug-Ins").join(kind));
-        dirs.push(home.join("Library/Audio/Plug-Ins").join(kind));
+    if cfg!(windows) {
+        let (common, programs) = (var("COMMONPROGRAMFILES"), var("PROGRAMFILES"));
+        let local = var("LOCALAPPDATA").join("Programs").join("Common");
+        dirs.extend([
+            common.join("VST3"),
+            local.join("VST3"),
+            common.join("CLAP"),
+            local.join("CLAP"),
+            common.join("VST2"),
+            common.join("Steinberg").join("VST2"),
+            programs.join("VSTPlugins"),
+            programs.join("Steinberg").join("VSTPlugins"),
+        ]);
+    } else {
+        let home = var("HOME");
+        for kind in ["VST3", "CLAP", "VST"] {
+            dirs.push(PathBuf::from("/Library/Audio/Plug-Ins").join(kind));
+            dirs.push(home.join("Library/Audio/Plug-Ins").join(kind));
+        }
     }
     for var in ["PINA_PLUGIN_PATH", "PINA_VST3_PATH"] {
         if let Some(extra) = std::env::var_os(var) {
@@ -83,12 +98,15 @@ pub fn folders() -> Vec<PathBuf> {
     dirs
 }
 
-/// A bundle's format, by its extension.
+/// A bundle's format, by its extension (a VST2 plugin is a `.vst` bundle on macOS, a `.dll` on
+/// Windows).
 pub fn format_of(bundle: &Path) -> Option<Format> {
-    match bundle.extension()?.to_str()? {
+    let ext = bundle.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
         "vst3" => Some(Format::Vst3),
         "clap" => Some(Format::Clap),
-        "vst" => Some(Format::Vst2),
+        "vst" if !cfg!(windows) => Some(Format::Vst2),
+        "dll" if cfg!(windows) => Some(Format::Vst2),
         _ => None,
     }
 }
@@ -116,6 +134,7 @@ pub fn bundles(dirs: &[PathBuf]) -> Vec<PathBuf> {
 /// The plugins in one bundle (or with `AUDIO_UNITS`, the Audio Units), opening it in this
 /// process. What `pina __scan` runs.
 pub fn inspect(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
+    #[cfg(target_os = "macos")]
     if bundle == Path::new(AUDIO_UNITS) {
         return Ok(plugin::au::list());
     }
@@ -128,6 +147,13 @@ pub fn inspect(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
 }
 
 /// When the Audio Units last changed, as far as their folders say.
+#[cfg(not(target_os = "macos"))]
+fn units_modified() -> u64 {
+    0
+}
+
+/// When the Audio Units last changed, as far as their folders say.
+#[cfg(target_os = "macos")]
 fn units_modified() -> u64 {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -217,10 +243,12 @@ pub fn scan(exe: &Path, bundles: &[PathBuf], cache: &Path) -> Vec<PluginInfo> {
     plugins
 }
 
-/// What `scan` looks through: every bundle in `folders`, and the Audio Units.
+/// What `scan` looks through: every bundle in `folders`, and on macOS the Audio Units.
 pub fn everything() -> Vec<PathBuf> {
     let mut all = bundles(&folders());
-    all.push(PathBuf::from(AUDIO_UNITS));
+    if cfg!(target_os = "macos") {
+        all.push(PathBuf::from(AUDIO_UNITS));
+    }
     all
 }
 

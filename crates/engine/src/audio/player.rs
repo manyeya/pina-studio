@@ -335,7 +335,8 @@ impl Player {
             e.show();
             return Ok(());
         }
-        let mtm = objc2::MainThreadMarker::new().ok_or("editors open on the main thread")?;
+        let mtm =
+            crate::plugin::MainThreadMarker::new().ok_or("editors open on the main thread")?;
         let plugin = self.plugin(id, which).ok_or("no plugin there")?;
         let editor = plugin.open_editor(mtm)?;
         self.editors.insert((id, which), editor);

@@ -99,12 +99,12 @@ pub fn mix(
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let plugins = scan::scan(&exe, &scan::everything(), &scan::cache_file());
     let first = tracks[0];
-    let (verb_bus, verb_said) = reverb(dir, first, &plugins, p.tempo, &genre)?;
+    let room = reverb(dir, first, &plugins, p.tempo, &genre)?;
     let wants_echo = tracks
         .iter()
         .any(|&t| sends(part_of(t), &genre).1.is_some());
     let echo = match wants_echo {
-        true => Some(echo(dir, first, p.tempo)?),
+        true => echo(dir, first, p.tempo)?,
         false => None,
     };
     let mut done = Vec::new();
@@ -309,15 +309,15 @@ pub fn mix(
         };
         run(dir, json!({ "op": "set_track", "track": t, "pan": pan }))?;
         let (verb, delay) = sends(part, &genre);
-        if let Some(db) = verb {
-            send(dir, t, verb_bus, db)?;
+        if let (Some(db), Some((bus, _))) = (verb, &room) {
+            send(dir, t, *bus, db)?;
         }
         if let (Some(db), Some((bus, _))) = (delay, &echo) {
             send(dir, t, *bus, db)?;
         }
         done.push(
             json!({ "track": t, "name": p.tracks[t].name, "part": part, "eq": why,
-            "verb_db": verb, "echo_db": delay.filter(|_| echo.is_some()) }),
+            "verb_db": verb.filter(|_| room.is_some()), "echo_db": delay.filter(|_| echo.is_some()) }),
         );
     }
     // The drums on a bus of their own, glued.
@@ -501,7 +501,7 @@ pub fn mix(
     }
     Ok(json!({
         "mixed": done,
-        "reverb": verb_said,
+        "reverb": room.map_or("none: no reverb plugin here (Dragonfly Reverb is free)".to_string(), |r| r.1),
         "delay": echo.map(|e| e.1),
         "drum_bus": bus_said,
         "kick": kick.map(|(d, hz, peak, floor)| json!({ "track": d, "hz": hz,

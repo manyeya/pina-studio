@@ -51,15 +51,21 @@ pub(crate) fn aux(dir: &Path, first: usize, name: &str) -> Result<(usize, u32), 
 }
 
 /// The song's reverb, "Verb": Dragonfly's plate (its hall for big, slow genres) if it's here,
-/// else Apple's; fully wet, its pre-delay a sixty-fourth note, its decay by genre, its lows and
-/// highs cut so it doesn't cloud the mix.
+/// else on macOS Apple's; fully wet, its pre-delay a sixty-fourth note, its decay by genre, its
+/// lows and highs cut so it doesn't cloud the mix. None where there's no reverb to use.
 pub(crate) fn reverb(
     dir: &Path,
     first: usize,
     plugins: &[scan::PluginInfo],
     bpm: f64,
     genre: &str,
-) -> Result<(u32, String), String> {
+) -> Result<Option<(u32, String)>, String> {
+    let big = matches!(genre, "cinematic" | "ambient");
+    let hall = installed(plugins, "Dragonfly Hall Reverb").filter(|_| big);
+    let plate = installed(plugins, "Dragonfly Plate Reverb");
+    if hall.is_none() && plate.is_none() && !cfg!(target_os = "macos") {
+        return Ok(None);
+    }
     let (i, bus) = aux(dir, first, "Verb")?;
     let ch = json!({ "aux": i });
     let predelay = (60_000.0 / bpm / 16.0).clamp(8.0, 40.0);
@@ -72,15 +78,12 @@ pub(crate) fn reverb(
         "house" | "deep_house" | "techno" | "edm" | "amapiano" | "afrobeats" | "reggaeton" => 1.3,
         _ => 1.6,
     };
-    let big = matches!(genre, "cinematic" | "ambient");
     let set = |name: &str, text: String| {
         run(
             dir,
             json!({ "op": "set_plugin_param", "channel": ch, "plugin": { "insert": 0 }, "param": name, "text": text }),
         )
     };
-    let hall = installed(plugins, "Dragonfly Hall Reverb").filter(|_| big);
-    let plate = installed(plugins, "Dragonfly Plate Reverb");
     let which = if let Some(h) = hall {
         run(
             dir,
@@ -126,15 +129,18 @@ pub(crate) fn reverb(
             { "shape": "high_shelf", "freq": 8000, "gain_db": -3 },
         ] } }),
     )?;
-    Ok((
+    Ok(Some((
         bus,
         format!("{which}, {predelay:.0} ms pre-delay, {decay:.1} s decay"),
-    ))
+    )))
 }
 
 /// The song's delay, "Echo": Apple's, a dotted eighth (an eighth under 90 BPM), its repeats dark
-/// and thin so they sit behind what they repeat.
-pub(crate) fn echo(dir: &Path, first: usize, bpm: f64) -> Result<(u32, String), String> {
+/// and thin so they sit behind what they repeat. None away from macOS, where there's no Apple's.
+pub(crate) fn echo(dir: &Path, first: usize, bpm: f64) -> Result<Option<(u32, String)>, String> {
+    if !cfg!(target_os = "macos") {
+        return Ok(None);
+    }
     let (i, bus) = aux(dir, first, "Echo")?;
     let ch = json!({ "aux": i });
     let beats = if bpm < 90.0 { 0.5 } else { 0.75 };
@@ -166,10 +172,10 @@ pub(crate) fn echo(dir: &Path, first: usize, bpm: f64) -> Result<(u32, String), 
     } else {
         "a dotted eighth"
     };
-    Ok((
+    Ok(Some((
         bus,
         format!("Apple's delay, {note} ({:.0} ms)", seconds * 1000.0),
-    ))
+    )))
 }
 
 /// Sends `t` to `bus` at `db`, or sets the send it has there.

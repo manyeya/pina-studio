@@ -1,5 +1,5 @@
-//! Hosting VST2 plugins (macOS): load a `.vst` bundle, run it on the audio thread, and open its
-//! editor in a window of its own. The VST2 interface (2.4) is written out here: the `AEffect` a
+//! Hosting VST2 plugins (`.vst` bundles on macOS, DLLs on Windows): load one, run it on the audio
+//! thread, and open its editor in a window of its own. The VST2 interface (2.4) is written out here: the `AEffect` a
 //! plugin's entry point returns, the opcodes Pina Studio sends it, and the host callback it calls.
 //!
 //! VST2 has no controller apart from the processor: what the editor shows, and what Pina Studio reads
@@ -24,7 +24,7 @@ pub use processor::*;
 use std::{
     cell::{Cell, OnceCell, UnsafeCell},
     collections::HashMap,
-    ffi::{CStr, CString, c_char, c_void},
+    ffi::{CStr, CString, c_void},
     path::{Path, PathBuf},
     ptr,
     sync::{
@@ -33,13 +33,10 @@ use std::{
     },
 };
 
-use objc2::{MainThreadMarker, rc::Retained};
-use objc2_app_kit::NSWindow;
-use objc2_foundation::NSSize;
-
 use super::{
-    AUTOMATED, Control, ControlKind, EditReceiver, EditSender, Editor, Note, Plugin, PluginApi,
-    PluginParam, Preset, PresetSource, Processor, ProcessorApi, edit_queue, editor_window,
+    AUTOMATED, Control, ControlKind, EditReceiver, EditSender, Editor, MainThreadMarker, Note,
+    Plugin, PluginApi, PluginParam, Preset, PresetSource, Processor, ProcessorApi, Window,
+    edit_queue, platform::Binary,
 };
 use crate::{
     plugin::scan::PluginInfo,
@@ -92,28 +89,6 @@ const EVENTS: usize = 512;
 const PARAM_IS_SWITCH: i32 = 1;
 const PARAM_USES_INTEGER_MIN_MAX: i32 = 1 << 1;
 const PARAM_USES_INT_STEP: i32 = 1 << 3;
-
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFURLCreateFromFileSystemRepresentation(
-        a: *const c_void,
-        buf: *const u8,
-        len: isize,
-        dir: u8,
-    ) -> *const c_void;
-    fn CFBundleCreate(a: *const c_void, url: *const c_void) -> *const c_void;
-    fn CFBundleLoadExecutable(bundle: *const c_void) -> u8;
-    fn CFBundleGetFunctionPointerForName(
-        bundle: *const c_void,
-        name: *const c_void,
-    ) -> *const c_void;
-    fn CFStringCreateWithCString(
-        a: *const c_void,
-        s: *const c_char,
-        encoding: u32,
-    ) -> *const c_void;
-    fn CFRelease(cf: *const c_void);
-}
 
 /// "Nothing waiting" in `Instance::sent`.
 const NOTHING: u64 = f64::NAN.to_bits();
