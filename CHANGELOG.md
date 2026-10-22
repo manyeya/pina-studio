@@ -9,6 +9,8 @@ first for changes that break songs or commands made before.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-22
+
 ### Added
 
 - Modulators reach every plugin parameter. **Learn** on a modulator's card maps it to the next
