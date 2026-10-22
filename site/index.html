@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pina Studio</title>
+  <meta name="description" content="Pina Studio is a free, open-source DAW where AI agents are first-class collaborators. You play; Claude Code, Codex or any agent writes, arranges, mixes and masters, and every step lands in your song as an edit you can undo. For macOS and Windows.">
+  <meta name="theme-color" content="#060609">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" type="image/png" href="media/icon-64.png">
+  <link rel="apple-touch-icon" href="media/icon-180.png">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Pina Studio">
+  <meta property="og:title" content="Pina Studio">
+  <meta property="og:description" content="A free, open-source DAW where AI agents are first-class collaborators. You play; the agent writes, arranges, mixes and masters, one undoable edit at a time.">
+  <meta property="og:url" content="https://manyeya.github.io/pina-studio/">
+  <meta property="og:image" content="https://manyeya.github.io/pina-studio/og.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Pina Studio's main window with the song Corner Store Blues">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Pina Studio">
+  <meta name="twitter:description" content="A free, open-source DAW where AI agents are first-class collaborators.">
+  <meta name="twitter:image" content="https://manyeya.github.io/pina-studio/og.jpg">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,200..800&family=Geist+Mono:wght@400;500;600&family=Instrument+Sans:wdth,wght@75..100,400..700&display=swap">
+  <link rel="preload" as="image" href="media/arrange.webp" fetchpriority="high">
+  <link rel="stylesheet" href="style.css">
+  <script src="downloads.js" defer></script>
+  <script src="main.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <!-- The frequency hairline: lit only while something is playing -->
+  <div class="hairline" aria-hidden="true"><canvas class="hairline__canvas"></canvas></div>
+
+  <header class="nav" data-nav>
+    <div class="nav__inner wrap">
+      <a class="brand" href="#top" aria-label="Pina Studio, back to top">
+        <img src="media/icon-64.png" width="28" height="28" alt="">
+        <span>Pina Studio</span>
+      </a>
+      <nav class="nav__links" aria-label="Sections">
+        <a href="#replay">Replay</a>
+        <a href="#agents">Agents</a>
+        <a href="#listen">Listen</a>
+        <a href="#studio">Studio</a>
+        <a href="#open">Open source</a>
+      </nav>
+      <div class="nav__end">
+        <button class="pill" type="button" data-sound-toggle aria-pressed="false">
+          <span class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="pill__label" data-sound-label="short">Sound off</span>
+        </button>
+        <a class="icon-link" href="https://github.com/manyeya/pina-studio" aria-label="Pina Studio on GitHub">
+          <svg viewBox="0 0 16 16" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M8 .2a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38v-1.34c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.71 1.22 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.83-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.22 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.14.46.55.38A8 8 0 0 0 8 .2Z"/></svg>
+        </a>
+        <a class="btn btn--light btn--sm" href="#download">Download</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <!-- ============ HERO ============ -->
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="wrap hero__head">
+        <p class="eyebrow reveal">Free and open source <span class="sep">/</span> Version <span data-version>0.3.0</span></p>
+        <h1 class="display reveal" id="hero-title">
+          <span class="line">Make music with an agent.</span>
+          <span class="line tone-2">Hear every edit land.</span>
+        </h1>
+        <div class="hero__row reveal">
+          <p class="lead hero__lead">Pina Studio is a DAW where Claude Code, Codex or any agent works in your song with you. You play; it writes, arranges, mixes and masters, and every step it takes lands in the song in front of you as an edit you can undo.</p>
+          <div class="hero__cta">
+            <div class="hero__buttons">
+              <a class="btn btn--light btn--lg" data-dl="primary" href="https://github.com/manyeya/pina-studio/releases/latest">
+                <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg>
+                <span data-dl-label="primary">Download Pina Studio</span>
+              </a>
+              <button class="listen" type="button" data-sound-toggle aria-pressed="false">
+                <span class="listen__orb" aria-hidden="true"><span class="bars bars--lg"><i></i><i></i><i></i><i></i><i></i></span></span>
+                <span class="listen__text">
+                  <span class="listen__label" data-sound-label="long">Enter with sound</span>
+                  <span class="listen__sub" data-sound-sub>Plays Corner Store Blues, 2:23</span>
+                </span>
+              </button>
+            </div>
+            <p class="meta">Version <span data-version>0.3.0</span><span class="size" data-dl-size="primary"></span><span class="sep">/</span>also for <a data-dl="other" href="https://github.com/manyeya/pina-studio/releases/latest"><span data-dl-other="label">Windows</span></a></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero__stage wrap wrap--wide reveal reveal--late">
+        <figure class="shot shot--hero" data-react>
+          <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="bleed" aria-hidden="true"><img src="media/arrange.webp" width="2880" height="1800" alt="" decoding="async"></div>
+          <div class="frame">
+            <img src="media/arrange.webp" width="2880" height="1800" fetchpriority="high" decoding="async" alt="Pina Studio's main window with the song Corner Store Blues: a drum stack of kick, snare and hats, FX, 808, bass, keys, stabs and pad tracks in coloured regions across the Intro, Verse, Hook and Verse 2, the inspector on the left, and the transport at 95 BPM in C minor.">
+          </div>
+          <figcaption class="shot__caption">
+            <span><b>Corner Store Blues</b> · 95 BPM · C minor</span>
+            <span>Built one <code>pina do</code> command at a time. <a href="#replay">Watch it get made</a></span>
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ============ SESSION REPLAY ============ -->
+    <section class="replay" id="replay" aria-labelledby="replay-title">
+      <header class="wrap section-head replay__intro">
+        <p class="eyebrow reveal">Session replay</p>
+        <h2 class="h2 reveal" id="replay-title">Watch a beat get built, <span class="tone-2">one command at a time.</span></h2>
+        <p class="lead reveal">Corner Store Blues was made by a script that works the way an agent does: one <code>pina do</code> command at a time. These are real lines from its build, laid along the song where each one lands. With the song open in Pina Studio, each one shows up on screen as a single edit you can undo.</p>
+      </header>
+
+      <div class="replay__track" data-replay-track>
+        <div class="replay__pin">
+          <div class="wrap replay__bar">
+            <p class="replay__title"><span class="rec" aria-hidden="true"></span>Replay<span class="replay__song"><span class="sep">/</span>Corner Store Blues</span></p>
+            <div class="lcd" aria-label="Replay position">
+              <span class="lcd__cell"><b data-lcd="bar">1.1.1.001</b><small>Bar · beat · div · tick</small></span>
+              <span class="lcd__cell"><b data-lcd="time">0:00.000</b><small>Time</small></span>
+              <span class="lcd__cell lcd__cell--static"><b>95.00</b><small>BPM</small></span>
+              <span class="lcd__cell lcd__cell--static"><b>C min</b><small>Key</small></span>
+            </div>
+            <button class="pill pill--quiet replay__sound" type="button" data-sound-toggle="song" aria-pressed="false">
+              <span class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+              <span data-sound-label="replay">Play the song under it</span>
+            </button>
+          </div>
+
+          <div class="wrap replay__main">
+            <ol class="chapters" data-chapters>
+              <li class="chapter" id="step-1">
+                <p class="chapter__meta"><span class="chapter__n">01</span><span class="chapter__name">Start</span><span class="chapter__where">Bar 1</span></p>
+                <p class="intent" data-line><span class="tag">Intent</span>A boom-bap beat at 95 BPM, in C minor.</p>
+                <div class="cmds">
+                  <code class="cmd" data-line>pina new "Corner Store Blues"</code>
+                  <code class="cmd" data-line>pina do song '{"op":"set_tempo","bpm":95}'</code>
+                  <code class="cmd" data-line>pina do song '{"op":"set_key","key":"C minor"}'</code>
+                </div>
+                <p class="result" data-line><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>A new song at 95 BPM in C minor, right there in the top bar.</p>
+                <div class="chapter__still"><div class="stage" data-still="arrange" data-rect="0.30,0,0.42,0.16"><img src="media/arrange.webp" width="2880" height="1800" loading="lazy" decoding="async" alt="The top bar of Corner Store Blues: transport, 95 BPM, 4/4, C minor."></div></div>
+              </li>
+
+              <li class="chapter" id="step-2">
+                <p class="chapter__meta"><span class="chapter__n">02</span><span class="chapter__name">Drums</span><span class="chapter__where">Bar 5</span></p>
+                <p class="intent" data-line><span class="tag">Intent</span>A kick from samples, and a pattern for the verse.</p>
+                <div class="cmds">
+                  <code class="cmd" data-line>pina do song '{"op":"add_track","name":"Kick","instrument":{"sampler":{"zones":[…]}}}'</code>
+                  <code class="cmd" data-line>pina do song '{"op":"add_pattern_region","track":0,"start":15360,"length":61440,"step":240,"rows":[…]}'</code>
+                  <p class="cmd cmd--more" data-line>⋯ then the rest of the kit, the same way</p>
+                </div>
+                <p class="result" data-line><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>A sampler kick playing a 16-bar pattern from bar 5 on sixteenths: tick 15,360 is bar 5, and a step of 240 is a sixteenth.</p>
+                <div class="chapter__still"><div class="stage" data-still="arrange" data-rect="0.17,0.1,0.64,0.32"><img src="media/arrange.webp" width="2880" height="1800" loading="lazy" decoding="async" alt="The drum stack in Corner Store Blues: the Kick, Snare and Hats rows with their Verse and Hook patterns."></div></div>
+              </li>
+
+              <li class="chapter" id="step-3">
+                <p class="chapter__meta"><span class="chapter__n">03</span><span class="chapter__name">The hook</span><span class="chapter__where">Bar 21</span></p>
+                <p class="intent" data-line><span class="tag">Intent</span>Mark where the hook comes in.</p>
+                <div class="cmds">
+                  <code class="cmd" data-line>pina do song '{"op":"add_marker","tick":76800,"name":"Hook"}'</code>
+                </div>
+                <p class="result" data-line><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>A Hook marker at bar 21. At 3,840 ticks to a bar, 76,800 is twenty bars in.</p>
+                <div class="chapter__still"><div class="stage" data-still="arrange" data-rect="0.41,0.04,0.5,0.4"><img src="media/arrange.webp" width="2880" height="1800" loading="lazy" decoding="async" alt="The marker lane of Corner Store Blues: Intro, Verse 1, Hook at bar 21 and Verse 2 above the drum regions."></div></div>
+              </li>
+
+              <li class="chapter" id="step-4">
+                <p class="chapter__meta"><span class="chapter__n">04</span><span class="chapter__name">Verse two</span><span class="chapter__where">Bar 29</span></p>
+                <p class="intent" data-line><span class="tag">Intent</span>Bring the bass back for verse two, tighten it, and slow the keys loop for the break.</p>
+                <div class="cmds">
+                  <code class="cmd" data-line>pina do song '{"op":"add_alias","track":5,"region":0,"start":107520}'</code>
+                  <code class="cmd" data-line>pina do song '{"op":"edit_notes","track":5,"region":0,"edit":{"kind":"quantize","grid":240,"strength":1}}'</code>
+                  <code class="cmd" data-line>pina do song '{"op":"flex_region","track":6,"region":1,"length":7680}'</code>
+                </div>
+                <p class="result" data-line><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>The bass comes back at bar 29 as an alias, its notes snapped to sixteenths at full strength; the keys loop plays at half time in the break.</p>
+                <div class="chapter__still"><div class="stage" data-still="arrange" data-rect="0.4,0.46,0.6,0.38"><img src="media/arrange.webp" width="2880" height="1800" loading="lazy" decoding="async" alt="The 808, Bass and Keys rows of Corner Store Blues, with the bass regions repeating into Verse 2."></div></div>
+              </li>
+
+              <li class="chapter" id="step-5">
+                <p class="chapter__meta"><span class="chapter__n">05</span><span class="chapter__name">Mix and master</span><span class="chapter__where">Whole song</span></p>
+                <p class="intent" data-line><span class="tag">Intent</span>Mix it, then master it to the genre's loudness.</p>
+                <div class="cmds">
+                  <code class="cmd" data-line>pina mix song</code>
+                  <code class="cmd" data-line>pina master song</code>
+                </div>
+                <p class="result" data-line><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Each part's EQ, compression, saturation, pan, reverb and level, set from its own measured sound. Then a master at the genre's loudness.</p>
+                <div class="chapter__still"><div class="stage" data-still="mixer" data-rect="0,0.05,0.62,0.5"><img src="media/mixer.webp" width="2880" height="1800" loading="lazy" decoding="async" alt="The mixer of Corner Store Blues: a strip per track with EQ thumbnails, inserts, Room and Hall sends, and faders."></div></div>
+              </li>
+
+              <li class="chapter" id="step-6">
+                <p class="chapter__meta"><span class="chapter__n">06</span><span class="chapter__name">Critique</span><span class="chapter__where">Whole song</span></p>
+                <p class="intent" data-line><span class="tag">Intent</span>What's still wrong with it?</p>
+                <div class="cmds">
+                  <code class="cmd" data-line>pina critique song</code>
+                </div>
+                <p class="result" data-line><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>What's wrong, worst first, from clashing notes to tonal balance, each with the command that fixes it.</p>
+                <div class="chapter__still"><div class="stage" data-still="eq" data-rect="0,0,1,1"><img src="media/eq.webp" width="1995" height="1179" loading="lazy" decoding="async" alt="The Channel EQ on the Kick: six bands over a live spectrum analyzer, with its analyzer settings open."></div></div>
+              </li>
+
+              <li class="chapter chapter--yours" id="step-7">
+                <p class="chapter__meta"><span class="chapter__n">07</span><span class="chapter__name">Your turn</span><span class="chapter__where">Not from the build</span></p>
+                <p class="intent" data-line><span class="tag">Your note</span>Make the hook hit harder.</p>
+                <div class="cmds">
+                  <code class="cmd" data-line>pina ask song "make the hook hit harder"</code>
+                </div>
+                <p class="result" data-line><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Notes in plain words, answered in edits you can hear and undo. And every track, region and knob stays yours, down to the Kick's five modulators.</p>
+                <div class="chapter__still"><div class="stage" data-still="modulation" data-rect="0,0,0.56,1"><img src="media/modulation.webp" width="2376" height="642" loading="lazy" decoding="async" alt="The Modulation pane on the Kick: LFO, Steps, Envelope, Follower and Random cards mapped to pan, EQ band gain, low cut and volume."></div></div>
+              </li>
+            </ol>
+
+            <div class="replay__screen">
+              <figure class="shot shot--stage" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true">
+                  <img class="bleed__img" data-bleed="arrange" src="media/arrange.webp" width="2880" height="1800" alt="" loading="lazy" decoding="async">
+                  <img class="bleed__img" data-bleed="mixer" src="media/mixer.webp" width="2880" height="1800" alt="" loading="lazy" decoding="async">
+                  <img class="bleed__img" data-bleed="eq" src="media/eq.webp" width="1995" height="1179" alt="" loading="lazy" decoding="async">
+                  <img class="bleed__img" data-bleed="modulation" src="media/modulation.webp" width="2376" height="642" alt="" loading="lazy" decoding="async">
+                </div>
+                <div class="stage stage--live" data-stage>
+                  <div class="stage__layer" data-layer="arrange"><img src="media/arrange.webp" width="2880" height="1800" alt="" loading="lazy" decoding="async"></div>
+                  <div class="stage__layer" data-layer="mixer"><img src="media/mixer.webp" width="2880" height="1800" alt="" loading="lazy" decoding="async"></div>
+                  <div class="stage__layer" data-layer="eq"><img src="media/eq.webp" width="1995" height="1179" alt="" loading="lazy" decoding="async"></div>
+                  <div class="stage__layer" data-layer="modulation"><img src="media/modulation.webp" width="2376" height="642" alt="" loading="lazy" decoding="async"></div>
+                </div>
+                <figcaption class="stage__caption" data-stage-caption aria-live="polite">Arrange · Corner Store Blues</figcaption>
+              </figure>
+            </div>
+          </div>
+
+          <nav class="wrap timeline" aria-label="Replay steps">
+            <div class="timeline__rail" aria-hidden="true"><span class="timeline__fill" data-fill></span></div>
+            <ol class="timeline__ticks">
+              <li><button type="button" data-goto="0"><span class="tk-n">01</span>Start</button></li>
+              <li><button type="button" data-goto="1"><span class="tk-n">02</span>Drums</button></li>
+              <li><button type="button" data-goto="2"><span class="tk-n">03</span>The hook</button></li>
+              <li><button type="button" data-goto="3"><span class="tk-n">04</span>Verse two</button></li>
+              <li><button type="button" data-goto="4"><span class="tk-n">05</span>Mix, master</button></li>
+              <li><button type="button" data-goto="5"><span class="tk-n">06</span>Critique</button></li>
+              <li><button type="button" data-goto="6"><span class="tk-n">07</span>Your turn</button></li>
+            </ol>
+          </nav>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ AGENTS / NOTES ============ -->
+    <section class="notes" id="agents" aria-labelledby="notes-title">
+      <header class="wrap section-head">
+        <p class="eyebrow reveal">Agents, built in</p>
+        <h2 class="h2 reveal" id="notes-title">Give notes like you would <span class="tone-2">to a producer.</span></h2>
+        <p class="lead reveal">Claude Code and Codex live in the Agent panel <kbd>⌘L</kbd>, or take your notes from a terminal. Each runs on your own account, with Pina Studio's tools as its only tools.</p>
+      </header>
+
+      <div class="wrap">
+        <ul class="prompts">
+          <li class="prompt reveal">
+            <p class="prompt__note">“make the hook hit harder”</p>
+            <p class="prompt__why">The critic checks for a hook weaker than its verse.</p>
+            <button class="prompt__copy" type="button" data-copy='pina ask song "make the hook hit harder"'><code>pina ask song "make the hook hit harder"</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
+          </li>
+          <li class="prompt reveal">
+            <p class="prompt__note">“write a bassline that follows the chords”</p>
+            <p class="prompt__why">Theory writes it in key, voice-led, with the genre's groove.</p>
+            <button class="prompt__copy" type="button" data-copy='pina ask song "write a bassline that follows the chords"'><code>pina ask song "write a bassline that follows the chords"</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
+          </li>
+          <li class="prompt reveal">
+            <p class="prompt__note">“find a dusty keys loop in C minor”</p>
+            <p class="prompt__why">Samples are found by what they sound like.</p>
+            <button class="prompt__copy" type="button" data-copy='pina ask song "find a dusty keys loop in C minor"'><code>pina ask song "find a dusty keys loop in C minor"</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
+          </li>
+          <li class="prompt reveal">
+            <p class="prompt__note">“pick a genre for this song”</p>
+            <p class="prompt__why">Seventeen playbooks, lo-fi to amapiano.</p>
+            <button class="prompt__copy" type="button" data-copy='pina ask song "pick a genre for this song"'><code>pina ask song "pick a genre for this song"</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
+          </li>
+          <li class="prompt reveal">
+            <p class="prompt__note">“what's wrong with it? fix the worst first”</p>
+            <p class="prompt__why">Every problem comes with the command that fixes it.</p>
+            <button class="prompt__copy" type="button" data-copy='pina ask song "what&#39;s wrong with it? fix the worst first"'><code>pina ask song "what's wrong with it? fix the worst first"</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
+          </li>
+          <li class="prompt reveal">
+            <p class="prompt__note">“master it to the genre's loudness”</p>
+            <p class="prompt__why">Mix targets are measured from released songs.</p>
+            <button class="prompt__copy" type="button" data-copy='pina ask song "master it to the genre&#39;s loudness"'><code>pina ask song "master it to the genre's loudness"</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
+          </li>
+        </ul>
+
+        <div class="live">
+          <figure class="shot shot--agent reveal" data-react>
+            <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="bleed" aria-hidden="true"><img src="media/agent.webp" width="636" height="1626" alt="" loading="lazy" decoding="async"></div>
+            <div class="frame"><img src="media/agent.webp" width="636" height="1626" loading="lazy" decoding="async" alt="The Agent panel: Make music with Claude Code. The song's key, tempo and length at the top, suggested next steps, and a composer at the bottom with the selected Snare as context."></div>
+          </figure>
+
+          <div class="live__copy">
+            <h3 class="h3 reveal">In the room, not in a chat window.</h3>
+            <p class="reveal">With the song open, the agent shows up the way a collaborator does in a shared file.</p>
+            <ol class="live__points">
+              <li class="reveal">
+                <span class="live__n">1</span>
+                <div>
+                  <p class="live__t">Its avatar sits in the top bar.</p>
+                  <div class="crop" role="img" aria-label="The top bar of Pina Studio, with the agent's avatar beside the Export button.">
+                    <span class="crop__ring" aria-hidden="true"></span>
+                  </div>
+                </div>
+              </li>
+              <li class="reveal">
+                <span class="live__n">2</span>
+                <div><p class="live__t">An outline and a cursor mark what it just changed.</p><p class="live__d">You see the edit where it happened, not in a log.</p></div>
+              </li>
+              <li class="reveal">
+                <span class="live__n">3</span>
+                <div><p class="live__t">Each edit is one undo.</p><p class="live__d">Keep what you like. Step back through the rest.</p></div>
+              </li>
+            </ol>
+            <p class="live__foot reveal">Notes from a terminal show up in the panel too: <code>pina ask &lt;song&gt; "…"</code></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ WHAT AN AGENT CAN'T DO ============ -->
+    <section class="craft" id="craft" aria-labelledby="craft-title">
+      <header class="wrap section-head">
+        <p class="eyebrow reveal">What Pina Studio brings</p>
+        <h2 class="h2 reveal" id="craft-title">An agent can't hear, and isn't a musician. <span class="tone-2">So Pina Studio does the parts it would get wrong.</span></h2>
+      </header>
+
+      <div class="wrap craft__grid">
+        <div class="craft__media">
+          <figure class="shot shot--book reveal" data-react>
+            <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="bleed" aria-hidden="true"><img src="media/playbooks.webp" width="2340" height="1680" alt="" loading="lazy" decoding="async"></div>
+            <div class="frame"><img src="media/playbooks.webp" width="2340" height="1680" loading="lazy" decoding="async" alt="The Lo-fi hip-hop playbook: 60 bars, 6 sections, 5 parts and a -13.0 LUFS master; tempo 70 to 90, swing 60, minor key, a groove grid for kick, snare and hats, and the chords Am9, Fmaj7, Dm9, E7b9."></div>
+            <figcaption class="shot__caption"><span><b>Playbooks</b> · the Lo-fi hip-hop page</span><span>Editable, like everything else</span></figcaption>
+          </figure>
+        </div>
+
+        <ol class="craft__list">
+          <li class="craft__item reveal">
+            <span class="craft__n">01</span>
+            <div>
+              <h3 class="h3">Playbooks</h3>
+              <p>Seventeen genres, lo-fi to amapiano: tempo, swing, keys, the parts and how to write them, sections, progressions, and mix targets measured from released songs. Each one is editable on its own page.</p>
+              <code class="chip-cmd">pina playbook lofi</code>
+            </div>
+          </li>
+          <li class="craft__item reveal">
+            <span class="craft__n">02</span>
+            <div>
+              <h3 class="h3">Theory</h3>
+              <p>Chords and progressions for a key and a mood. Bass, chords, melodies and drums written in key, voice-led, with a genre's groove.</p>
+              <code class="chip-cmd">pina theory "A minor" dark trap</code>
+            </div>
+          </li>
+          <li class="craft__item reveal">
+            <span class="craft__n">03</span>
+            <div>
+              <h3 class="h3">A critic</h3>
+              <p>What's wrong, worst first: clashing notes, a bass off its chords, robotic velocities, a hook weaker than its verse, clipping, tonal balance. Each comes with the command that fixes it.</p>
+              <code class="chip-cmd">pina critique song</code>
+            </div>
+          </li>
+          <li class="craft__item reveal">
+            <span class="craft__n">04</span>
+            <div>
+              <h3 class="h3">Mixing by measurement</h3>
+              <p>Each part's EQ, compression, saturation, pan, reverb and level, set from its own measured sound. Then mastered to the genre's loudness.</p>
+              <code class="chip-cmd">pina mix song</code> <code class="chip-cmd">pina master song</code>
+            </div>
+          </li>
+          <li class="craft__item reveal">
+            <span class="craft__n">05</span>
+            <div>
+              <h3 class="h3">Sounds and samples</h3>
+              <p>Real presets from the instruments you have installed. Samples found by what they sound like, and kits that fit the song's key and tempo.</p>
+              <code class="chip-cmd">pina samples find "dusty keys loop in C minor 95 bpm"</code>
+            </div>
+          </li>
+          <li class="craft__item reveal">
+            <span class="craft__n">06</span>
+            <div>
+              <h3 class="h3">Song Study</h3>
+              <p>A finished song taken apart from its audio: tempo, key, chords, form, groove, and its lyrics' rhymes and hooks. Only its title, artist and length are sent anywhere, never its audio.</p>
+              <code class="chip-cmd">pina study song.mp3</code>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ============ MIDNIGHT DRIVE ============ -->
+    <section class="listen-sec" id="listen" aria-labelledby="md-title">
+      <header class="wrap section-head">
+        <p class="eyebrow reveal">Listen</p>
+        <h2 class="h2 reveal" id="md-title">Midnight Drive. <span class="tone-2">Every note placed by a command.</span></h2>
+        <p class="lead reveal">Sixteen bars at 112 BPM in A minor, made entirely with <code>pina do</code> commands, the way an agent would make it, on Pina Studio's built-in instruments. These are its real stems. Mute them, solo them, and the light follows whatever is left.</p>
+      </header>
+
+      <div class="wrap wrap--wide md reveal" data-md data-react>
+        <figure class="shot shot--md">
+          <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="bleed" aria-hidden="true"><img src="media/midnight-drive.webp" width="2880" height="1440" alt="" loading="lazy" decoding="async"></div>
+          <div class="frame md__window">
+            <img src="media/midnight-drive.webp" width="2880" height="1440" loading="lazy" decoding="async" alt="Midnight Drive open in Pina Studio: Drums, Bass, Keys, Lead and Pad tracks across 16 bars, with Intro, Verse, Pre-Chorus and Chorus markers, at 112 BPM in A minor.">
+            <div class="md__overlay" aria-hidden="true">
+              <span class="md__row" data-row="0" style="top:14.3%;height:9.6%"></span>
+              <span class="md__row" data-row="1" style="top:25%;height:9.4%"></span>
+              <span class="md__row" data-row="2" style="top:35.6%;height:9.4%"></span>
+              <span class="md__row" data-row="3" style="top:46.1%;height:9.5%"></span>
+              <span class="md__row" data-row="4" style="top:56.7%;height:9.4%"></span>
+              <span class="md__lane" data-md-lane title="Click to play from here"><span class="md__head" data-md-head></span></span>
+            </div>
+          </div>
+        </figure>
+
+        <div class="md__console">
+          <div class="md__transport">
+            <button class="md__play" type="button" data-md-play aria-label="Play Midnight Drive">
+              <svg class="ico ico--play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.8v12.4a.8.8 0 0 0 1.2.7l10-6.2a.8.8 0 0 0 0-1.4l-10-6.2A.8.8 0 0 0 8 5.8Z"/></svg>
+              <svg class="ico ico--pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></svg>
+              <span class="md__spinner" aria-hidden="true"></span>
+            </button>
+            <div class="md__clock">
+              <span class="lcd__cell"><b data-md-bar>1.1</b><small>Bar</small></span>
+              <span class="lcd__cell"><b data-md-time>0:00.0</b><small>of 0:34.3</small></span>
+              <span class="lcd__cell lcd__cell--static"><b>112</b><small>BPM</small></span>
+            </div>
+            <div class="md__sections" role="group" aria-label="Jump to a section">
+              <button type="button" data-md-seek="0">Intro</button>
+              <button type="button" data-md-seek="8.5714">Verse</button>
+              <button type="button" data-md-seek="17.1429">Pre-Chorus</button>
+              <button type="button" data-md-seek="25.7143">Chorus</button>
+            </div>
+            <p class="md__status" data-md-status aria-live="polite">Five stems, about 2.3 MB. Nothing loads until you press play.</p>
+          </div>
+
+          <ul class="md__stems" aria-label="Stems">
+            <li class="stem" data-stem="0" style="--track:#E5484D"><span class="stem__name"><i class="stem__dot"></i>Drums</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="0" aria-pressed="false" aria-label="Mute drums">M</button><button type="button" data-solo="0" aria-pressed="false" aria-label="Solo drums">S</button></span></li>
+            <li class="stem" data-stem="1" style="--track:#8E7CF0"><span class="stem__name"><i class="stem__dot"></i>Bass</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="1" aria-pressed="false" aria-label="Mute bass">M</button><button type="button" data-solo="1" aria-pressed="false" aria-label="Solo bass">S</button></span></li>
+            <li class="stem" data-stem="2" style="--track:#2FBF8F"><span class="stem__name"><i class="stem__dot"></i>Keys</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="2" aria-pressed="false" aria-label="Mute keys">M</button><button type="button" data-solo="2" aria-pressed="false" aria-label="Solo keys">S</button></span></li>
+            <li class="stem" data-stem="3" style="--track:#3B9EFF"><span class="stem__name"><i class="stem__dot"></i>Lead</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="3" aria-pressed="false" aria-label="Mute lead">M</button><button type="button" data-solo="3" aria-pressed="false" aria-label="Solo lead">S</button></span></li>
+            <li class="stem" data-stem="4" style="--track:#8B8FF7"><span class="stem__name"><i class="stem__dot"></i>Pad</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="4" aria-pressed="false" aria-label="Mute pad">M</button><button type="button" data-solo="4" aria-pressed="false" aria-label="Solo pad">S</button></span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ THE STUDIO ============ -->
+    <section class="studio" id="studio" aria-labelledby="studio-title">
+      <header class="wrap section-head">
+        <p class="eyebrow reveal">A whole studio</p>
+        <h2 class="h2 reveal" id="studio-title">The agent's studio <span class="tone-2">is your studio.</span></h2>
+        <p class="lead reveal">Everything the agent touches is a real part of a real studio, and none of it needs an agent. Play it, write it, shape it and mix it yourself, with your own plugins.</p>
+      </header>
+
+      <div class="wrap">
+        <div class="tabs reveal" data-tabs>
+          <div class="tabs__list" role="tablist" aria-label="Parts of the studio">
+            <button role="tab" type="button" id="tab-roll" aria-controls="panel-roll" aria-selected="true">Piano roll</button>
+            <button role="tab" type="button" id="tab-steps" aria-controls="panel-steps" aria-selected="false" tabindex="-1">Step sequencer</button>
+            <button role="tab" type="button" id="tab-mod" aria-controls="panel-mod" aria-selected="false" tabindex="-1">Modulation</button>
+            <button role="tab" type="button" id="tab-eq" aria-controls="panel-eq" aria-selected="false" tabindex="-1">Channel EQ</button>
+            <button role="tab" type="button" id="tab-pan" aria-controls="panel-pan" aria-selected="false" tabindex="-1">Binaural panner</button>
+          </div>
+
+          <div class="tabs__panels">
+            <div class="tabs__panel" role="tabpanel" id="panel-roll" aria-labelledby="tab-roll" tabindex="0">
+              <figure class="shot shot--fit" style="--ar:2.64" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/roll.webp" width="2376" height="900" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/roll.webp" width="2376" height="900" loading="lazy" decoding="async" alt="The piano roll: four chords as coloured notes, quantize, strength and swing, tools such as Humanize, Strum and Arpeggiate, and a velocity lane."></div>
+              </figure>
+              <p class="tabs__cap">Chords as coloured notes, quantize and swing, tools that humanize, strum, chop and arpeggiate, and a velocity lane. Plus score view, musical typing, and MIDI and audio recording.</p>
+            </div>
+            <div class="tabs__panel" role="tabpanel" id="panel-steps" aria-labelledby="tab-steps" tabindex="0" hidden>
+              <figure class="shot shot--fit" style="--ar:2.64" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/steps.webp" width="2376" height="900" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/steps.webp" width="2376" height="900" loading="lazy" decoding="async" alt="The step sequencer: pads for kick, snare, closed and open hat and clap, steps per sound, a velocity lane with an LFO modulating it, and Euclid and Randomize."></div>
+              </figure>
+              <p class="tabs__cap">Pads, steps per sound, and settings per step: velocity, chance, pitch, repeat, gate and nudge. Modulate a lane, Euclid it, randomize it. A sampler with zones, slices, layers and round robins sits behind the pads.</p>
+            </div>
+            <div class="tabs__panel" role="tabpanel" id="panel-mod" aria-labelledby="tab-mod" tabindex="0" hidden>
+              <figure class="shot shot--fit" style="--ar:3.7" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/modulation.webp" width="2376" height="642" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/modulation.webp" width="2376" height="642" loading="lazy" decoding="async" alt="The Modulation pane: LFO, Steps, Envelope, Follower and Random cards, each mapped to a setting such as Pan, EQ band gain, Low cut or Volume."></div>
+              </figure>
+              <p class="tabs__cap">LFO, steps, envelope, follower, random and macro, on any setting and any plugin parameter, and shared across a stack. Automation on every control too: Read, Touch, Latch, Trim and Write, with curves and shapes.</p>
+            </div>
+            <div class="tabs__panel" role="tabpanel" id="panel-eq" aria-labelledby="tab-eq" tabindex="0" hidden>
+              <figure class="shot shot--fit" style="--ar:1.692" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/eq.webp" width="1995" height="1179" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/eq.webp" width="1995" height="1179" loading="lazy" decoding="async" alt="The Channel EQ: bands over a live spectrum analyzer, with analyzer settings for range, resolution, speed and tilt, and Collisions and Grab."></div>
+              </figure>
+              <p class="tabs__cap">Up to 24 bands, dynamic bands, natural and linear phase, spectral dynamics, EQ Match, Spectrum Grab, and collisions with another track. A compressor and a saturator beside it.</p>
+            </div>
+            <div class="tabs__panel" role="tabpanel" id="panel-pan" aria-labelledby="tab-pan" tabindex="0" hidden>
+              <figure class="shot shot--fit" style="--ar:0.865" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/panner.webp" width="848" height="980" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/panner.webp" width="848" height="980" loading="lazy" decoding="async" alt="The binaural panner on the drums: a sound placed in front and to the right of a head, with Front, Left, Right, Behind, Above and Below buttons and Round, Height and Distance sliders."></div>
+              </figure>
+              <p class="tabs__cap">A binaural panner that places a sound all round the head: in front, beside, behind, above or below. Made for headphones.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="spec">
+          <div class="spec__col reveal">
+            <h3 class="spec__h">Arrange</h3>
+            <p>Regions that loop, trim, fade and time-stretch. Markers, cycle, aliases, take folders with comping, Live Loops, track stacks, sends and aux buses, and plugin delay compensation.</p>
+          </div>
+          <div class="spec__col reveal">
+            <h3 class="spec__h">Plugins</h3>
+            <p class="formats"><span>VST3</span><span>CLAP</span><span>VST2</span><span>Audio Units</span></p>
+            <p>Scanned, played and automated, with their own windows shown. Audio Units on macOS.</p>
+          </div>
+          <div class="spec__col reveal">
+            <h3 class="spec__h">Bounce</h3>
+            <p>The mix, stems or sections, to a loudness, with tails. Unsaved edits are kept every 30 seconds and offered back.</p>
+          </div>
+        </div>
+
+        <ul class="keys reveal" aria-label="Shortcuts">
+          <li><kbd>Space</kbd> plays</li>
+          <li><kbd>R</kbd> records</li>
+          <li><kbd>C</kbd> cycle</li>
+          <li><kbd>K</kbd> metronome</li>
+          <li><kbd>⌘L</kbd> agent panel</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============ OPEN BY DEFAULT ============ -->
+    <section class="open" id="open" aria-labelledby="open-title">
+      <header class="wrap section-head">
+        <p class="eyebrow reveal">Open by default</p>
+        <h2 class="h2 reveal" id="open-title">Read it. Build it. <span class="tone-2">Change it.</span></h2>
+        <p class="lead reveal">MIT licensed and written in Rust from top to bottom. The interface is drawn on the GPU; the built-in effects and instruments are written in Faust. And it works with whichever agent you like.</p>
+      </header>
+
+      <div class="wrap open__grid">
+        <dl class="facts reveal">
+          <div><dt>License</dt><dd>MIT</dd></div>
+          <div><dt>Written in</dt><dd>Rust</dd></div>
+          <div><dt>Interface</dt><dd>Drawn on the GPU, with gpui</dd></div>
+          <div><dt>Effects and instruments</dt><dd>Faust</dd></div>
+          <div><dt>Agents</dt><dd>Claude Code and Codex built in; any other through MCP or the CLI</dd></div>
+          <div><dt>Runs on</dt><dd>macOS, Apple silicon and Intel · Windows x64</dd></div>
+        </dl>
+
+        <div class="terms">
+          <div class="term reveal">
+            <p class="term__h">Add it to Claude Code</p>
+            <button class="term__cmd" type="button" data-copy="claude mcp add pina -- /path/to/pina mcp"><code>claude mcp add pina -- /path/to/pina mcp</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
+          </div>
+          <div class="term reveal">
+            <p class="term__h">Any agent, through MCP</p>
+            <button class="term__cmd" type="button" data-copy="pina mcp"><code>pina mcp</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
+            <p class="term__d">An MCP server with 22 tools:</p>
+            <ul class="tools" aria-label="Some of the 22 tools">
+              <li>show</li><li>edit</li><li>analyze</li><li>render</li><li>critique</li><li>playbook</li><li>theory</li><li>mix</li><li>master</li><li>sounds</li><li>samples</li><li>plugins</li><li class="tools__more">and more</li>
+            </ul>
+          </div>
+          <div class="term reveal">
+            <p class="term__h">Or one command at a time</p>
+            <p class="term__d"><code>pina do &lt;song&gt; '&lt;json&gt;'</code> changes a song one command at a time; <code>pina describe</code> lists every command.</p>
+          </div>
+          <div class="term reveal">
+            <p class="term__h">Build it from source</p>
+            <button class="term__cmd" type="button" data-copy="git clone https://github.com/manyeya/pina-studio && cargo run -p pina -- examples/midnight-drive"><code>git clone https://github.com/manyeya/pina-studio &amp;&amp; cargo run -p pina -- examples/midnight-drive</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ FINALE / DOWNLOAD ============ -->
+    <section class="finale" id="download" aria-labelledby="finale-title" data-finale data-react>
+      <div class="flood" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="wrap finale__inner">
+        <h2 class="display finale__title reveal" id="finale-title"><span class="line">It's late.</span> <span class="line">Make something.</span></h2>
+        <p class="lead finale__lead reveal">Pina Studio is free and open source, for macOS and Windows.</p>
+
+        <div class="dl reveal">
+          <div class="dl__top">
+            <a class="btn btn--light btn--xl" data-dl="primary" href="https://github.com/manyeya/pina-studio/releases/latest">
+              <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg>
+              <span data-dl-label="primary">Download Pina Studio</span>
+            </a>
+            <p class="meta">Version <span data-version>0.3.0</span><span class="size" data-dl-size="primary"></span><span class="sep">/</span><a href="https://github.com/manyeya/pina-studio/blob/main/CHANGELOG.md">What's new</a></p>
+          </div>
+
+          <div class="dl__grid">
+            <div class="dl__os dl__os--mac">
+              <h3 class="dl__h">macOS</h3>
+              <p class="dl__what">Apple silicon and Intel. A disk image with an installer.</p>
+              <a class="dl__link" data-dl="mac" href="https://github.com/manyeya/pina-studio/releases/latest">Disk image (.dmg)<span class="size" data-dl-size="mac"></span><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg></a>
+              <p class="dl__note">It isn't notarized yet. If macOS won't open it: System Settings › Privacy &amp; Security › Open Anyway.</p>
+            </div>
+            <div class="dl__os dl__os--win">
+              <h3 class="dl__h">Windows</h3>
+              <p class="dl__what">x64. A per-user installer, no administrator needed, or a zip.</p>
+              <a class="dl__link" data-dl="win" href="https://github.com/manyeya/pina-studio/releases/latest">Installer (.exe)<span class="size" data-dl-size="win"></span><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg></a>
+              <a class="dl__link" data-dl="zip" href="https://github.com/manyeya/pina-studio/releases/latest">Zip<span class="size" data-dl-size="zip"></span><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg></a>
+              <p class="dl__note">The installer isn't code-signed yet. If SmartScreen stops it, choose More info › Run anyway.</p>
+            </div>
+            <div class="dl__os dl__os--src">
+              <h3 class="dl__h">From source</h3>
+              <p class="dl__what">With Rust installed, from a clone of the repository:</p>
+              <button class="term__cmd" type="button" data-copy="cargo run -p pina -- examples/midnight-drive"><code>cargo run -p pina -- examples/midnight-drive</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
+              <p class="dl__note"><a href="https://github.com/manyeya/pina-studio/releases">Every release</a> is on GitHub.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap foot__inner">
+      <a class="brand" href="#top" aria-label="Pina Studio, back to top"><img src="media/icon-64.png" width="24" height="24" alt="" loading="lazy"><span>Pina Studio</span></a>
+      <p class="foot__line">Free software under the MIT license.</p>
+      <nav class="foot__links" aria-label="Project">
+        <a href="https://github.com/manyeya/pina-studio">GitHub</a>
+        <a href="https://github.com/manyeya/pina-studio/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/manyeya/pina-studio/releases">Releases</a>
+      </nav>
+    </div>
+  </footer>
+
+  <p class="sr-only" aria-live="polite" data-announce></p>
+</body>
+</html>

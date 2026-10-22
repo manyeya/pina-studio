@@ -1,7 +1,6 @@
 # Pina Studio for Windows: for a release tag vX.Y.Z, the app is built, packaged as an installer and
 # a zip, put on that tag's release, then tested. Run it by hand (Actions, Windows, Run workflow)
-# for a build to try from any branch: its downloads are kept with the run. (Windows minutes cost
-# double on a private repository, so it doesn't run on every push.)
+# for a build to try from any branch: its downloads are kept with the run.
 name: Windows
 
 on:

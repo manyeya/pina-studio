@@ -46,3 +46,9 @@ first for changes that break songs or commands made with an earlier version.
 
 A fix that can't wait for the next release: branch `fix/<what>` from `main`, merge it into `main`
 (tagged as a patch release) and into `dev`.
+
+## The website
+
+`site/` is the website, plain files with nothing to build. A push to `dev` that changes it
+publishes it to https://manyeya.github.io/pina-studio/ (`.github/workflows/pages.yml`). Its
+download buttons ask GitHub for the latest release, so a release needs nothing done to it.

@@ -1,7 +1,9 @@
 # Pina Studio
 
 A DAW written in Rust: gpui for the UI, VST3, CLAP, VST2 and Audio Unit plugins, and agents as
-first-class collaborators. macOS first, Windows next.
+first-class collaborators. macOS and Windows. Website and downloads:
+https://manyeya.github.io/pina-studio/ (`site/`, published from `dev` by
+`.github/workflows/pages.yml`).
 
 ## Layout
 

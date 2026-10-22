@@ -9,6 +9,12 @@ first for changes that break songs or commands made before.
 
 ## [Unreleased]
 
+### Added
+
+- Pina Studio is open source, under the MIT license, and has a website:
+  https://manyeya.github.io/pina-studio/ (its downloads, Midnight Drive to play track by track,
+  and an agent building Corner Store Blues one command at a time).
+
 ## [0.3.0] - 2026-10-22
 
 ### Added
