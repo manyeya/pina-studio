@@ -97,6 +97,12 @@ if [ -n "${PINA_NOTARY_PROFILE:-}" ]; then
   xcrun stapler staple "$DMG"
 fi
 (cd "$OUT" && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256")
+# Both apps are on the disk image now. Left in dist/, macOS lists them beside the installed one
+# (Spotlight, Launchpad, Open With).
+LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+"$LSR" -u "$PWD/$BUILD/Pina Studio.app" || true
+"$LSR" -u "$PWD/$INSTALLER" || true
+rm -rf "$BUILD"
 
 say "Done"
 ls -lh "$DMG" | awk '{print $5, $9}'
