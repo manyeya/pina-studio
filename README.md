@@ -44,6 +44,16 @@ of it.
 - `crates/installer`: Install Pina Studio, the app on Pina Studio's disk image (`install.rs` what
   it does, `ui.rs` its window).
 
+How the code is kept in order:
+
+- A part of the app is a folder; each file in it is one job (`sounds/browser/` has `library.rs`,
+  `finding.rs`, `audition.rs`, `kits.rs`…), and its `mod.rs` holds what they share. A file that
+  grows past about a thousand lines becomes a folder the same way.
+- Tests never share a file with the code they test: `foo.rs`'s are in `foo/tests.rs`, or a
+  `tests/` folder of files by topic once there are many (`crates/app/src/tests/` drives the whole
+  window, a file per part of the app).
+- Generated code says what writes it, and is written in the same shape (`samples/model/`).
+
 `docs/branches.md` says how work moves from a branch to a release; `CHANGELOG.md` says what each
 release changed.
 

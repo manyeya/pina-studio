@@ -40,7 +40,8 @@ first for changes that break songs or commands made before.
   answers with where every track went.
 - A follower's source, in commands, is the followed track's place, as every other track is named.
 - The code is organised by feature: the app in `ui`, `workspace`, `arrange`, `editors`, `mix`,
-  `sounds`, `pages`, `agent` and `cli`, the engine in `song`, `audio`, `dsp`, `music` and `plugin`.
+  `sounds`, `pages`, `agent` and `cli`, the engine in `song`, `audio`, `dsp`, `music` and `plugin`;
+  large files are folders of a file per job, and tests sit in files of their own.
 - Comments, docs and on-screen text say what Pina Studio does rather than which other product
   something resembles.
 
