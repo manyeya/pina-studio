@@ -97,11 +97,11 @@ The icon, a metronome on a dark squircle on Apple's grid, is drawn by `scripts/i
 icon`; macOS 26 draws it in its own glass, not in a gray box. The same example writes `pina.ico`
 for Windows.
 
-On Windows, Pina Studio is built by `.github/workflows/windows.yml` on every push to `dev`, `main`
-and `feat/*`: `Pina Studio.exe` (the app, with no console window; built with the `windows-gui`
+On Windows, Pina Studio is built by `.github/workflows/windows.yml` for each release tag, or when
+run by hand: `Pina Studio.exe` (the app, with no console window; built with the `windows-gui`
 feature) and `pina.exe` (the command line agents and scripts run), packed into
 `dist/PinaStudio-<version>-windows-x64-setup.exe` (`scripts/windows/pina.iss`, Inno Setup) and a
-zip, both downloadable from the run; a `vX.Y.Z` tag puts them on its release. The installer is per
+zip, kept with the run; a `vX.Y.Z` tag puts them on its release. The installer is per
 user (no administrator): Pina Studio in `AppData\Local\Programs`, a Start menu entry, and if you
 like `pina` on the PATH. On Windows, VST3, CLAP and VST2 plugins are found in Windows' plugin
 folders and their editors open in windows of their own; settings and caches are in `AppData`;

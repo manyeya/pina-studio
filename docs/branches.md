@@ -35,8 +35,9 @@ own, then why, if it isn't obvious. They don't name other products, and they don
 2. `git switch main && git merge --ff-only dev`, then `git tag vx.y.z` and push `main` and the tag.
 3. The downloads: the tag's push builds the Windows installer and zip and puts them on its
    release (`.github/workflows/windows.yml`); add the Mac disk image from
-   `scripts/release-mac.sh` (it lands in `dist/`). Every push to `dev`, `main` and `feat/*`
-   also builds the Windows downloads, kept with the run, to try before a release.
+   `scripts/release-mac.sh` (it lands in `dist/`). To try a Windows build before a release, run
+   the workflow by hand on the branch (Actions, Windows, Run workflow); its downloads stay with
+   the run.
 
 The version follows semantic versioning: the third number for fixes, the second for features, the
 first for changes that break songs or commands made with an earlier version.
