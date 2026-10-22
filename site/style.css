@@ -972,23 +972,29 @@ html[data-sound="on"] .listen__orb { box-shadow: inset 0 0 0 1px #3a3a48, 0 0 28
 
 /* ---------- Midnight Drive ---------- */
 .listen-sec { padding-top: var(--sec); }
-.listen-sec .md { width: min(var(--wrap), 100% - var(--gutter) * 2); }
+.listen-sec .songs { width: min(var(--wrap), 100% - var(--gutter) * 2); display: grid; gap: clamp(24px, 3vw, 36px); }
+.songs__tabs { justify-self: center; }
+.songs__tabs [role="tab"] { display: flex; align-items: center; gap: 10px; }
+.songs__tabs [role="tab"] small { font-family: var(--font-mono); font-size: 11px; letter-spacing: .02em; color: var(--muted); }
+@media (max-width: 640px) { .songs__tabs [role="tab"] small { display: none; } }
 .md { display: grid; gap: 20px; }
+.md[hidden] { display: none; }
+.js .songs .md:not([hidden]) { animation: fade-in .5s var(--ease); }
 .shot--md .glow { inset: -14% -6% -18%; }
 .md__window { position: relative; }
 .md__overlay { position: absolute; inset: 0; pointer-events: none; }
 .md__row {
   position: absolute;
   left: 17.2%;
-  width: 81.7%;
+  right: 0;
   background: rgba(6, 6, 9, 0);
   transition: background-color .3s var(--ease);
 }
 .md__row.is-off { background: rgba(6, 6, 9, .74); }
 .md__lane {
   position: absolute;
-  left: 41.2%;
-  width: 57.65%;
+  left: 41.14%;
+  width: 57.78%;
   top: 12%;
   height: 85%;
   pointer-events: auto;
@@ -1084,7 +1090,7 @@ html[data-sound="on"] .listen__orb { box-shadow: inset 0 0 0 1px #3a3a48, 0 0 28
 .md__status.is-error { color: var(--text); }
 .md__status button { text-decoration: underline; text-underline-offset: 3px; color: var(--text); }
 
-.md__stems { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.md__stems { display: grid; grid-template-columns: repeat(var(--n, 5), minmax(0, 1fr)); gap: 8px; }
 .stem {
   display: flex;
   flex-direction: column;

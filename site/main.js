@@ -58,7 +58,7 @@
 
   const audio = { ctx: null, master: null, analyser: null, data: null, binHz: 0, levels: [0, 0, 0, 0, 0], level: 0 };
   let state = "off"; // off | loading | on
-  let program = null; // "song" (Corner Store Blues) | "md" (Midnight Drive stems)
+  let program = null; // "song" (Corner Store Blues, the whole song) | "md" (a Listen player's stems)
 
   function getCtx() {
     if (!audio.ctx) {
@@ -120,7 +120,7 @@
         announce("Corner Store Blues couldn't be loaded. Try again in a moment.");
       });
     }
-    if (md.playing || md.root.classList.contains("is-loading")) mdPause(true);
+    players.forEach((p) => mdPause(p, true));
     program = "song";
     clearTimeout(song.pauseTimer);
     if (typeof at === "number") song.el.currentTime = at;
@@ -143,7 +143,7 @@
 
   function stopAll() {
     songPause();
-    mdPause(true);
+    players.forEach((p) => mdPause(p, true));
     setSound("off");
   }
 
@@ -162,7 +162,7 @@
     doc.dataset.sound = next;
     doc.dataset.program = program || "";
     const on = next !== "off";
-    const name = program === "md" ? "Midnight Drive" : "Corner Store Blues";
+    const name = program === "md" && md ? md.name : "Corner Store Blues";
     toggles.forEach((b) => {
       const pressed = b.dataset.soundToggle === "song" ? on && program === "song" : on;
       b.setAttribute("aria-pressed", String(pressed));
@@ -578,292 +578,317 @@
     el.innerHTML = `<span class="k-bin">${esc(m[1])}</span> <span class="k-sub">${esc(m[2])}</span>${rest}`;
   });
 
-  /* ---------------------------------------------------------- Midnight Drive */
-  const STEMS = ["drums", "bass", "keys", "lead", "pad"];
-  const MD_LOOP = 34.2857;
-  const MD_BEAT = 60 / 112;
-  const MD_BAR = MD_BEAT * 4;
-  const md = {
-    root: $("[data-md]"),
-    play: $("[data-md-play]"),
-    status: $("[data-md-status]"),
-    lane: $("[data-md-lane]"),
-    head: $("[data-md-head]"),
-    bar: $("[data-md-bar]"),
-    time: $("[data-md-time]"),
-    rows: $$(".md__row"),
-    stems: $$(".stem"),
-    meters: $$(".stem__meter i"),
-    seeks: $$("[data-md-seek]"),
-    buffers: null,
-    loading: null,
-    gains: [],
-    analysers: [],
-    levels: [0, 0, 0, 0, 0],
-    srcs: [],
-    bus: null,
-    startAt: 0,
-    offset: 0,
-    playing: false,
-    mute: new Set(),
-    solo: new Set(),
-    buf: null,
-  };
+  /* ------------------------------------------------- the stems players (Listen) */
+  // One for each song, from its data attributes: its stems (files in data-dir), the loop's
+  // length in seconds, its tempo and the bar the loop starts at. One plays at a time.
+  const players = $$("[data-md]").map((root) => {
+    const stems = root.dataset.stems.split(" ");
+    const beat = 60 / +root.dataset.bpm;
+    return {
+      root,
+      stems,
+      name: root.dataset.name,
+      dir: root.dataset.dir,
+      loop: +root.dataset.loop,
+      beat,
+      bar: beat * 4,
+      first: +(root.dataset.firstBar || 1),
+      play: $("[data-md-play]", root),
+      status: $("[data-md-status]", root),
+      lane: $("[data-md-lane]", root),
+      head: $("[data-md-head]", root),
+      barEl: $("[data-md-bar]", root),
+      time: $("[data-md-time]", root),
+      rows: $$(".md__row", root),
+      cards: $$(".stem", root),
+      meters: $$(".stem__meter i", root),
+      seeks: $$("[data-md-seek]", root),
+      buffers: null,
+      loading: null,
+      gains: [],
+      analysers: [],
+      levels: stems.map(() => 0),
+      srcs: [],
+      bus: null,
+      startAt: 0,
+      offset: 0,
+      playing: false,
+      mute: new Set(),
+      solo: new Set(),
+      buf: null,
+    };
+  });
+  let md = players[0] || null; // the player playing, or played last
 
-  const mdSay = (text, isError) => {
-    md.status.textContent = text;
-    md.status.classList.toggle("is-error", !!isError);
+  const mdSay = (p, text, isError) => {
+    p.status.textContent = text;
+    p.status.classList.toggle("is-error", !!isError);
   };
 
   const decode = (c, data) =>
     new Promise((resolve, reject) => {
-      const p = c.decodeAudioData(data, resolve, reject);
-      if (p && p.then) p.then(resolve, reject);
+      const pr = c.decodeAudioData(data, resolve, reject);
+      if (pr && pr.then) pr.then(resolve, reject);
     });
 
-  function mdLoad() {
-    if (md.buffers) return Promise.resolve(md.buffers);
-    if (md.loading) return md.loading;
+  function mdLoad(p) {
+    if (p.buffers) return Promise.resolve(p.buffers);
+    if (p.loading) return p.loading;
     const c = getCtx();
+    const n = p.stems.length;
     let done = 0;
-    md.root.classList.add("is-loading");
-    md.play.setAttribute("aria-label", "Loading Midnight Drive, click to cancel");
-    mdSay("Loading the stems, 0 of 5…");
-    md.loading = Promise.all(
-      STEMS.map((name) =>
-        fetch(`media/stems/${name}.m4a`)
+    p.root.classList.add("is-loading");
+    p.play.setAttribute("aria-label", `Loading ${p.name}, click to cancel`);
+    mdSay(p, `Loading the stems, 0 of ${n}…`);
+    p.loading = Promise.all(
+      p.stems.map((name) =>
+        fetch(`${p.dir}/${name}.m4a`)
           .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
           .then((data) => decode(c, data))
           .then((buffer) => {
             done += 1;
-            mdSay(`Loading the stems, ${done} of 5…`);
+            mdSay(p, `Loading the stems, ${done} of ${n}…`);
             return buffer;
           })
       )
     )
       .then((buffers) => {
-        md.buffers = buffers;
-        md.root.classList.remove("is-loading");
-        mdGraph();
+        p.buffers = buffers;
+        p.root.classList.remove("is-loading");
+        mdGraph(p);
         return buffers;
       })
       .catch((err) => {
-        md.loading = null;
-        md.root.classList.remove("is-loading");
-        md.play.setAttribute("aria-label", "Play Midnight Drive");
-        mdSay("The stems couldn't be loaded. Check your connection and press play to try again.", true);
+        p.loading = null;
+        p.root.classList.remove("is-loading");
+        p.play.setAttribute("aria-label", `Play ${p.name}`);
+        mdSay(p, "The stems couldn't be loaded. Check your connection and press play to try again.", true);
         throw err;
       });
-    return md.loading;
+    return p.loading;
   }
 
-  function mdGraph() {
+  function mdGraph(p) {
     const c = audio.ctx;
-    md.bus = c.createGain();
-    md.bus.gain.value = 0;
-    md.bus.connect(audio.master);
-    md.buf = new Float32Array(1024);
-    STEMS.forEach((_, i) => {
+    p.bus = c.createGain();
+    p.bus.gain.value = 0;
+    p.bus.connect(audio.master);
+    p.buf = new Float32Array(1024);
+    p.stems.forEach((_, i) => {
       const g = c.createGain();
       const a = c.createAnalyser();
       a.fftSize = 1024;
       g.connect(a);
-      g.connect(md.bus);
-      md.gains[i] = g;
-      md.analysers[i] = a;
+      g.connect(p.bus);
+      p.gains[i] = g;
+      p.analysers[i] = a;
     });
-    mdApply(true);
+    mdApply(p, true);
   }
 
-  function mdStart(offset) {
+  function mdStart(p, offset) {
     const c = audio.ctx;
     const t0 = c.currentTime + 0.05;
-    md.srcs = md.buffers.map((buffer, i) => {
+    p.srcs = p.buffers.map((buffer, i) => {
       const s = c.createBufferSource();
       s.buffer = buffer;
       s.loop = true;
       s.loopStart = 0;
-      s.loopEnd = Math.min(MD_LOOP, buffer.duration);
-      s.connect(md.gains[i]);
-      s.start(t0, offset % MD_LOOP);
+      s.loopEnd = Math.min(p.loop, buffer.duration);
+      s.connect(p.gains[i]);
+      s.start(t0, offset % p.loop);
       return s;
     });
-    md.startAt = t0 - offset;
-    md.playing = true;
-    md.bus.gain.cancelScheduledValues(c.currentTime);
-    md.bus.gain.setValueAtTime(0, c.currentTime);
-    md.bus.gain.linearRampToValueAtTime(0, t0);
-    md.bus.gain.linearRampToValueAtTime(1, t0 + 0.03);
+    p.startAt = t0 - offset;
+    p.playing = true;
+    p.bus.gain.cancelScheduledValues(c.currentTime);
+    p.bus.gain.setValueAtTime(0, c.currentTime);
+    p.bus.gain.linearRampToValueAtTime(0, t0);
+    p.bus.gain.linearRampToValueAtTime(1, t0 + 0.03);
   }
 
-  function mdKill(at) {
-    md.srcs.forEach((s) => {
+  function mdKill(p, at) {
+    p.srcs.forEach((s) => {
       try {
         s.stop(at);
       } catch (e) {
         /* already stopped */
       }
     });
-    md.srcs = [];
+    p.srcs = [];
   }
 
-  const mdPos = () => {
-    if (!md.playing) return md.offset;
-    const t = audio.ctx.currentTime - md.startAt;
-    return ((t % MD_LOOP) + MD_LOOP) % MD_LOOP;
+  const mdPos = (p) => {
+    if (!p.playing) return p.offset;
+    const t = audio.ctx.currentTime - p.startAt;
+    return ((t % p.loop) + p.loop) % p.loop;
   };
 
-  function mdPaint(t) {
-    md.head.style.transform = `translateX(${((t / MD_LOOP) * 100).toFixed(3)}%)`;
-    const bar = Math.floor(t / MD_BAR) + 1;
-    const beat = Math.floor((t % MD_BAR) / MD_BEAT) + 1;
-    md.bar.textContent = `${bar}.${beat}`;
-    md.time.textContent = `0:${t.toFixed(1).padStart(4, "0")}`;
+  function mdPaint(p, t) {
+    p.head.style.transform = `translateX(${((t / p.loop) * 100).toFixed(3)}%)`;
+    const bar = Math.floor(t / p.bar) + p.first;
+    const beat = Math.floor((t % p.bar) / p.beat) + 1;
+    p.barEl.textContent = `${bar}.${beat}`;
+    p.time.textContent = `0:${t.toFixed(1).padStart(4, "0")}`;
     let cur = 0;
-    md.seeks.forEach((b, k) => {
+    p.seeks.forEach((b, k) => {
       if (t >= +b.dataset.mdSeek - 0.01) cur = k;
     });
-    md.seeks.forEach((b, k) => b.setAttribute("aria-current", String(k === cur)));
+    p.seeks.forEach((b, k) => b.setAttribute("aria-current", String(k === cur)));
   }
 
-  async function mdPlay(from) {
+  async function mdPlay(p, from) {
     if (!getCtx()) {
-      mdSay("This browser can't play audio here.", true);
+      mdSay(p, "This browser can't play audio here.", true);
       return;
     }
-    if (typeof from === "number") md.offset = from;
+    if (typeof from === "number") p.offset = from;
     if (program === "song") songPause();
+    players.forEach((o) => o !== p && mdPause(o, true));
     program = "md";
+    md = p;
     setSound("loading");
     try {
-      await mdLoad();
+      await mdLoad(p);
     } catch (e) {
-      if (program === "md") {
+      if (program === "md" && md === p) {
         program = null;
         setSound("off");
       }
       return;
     }
-    if (program !== "md" || md.playing) return; // the visitor changed their mind meanwhile
-    mdStart(md.offset);
-    md.root.classList.add("is-playing");
-    md.play.setAttribute("aria-label", "Pause Midnight Drive");
-    mdSay("Playing, and looping. Mute or solo a stem; the light follows what's left.");
+    if (program !== "md" || md !== p || p.playing) return; // the visitor changed their mind meanwhile
+    mdStart(p, p.offset);
+    p.root.classList.add("is-playing");
+    p.play.setAttribute("aria-label", `Pause ${p.name}`);
+    mdSay(p, "Playing, and looping. Mute or solo a stem; the light follows what's left.");
     setSound("on");
     wake();
   }
 
-  function mdPause(silent) {
-    if (md.root.classList.contains("is-loading") && program === "md") program = null;
-    if (!md.playing) return;
-    md.offset = mdPos();
+  function mdPause(p, silent) {
+    if (p.root.classList.contains("is-loading") && program === "md" && md === p) program = null;
+    if (!p.playing) return;
+    p.offset = mdPos(p);
     const c = audio.ctx;
-    md.bus.gain.cancelScheduledValues(c.currentTime);
-    md.bus.gain.setTargetAtTime(0, c.currentTime, 0.012);
-    mdKill(c.currentTime + 0.08);
-    md.playing = false;
-    md.root.classList.remove("is-playing");
-    md.play.setAttribute("aria-label", "Play Midnight Drive");
-    md.levels = [0, 0, 0, 0, 0];
-    md.meters.forEach((m) => m.style.setProperty("--m", "0"));
-    mdSay("Paused at bar " + (Math.floor(md.offset / MD_BAR) + 1) + ".");
+    p.bus.gain.cancelScheduledValues(c.currentTime);
+    p.bus.gain.setTargetAtTime(0, c.currentTime, 0.012);
+    mdKill(p, c.currentTime + 0.08);
+    p.playing = false;
+    p.root.classList.remove("is-playing");
+    p.play.setAttribute("aria-label", `Play ${p.name}`);
+    p.levels = p.stems.map(() => 0);
+    p.meters.forEach((m) => m.style.setProperty("--m", "0"));
+    mdSay(p, "Paused at bar " + (Math.floor(p.offset / p.bar) + p.first) + ".");
     if (!silent) setSound("off");
   }
 
-  function mdSeek(t) {
-    t = clamp(t, 0, MD_LOOP - 0.02);
-    if (md.playing) {
-      mdKill(audio.ctx.currentTime);
-      mdStart(t);
+  function mdSeek(p, t) {
+    t = clamp(t, 0, p.loop - 0.02);
+    if (p.playing) {
+      mdKill(p, audio.ctx.currentTime);
+      mdStart(p, t);
     } else {
-      md.offset = t;
-      mdPaint(t);
+      p.offset = t;
+      mdPaint(p, t);
     }
   }
 
-  function mdApply(instant) {
-    STEMS.forEach((_, i) => {
-      const on = md.solo.size ? md.solo.has(i) : !md.mute.has(i);
-      const g = md.gains[i];
+  function mdApply(p, instant) {
+    const on = p.stems.map((_, i) => (p.solo.size ? p.solo.has(i) : !p.mute.has(i)));
+    on.forEach((o, i) => {
+      const g = p.gains[i];
       if (g) {
-        if (instant) g.gain.value = on ? 1 : 0;
-        else g.gain.setTargetAtTime(on ? 1 : 0, audio.ctx.currentTime, 0.015);
+        if (instant) g.gain.value = o ? 1 : 0;
+        else g.gain.setTargetAtTime(o ? 1 : 0, audio.ctx.currentTime, 0.015);
       }
-      md.rows[i].classList.toggle("is-off", !on);
-      md.stems[i].classList.toggle("is-off", !on);
+      p.cards[i].classList.toggle("is-off", !o);
     });
+    p.rows.forEach((r) => r.classList.toggle("is-off", !on[+r.dataset.row]));
   }
 
-  if (md.root) {
-    md.play.addEventListener("click", () => {
-      if (md.root.classList.contains("is-loading")) {
+  players.forEach((p) => {
+    p.play.addEventListener("click", () => {
+      if (p.root.classList.contains("is-loading")) {
         program = null;
         setSound("off");
-        mdSay("Cancelled. Press play when you're ready.");
+        mdSay(p, "Cancelled. Press play when you're ready.");
         return;
       }
-      if (md.playing) mdPause();
-      else mdPlay();
+      if (p.playing) mdPause(p);
+      else mdPlay(p);
     });
-    md.seeks.forEach((b) =>
+    p.seeks.forEach((b) =>
       b.addEventListener("click", () => {
         const t = +b.dataset.mdSeek;
-        if (md.playing) mdSeek(t);
-        else mdPlay(t);
-        mdPaint(t);
+        if (p.playing) mdSeek(p, t);
+        else mdPlay(p, t);
+        mdPaint(p, t);
       })
     );
     // Click the lanes to play from there, like clicking the ruler in the app
-    md.lane.addEventListener("pointerdown", (e) => {
-      const r = md.lane.getBoundingClientRect();
-      const t = clamp(((e.clientX - r.left) / r.width) * MD_LOOP, 0, MD_LOOP - 0.02);
-      if (md.playing) mdSeek(t);
-      else if (!md.root.classList.contains("is-loading")) {
-        mdPaint(t);
-        mdPlay(t);
+    p.lane.addEventListener("pointerdown", (e) => {
+      const r = p.lane.getBoundingClientRect();
+      const t = clamp(((e.clientX - r.left) / r.width) * p.loop, 0, p.loop - 0.02);
+      if (p.playing) mdSeek(p, t);
+      else if (!p.root.classList.contains("is-loading")) {
+        mdPaint(p, t);
+        mdPlay(p, t);
       }
     });
-    $$("[data-mute]").forEach((b) =>
+    $$("[data-mute]", p.root).forEach((b) =>
       b.addEventListener("click", () => {
         const i = +b.dataset.mute;
-        if (md.mute.has(i)) md.mute.delete(i);
-        else md.mute.add(i);
-        b.setAttribute("aria-pressed", String(md.mute.has(i)));
-        mdApply(false);
+        if (p.mute.has(i)) p.mute.delete(i);
+        else p.mute.add(i);
+        b.setAttribute("aria-pressed", String(p.mute.has(i)));
+        mdApply(p, false);
       })
     );
-    $$("[data-solo]").forEach((b) =>
+    $$("[data-solo]", p.root).forEach((b) =>
       b.addEventListener("click", () => {
         const i = +b.dataset.solo;
-        if (md.solo.has(i)) md.solo.delete(i);
-        else md.solo.add(i);
-        b.setAttribute("aria-pressed", String(md.solo.has(i)));
-        mdApply(false);
+        if (p.solo.has(i)) p.solo.delete(i);
+        else p.solo.add(i);
+        b.setAttribute("aria-pressed", String(p.solo.has(i)));
+        mdApply(p, false);
       })
     );
     // Space plays, like in the app, while focus is inside the player
-    md.root.addEventListener("keydown", (e) => {
+    p.root.addEventListener("keydown", (e) => {
       if (e.code !== "Space" || e.target.closest("button")) return;
       e.preventDefault();
-      md.play.click();
+      p.play.click();
     });
-    mdPaint(0);
-  }
+    // Switching to the other song stops this one
+    new MutationObserver(() => {
+      if (!p.root.hidden) return;
+      if (p.root.classList.contains("is-loading") && md === p && program === "md") {
+        program = null;
+        setSound("off");
+      }
+      if (p.playing) mdPause(p);
+    }).observe(p.root, { attributes: true, attributeFilter: ["hidden"] });
+    mdPaint(p, 0);
+  });
 
   tasks.push(function mdTask() {
-    if (!md.playing) return false;
-    mdPaint(mdPos());
-    for (let i = 0; i < md.analysers.length; i++) {
-      const a = md.analysers[i];
-      a.getFloatTimeDomainData(md.buf);
-      let s = 0;
-      for (let k = 0; k < md.buf.length; k += 2) s += md.buf[k] * md.buf[k];
-      const rms = Math.sqrt(s / (md.buf.length / 2));
-      const v = clamp((20 * Math.log10(rms + 1e-6) + 46) / 40);
-      md.levels[i] = v > md.levels[i] ? v : md.levels[i] * 0.9;
-      md.meters[i].style.setProperty("--m", md.levels[i].toFixed(3));
+    let any = false;
+    for (const p of players) {
+      if (!p.playing) continue;
+      any = true;
+      mdPaint(p, mdPos(p));
+      for (let i = 0; i < p.analysers.length; i++) {
+        p.analysers[i].getFloatTimeDomainData(p.buf);
+        let s = 0;
+        for (let k = 0; k < p.buf.length; k += 2) s += p.buf[k] * p.buf[k];
+        const rms = Math.sqrt(s / (p.buf.length / 2));
+        const v = clamp((20 * Math.log10(rms + 1e-6) + 46) / 40);
+        p.levels[i] = v > p.levels[i] ? v : p.levels[i] * 0.9;
+        p.meters[i].style.setProperty("--m", p.levels[i].toFixed(3));
+      }
     }
-    return true;
+    return any;
   });
 
   /* ----------------------------------------------------------------- copy */

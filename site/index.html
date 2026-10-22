@@ -397,59 +397,121 @@
       </div>
     </section>
 
-    <!-- ============ MIDNIGHT DRIVE ============ -->
-    <section class="listen-sec" id="listen" aria-labelledby="md-title">
+    <!-- ============ LISTEN ============ -->
+    <section class="listen-sec" id="listen" aria-labelledby="listen-title">
       <header class="wrap section-head">
         <p class="eyebrow reveal">Listen</p>
-        <h2 class="h2 reveal" id="md-title">Midnight Drive. <span class="tone-2">Every note placed by a command.</span></h2>
-        <p class="lead reveal">Sixteen bars at 112 BPM in A minor, made entirely with <code>pina do</code> commands, the way an agent would make it, on Pina Studio's built-in instruments. These are its real stems. Mute them, solo them, and the light follows whatever is left.</p>
+        <h2 class="h2 reveal" id="listen-title">Two songs. <span class="tone-2">Take them apart.</span></h2>
+        <p class="lead reveal">Midnight Drive was made entirely with <code>pina do</code> commands, the way an agent would make it, on Pina Studio's built-in instruments. Corner Store Blues is the boom-bap beat from the replay, on real samples. These are their real stems, bounced with <code>pina bounce --stems</code>. Mute them, solo them, and the light follows whatever is left.</p>
       </header>
 
-      <div class="wrap wrap--wide md reveal" data-md data-react>
-        <figure class="shot shot--md">
-          <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-          <div class="bleed" aria-hidden="true"><img src="media/midnight-drive.webp" width="2880" height="1440" alt="" loading="lazy" decoding="async"></div>
-          <div class="frame md__window">
-            <img src="media/midnight-drive.webp" width="2880" height="1440" loading="lazy" decoding="async" alt="Midnight Drive open in Pina Studio: Drums, Bass, Keys, Lead and Pad tracks across 16 bars, with Intro, Verse, Pre-Chorus and Chorus markers, at 112 BPM in A minor.">
-            <div class="md__overlay" aria-hidden="true">
-              <span class="md__row" data-row="0" style="top:14.3%;height:9.6%"></span>
-              <span class="md__row" data-row="1" style="top:25%;height:9.4%"></span>
-              <span class="md__row" data-row="2" style="top:35.6%;height:9.4%"></span>
-              <span class="md__row" data-row="3" style="top:46.1%;height:9.5%"></span>
-              <span class="md__row" data-row="4" style="top:56.7%;height:9.4%"></span>
-              <span class="md__lane" data-md-lane title="Click to play from here"><span class="md__head" data-md-head></span></span>
-            </div>
-          </div>
-        </figure>
+      <div class="wrap wrap--wide songs reveal" data-tabs>
+        <div class="tabs__list songs__tabs" role="tablist" aria-label="Songs">
+          <button role="tab" type="button" id="tab-md" aria-controls="player-md" aria-selected="true">Midnight Drive <small>112 BPM · A minor · all 16 bars</small></button>
+          <button role="tab" type="button" id="tab-csb" aria-controls="player-csb" aria-selected="false" tabindex="-1">Corner Store Blues <small>95 BPM · C minor · bars 21–36</small></button>
+        </div>
 
-        <div class="md__console">
-          <div class="md__transport">
-            <button class="md__play" type="button" data-md-play aria-label="Play Midnight Drive">
-              <svg class="ico ico--play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.8v12.4a.8.8 0 0 0 1.2.7l10-6.2a.8.8 0 0 0 0-1.4l-10-6.2A.8.8 0 0 0 8 5.8Z"/></svg>
-              <svg class="ico ico--pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></svg>
-              <span class="md__spinner" aria-hidden="true"></span>
-            </button>
-            <div class="md__clock">
-              <span class="lcd__cell"><b data-md-bar>1.1</b><small>Bar</small></span>
-              <span class="lcd__cell"><b data-md-time>0:00.0</b><small>of 0:34.3</small></span>
-              <span class="lcd__cell lcd__cell--static"><b>112</b><small>BPM</small></span>
+        <div class="md" id="player-md" role="tabpanel" aria-labelledby="tab-md" tabindex="0" data-md data-react data-name="Midnight Drive" data-dir="media/stems" data-stems="drums bass keys lead pad" data-loop="34.2857" data-bpm="112">
+          <figure class="shot shot--md">
+            <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="bleed" aria-hidden="true"><img src="media/midnight-drive.webp" width="2880" height="1440" alt="" loading="lazy" decoding="async"></div>
+            <div class="frame md__window">
+              <img src="media/midnight-drive.webp" width="2880" height="1440" loading="lazy" decoding="async" alt="Midnight Drive open in Pina Studio: Drums, Bass, Keys, Lead and Pad tracks across 16 bars, with Intro, Verse, Pre-Chorus and Chorus markers, at 112 BPM in A minor.">
+              <div class="md__overlay" aria-hidden="true">
+              <span class="md__row" data-row="0" style="top:13.89%;height:10.42%"></span>
+              <span class="md__row" data-row="1" style="top:24.44%;height:10.42%"></span>
+              <span class="md__row" data-row="2" style="top:35.0%;height:10.42%"></span>
+              <span class="md__row" data-row="3" style="top:45.56%;height:10.42%"></span>
+              <span class="md__row" data-row="4" style="top:56.11%;height:10.42%"></span>
+                <span class="md__lane" data-md-lane title="Click to play from here"><span class="md__head" data-md-head></span></span>
+              </div>
             </div>
-            <div class="md__sections" role="group" aria-label="Jump to a section">
+          </figure>
+
+          <div class="md__console">
+            <div class="md__transport">
+              <button class="md__play" type="button" data-md-play aria-label="Play Midnight Drive">
+                <svg class="ico ico--play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.8v12.4a.8.8 0 0 0 1.2.7l10-6.2a.8.8 0 0 0 0-1.4l-10-6.2A.8.8 0 0 0 8 5.8Z"/></svg>
+              <svg class="ico ico--pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></svg>
+                <span class="md__spinner" aria-hidden="true"></span>
+              </button>
+              <div class="md__clock">
+                <span class="lcd__cell"><b data-md-bar>1.1</b><small>Bar</small></span>
+                <span class="lcd__cell"><b data-md-time>0:00.0</b><small>of 0:34.3</small></span>
+                <span class="lcd__cell lcd__cell--static"><b>112</b><small>BPM</small></span>
+              </div>
+              <div class="md__sections" role="group" aria-label="Jump to a section">
               <button type="button" data-md-seek="0">Intro</button>
               <button type="button" data-md-seek="8.5714">Verse</button>
               <button type="button" data-md-seek="17.1429">Pre-Chorus</button>
               <button type="button" data-md-seek="25.7143">Chorus</button>
+              </div>
+              <p class="md__status" data-md-status aria-live="polite">Five stems, about 2.3 MB. Nothing loads until you press play.</p>
             </div>
-            <p class="md__status" data-md-status aria-live="polite">Five stems, about 2.3 MB. Nothing loads until you press play.</p>
-          </div>
 
-          <ul class="md__stems" aria-label="Stems">
+            <ul class="md__stems" aria-label="Stems" style="--n:5">
             <li class="stem" data-stem="0" style="--track:#E5484D"><span class="stem__name"><i class="stem__dot"></i>Drums</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="0" aria-pressed="false" aria-label="Mute drums">M</button><button type="button" data-solo="0" aria-pressed="false" aria-label="Solo drums">S</button></span></li>
             <li class="stem" data-stem="1" style="--track:#8E7CF0"><span class="stem__name"><i class="stem__dot"></i>Bass</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="1" aria-pressed="false" aria-label="Mute bass">M</button><button type="button" data-solo="1" aria-pressed="false" aria-label="Solo bass">S</button></span></li>
             <li class="stem" data-stem="2" style="--track:#2FBF8F"><span class="stem__name"><i class="stem__dot"></i>Keys</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="2" aria-pressed="false" aria-label="Mute keys">M</button><button type="button" data-solo="2" aria-pressed="false" aria-label="Solo keys">S</button></span></li>
             <li class="stem" data-stem="3" style="--track:#3B9EFF"><span class="stem__name"><i class="stem__dot"></i>Lead</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="3" aria-pressed="false" aria-label="Mute lead">M</button><button type="button" data-solo="3" aria-pressed="false" aria-label="Solo lead">S</button></span></li>
             <li class="stem" data-stem="4" style="--track:#8B8FF7"><span class="stem__name"><i class="stem__dot"></i>Pad</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="4" aria-pressed="false" aria-label="Mute pad">M</button><button type="button" data-solo="4" aria-pressed="false" aria-label="Solo pad">S</button></span></li>
-          </ul>
+            </ul>
+          </div>
+        </div>
+
+        <div class="md" id="player-csb" role="tabpanel" aria-labelledby="tab-csb" tabindex="0" data-md data-react data-name="Corner Store Blues" data-dir="media/stems/csb" data-stems="drums 808 bass keys stabs pad" data-loop="40.4211" data-bpm="95" data-first-bar="21" hidden>
+          <figure class="shot shot--md">
+            <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="bleed" aria-hidden="true"><img src="media/corner-store-blues.webp" width="2880" height="2180" alt="" loading="lazy" decoding="async"></div>
+            <div class="frame md__window">
+              <img src="media/corner-store-blues.webp" width="2880" height="2180" loading="lazy" decoding="async" alt="Corner Store Blues open in Pina Studio at bars 21 to 37: the Drums stack of Kick, Snare and Hats, FX, 808, Bass, Keys, Stabs, Pad, a shaker loop, Whistle and Vinyl, under the Hook and Verse 2 markers, at 95 BPM in C minor.">
+              <div class="md__overlay" aria-hidden="true">
+              <span class="md__row" data-row="0" style="top:9.17%;height:3.21%"></span>
+              <span class="md__row" data-row="0" style="top:12.48%;height:6.88%"></span>
+              <span class="md__row" data-row="0" style="top:19.45%;height:6.88%"></span>
+              <span class="md__row" data-row="0" style="top:26.42%;height:6.88%"></span>
+              <span class="md__row" data-row="0" style="top:33.39%;height:6.88%"></span>
+              <span class="md__row" data-row="1" style="top:40.37%;height:6.88%"></span>
+              <span class="md__row" data-row="2" style="top:47.34%;height:6.88%"></span>
+              <span class="md__row" data-row="3" style="top:54.31%;height:6.88%"></span>
+              <span class="md__row" data-row="4" style="top:61.28%;height:6.88%"></span>
+              <span class="md__row" data-row="5" style="top:68.26%;height:6.88%"></span>
+              <span class="md__row" data-row="0" style="top:75.23%;height:6.88%"></span>
+              <span class="md__row" data-row="5" style="top:82.2%;height:6.88%"></span>
+              <span class="md__row" data-row="0" style="top:89.17%;height:6.88%"></span>
+                <span class="md__lane" data-md-lane title="Click to play from here"><span class="md__head" data-md-head></span></span>
+              </div>
+            </div>
+          </figure>
+
+          <div class="md__console">
+            <div class="md__transport">
+              <button class="md__play" type="button" data-md-play aria-label="Play Corner Store Blues">
+                <svg class="ico ico--play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.8v12.4a.8.8 0 0 0 1.2.7l10-6.2a.8.8 0 0 0 0-1.4l-10-6.2A.8.8 0 0 0 8 5.8Z"/></svg>
+              <svg class="ico ico--pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></svg>
+                <span class="md__spinner" aria-hidden="true"></span>
+              </button>
+              <div class="md__clock">
+                <span class="lcd__cell"><b data-md-bar>1.1</b><small>Bar</small></span>
+                <span class="lcd__cell"><b data-md-time>0:00.0</b><small>of 0:40.4</small></span>
+                <span class="lcd__cell lcd__cell--static"><b>95</b><small>BPM</small></span>
+              </div>
+              <div class="md__sections" role="group" aria-label="Jump to a section">
+              <button type="button" data-md-seek="0">Hook</button>
+              <button type="button" data-md-seek="20.2105">Verse 2</button>
+              </div>
+              <p class="md__status" data-md-status aria-live="polite">Six stems, about 2.8 MB. Nothing loads until you press play.</p>
+            </div>
+
+            <ul class="md__stems" aria-label="Stems" style="--n:3">
+            <li class="stem" data-stem="0" style="--track:#E5484D"><span class="stem__name"><i class="stem__dot"></i>Drums</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="0" aria-pressed="false" aria-label="Mute drums">M</button><button type="button" data-solo="0" aria-pressed="false" aria-label="Solo drums">S</button></span></li>
+            <li class="stem" data-stem="1" style="--track:#8E7CF0"><span class="stem__name"><i class="stem__dot"></i>808</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="1" aria-pressed="false" aria-label="Mute 808">M</button><button type="button" data-solo="1" aria-pressed="false" aria-label="Solo 808">S</button></span></li>
+            <li class="stem" data-stem="2" style="--track:#B39DFF"><span class="stem__name"><i class="stem__dot"></i>Bass</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="2" aria-pressed="false" aria-label="Mute bass">M</button><button type="button" data-solo="2" aria-pressed="false" aria-label="Solo bass">S</button></span></li>
+            <li class="stem" data-stem="3" style="--track:#2FBF8F"><span class="stem__name"><i class="stem__dot"></i>Keys</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="3" aria-pressed="false" aria-label="Mute keys">M</button><button type="button" data-solo="3" aria-pressed="false" aria-label="Solo keys">S</button></span></li>
+            <li class="stem" data-stem="4" style="--track:#3FC8B4"><span class="stem__name"><i class="stem__dot"></i>Stabs</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="4" aria-pressed="false" aria-label="Mute stabs">M</button><button type="button" data-solo="4" aria-pressed="false" aria-label="Solo stabs">S</button></span></li>
+            <li class="stem" data-stem="5" style="--track:#8B8FF7"><span class="stem__name"><i class="stem__dot"></i>Pad &amp; Whistle</span><span class="stem__meter" aria-hidden="true"><i></i></span><span class="stem__btns"><button type="button" data-mute="5" aria-pressed="false" aria-label="Mute pad &amp; whistle">M</button><button type="button" data-solo="5" aria-pressed="false" aria-label="Solo pad &amp; whistle">S</button></span></li>
+            </ul>
+          </div>
         </div>
       </div>
     </section>
