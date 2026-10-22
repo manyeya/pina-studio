@@ -14,11 +14,11 @@ use std::{
 };
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use objc2::MainThreadMarker;
+#[cfg(target_os = "macos")]
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use pina_engine::{
     plugin::scan,
-    plugin::{self, Libraries, Note},
+    plugin::{self, Libraries, MainThreadMarker, Note},
 };
 
 const MAX_BLOCK: usize = 512;
@@ -28,8 +28,12 @@ fn main() {
         .nth(1)
         .expect("usage: play_vst <plugin.vst3>");
     let mtm = MainThreadMarker::new().unwrap();
-    let app = NSApplication::sharedApplication(mtm);
-    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    #[cfg(target_os = "macos")]
+    let app = {
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        app
+    };
 
     let found = scan::inspect(Path::new(&path)).unwrap();
     for p in &found {
@@ -120,6 +124,21 @@ fn main() {
         }
     });
 
-    app.activate();
-    app.run();
+    // The editor's window lives on this thread's events.
+    #[cfg(target_os = "macos")]
+    {
+        app.activate();
+        app.run();
+    }
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, GetMessageW, TranslateMessage,
+        };
+        let mut msg = std::mem::zeroed();
+        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
 }

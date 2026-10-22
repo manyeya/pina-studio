@@ -27,7 +27,7 @@ impl Module {
             // Its entry point: on macOS handed its bundle; on Windows `InitDll`, if it has one.
             #[cfg(target_os = "macos")]
             {
-                let entry: unsafe extern "C" fn(*const c_void) -> bool = binary
+                let entry: unsafe extern "C" fn(*const std::ffi::c_void) -> bool = binary
                     .function(c"bundleEntry")
                     .ok_or_else(|| fail("no bundleEntry"))?;
                 if !entry(binary.handle()) {

@@ -17,7 +17,7 @@ mod com;
 
 use std::{
     collections::HashMap,
-    ffi::{c_char, c_void},
+    ffi::c_char,
     path::{Path, PathBuf},
     ptr,
 };
