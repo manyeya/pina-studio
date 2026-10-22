@@ -93,9 +93,10 @@ fn selected(ws: &Entity<Workspace>, cx: &VisualTestContext) -> (usize, u64, u64)
     })
 }
 
-/// Waits for the engine thread to catch up with something, drawing frames meanwhile.
+/// Waits for the engine thread to catch up with something, drawing frames meanwhile. Room for a
+/// slow machine: on Windows' coarser timer, playing runs behind real time.
 fn until(cx: &mut VisualTestContext, ws: &Entity<Workspace>, f: impl Fn(&Workspace) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while !ws.read_with(cx, |ws, _| f(ws)) {
         assert!(Instant::now() < deadline, "timed out");
         thread::sleep(Duration::from_millis(5));
