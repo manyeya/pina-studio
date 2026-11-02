@@ -13,7 +13,7 @@ use crate::{
     music::compose::{chords_at, heard_notes},
     music::playbook::{self, Playbook},
     music::theory::{Quality, Span},
-    song::project::{Content, Instrument, Note, Project},
+    song::project::{Comp, Content, Instrument, Note, Project, SatStyle, Saturator},
 };
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -133,16 +133,20 @@ pub fn music(p: &Project) -> Vec<Issue> {
         .collect();
     let spans = chords_at(p, 0, end.max(bar));
 
-    // Setup.
-    match book {
-        None => out.push(issue("note", "setup", "the song has no genre".into(), None, format!(
-            "set_genre (one of {}) so its tempo, swing, parts, layout and mix are checked against the genre's",
-            playbook::ids().join(", ")
-        ))),
-        Some(b) if p.tempo < b.tempo.0 - 3.0 || p.tempo > b.tempo.1 + 3.0 => out.push(issue("improve", "setup",
-            format!("{} bpm is outside {}'s {}-{}", p.tempo, b.name, b.tempo.0, b.tempo.1), None,
-            format!("set_tempo to {}", ((b.tempo.0 + b.tempo.1) / 2.0).round()))),
-        _ => {}
+    // Setup: checked against a playbook only when the person chose one as the song's genre.
+    if let Some(b) = book
+        && (p.tempo < b.tempo.0 - 3.0 || p.tempo > b.tempo.1 + 3.0)
+    {
+        out.push(issue(
+            "improve",
+            "setup",
+            format!(
+                "{} bpm is outside {}'s {}-{}",
+                p.tempo, b.name, b.tempo.0, b.tempo.1
+            ),
+            None,
+            format!("set_tempo to {}", ((b.tempo.0 + b.tempo.1) / 2.0).round()),
+        ));
     }
     if key.is_none() && !pitched.is_empty() {
         out.push(issue(
@@ -176,7 +180,7 @@ pub fn music(p: &Project) -> Vec<Issue> {
                 format!("give it a real instrument: sounds role \"{}\" lists every instrument's presets that suit it, and samples", roles[t]))),
             Some(Instrument::Drums) => out.push(issue("improve", "sound",
                 "plays the built-in synthesized kit".into(), Some(track_name(p, t)),
-                "samples_kit for a real kit that goes together, then write_drums on it".into())),
+                "samples_kit for a real kit that goes together, then write the drums on it again".into())),
             _ => {}
         }
     }
@@ -192,7 +196,7 @@ pub fn music(p: &Project) -> Vec<Issue> {
             out.push(issue("fix", "harmony",
                 format!("{} notes outside the key ({}) and the chord", wrong.len(), key.map_or("?".into(), |k| k.name())),
                 Some(format!("{}, {}", track_name(p, t), bars(&wrong))),
-                "move them into the key (edit_notes transpose, or set_notes), or rewrite with write_chords / write_melody".into()));
+                "move them into the key (edit_notes transpose, or set_notes with the notes rewritten)".into()));
         }
     }
     // Clashes: two parts a semitone apart at once.
@@ -222,7 +226,7 @@ pub fn music(p: &Project) -> Vec<Issue> {
         out.push(issue("fix", "harmony",
             format!("{} times two parts play a semitone apart (a rub that sounds like a wrong note)", clashes.len()),
             Some(format!("{} against {}, {}", track_name(p, a), track_name(p, b), bars(&where_))),
-            "move one part's register (write_chords register, or edit_notes transpose 12), or use a rootless voicing".into()));
+            "move one part's register (edit_notes transpose 12, or set_notes), or voice the chords without their roots".into()));
     }
     // The bass on its chords.
     for &t in pitched.iter().filter(|&&t| roles[t] == "bass") {
@@ -241,8 +245,106 @@ pub fn music(p: &Project) -> Vec<Issue> {
         if off.len() > 1 {
             out.push(issue("fix", "harmony", format!("the bass plays off the chord {} times where chords change", off.len()),
                 Some(format!("{}, {}", track_name(p, t), bars(&off))),
-                format!("write_bass on track {t} (it plays each chord's root), or move those notes to the root")));
+                format!("rewrite track {t}'s notes there on each chord's root (set_notes), or move those notes to it")));
         }
+    }
+
+    // The chord track against the key. Notes on its chords pass the note checks above, so a
+    // progression outside the key goes unheard there: most of the song on chords with two or more
+    // tones off the key means the key or the progression is wrong (a borrowed chord is colour).
+    if let Some(k) = key.as_ref() {
+        let track = crate::music::compose::chord_track(p, 0, end.max(bar));
+        let outside = |s: &Span, k: &Key| {
+            s.chord
+                .classes()
+                .iter()
+                .filter(|&&c| !k.contains(c))
+                .count()
+                >= 2
+        };
+        let inside = |k: &Key| -> u64 {
+            track
+                .iter()
+                .filter(|s| !outside(s, k))
+                .map(|s| s.end - s.start)
+                .sum()
+        };
+        let total: u64 = track.iter().map(|s| s.end - s.start).sum();
+        let off: Vec<&Span> = track.iter().filter(|s| outside(s, k)).collect();
+        let off_time: u64 = off.iter().map(|s| s.end - s.start).sum();
+        if total > 0 && off_time * 4 > total {
+            let mut names: Vec<String> = off.iter().map(|s| s.chord.name()).collect();
+            names.sort();
+            names.dedup();
+            let best = Key::all().max_by_key(|c| inside(c));
+            let fix = match best {
+                Some(b) if b != *k && inside(&b) > inside(k) + total / 4 => format!(
+                    "the chords sit in {}: set_key to it (move_notes false), or rewrite the \
+                     progression in {} (set_chords with numerals) and the parts on it",
+                    b.name(),
+                    k.name()
+                ),
+                _ => format!(
+                    "rewrite the progression in {} (set_chords with numerals; a borrowed chord \
+                     now and then is fine) and the parts on it",
+                    k.name()
+                ),
+            };
+            names.truncate(6);
+            out.push(issue(
+                "fix",
+                "harmony",
+                format!(
+                    "the chord track leaves {} for {} of its {} bars: {}",
+                    k.name(),
+                    off_time.div_ceil(bar),
+                    total.div_ceil(bar),
+                    names.join(", ")
+                ),
+                None,
+                fix,
+            ));
+        }
+    }
+
+    // Mix, before hearing it: a fader pushed up to make up for a quiet sound runs everything
+    // after it hot; a whole song nothing has been done to isn't mixed yet.
+    for (t, tr) in p.tracks.iter().enumerate() {
+        if tr.volume_db > 6.0 && !tr.regions.is_empty() {
+            out.push(issue(
+                "improve",
+                "mix",
+                format!(
+                    "its fader is at {:+.1} dB: the sound is too quiet where it's made",
+                    tr.volume_db
+                ),
+                Some(track_name(p, t)),
+                "turn it up at its source (its sample's or instrument's level) and the fader back \
+                 to 0 or under, or turn the rest down"
+                    .into(),
+            ));
+        }
+    }
+    let playing = p.tracks.iter().filter(|t| !t.regions.is_empty()).count();
+    let mixed = p.tracks.iter().any(|t| {
+        t.eq.is_some()
+            || t.comp.is_some()
+            || t.sat.is_some()
+            || t.limit.is_some()
+            || !t.inserts.is_empty()
+    }) || p.master_eq.is_some()
+        || p.master_comp.is_some()
+        || p.master_limit.is_some()
+        || !p.master_inserts.is_empty();
+    if playing >= 4 && song_bars >= 16 && !mixed {
+        out.push(issue(
+            "improve",
+            "mix",
+            "nothing in it is mixed yet: no EQ, compression or limiting on any track or the master"
+                .into(),
+            None,
+            "mix (it balances, EQs and compresses each part for its role), then master".into(),
+        ));
     }
 
     // Rhythm.
@@ -272,9 +374,16 @@ pub fn music(p: &Project) -> Vec<Issue> {
             .map(|n| n.start.max(0) as u64 / bar)
             .collect();
         if flams.len() > 2 {
-            out.push(issue("fix", "rhythm", format!("{} bass notes land just off a kick: the two flam and the low end smears", flams.len()),
+            out.push(issue(
+                "fix",
+                "rhythm",
+                format!(
+                    "{} bass notes land just off a kick: the two flam and the low end smears",
+                    flams.len()
+                ),
                 Some(format!("{}, {}", track_name(p, t), bars(&flams))),
-                format!("put them on the kick: write_bass style kick on track {t}, or edit_notes quantize")));
+                format!("put track {t}'s notes on the kick (set_notes), or edit_notes quantize"),
+            ));
         }
     }
     for (t, list) in notes.iter().enumerate() {
@@ -322,7 +431,7 @@ pub fn music(p: &Project) -> Vec<Issue> {
                 "rhythm",
                 format!("the lead plays {busy:.0} notes a bar: too busy to hum"),
                 Some(track_name(p, t)),
-                "write_melody with density 0.4, or thin it: a hook leaves space".into(),
+                "thin it (set_notes): a hook leaves space".into(),
             ));
         }
     }
@@ -337,7 +446,8 @@ pub fn music(p: &Project) -> Vec<Issue> {
                 && p.tracks[t]
                     .regions
                     .iter()
-                    .any(|r| r.start < to && r.start + r.length > from)
+                    .enumerate()
+                    .any(|(i, r)| r.start < to && p.plays_to((t, i)) > from)
     };
     let sounding: Vec<usize> = (0..p.tracks.len()).filter(|&t| active(t, 0, end)).collect();
     if song_bars < 24 && sounding.len() > 2 {
@@ -346,7 +456,7 @@ pub fn music(p: &Project) -> Vec<Issue> {
             "arrangement",
             format!("{song_bars} bars: a loop, not a song yet"),
             None,
-            "when the loop works, arrange (sections from the genre's playbook, or your own)".into(),
+            "when the loop works, arrange it into sections".into(),
         ));
     } else if song_bars >= 24 {
         if p.markers.is_empty() {
@@ -668,9 +778,147 @@ pub fn mix(p: &Project, heard: &Heard) -> Vec<Issue> {
     out
 }
 
+/// The built-in effects as they're set: a compressor or saturator left as it came, or one
+/// saturator copied across the parts, or every one the same style.
+pub fn effects(p: &Project) -> Vec<Issue> {
+    let mut out = Vec::new();
+    // Nothing in the song moves or shapes beyond the channel's own four: fine for a sketch, not
+    // for a song of any size.
+    use crate::song::project::{Fx, Unit};
+    let tool = |u: &Unit| {
+        !matches!(
+            u.kind(),
+            Fx::Eq | Fx::Comp | Fx::Sat | Fx::Limit | Fx::Reverb | Fx::Delay
+        )
+    };
+    let tools = p.tracks.iter().flat_map(|t| &t.more).any(tool)
+        || p.auxes.iter().flat_map(|a| &a.more).any(tool)
+        || p.master_more.iter().any(tool);
+    if p.tracks.len() >= 4 && !tools {
+        out.push(issue(
+            "improve",
+            "mix",
+            "no part uses the tools: nothing moves or is shaped past EQ, compressor and saturator"
+                .into(),
+            None,
+            "set_fx where the song wants it: a filter sweeping into a section, motion on a pad, \
+             the shaper on drums, a gate on what rings, the de-esser on anything sung, stereo \
+             widths on the mix"
+                .into(),
+        ));
+    }
+    let as_came = Saturator::default();
+    let sats: Vec<(usize, Saturator)> = p
+        .tracks
+        .iter()
+        .enumerate()
+        .filter_map(|(t, tr)| tr.sat.filter(|s| !s.bypass).map(|s| (t, s)))
+        .collect();
+    let plain: Vec<usize> = sats
+        .iter()
+        .filter(|(_, s)| *s == as_came)
+        .map(|&(t, _)| t)
+        .collect();
+    if !plain.is_empty() {
+        out.push(issue(
+            "improve",
+            "mix",
+            format!(
+                "{}: the saturator is as it came, one Warm Tape band",
+                plain
+                    .iter()
+                    .map(|&t| track_name(p, t))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            None,
+            "`learn` it (effect sat) for its part, or set_saturator: bands where the part needs \
+             them, each a style for it (tape, tube, transformer, crunch, heavy, rectify, foldback, \
+             lo-fi), its drive, tone and dynamics"
+                .into(),
+        ));
+    }
+    // The same settings on several parts (its output aside): one recipe, not each part's.
+    let shaped = |s: &Saturator| Saturator {
+        output_db: 0.0,
+        ..*s
+    };
+    let mut copied: Vec<usize> = Vec::new();
+    for (k, (t, s)) in sats.iter().enumerate() {
+        let same = sats
+            .iter()
+            .enumerate()
+            .any(|(j, (_, o))| j != k && shaped(o) == shaped(s));
+        if same && *s != as_came {
+            copied.push(*t);
+        }
+    }
+    if copied.len() >= 3 {
+        out.push(issue(
+            "note",
+            "mix",
+            format!(
+                "{} tracks share one saturator setting ({})",
+                copied.len(),
+                copied
+                    .iter()
+                    .map(|&t| track_name(p, t))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            None,
+            "set each for its part: `learn` (effect sat) on each, then shape it".into(),
+        ));
+    } else if sats.len() >= 3
+        && sats
+            .iter()
+            .all(|(_, s)| s.bands.iter().all(|b| b.style == SatStyle::WarmTape))
+    {
+        out.push(issue(
+            "note",
+            "mix",
+            format!(
+                "all {} saturators are Warm Tape and nothing else",
+                sats.len()
+            ),
+            None,
+            "each part its own colour: `learn` them (or `mix` again), or set_saturator other \
+             styles where they suit"
+                .into(),
+        ));
+    }
+    let plain: Vec<usize> = p
+        .tracks
+        .iter()
+        .enumerate()
+        .filter(|(_, tr)| tr.comp.is_some_and(|c| !c.bypass && c == Comp::default()))
+        .map(|(t, _)| t)
+        .collect();
+    if !plain.is_empty() {
+        out.push(issue(
+            "improve",
+            "mix",
+            format!(
+                "{}: the compressor is as it came",
+                plain
+                    .iter()
+                    .map(|&t| track_name(p, t))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            None,
+            "`learn` it (effect comp) for what it plays, or set_comp its style, threshold, ratio, \
+             attack, release and mix"
+                .into(),
+        ));
+    }
+    out
+}
+
 /// Both, the worst first.
 pub fn critique(p: &Project, heard: Option<&Heard>) -> Vec<Issue> {
     let mut all = music(p);
+    all.extend(effects(p));
     if let Some(h) = heard {
         all.extend(mix(p, h));
     }

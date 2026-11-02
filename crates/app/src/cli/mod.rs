@@ -1,6 +1,8 @@
 //! What agents and scripts run: each returns JSON (or text), and goes to the running app when it
 //! has the project open, so edits land on screen and can be undone there.
 
+pub mod midi;
+pub mod reference;
 pub mod samples;
 pub mod server;
 pub mod study;
@@ -40,7 +42,17 @@ pub fn project(dir: &Path) -> Result<Project, String> {
 }
 
 pub fn show(dir: &Path) -> Result<Value, String> {
-    json(project(dir)?)
+    let p = project(dir)?;
+    let mut shown = json(&p)?;
+    // A looped region's length is one pass: this is how far it really plays.
+    for (t, track) in p.tracks.iter().enumerate() {
+        for (r, region) in track.regions.iter().enumerate() {
+            if region.looped {
+                shown["tracks"][t]["regions"][r]["loops_to"] = p.loop_end((t, r)).into();
+            }
+        }
+    }
+    Ok(shown)
 }
 
 /// Applies a command given as JSON.
@@ -53,7 +65,9 @@ pub fn edit(dir: &Path, command: &str) -> Result<Value, String> {
 /// Applies a command: in the app if it has the project open, else to the folder on disk (making
 /// the project if there's none).
 pub fn edit_with(dir: &Path, command: Command) -> Result<Value, String> {
-    let request = Request::Edit { command };
+    let request = Request::Edit {
+        command: Box::new(command),
+    };
     if let Some(reply) = server::ask(dir, &request) {
         return reply;
     }
@@ -62,7 +76,7 @@ pub fn edit_with(dir: &Path, command: Command) -> Result<Value, String> {
     };
     let mut session = Session::open(dir)?;
     let mut plugins = Offline { dir, loaded: None };
-    let command = commands::resolve(&session.project, command, &mut plugins)?;
+    let command = commands::resolve(&session.project, *command, &mut plugins)?;
     let result = commands::apply(&mut session.project, dir, command)?;
     session.save()?;
     Ok(result)
@@ -154,7 +168,7 @@ pub fn rendered(
         return mixed(p, dir, length(p));
     };
     let rate = p.sample_rate as f64;
-    let lead = p.samples(from.min(p.bar()), rate);
+    let lead = p.span(from - from.min(p.bar()), from, rate);
     let start = p.samples(from, rate) - lead;
     let frames = p.samples(to, rate) - start;
     let (mut engine, _plugins) = Engine::load(p, dir, rate)?;
@@ -205,7 +219,7 @@ pub fn report(
     let [l, r] = rendered(p, dir, range)?;
     let mix = analysis::analyze(&l, &r, rate);
     let origin = range.map_or(0, |r| r.0);
-    let at = |tick: u64| (p.samples(tick.saturating_sub(origin), rate) as usize).min(l.len());
+    let at = |tick: u64| (p.span(origin, tick.max(origin), rate) as usize).min(l.len());
     let sections = p
         .markers
         .iter()

@@ -9,6 +9,7 @@ mod plugins;
 mod regions;
 mod song;
 mod tracks;
+pub use tracks::drum_note;
 mod writing;
 
 pub use automation::*;
@@ -24,15 +25,16 @@ use serde_json::{Value, json};
 
 use crate::{
     dsp::modulate::{ModKind, ModParam},
-    music::arrange::{self, Arrangement, Transition},
-    music::compose::{self, BassPart, ChordPart, DrumPart, MelodyPart},
+    music::arrange::{self, Transition},
+    music::compose,
     music::{Key, NoteEdit},
     plugin::{PluginApi, PluginParam, value_from_text},
     song::project::{
-        AUDIO_DIR, AutoMode, AutoPoint, AutoShape, AuxSend, BEAT_UNITS, Cell, Comp, Content,
-        ControlPoint, Cycle, Dynamic, Eq, Flex, Input, Instrument, Marker, Note, PPQ,
-        PaletteDevice, PaletteSound, PanLaw, PanMode, Param, PatternRow, Place, PluginRef, Preset,
-        PresetSource, Project, Region, Saturator, Track, Which,
+        AUDIO_DIR, AutoMode, AutoPoint, AutoShape, AuxSend, BEAT_UNITS, Cell, ChainMut, Comp,
+        Content, ControlPoint, Cycle, Dynamic, Eq, Follow, Input, Instrument, LimitParam, Limiter,
+        MAX_BPM, MIN_BPM, Marker, Note, PPQ, PaletteDevice, PaletteSound, PanLaw, PanMode, Param,
+        PatternRow, Place, PluginRef, Preset, PresetSource, Project, Region, Saturator,
+        StretchMode, Track, Which,
     },
 };
 
@@ -42,8 +44,18 @@ pub const DESCRIBE: &str = include_str!("commands.md");
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    /// The song's tempo: its own, with its tempo changes scaled along.
     SetTempo {
         bpm: f64,
+    },
+    /// The tempo from a tick on (0 is the song's own), until the next change.
+    SetTempoAt {
+        tick: u64,
+        bpm: f64,
+    },
+    /// Takes the tempo change at a tick out.
+    DeleteTempo {
+        tick: u64,
     },
     /// Beats to a bar and the note that's a beat.
     SetTimeSignature {
@@ -102,12 +114,29 @@ pub enum Command {
         track: usize,
         instrument: Instrument,
     },
+    /// The built-in synth on a track: a `patch` by name (its sound as it comes), its
+    /// `settings` laid over it, field by field,
+    /// its `voice` (the sampler's: filter, envelopes, LFOs, unison...), only what's given
+    /// changing. A track that hasn't the synth gets it (the patch, or one saw).
+    SetSynth {
+        track: usize,
+        #[serde(default)]
+        patch: Option<String>,
+        #[serde(default)]
+        settings: Option<Value>,
+    },
     /// Puts a plugin in an insert slot (an index past the last adds one), or takes it out.
     SetInsert {
         channel: ChannelRef,
         index: usize,
         #[serde(default)]
         plugin: Option<PluginRef>,
+    },
+    /// Moves an effect (a built-in or a plugin) from one place in a channel's chain to another.
+    MoveEffect {
+        channel: ChannelRef,
+        from: usize,
+        to: usize,
     },
     AddMidiRegion {
         track: usize,
@@ -222,7 +251,7 @@ pub enum Command {
         region: usize,
     },
     /// A region's name and playback settings (any of them): MIDI played transposed, louder or
-    /// quantized, its notes kept; looping; and audio's flex mode and whether it follows the
+    /// quantized, its notes kept; looping; and audio's stretch mode and whether it follows the
     /// song's tempo.
     SetRegion {
         track: usize,
@@ -246,13 +275,19 @@ pub enum Command {
         /// Ticks; 0 turns it off.
         #[serde(default)]
         quantize: Option<u64>,
+        #[serde(default, alias = "flex")]
+        stretch_mode: Option<StretchMode>,
+        /// How it keeps time: off, on (following the song's tempo), bars or beats (locked to
+        /// them as well); true and false are on and off.
         #[serde(default)]
-        flex: Option<Flex>,
+        follow: Option<Follow>,
+        /// Its own tempo, in BPM: what following keeps to the song's.
         #[serde(default)]
-        follow: Option<bool>,
+        tempo: Option<f64>,
         #[serde(default)]
         formants: Option<bool>,
-        /// Warp markers: [a frame of the file, where it plays in the stretched audio].
+        /// Warp markers: [a frame of the file, where it plays: in the stretched audio, or
+        /// following, in its own time at its tempo].
         #[serde(default)]
         warps: Option<Vec<[u64; 2]>>,
     },
@@ -276,11 +311,37 @@ pub enum Command {
         #[serde(default)]
         region: Option<Region>,
     },
-    /// Flex: stretches an audio region to `length` ticks, keeping its pitch.
-    FlexRegion {
+    /// Time-stretches an audio region to `length` ticks, keeping its pitch.
+    #[serde(alias = "flex_region")]
+    StretchRegion {
         track: usize,
         region: usize,
         length: u64,
+    },
+    /// Listens to an audio region's file for its tempo, beats and downbeats.
+    AnalyzeTempo {
+        track: usize,
+        region: usize,
+    },
+    /// The song keeps time with an audio region: its tempo the take's, bar by bar (or its
+    /// average with `steady`), from its first downbeat (on the nearest bar, unless `align` is
+    /// false).
+    AdaptTempo {
+        track: usize,
+        region: usize,
+        #[serde(default)]
+        steady: bool,
+        #[serde(default = "yes")]
+        align: bool,
+    },
+    /// The tempo set so an audio region fills the cycle.
+    FitTempo {
+        track: usize,
+        region: usize,
+    },
+    /// What audio recorded or brought in does to the tempo: keep, adapt or auto.
+    SetTempoMode {
+        mode: crate::song::project::TempoMode,
     },
     /// Comps a take folder: take `take` plays from `from` to `to`, ticks from the region's start.
     Comp {
@@ -335,6 +396,38 @@ pub enum Command {
     FlattenStack {
         aux: usize,
     },
+    /// A kit as a stack: a kit track whose notes play its pads, a track a pad (its own sampler,
+    /// channel and effects), a starter pattern on the kit track unless `pattern` is false.
+    AddKit {
+        #[serde(default)]
+        name: Option<String>,
+        pads: Vec<KitPad>,
+        /// Where its tracks go (the end if not given), and the tick its pattern starts at.
+        #[serde(default)]
+        index: Option<usize>,
+        #[serde(default)]
+        at: u64,
+        #[serde(default = "yes")]
+        pattern: bool,
+    },
+    /// A kit track's notes moved onto its pads' own tracks.
+    SplitKit {
+        track: usize,
+    },
+    /// A MIDI file brought in: a track a part, its notes, controllers and bends in a region at
+    /// `at`, on an instrument that plays it (drums on the kit, the rest on General MIDI's).
+    /// `transpose` semitones, or `fit` to move it into the song's key from its own.
+    ImportMidi {
+        file: PathBuf,
+        #[serde(default)]
+        at: u64,
+        #[serde(default)]
+        index: Option<usize>,
+        #[serde(default)]
+        transpose: Option<i32>,
+        #[serde(default)]
+        fit: bool,
+    },
     RemoveSend {
         track: usize,
         send: usize,
@@ -370,6 +463,16 @@ pub enum Command {
         modulator: Option<usize>,
         #[serde(default)]
         setting: Option<ModParam>,
+        /// For a stacked effect's knob: the effect, which of those (0 the first), the knob's name.
+        #[serde(default)]
+        fx: Option<String>,
+        #[serde(default)]
+        which: Option<usize>,
+        #[serde(default)]
+        knob: Option<String>,
+        /// With `comp` or `sat`: the track's own, not a stacked one.
+        #[serde(default)]
+        own: bool,
         points: Vec<PointIn>,
     },
     /// The sounds the person picked for the song (each file with what it's for), and whether
@@ -397,6 +500,16 @@ pub enum Command {
         modulator: Option<usize>,
         #[serde(default)]
         setting: Option<ModParam>,
+        /// For a stacked effect's knob: the effect, which of those (0 the first), the knob's name.
+        #[serde(default)]
+        fx: Option<String>,
+        #[serde(default)]
+        which: Option<usize>,
+        #[serde(default)]
+        knob: Option<String>,
+        /// With `comp` or `sat`: the track's own, not a stacked one.
+        #[serde(default)]
+        own: bool,
         #[serde(default)]
         from: Option<u64>,
         #[serde(default)]
@@ -419,6 +532,16 @@ pub enum Command {
         modulator: Option<usize>,
         #[serde(default)]
         setting: Option<ModParam>,
+        /// For a stacked effect's knob: the effect, which of those (0 the first), the knob's name.
+        #[serde(default)]
+        fx: Option<String>,
+        #[serde(default)]
+        which: Option<usize>,
+        #[serde(default)]
+        knob: Option<String>,
+        /// With `comp` or `sat`: the track's own, not a stacked one.
+        #[serde(default)]
+        own: bool,
         shape: AutoShape,
         from: u64,
         to: u64,
@@ -474,6 +597,46 @@ pub enum Command {
     DeleteMarker {
         marker: usize,
     },
+    /// A section (a marker to the next) moved before another (`before` past the last: to the
+    /// end), everything in it along, the song closing up and making room.
+    MoveSection {
+        section: usize,
+        before: usize,
+    },
+    /// A copy of a section before another, the song making room.
+    CopySection {
+        section: usize,
+        before: usize,
+    },
+    /// Two sections change places, everything in them along.
+    SwapSections {
+        a: usize,
+        b: usize,
+    },
+    /// A section taken out, everything in it, the song closing the gap.
+    DeleteSection {
+        section: usize,
+    },
+    /// A section emptied of regions and automation, its time and marker kept.
+    ClearSection {
+        section: usize,
+    },
+    /// A section after the last, `bars` long (8 if not given).
+    AddSection {
+        name: String,
+        #[serde(default)]
+        bars: Option<u64>,
+    },
+    /// `length` ticks of nothing at `tick`, everything after it moving later.
+    InsertTime {
+        tick: u64,
+        length: u64,
+    },
+    /// The song from `from` to `to` taken out, everything after it moving up.
+    RemoveTime {
+        from: u64,
+        to: u64,
+    },
     /// The song's key, like "A minor"; without one, Pina Studio works it out from the notes. With
     /// `move_notes`, the music moves into the new key.
     SetKey {
@@ -497,6 +660,10 @@ pub enum Command {
         channel: ChannelRef,
         #[serde(default)]
         eq: Option<Value>,
+        /// Which of the channel's EQs: 0 its own, 1 on the others in the order they run; one
+        /// past the last adds another.
+        #[serde(default)]
+        which: usize,
     },
     /// One band of a channel's EQ, by its place: only what's given changes. A place one past the
     /// last adds a band (a 1 kHz bell unless it says); `remove` takes the band out. The channel
@@ -504,6 +671,8 @@ pub enum Command {
     SetEqBand {
         channel: ChannelRef,
         band: usize,
+        #[serde(default)]
+        which: usize,
         #[serde(default)]
         shape: Option<crate::song::project::Shape>,
         #[serde(default)]
@@ -532,12 +701,52 @@ pub enum Command {
         channel: ChannelRef,
         #[serde(default)]
         comp: Option<Value>,
+        #[serde(default)]
+        which: usize,
     },
     /// A channel's built-in saturator, after its compressor; without `sat`, takes it out.
     SetSaturator {
         channel: ChannelRef,
         #[serde(default)]
         sat: Option<Value>,
+        #[serde(default)]
+        which: usize,
+    },
+    /// A reverb stacked on a channel (`which`: its place among the channel's reverbs, one past
+    /// the last adds another); without `reverb`, takes it out.
+    SetReverb {
+        channel: ChannelRef,
+        #[serde(default)]
+        reverb: Option<Value>,
+        #[serde(default)]
+        which: usize,
+    },
+    /// A delay stacked on a channel, as `set_reverb`.
+    SetDelay {
+        channel: ChannelRef,
+        #[serde(default)]
+        delay: Option<Value>,
+        #[serde(default)]
+        which: usize,
+    },
+    /// One of the tools stacked on a channel: `fx` is `filter`, `motion`, `shaper`, `gate`,
+    /// `de_esser` or `stereo`; `which` its place among the channel's of that tool (one past the
+    /// last adds another); without `settings`, takes it out.
+    SetFx {
+        channel: ChannelRef,
+        fx: String,
+        #[serde(default)]
+        settings: Option<Value>,
+        #[serde(default)]
+        which: usize,
+    },
+    /// A channel's built-in limiter, last in its chain; without `limit`, takes it out.
+    SetLimiter {
+        channel: ChannelRef,
+        #[serde(default)]
+        limit: Option<Value>,
+        #[serde(default)]
+        which: usize,
     },
     /// Quantizes, humanizes, makes legato, chops, arpeggiates, transposes or changes the
     /// velocity of a MIDI region's notes (or one of them, with `note`).
@@ -559,22 +768,11 @@ pub enum Command {
         #[serde(default)]
         bars: Option<u64>,
     },
-    /// Plays the song's chords on an instrument track, voiced from chord to chord.
-    WriteChords(ChordPart),
-    /// A bassline on the song's chords; `kick` style plays on the kick, as an 808 does.
-    WriteBass(BassPart),
-    /// A melody, riff, arpeggio or counter-line on the song's chords, in its key.
-    WriteMelody(MelodyPart),
-    /// A genre's groove as a step pattern, with fills and its swing.
-    WriteDrums(DrumPart),
-    /// What the song is: a playbook's id ("lofi", "trap"); without one, none.
+    /// What the song is, in any words ("lofi"), or one of the person's playbooks; without one, none.
     SetGenre {
         #[serde(default)]
         genre: Option<String>,
     },
-    /// Makes a loop into a song: sections laid out one after another, each with its parts,
-    /// marked, the chords carried along.
-    Arrange(Arrangement),
     /// Copies bars of some tracks (all by default) to another place, replacing what's there.
     CopyBars {
         from: u64,
@@ -583,7 +781,7 @@ pub enum Command {
         #[serde(default)]
         tracks: Option<Vec<usize>>,
     },
-    /// A riser, reverse cymbal, impact, downlifter, drum fill, gap or a whole build into a bar.
+    /// A riser, reverse cymbal, impact, downlifter, gap or a whole build into a bar.
     Transition(Transition),
     /// A finished song the mix aims at (the `reference` tool measures one and sets it); without
     /// one, the genre's targets.
@@ -628,6 +826,23 @@ pub enum Command {
 
 fn yes() -> bool {
     true
+}
+
+/// A pad of a kit to make: its sound, its name (the file's if not given), its note (from its
+/// name's drum, else the next free one from 36), its choke group, and the sixteenths a starter
+/// pattern has it on.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct KitPad {
+    pub file: PathBuf,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub note: Option<u8>,
+    #[serde(default)]
+    pub choke: Option<u8>,
+    #[serde(default)]
+    pub steps: Vec<usize>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -683,12 +898,23 @@ pub fn apply(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String>
 fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
     match &cmd {
         Command::SetTempo { .. }
+        | Command::SetTempoAt { .. }
+        | Command::DeleteTempo { .. }
+        | Command::SetTempoMode { .. }
         | Command::SetMaster { .. }
         | Command::SetTimeSignature { .. }
         | Command::SetPalette { .. }
         | Command::AddMarker { .. }
         | Command::SetMarker { .. }
         | Command::DeleteMarker { .. }
+        | Command::MoveSection { .. }
+        | Command::CopySection { .. }
+        | Command::SwapSections { .. }
+        | Command::DeleteSection { .. }
+        | Command::ClearSection { .. }
+        | Command::AddSection { .. }
+        | Command::InsertTime { .. }
+        | Command::RemoveTime { .. }
         | Command::SetKey { .. }
         | Command::SetCycle { .. }
         | Command::SetReference { .. }
@@ -697,11 +923,16 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         | Command::DeleteTrack { .. }
         | Command::SetTrack { .. }
         | Command::SetInstrument { .. }
+        | Command::SetSynth { .. }
         | Command::SetInsert { .. }
+        | Command::MoveEffect { .. }
         | Command::SetInput { .. }
         | Command::SetOutput { .. }
         | Command::AddStack { .. }
-        | Command::FlattenStack { .. } => tracks::run(p, dir, cmd),
+        | Command::FlattenStack { .. }
+        | Command::AddKit { .. }
+        | Command::SplitKit { .. }
+        | Command::ImportMidi { .. } => tracks::run(p, dir, cmd),
         Command::AddMidiRegion { .. }
         | Command::SetControls { .. }
         | Command::SetNotes { .. }
@@ -712,14 +943,22 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         | Command::TrimRegion { .. }
         | Command::SplitRegion { .. }
         | Command::SetCell { .. }
-        | Command::FlexRegion { .. }
+        | Command::StretchRegion { .. }
+        | Command::AnalyzeTempo { .. }
+        | Command::AdaptTempo { .. }
+        | Command::FitTempo { .. }
         | Command::Comp { .. }
         | Command::Flatten { .. }
         | Command::DeleteRegion { .. }
         | Command::SetRegion { .. }
         | Command::AddAlias { .. }
         | Command::Unlink { .. }
-        | Command::EditNotes { .. } => regions::run(p, dir, cmd),
+        | Command::EditNotes { .. } => {
+            let ran = regions::loops_running(p, &cmd);
+            let answer = regions::run(p, dir, cmd)?;
+            regions::carry_loops(p, &ran);
+            Ok(answer)
+        }
         Command::AddSend { .. }
         | Command::SetSend { .. }
         | Command::RemoveSend { .. }
@@ -727,7 +966,11 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         | Command::SetEq { .. }
         | Command::SetEqBand { .. }
         | Command::SetComp { .. }
-        | Command::SetSaturator { .. } => mixing::run(p, dir, cmd),
+        | Command::SetSaturator { .. }
+        | Command::SetLimiter { .. }
+        | Command::SetReverb { .. }
+        | Command::SetDelay { .. }
+        | Command::SetFx { .. } => mixing::run(p, dir, cmd),
         Command::SetAutomation { .. }
         | Command::SmoothAutomation { .. }
         | Command::ShapeAutomation { .. }
@@ -735,14 +978,9 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         Command::SetPluginParam { .. }
         | Command::SetPreset { .. }
         | Command::SetSidechain { .. } => plugins::run(p, dir, cmd),
-        Command::SetChords { .. }
-        | Command::WriteChords(..)
-        | Command::WriteBass(..)
-        | Command::WriteMelody(..)
-        | Command::WriteDrums(..)
-        | Command::Arrange(..)
-        | Command::CopyBars { .. }
-        | Command::Transition(..) => writing::run(p, dir, cmd),
+        Command::SetChords { .. } | Command::CopyBars { .. } | Command::Transition(..) => {
+            writing::run(p, dir, cmd)
+        }
         Command::AddModulator { .. }
         | Command::SetModulator { .. }
         | Command::ShareModulator { .. }

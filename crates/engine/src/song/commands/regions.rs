@@ -140,13 +140,16 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             };
             // Played at the project's rate, converted if it was recorded at another.
             let frames = (frames as f64 * p.sample_rate as f64 / from) as u64;
-            let length = length.unwrap_or_else(|| p.ticks(frames.saturating_sub(offset)).max(1));
+            let length =
+                length.unwrap_or_else(|| p.ticks_for(start, frames.saturating_sub(offset)).max(1));
             let content = Content::Audio {
                 file,
                 offset,
                 stretch: 1.0,
-                flex: Flex::default(),
-                follow: false,
+                stretch_mode: StretchMode::default(),
+                follow: crate::song::project::Follow::Off,
+                tempo: None,
+                grid: None,
                 formants: false,
                 warps: Vec::new(),
             };
@@ -182,11 +185,22 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             end,
         } => {
             region_at(p, t, r)?;
+            let looped = p.region((t, r)).looped;
             if let Some(end) = end {
-                p.trim_end((t, r), end);
+                let region = p.region((t, r));
+                let (from, pass_end) = (region.start, region.start + region.length);
+                // A looped region trimmed out runs its loops further: one pass stays one pass,
+                // or its notes would stop and the rest of it be silence.
+                match looped && end > pass_end {
+                    true => p.tracks[t].regions[r].loop_length = Some(end - from),
+                    false => p.trim_end((t, r), end),
+                }
             }
             if let Some(start) = start {
                 p.trim_start((t, r), start);
+            }
+            if looped {
+                return Ok(loops(p, (t, r)));
             }
         }
         Command::SplitRegion {
@@ -219,13 +233,56 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
                 });
             }
         }
-        Command::FlexRegion {
+        Command::StretchRegion {
             track: t,
             region: r,
             length,
         } => {
             region_at(p, t, r)?;
-            p.flex((t, r), length)?;
+            p.time_stretch((t, r), length)?;
+        }
+        Command::AnalyzeTempo {
+            track: t,
+            region: r,
+        } => {
+            region_at(p, t, r)?;
+            let Content::Audio { file, .. } = &p.region((t, r)).content else {
+                return Err("that isn't an audio region".into());
+            };
+            let found = find_timing(p, dir, file)?
+                .ok_or("no beat to follow in it: a one-shot, or nothing steady enough")?;
+            let answer = json!({
+                "tempo": (found.tempo * 100.0).round() / 100.0,
+                "beats": found.grid.beats.len(),
+                "meter": found.grid.meter,
+                "loop": found.looped,
+            });
+            if let Content::Audio { tempo, grid, .. } = &mut p.tracks[t].regions[r].content {
+                (*tempo, *grid) = (Some(found.tempo), Some(found.grid));
+            }
+            return Ok(answer);
+        }
+        Command::AdaptTempo {
+            track: t,
+            region: r,
+            steady,
+            align,
+        } => {
+            region_at(p, t, r)?;
+            p.adapt_to((t, r), steady, align)?;
+            return Ok(json!({ "tempo": p.tempo, "tempos": p.tempos.len() }));
+        }
+        Command::FitTempo {
+            track: t,
+            region: r,
+        } => {
+            region_at(p, t, r)?;
+            let c = p
+                .cycle
+                .filter(|c| c.end > c.start)
+                .ok_or("set a cycle to fit it to")?;
+            let bpm = p.fit_tempo((t, r), c.start, c.end)?;
+            return Ok(json!({ "bpm": (bpm * 100.0).round() / 100.0 }));
         }
         Command::Comp {
             track: t,
@@ -264,26 +321,39 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             transpose,
             velocity,
             quantize,
-            flex,
+            stretch_mode,
             follow,
+            tempo,
             formants,
             warps,
         } => {
             region_at(p, t, r)?;
+            let looping = looped == Some(true) || loop_length.is_some_and(|l| l > 0);
+            let audio = stretch_mode.is_some()
+                || follow.is_some()
+                || tempo.is_some()
+                || formants.is_some()
+                || warps.is_some();
+            if audio && !matches!(p.tracks[t].regions[r].content, Content::Audio { .. }) {
+                return Err(
+                    "stretch_mode, follow, tempo, formants and warps are for audio regions".into(),
+                );
+            }
+            if let Some(bpm) = tempo {
+                p.set_audio_tempo((t, r), bpm);
+            }
+            if let Some(f) = follow {
+                p.set_follow((t, r), f);
+            }
             let region = &mut p.tracks[t].regions[r];
-            if flex.is_some() || follow.is_some() || formants.is_some() || warps.is_some() {
-                let Content::Audio {
-                    flex: f,
-                    follow: w,
-                    formants: k,
-                    warps: m,
-                    ..
-                } = &mut region.content
-                else {
-                    return Err("flex, follow, formants and warps are for audio regions".into());
-                };
-                *f = flex.unwrap_or(*f);
-                *w = follow.unwrap_or(*w);
+            if let Content::Audio {
+                stretch_mode: f,
+                formants: k,
+                warps: m,
+                ..
+            } = &mut region.content
+            {
+                *f = stretch_mode.unwrap_or(*f);
                 *k = formants.unwrap_or(*k);
                 if let Some(mut v) = warps {
                     v.sort();
@@ -299,6 +369,11 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             if let Some(v) = loop_length {
                 region.loop_length = (v > 0).then_some(v);
                 region.looped |= v > 0;
+                // Loops can't stop inside one pass: given that, the two were meant the other
+                // way round, this is one pass and the region's length how far they run.
+                if v > 0 && v < region.length {
+                    (region.length, region.loop_length) = (v, Some(region.length));
+                }
             }
             if let Some(v) = fade_in {
                 region.fade_in = v.min(region.length);
@@ -314,6 +389,9 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             }
             if let Some(v) = quantize {
                 region.quantize = (v > 0).then_some(v);
+            }
+            if looping {
+                return Ok(loops(p, (t, r)));
             }
         }
         Command::AddAlias {
@@ -396,4 +474,128 @@ fn settle(p: &mut crate::song::project::Pattern, s: Settings) -> Result<(), Stri
     }
     p.tidy();
     Ok(())
+}
+
+/// Listens to a file in the project for its timing (its frames at the project's rate).
+pub(crate) fn find_timing(
+    p: &Project,
+    dir: &Path,
+    file: &Path,
+) -> Result<Option<crate::study::timing::Found>, String> {
+    let (channels, rate) = crate::audio::engine::read_audio(&dir.join(file))?;
+    let name = file
+        .file_stem()
+        .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+    Ok(crate::study::timing::find(
+        &channels,
+        rate,
+        p.sample_rate as f64,
+        &name,
+    ))
+}
+
+/// How far a region's loops run, and why not if they don't.
+fn loops(p: &Project, at: (usize, usize)) -> Value {
+    let (r, to, bar) = (p.region(at), p.loop_end(at), p.bar().max(1));
+    let mut answer = json!({
+        "loops_to": to,
+        "bars": format!("{}-{}", r.start / bar + 1, to.div_ceil(bar)),
+    });
+    let last = r
+        .content
+        .notes(r.length)
+        .and_then(|n| n.iter().map(|n| n.start.max(0) as u64 + n.length).max());
+    if to <= r.start + r.length {
+        answer["note"] = json!(
+            "it doesn't repeat: `length` is one pass, and it plays once. Give loop_length, the \
+             ticks from its start to where its loops stop, longer than its length; or \
+             trim_region its end out to there"
+        );
+    } else if let Some(last) = last.filter(|l| l * 4 < r.length * 3) {
+        answer["note"] = json!(format!(
+            "each pass ends in silence: its notes stop at bar {} of its {} bars. Trim one pass \
+             to its notes with set_region loop_length, or write the rest",
+            last.div_ceil(bar),
+            r.length.div_ceil(bar)
+        ));
+    }
+    answer
+}
+
+/// The looped regions a command may put another region across: track, region, where they stop.
+pub(super) fn loops_running(p: &Project, cmd: &Command) -> Vec<(usize, usize, u64)> {
+    let (t, moved) = match *cmd {
+        Command::AddMidiRegion { track, .. }
+        | Command::AddPatternRegion { track, .. }
+        | Command::AddAudioRegion { track, .. } => (track, None),
+        Command::AddAlias {
+            track, to_track, ..
+        } => (to_track.unwrap_or(track), None),
+        Command::MoveRegion {
+            track,
+            region,
+            to_track,
+            ..
+        } => (
+            to_track.unwrap_or(track),
+            (to_track.unwrap_or(track) == track).then_some(region),
+        ),
+        _ => return Vec::new(),
+    };
+    let Some(track) = p.tracks.get(t) else {
+        return Vec::new();
+    };
+    (0..track.regions.len())
+        .filter(|&r| track.regions[r].looped && Some(r) != moved)
+        .map(|r| (t, r, p.loop_end((t, r))))
+        .collect()
+}
+
+/// A region dropped into a looped region's run stops it there: its loops carry on after it, in
+/// time, as far as they went. shortcut: the rest is a copy, not an alias, unless it was one;
+/// link them if editing one loop should edit them all.
+pub(super) fn carry_loops(p: &mut Project, ran: &[(usize, usize, u64)]) {
+    for &(t, i, was) in ran {
+        let stop = p.loop_end((t, i));
+        if stop >= was {
+            continue;
+        }
+        let r = p.tracks[t].regions[i].clone();
+        let Some(after) = p.tracks[t]
+            .regions
+            .iter()
+            .filter(|o| o.start > r.start)
+            .min_by_key(|o| o.start)
+            .map(|o| o.start + o.length)
+        else {
+            continue;
+        };
+        p.tracks[t].regions[i].loop_length = Some(stop - r.start);
+        if after >= was {
+            continue;
+        }
+        // What's left of the loop it landed in, then whole loops again.
+        let pass = r.length.max(1);
+        let whole = r.start + (after - r.start).div_ceil(pass) * pass;
+        let plain = Region {
+            start: whole - pass,
+            looped: false,
+            loop_length: None,
+            ..r.clone()
+        };
+        if let Some(part) = (whole > after)
+            .then(|| crate::music::arrange::clip(p, &plain, after, whole.min(was)))
+            .flatten()
+        {
+            p.tracks[t].regions.push(part);
+        }
+        if whole < was {
+            p.tracks[t].regions.push(Region {
+                start: whole,
+                looped: true,
+                loop_length: Some(was - whole),
+                ..r
+            });
+        }
+    }
 }

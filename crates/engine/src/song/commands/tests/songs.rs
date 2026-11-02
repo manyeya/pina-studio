@@ -147,6 +147,18 @@ fn mistakes_say_what_went_wrong() {
 }
 
 #[test]
+fn a_genre_is_any_word_and_names_a_playbook_only_if_the_person_has_one() {
+    let mut p = Project::new(48_000);
+    run(&mut p, r#"{"op": "set_genre", "genre": "gqom"}"#).unwrap();
+    assert_eq!(p.genre.as_deref(), Some("gqom"));
+    // One of theirs (the tests' own), by its name: its id.
+    run(&mut p, r#"{"op": "set_genre", "genre": "Lo-fi hip-hop"}"#).unwrap();
+    assert_eq!(p.genre.as_deref(), Some("lofi"));
+    run(&mut p, r#"{"op": "set_genre"}"#).unwrap();
+    assert_eq!(p.genre, None);
+}
+
+#[test]
 fn audio_from_elsewhere_is_copied_in() {
     let base = std::env::temp_dir().join(format!("pina-test-cmd-{}", std::process::id()));
     let (dir, outside) = (base.join("song"), base.join("take.wav"));
@@ -174,25 +186,47 @@ fn audio_from_elsewhere_is_copied_in() {
     let r = p.region((0, 0));
     assert_eq!((r.start, r.length), (PPQ, PPQ)); // half a second at 120 bpm is a beat
     assert!(dir.join("Audio Files/take.wav").exists());
-    // Sliced, and following the tempo: at 60 it plays twice as long, still a beat.
+    // Sliced, and following the tempo: its own tempo is the song's then, 120, so at 60 it
+    // plays twice as long, still a beat.
     run(
         &mut p,
-        r#"{"op": "set_region", "track": 0, "region": 0, "flex": "slicing", "follow": true}"#,
+        r#"{"op": "set_region", "track": 0, "region": 0, "stretch_mode": "slicing", "follow": true}"#,
     )
     .unwrap();
     run(&mut p, r#"{"op": "set_tempo", "bpm": 60}"#).unwrap();
-    let r = p.region((0, 0));
+    let r = p.region((0, 0)).clone();
     assert!(matches!(
         r.content,
         Content::Audio {
-            flex: Flex::Slicing,
-            follow: true,
-            stretch: 2.0,
+            stretch_mode: StretchMode::Slicing,
+            follow: crate::song::project::Follow::On,
+            tempo: Some(120.0),
             ..
         }
     ));
     assert_eq!(r.length, PPQ);
-    // MIDI has no flex.
+    let half = p.frame_at(&r.content, PPQ as f64, PPQ as f64 * 1.5);
+    assert_eq!(half, Some(12_000));
+    // Locked to its beats, at its own tempo of 90, by name.
+    run(
+        &mut p,
+        r#"{"op": "set_region", "track": 0, "region": 0, "follow": "beats", "tempo": 90}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        p.region((0, 0)).content,
+        Content::Audio {
+            follow: crate::song::project::Follow::Beats,
+            tempo: Some(90.0),
+            ..
+        }
+    ));
+    // A tempo change, and where it is, and gone again.
+    run(&mut p, r#"{"op": "set_tempo_at", "tick": 3840, "bpm": 90}"#).unwrap();
+    assert_eq!(p.tempo_at(4000), 90.0);
+    run(&mut p, r#"{"op": "delete_tempo", "tick": 3840}"#).unwrap();
+    assert!(p.tempos.is_empty());
+    // MIDI has no stretch mode.
     run(
         &mut p,
         r#"{"op": "add_track", "name": "Keys", "instrument": "synth"}"#,
@@ -215,6 +249,23 @@ fn audio_from_elsewhere_is_copied_in() {
 fn every_command_is_described() {
     let samples = [
         "set_tempo",
+        "set_tempo_at",
+        "delete_tempo",
+        "set_tempo_mode",
+        "add_kit",
+        "split_kit",
+        "import_midi",
+        "move_section",
+        "copy_section",
+        "swap_sections",
+        "delete_section",
+        "clear_section",
+        "add_section",
+        "insert_time",
+        "remove_time",
+        "analyze_tempo",
+        "adapt_tempo",
+        "fit_tempo",
         "set_time_signature",
         "set_master",
         "add_track",
@@ -222,6 +273,7 @@ fn every_command_is_described() {
         "set_track",
         "set_instrument",
         "set_insert",
+        "move_effect",
         "add_midi_region",
         "set_notes",
         "add_pattern_region",
@@ -231,7 +283,7 @@ fn every_command_is_described() {
         "trim_region",
         "split_region",
         "delete_region",
-        "flex_region",
+        "stretch_region",
         "set_cell",
         "comp",
         "flatten",
@@ -255,6 +307,11 @@ fn every_command_is_described() {
         "set_eq_band",
         "set_comp",
         "set_saturator",
+        "set_synth",
+        "set_reverb",
+        "set_delay",
+        "set_fx",
+        "set_limiter",
         "edit_notes",
         "set_region",
         "add_alias",
@@ -266,12 +323,7 @@ fn every_command_is_described() {
         "set_preset",
         "set_sidechain",
         "set_chords",
-        "write_chords",
-        "write_bass",
-        "write_melody",
-        "write_drums",
         "set_genre",
-        "arrange",
         "copy_bars",
         "transition",
         "set_reference",
@@ -295,5 +347,261 @@ fn every_command_is_described() {
     for op in samples {
         assert!(err.contains(op), "{op} isn't a command");
     }
-    assert_eq!(err.matches('`').count() / 2, samples.len() + 1); // + the unknown one
+    // + the unknown one, and flex_region (stretch_region's old name).
+    assert_eq!(err.matches('`').count() / 2, samples.len() + 2);
+}
+
+#[test]
+fn a_kit_comes_as_a_stack_and_splits_onto_its_pads() {
+    let dir = std::env::temp_dir().join(format!("pina-kit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 48_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    for name in ["Kick 01", "Snare Tight", "Open Hat", "Closed Hat"] {
+        let mut w = hound::WavWriter::create(dir.join(format!("{name}.wav")), spec).unwrap();
+        (0..2400).for_each(|_| w.write_sample(1000i16).unwrap());
+        w.finalize().unwrap();
+    }
+    let mut p = Project::new(48_000);
+    let pads: Vec<Value> = ["Kick 01", "Snare Tight", "Open Hat", "Closed Hat"]
+        .iter()
+        .map(|n| json!({ "file": dir.join(format!("{n}.wav")), "steps": [0, 8] }))
+        .collect();
+    let cmd = json!({ "op": "add_kit", "name": "Trap kit", "pads": pads });
+    let made = apply(&mut p, &dir, serde_json::from_value(cmd).unwrap()).unwrap();
+    assert_eq!(made["kit"], 0);
+    assert_eq!(made["pads"], json!([1, 2, 3, 4]));
+    // Each pad on its name's drum note, the hats choking each other, its sound copied in.
+    let pads: Vec<_> = (1..5).map(|t| p.tracks[t].pad.unwrap()).collect();
+    assert_eq!(
+        pads.iter().map(|d| (d.note, d.choke)).collect::<Vec<_>>(),
+        [(36, None), (38, None), (46, Some(1)), (42, Some(1))]
+    );
+    assert!(dir.join("Audio Files/Kick 01.wav").exists());
+    let split = apply(
+        &mut p,
+        &dir,
+        serde_json::from_value(json!({ "op": "split_kit", "track": 0 })).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(split["regions"], 4);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_track_takes_the_synth_by_patch_and_settings() {
+    use crate::song::project::{
+        FilterField, FilterRouting, Instrument, Param, PolyFilter, Warp, filter_param,
+    };
+    let mut p = Project::new(48_000);
+    run(&mut p, r#"{"op": "add_track", "name": "Bass"}"#).unwrap();
+    let s = |p: &Project| match &p.tracks[0].instrument {
+        Some(Instrument::Poly(s)) => (**s).clone(),
+        i => panic!("{i:?}"),
+    };
+    run(
+        &mut p,
+        r#"{"op": "set_synth", "track": 0, "patch": "Reese"}"#,
+    )
+    .unwrap();
+    assert_eq!(s(&p).patch, "Reese");
+    // Only what's given changes.
+    run(&mut p, r#"{"op": "set_synth", "track": 0, "settings": {"params": {"filter1_cutoff": 900}, "filters": ["diode", "none"], "routing": "parallel", "warps": [["sync", "none"], ["none", "none"], ["none", "none"]]}}"#).unwrap();
+    let now = s(&p);
+    assert_eq!(now.patch, "Reese");
+    assert_eq!(now.params[filter_param(0, FilterField::Cutoff)], 900.0);
+    assert_eq!(now.filters[0], PolyFilter::Diode);
+    assert_eq!(now.routing, FilterRouting::Parallel);
+    assert_eq!(now.warps[0][0], Warp::Sync);
+    assert_eq!(
+        now.tables,
+        crate::song::project::poly_patch("Reese").unwrap().tables
+    );
+    // Its parameters automated in their own units, by id or by name.
+    run(&mut p, r#"{"op": "set_automation", "track": 0, "param": "synth", "knob": "filter1_cutoff", "points": [{"tick": 0, "value": 632.5}]}"#).unwrap();
+    let i = filter_param(0, FilterField::Cutoff) as u16;
+    let points = p.tracks[0].automation.points(Param::Poly(i));
+    assert!((points[0].value - 0.5).abs() < 1e-3, "{points:?}");
+    let e = run(
+        &mut p,
+        r#"{"op": "set_automation", "track": 0, "param": "synth", "knob": "wobble", "points": []}"#,
+    )
+    .unwrap_err();
+    assert!(e.contains("wobble"), "{e}");
+    // Bad patch names say what there is.
+    let e = run(
+        &mut p,
+        r#"{"op": "set_synth", "track": 0, "patch": "Nope"}"#,
+    )
+    .unwrap_err();
+    assert!(e.contains("Supersaw") && e.contains("Drone"), "{e}");
+}
+
+#[test]
+fn a_loop_says_how_far_it_runs() {
+    let mut p = Project::new(48_000);
+    run(
+        &mut p,
+        r#"{"op": "add_track", "name": "Keys", "instrument": "synth"}"#,
+    )
+    .unwrap();
+    run(
+        &mut p,
+        r#"{"op": "add_midi_region", "track": 0, "start": 0, "length": 15360, "notes": []}"#,
+    )
+    .unwrap();
+    let alone = run(
+        &mut p,
+        r#"{"op": "set_region", "track": 0, "region": 0, "loop": true}"#,
+    )
+    .unwrap();
+    assert_eq!(alone["loops_to"], 15360);
+    assert!(
+        alone["note"].as_str().unwrap().contains("loop_length"),
+        "{alone}"
+    );
+    let far = run(
+        &mut p,
+        r#"{"op": "set_region", "track": 0, "region": 0, "loop_length": 122880}"#,
+    )
+    .unwrap();
+    assert_eq!(far, json!({"loops_to": 122880, "bars": "1-32"}));
+}
+
+#[test]
+fn a_fill_dropped_in_a_loop_keeps_the_loop_going() {
+    let mut p = Project::new(48_000);
+    run(
+        &mut p,
+        r#"{"op": "add_track", "name": "Keys", "instrument": "synth"}"#,
+    )
+    .unwrap();
+    run(
+        &mut p,
+        r#"{"op": "add_midi_region", "track": 0, "start": 0, "length": 15360,
+            "notes": [{"start": 0, "length": 240, "pitch": 60, "velocity": 100},
+                      {"start": 7680, "length": 240, "pitch": 64, "velocity": 100}]}"#,
+    )
+    .unwrap();
+    run(
+        &mut p,
+        r#"{"op": "set_region", "track": 0, "region": 0, "loop_length": 122880}"#,
+    )
+    .unwrap();
+    run(
+        &mut p,
+        r#"{"op": "add_midi_region", "track": 0, "start": 61440, "length": 3840,
+            "notes": [{"start": 0, "length": 240, "pitch": 72, "velocity": 100}]}"#,
+    )
+    .unwrap();
+    let heard: Vec<(i64, u8)> = crate::music::compose::heard_notes(&p, 0)
+        .iter()
+        .map(|n| (n.start, n.pitch))
+        .collect();
+    // The fill in place of its bar, the loop's second half straight after it, then whole loops.
+    assert!(heard.contains(&(61440, 72)), "{heard:?}");
+    assert!(!heard.contains(&(61440, 60)), "{heard:?}");
+    assert!(heard.contains(&(69120, 64)), "{heard:?}");
+    assert!(heard.contains(&(76800, 60)), "{heard:?}");
+    assert!(heard.contains(&(115200, 64)), "{heard:?}");
+    assert_eq!(p.end(), 122880);
+}
+
+/// A 4-bar region of notes, on a new track.
+fn four_bars(p: &mut Project) {
+    run(
+        p,
+        r#"{"op": "add_track", "name": "Keys", "instrument": "synth"}"#,
+    )
+    .unwrap();
+    run(
+        p,
+        r#"{"op": "add_midi_region", "track": 0, "start": 0, "length": 15360,
+            "notes": [{"start": 0, "length": 960, "pitch": 60, "velocity": 100},
+                      {"start": 11520, "length": 960, "pitch": 64, "velocity": 100}]}"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn trimming_a_loop_out_runs_its_loops_and_keeps_its_notes_going() {
+    let mut p = Project::new(48_000);
+    four_bars(&mut p);
+    run(
+        &mut p,
+        r#"{"op": "set_region", "track": 0, "region": 0, "loop": true}"#,
+    )
+    .unwrap();
+    let out = run(
+        &mut p,
+        r#"{"op": "trim_region", "track": 0, "region": 0, "end": 122880}"#,
+    )
+    .unwrap();
+    assert_eq!(out, json!({"loops_to": 122880, "bars": "1-32"}));
+    let r = &p.tracks[0].regions[0];
+    assert_eq!((r.length, r.loop_length), (15360, Some(122880)));
+    assert_eq!(p.end(), 122880);
+    // Notes in the last pass: bar 29 and its last bar.
+    let heard: Vec<i64> = crate::music::compose::heard_notes(&p, 0)
+        .iter()
+        .map(|n| n.start)
+        .collect();
+    assert!(
+        heard.contains(&107520) && heard.contains(&119040),
+        "{heard:?}"
+    );
+    // Trimmed back in, they stop sooner.
+    run(
+        &mut p,
+        r#"{"op": "trim_region", "track": 0, "region": 0, "end": 61440}"#,
+    )
+    .unwrap();
+    assert_eq!(p.loop_end((0, 0)), 61440);
+}
+
+#[test]
+fn how_far_a_loop_runs_and_one_pass_given_the_wrong_way_round_are_put_right() {
+    let mut p = Project::new(48_000);
+    four_bars(&mut p);
+    run(
+        &mut p,
+        r#"{"op": "trim_region", "track": 0, "region": 0, "end": 61440}"#,
+    )
+    .unwrap();
+    let out = run(
+        &mut p,
+        r#"{"op": "set_region", "track": 0, "region": 0, "loop_length": 15360}"#,
+    )
+    .unwrap();
+    assert_eq!(out, json!({"loops_to": 61440, "bars": "1-16"}));
+    assert_eq!(p.tracks[0].regions[0].length, 15360);
+}
+
+#[test]
+fn a_pass_that_ends_in_silence_says_so() {
+    let mut p = Project::new(48_000);
+    run(
+        &mut p,
+        r#"{"op": "add_track", "name": "Keys", "instrument": "synth"}"#,
+    )
+    .unwrap();
+    run(
+        &mut p,
+        r#"{"op": "add_midi_region", "track": 0, "start": 0, "length": 15360,
+            "notes": [{"start": 0, "length": 960, "pitch": 60, "velocity": 100}]}"#,
+    )
+    .unwrap();
+    let out = run(
+        &mut p,
+        r#"{"op": "set_region", "track": 0, "region": 0, "loop_length": 122880}"#,
+    )
+    .unwrap();
+    assert!(
+        out["note"].as_str().unwrap().contains("ends in silence"),
+        "{out}"
+    );
 }
