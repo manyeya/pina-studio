@@ -61,3 +61,20 @@ fn plugin_settings_are_saved_with_the_project_and_loaded_back() {
     assert!(Engine::load(&loaded, &dir, 48_000.0).is_ok());
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn running_plugins_are_matched_to_where_they_are_now() {
+    assert_eq!(
+        matching(&['a', 'b', 'c'], &['c', 'a', 'b']),
+        [Some(2), Some(0), Some(1)]
+    );
+    // The same plugin twice keeps the order they came in; one new is none.
+    assert_eq!(
+        matching(&['a', 'a', 'b'], &['b', 'a', 'a']),
+        [Some(2), Some(0), Some(1)]
+    );
+    assert_eq!(
+        matching(&['a', 'b'], &['a', 'c', 'b']),
+        [Some(0), None, Some(1)]
+    );
+}

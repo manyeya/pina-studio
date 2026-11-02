@@ -304,6 +304,7 @@ fn an_edit_while_playing_lets_go_of_notes_the_song_no_longer_has() {
     let lane = make_lane(
         Some(&Instrument::Synth),
         &[],
+        &mut Vec::new(),
         RATE,
         &mut Modules::new(),
         Path::new("."),
@@ -400,7 +401,7 @@ fn loops_dragged_out_stop_where_they_were_dragged_and_stretching_spreads_notes()
     assert_eq!(p.loop_end((0, 0)), PPQ * 3);
     // Stretched to twice as long: the note starts and lasts twice as late and long.
     p.tracks[0].regions[1].start = PPQ * 5;
-    p.flex((0, 1), PPQ * 2).unwrap();
+    p.time_stretch((0, 1), PPQ * 2).unwrap();
     let r = &p.tracks[0].regions[1];
     let Content::Midi { notes, .. } = &r.content else {
         unreachable!()
@@ -425,4 +426,113 @@ fn region_playback_settings_change_what_plays_not_the_notes() {
         unreachable!()
     };
     assert_eq!((notes[0].start, notes[0].pitch), (100, 60));
+}
+
+#[test]
+fn a_kits_pads_play_its_notes_and_a_closed_hat_chokes_the_open_one() {
+    use crate::song::project::{NewPad, Sampler, Zone};
+    let dir = scratch_dir("kit");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: RATE as u32,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    // A second of steady level: a hit that rings until something stops it.
+    let mut w = hound::WavWriter::create(dir.join("ring.wav"), spec).unwrap();
+    (0..RATE as usize).for_each(|_| w.write_sample(0.5f32).unwrap());
+    w.finalize().unwrap();
+    let pad = |name: &str, note: u8, choke: Option<u8>| NewPad {
+        name: name.into(),
+        sampler: Sampler {
+            zones: vec![Zone {
+                file: "ring.wav".into(),
+                note,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        note,
+        choke,
+        steps: Vec::new(),
+    };
+    let mut p = project(Vec::new());
+    let made = p.add_kit(
+        "Kit",
+        vec![
+            pad("Kick", 36, None),
+            pad("Open hat", 46, Some(1)),
+            pad("Closed hat", 42, Some(1)),
+        ],
+        0,
+        0,
+        false,
+    );
+    // On the kit track: the kick on beat 1, the open hat on beat 2, the closed hat half a beat
+    // later.
+    p.tracks[made.kit].regions.push(Region {
+        start: 0,
+        length: PPQ * 4,
+        content: Content::Midi {
+            notes: vec![
+                note(0, 240, 36),
+                note(PPQ as i64, 240, 46),
+                note(PPQ as i64 * 3 / 2, 240, 42),
+            ],
+            controls: Vec::new(),
+        },
+        ..Default::default()
+    });
+    let beat = (RATE * 60.0 / p.tempo) as usize;
+    let level = |out: &[Vec<f32>; 2], at: f64| peak(&out[0][(at * beat as f64) as usize..][..200]);
+    // The open hat alone: it rings from beat 2 until the closed hat cuts it off.
+    p.tracks[made.pads[1]].solo = true;
+    let out = render(&p, &dir, beat * 3);
+    assert!(level(&out, 0.5) < 1e-4, "it plays only its own note");
+    assert!(level(&out, 1.25) > 0.1);
+    assert!(level(&out, 1.75) < 1e-3, "choked: {}", level(&out, 1.75));
+    // The kick alone: on beat 1.
+    p.tracks[made.pads[1]].solo = false;
+    p.tracks[made.pads[0]].solo = true;
+    let out = render(&p, &dir, beat * 2);
+    assert!(level(&out, 0.1) > 0.1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn every_patch_of_the_synth_sounds_on_a_track_and_follows_its_automation() {
+    use crate::song::project::{
+        AutoPoint, FilterField, Instrument, POLY_PATCHES, Param, PolyFilter, filter_param,
+        poly_patch,
+    };
+    let track = |p| {
+        let mut t = synth_track("a", vec![note(0, PPQ * 4, 57)], PPQ * 4);
+        t.instrument = Some(Instrument::Poly(Box::new(p)));
+        t
+    };
+    let frames = 48_000;
+    for (name, ..) in POLY_PATCHES {
+        // Those that take their time need longer to speak.
+        let [l, r] = render(
+            &project(vec![track(poly_patch(name).unwrap())]),
+            Path::new("."),
+            frames,
+        );
+        let top = peak(&l).max(peak(&r));
+        assert!(top > 0.002, "{name} is silent: {top}");
+        assert!(top < 2.5, "{name} is far too loud: {top}");
+        assert!(l.iter().chain(&r).all(|v| v.is_finite()), "{name}");
+    }
+    // Its automation: a filter's cutoff brought down over the note.
+    let mut p = poly_patch("Init").unwrap();
+    p.filters[0] = PolyFilter::Ladder;
+    let open = track(p);
+    let mut closing = open.clone();
+    closing
+        .automation
+        .points_mut(Param::Poly(filter_param(0, FilterField::Cutoff) as u16))
+        .push(AutoPoint::new(0, 0.0));
+    let heard =
+        |t: &Track| peak(&render(&project(vec![t.clone()]), Path::new("."), 24_000)[0][12_000..]);
+    assert!(heard(&closing) < heard(&open) * 0.1, "{}", heard(&closing));
 }

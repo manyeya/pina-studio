@@ -26,8 +26,10 @@ fn audio_regions_play_their_slice_of_the_file() {
             file: "ramp.wav".into(),
             offset: 100,
             stretch: 1.0,
-            flex: Flex::default(),
-            follow: false,
+            stretch_mode: StretchMode::default(),
+            follow: crate::song::project::Follow::Off,
+            tempo: None,
+            grid: None,
             formants: false,
             warps: Vec::new(),
         },
@@ -69,8 +71,10 @@ fn an_audio_regions_fades_bring_it_in_and_take_it_out() {
             file: "flat.wav".into(),
             offset: 0,
             stretch: 1.0,
-            flex: Flex::default(),
-            follow: false,
+            stretch_mode: StretchMode::default(),
+            follow: crate::song::project::Follow::Off,
+            tempo: None,
+            grid: None,
             formants: false,
             warps: Vec::new(),
         },
@@ -99,8 +103,10 @@ fn a_missing_audio_file_leaves_out_its_region_only() {
             file: "gone.wav".into(),
             offset: 0,
             stretch: 1.0,
-            flex: Flex::default(),
-            follow: false,
+            stretch_mode: StretchMode::default(),
+            follow: crate::song::project::Follow::Off,
+            tempo: None,
+            grid: None,
             formants: false,
             warps: Vec::new(),
         },
@@ -124,7 +130,7 @@ fn a_missing_audio_file_leaves_out_its_region_only() {
 #[test]
 fn flex_stretches_audio_and_keeps_its_pitch() {
     // A second of 441 Hz, flexed to fill two seconds (four beats at 120 bpm).
-    let dir = scratch_dir("flex");
+    let dir = scratch_dir("time-stretch");
     let tone: Vec<f32> = (0..48_000)
         .map(|i| 0.5 * (std::f32::consts::TAU * 441.0 * i as f32 / 48_000.0).sin())
         .collect();
@@ -141,8 +147,10 @@ fn flex_stretches_audio_and_keeps_its_pitch() {
         file: "tone.wav".into(),
         offset: 0,
         stretch: 1.0,
-        flex: Flex::default(),
-        follow: false,
+        stretch_mode: StretchMode::default(),
+        follow: crate::song::project::Follow::Off,
+        tempo: None,
+        grid: None,
         formants: false,
         warps: Vec::new(),
     };
@@ -157,7 +165,7 @@ fn flex_stretches_audio_and_keeps_its_pitch() {
         regions: vec![region],
         ..Default::default()
     }]);
-    p.flex((0, 0), PPQ * 4).unwrap();
+    p.time_stretch((0, 0), PPQ * 4).unwrap();
     assert!(matches!(
         p.region((0, 0)).content,
         Content::Audio { stretch: 2.0, .. }
@@ -194,16 +202,18 @@ fn a_player_plays_a_stand_in_while_a_stretch_is_made_off_its_thread() {
     let mut files = AudioFiles::new(&dir, 48_000.0).in_background();
     let get = |files: &mut AudioFiles| {
         files.begin();
-        let data = files
-            .stretched(Path::new("tone.wav"), stretch::Fit::ratio(1.5))
+        let (data, at) = files
+            .stretched(Path::new("tone.wav"), stretch::Fit::ratio(1.5), 0, 72_000)
             .unwrap();
+        assert_eq!(at, 0);
         files.end();
         data
     };
     // At once: as long as the stretch will be.
     let stand_in = get(&mut files);
     assert_eq!(stand_in.channels[0].len(), 72_000);
-    assert!(files.rendering());
+    assert!(files.rendering() && files.stretching(Path::new("tone.wav")));
+    assert!(!files.stretching(Path::new("other.wav")));
     let deadline = Instant::now() + Duration::from_secs(10);
     while !files.fresh() {
         assert!(Instant::now() < deadline, "never made");
@@ -213,7 +223,7 @@ fn a_player_plays_a_stand_in_while_a_stretch_is_made_off_its_thread() {
     let made = get(&mut files);
     assert!(!Arc::ptr_eq(&stand_in, &made));
     assert_eq!(made.channels[0].len(), 72_000);
-    assert!(!files.rendering());
+    assert!(!files.rendering() && !files.stretching(Path::new("tone.wav")));
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -241,8 +251,10 @@ fn a_transposed_audio_region_moves_in_pitch_not_length() {
             file: "tone.wav".into(),
             offset: 0,
             stretch: 1.0,
-            flex: Flex::default(),
-            follow: false,
+            stretch_mode: StretchMode::default(),
+            follow: crate::song::project::Follow::Off,
+            tempo: None,
+            grid: None,
             formants: false,
             warps: Vec::new(),
         },
@@ -286,8 +298,10 @@ fn a_launched_audio_cell_plays_its_loop() {
             file: "loop.wav".into(),
             offset: 0,
             stretch: 1.0,
-            flex: Flex::default(),
-            follow: false,
+            stretch_mode: StretchMode::default(),
+            follow: crate::song::project::Follow::Off,
+            tempo: None,
+            grid: None,
             formants: false,
             warps: Vec::new(),
         },

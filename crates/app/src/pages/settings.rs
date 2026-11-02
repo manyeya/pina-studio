@@ -5,11 +5,12 @@
 //! with a double-click), the transport (following the playhead, going back where play started on
 //! stop), automation (its lanes' height, what an automated control does moved while stopped,
 //! snapping, thinning, Write turning to Latch, automation going with regions), and the editor's
-//! tabs (a hidden one's shortcut still opens it).
+//! tabs (a hidden one's shortcut still opens it). And audio: the output, and its buffer.
 
 use std::path::PathBuf;
 
 use gpui::{Context, Div, FontWeight, MouseButton, div, prelude::*, px, rgb};
+use pina_engine::audio::engine::{AudioSetup, buffer_sizes, output_devices};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -57,6 +58,8 @@ pub struct Settings {
     pub thin_recorded: bool,
     pub write_to_latch: bool,
     pub carry_automation: bool,
+    /// The output it plays through, and that output's buffer.
+    pub audio: AudioSetup,
 }
 
 impl Default for Settings {
@@ -85,6 +88,7 @@ impl Default for Settings {
             thin_recorded: true,
             write_to_latch: true,
             carry_automation: false,
+            audio: AudioSetup::default(),
         }
     }
 }
@@ -105,7 +109,7 @@ impl Settings {
         }
     }
 
-    fn save(&self) {
+    pub(crate) fn save(&self) {
         if cfg!(test) {
             return;
         }
@@ -131,16 +135,18 @@ pub enum Section {
     Regions,
     Editing,
     Transport,
+    Audio,
     Automation,
     Tabs,
 }
 
 impl Section {
-    const ALL: [Section; 6] = [
+    const ALL: [Section; 7] = [
         Section::Tracks,
         Section::Regions,
         Section::Editing,
         Section::Transport,
+        Section::Audio,
         Section::Automation,
         Section::Tabs,
     ];
@@ -151,6 +157,7 @@ impl Section {
             Section::Regions => "Regions & grid",
             Section::Editing => "Editing",
             Section::Transport => "Transport",
+            Section::Audio => "Audio",
             Section::Automation => "Automation",
             Section::Tabs => "Editor tabs",
         }
@@ -162,6 +169,7 @@ impl Section {
             Section::Regions => Icon::Grid,
             Section::Editing => Icon::Pointer,
             Section::Transport => Icon::Play,
+            Section::Audio => Icon::Speaker,
             Section::Automation => Icon::Fade,
             Section::Tabs => Icon::PanelBottom,
         }
@@ -175,6 +183,9 @@ impl Section {
             Section::Regions => "How regions and the grid behind them look.",
             Section::Editing => "What the mouse does in the tracks.",
             Section::Transport => "Playing and stopping.",
+            Section::Audio => {
+                "Where the sound goes, and how much room the computer has to make it."
+            }
             Section::Automation => {
                 "Volume, pan, mute, sends and plugin parameters over time: the lanes under each track (A), and what moving an automated control does."
             }
@@ -187,9 +198,10 @@ impl Section {
 
 impl Bottom {
     /// The editor's tabs, in order.
-    pub const ALL: [Bottom; 7] = [
+    pub const ALL: [Bottom; 8] = [
         Bottom::PianoRoll,
         Bottom::Steps,
+        Bottom::Drums,
         Bottom::Sampler,
         Bottom::Modulation,
         Bottom::Score,
@@ -201,6 +213,7 @@ impl Bottom {
         match self {
             Bottom::PianoRoll => "piano_roll",
             Bottom::Steps => "steps",
+            Bottom::Drums => "drums",
             Bottom::Sampler => "sampler",
             Bottom::Modulation => "modulation",
             Bottom::Score => "score",
@@ -213,6 +226,7 @@ impl Bottom {
         match self {
             Bottom::PianoRoll => "Piano Roll",
             Bottom::Steps => "Step Sequencer",
+            Bottom::Drums => "Drum Machine",
             Bottom::Sampler => "Sampler",
             Bottom::Modulation => "Modulation",
             Bottom::Score => "Score",
@@ -225,6 +239,7 @@ impl Bottom {
         match self {
             Bottom::PianoRoll => "A MIDI region's notes against a keyboard · P",
             Bottom::Steps => "Patterns: the sounds as pads, a row of steps each",
+            Bottom::Drums => "A kit's pads: play them, shape and swap their sounds",
             Bottom::Sampler => "The Sampler's zones, waveform and voice",
             Bottom::Modulation => "LFOs, steps, envelopes and followers, and what they move",
             Bottom::Score => "A MIDI region as notation · N",
@@ -273,6 +288,34 @@ impl Workspace {
         }
         self.settings.save();
         cx.notify();
+    }
+
+    /// What can be played through, as of now: asking the system is too slow to do every frame.
+    fn read_outputs(&mut self) {
+        self.outputs = output_devices();
+        self.buffers = buffer_sizes(self.settings.audio.device.as_deref());
+    }
+
+    /// Plays through `audio` from now on. If it can't, what was playing goes on, and says why.
+    fn set_audio(&mut self, audio: AudioSetup, cx: &mut Context<Self>) {
+        match self.player.set_output(&audio) {
+            Ok(()) => {
+                self.settings.audio = audio;
+                self.settings.save();
+                self.read_outputs();
+            }
+            Err(e) => self.status = Some(format!("Couldn't change the audio output: {e}")),
+        }
+        cx.notify();
+    }
+
+    /// `device` from now on, on a buffer it can do.
+    fn set_output_device(&mut self, device: Option<String>, cx: &mut Context<Self>) {
+        let mut audio = self.settings.audio.clone();
+        let can = buffer_sizes(device.as_deref());
+        audio.buffer = audio.buffer.filter(|b| can.contains(b));
+        audio.device = device;
+        self.set_audio(audio, cx);
     }
 
     fn flip(&mut self, field: Field, cx: &mut Context<Self>) {
@@ -352,6 +395,40 @@ impl Workspace {
                 Box::new(move |ws, cx| ws.flip(field, cx)),
                 cx,
             )
+        };
+        // A choice of a few, beside its title.
+        let choose = |title: &'static str, what: &'static str, segs: Vec<Div>| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(14.))
+                .px(px(14.))
+                .py(px(12.))
+                .rounded(px(12.))
+                .bg(rgb(CARD))
+                .border_1()
+                .border_color(rgb(LINE))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(title),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(rgb(TEXT_3))
+                                .child(what),
+                        ),
+                )
+                .child(tray().p(px(2.)).rounded(px(8.)).children(segs))
         };
         let body: Vec<Div> = match section {
             Section::Tracks => {
@@ -514,41 +591,72 @@ impl Workspace {
                     cx,
                 ),
             ])],
-            Section::Automation => {
-                // A choice of a few, beside its title.
-                let choose = |title: &'static str, what: &'static str, segs: Vec<Div>| {
+            Section::Audio => {
+                let audio = self.settings.audio.clone();
+                let output = |name: Option<String>, cx: &mut Context<Self>| {
+                    let (on, shown) = (name == audio.device, name.clone());
+                    let shown = shown.unwrap_or_else(|| "System output".to_string());
+                    let selector = format!("setting-output-{shown}");
                     div()
                         .flex()
                         .items_center()
                         .gap(px(14.))
                         .px(px(14.))
-                        .py(px(12.))
-                        .rounded(px(12.))
-                        .bg(rgb(CARD))
-                        .border_1()
-                        .border_color(rgb(LINE))
+                        .py(px(11.))
+                        .border_b_1()
+                        .border_color(rgb(LINE_SOFT))
+                        .cursor_pointer()
+                        .hover(|d| d.bg(rgb(OFF)))
+                        .debug_selector(move || selector)
                         .child(
                             div()
                                 .flex_1()
                                 .min_w(px(0.))
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.))
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child(title),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.5))
-                                        .text_color(rgb(TEXT_3))
-                                        .child(what),
-                                ),
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(shown),
                         )
-                        .child(tray().p(px(2.)).rounded(px(8.)).children(segs))
+                        .when(on, |d| {
+                            d.child(icon(Icon::Check, 15.).text_color(rgb(TEXT)))
+                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| {
+                                ws.set_output_device(name.clone(), cx);
+                            }),
+                        )
                 };
+                let mut outputs = vec![output(None, cx)];
+                for name in self.outputs.clone() {
+                    outputs.push(output(Some(name), cx));
+                }
+                let buffers = std::iter::once(None)
+                    .chain(self.buffers.iter().copied().map(Some))
+                    .map(|size| {
+                        let label = size.map_or("Auto".to_string(), |b| b.to_string());
+                        let selector = format!("setting-buffer-{label}");
+                        seg(label, size == audio.buffer, 26.)
+                            .debug_selector(move || selector)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    let mut audio = ws.settings.audio.clone();
+                                    audio.buffer = size;
+                                    ws.set_audio(audio, cx);
+                                }),
+                            )
+                    })
+                    .collect();
+                vec![
+                    card(outputs),
+                    choose(
+                        "Buffer size",
+                        "Bigger gives a heavy song more room, smaller answers your keyboard sooner: 512 suits mixing, 128 playing live",
+                        buffers,
+                    ),
+                ]
+            }
+            Section::Automation => {
                 let height = self.settings.auto_height;
                 let heights = AUTO_HEIGHTS
                     .map(|(label, h)| {
@@ -661,6 +769,9 @@ impl Workspace {
                     MouseButton::Left,
                     cx.listener(move |ws, _, _, cx| {
                         ws.settings_section = s;
+                        if s == Section::Audio {
+                            ws.read_outputs();
+                        }
                         cx.notify();
                     }),
                 )

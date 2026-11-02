@@ -17,3 +17,8 @@ debug = false
 [profile.dev]
 opt-level = 1
 debug = "line-tables-only"
+
+# What ships: the audio thread has no time to spare, so code is optimized across its crates.
+[profile.release]
+lto = "thin"
+codegen-units = 1

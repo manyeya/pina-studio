@@ -1,6 +1,7 @@
 mod audio;
 mod latency;
 mod live;
+mod load;
 mod mixing;
 mod modulation;
 mod notes;
@@ -84,7 +85,7 @@ impl crate::plugin::ProcessorApi for Probe {
     fn latency(&self) -> u32 {
         0
     }
-    fn set_transport(&mut self, _: bool, position: u64, _: f64) {
+    fn set_transport(&mut self, _: bool, position: u64, _: f64, _: f64) {
         self.at = position;
     }
     fn automate(&mut self, _: u32, _: f64, _: f64) {}
@@ -123,7 +124,14 @@ fn probed(p: &Project, probe: &Probe) -> Engine {
             .instrument
             .as_ref()
             .filter(|i| !matches!(i, Instrument::Plugin(_)));
-        let made = make_lane(built_in, &[], RATE, &mut Modules::new(), Path::new("."));
+        let made = make_lane(
+            built_in,
+            &[],
+            &mut Vec::new(),
+            RATE,
+            &mut Modules::new(),
+            Path::new("."),
+        );
         let mut lane = made.unwrap().0;
         if matches!(t.instrument, Some(Instrument::Plugin(_))) {
             lane.source = Source::Plugin(Box::new(probe.clone()));

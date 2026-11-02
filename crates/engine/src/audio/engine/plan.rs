@@ -43,7 +43,7 @@ pub(crate) struct ControlEvent {
 
 /// What every lane plays, and how loud.
 pub struct Arrangement {
-    pub(crate) tempo: f64,
+    pub(crate) tempo: crate::song::project::TempoMap,
     pub(crate) master: f32,
     pub(crate) plans: Vec<Plan>,
     pub(crate) auxes: Vec<AuxPlan>,
@@ -53,8 +53,9 @@ pub struct Arrangement {
     pub(crate) buses: Vec<[Vec<f32>; 2]>,
     /// How far ahead of what's heard the engine reads, so plugins' latency doesn't make it late.
     pub(crate) lookahead: u64,
-    /// The master's built-in EQ and compressor.
+    /// The master's built-in EQ and compressor, and the order its effects run in.
     pub(crate) master_strip: StripDsp,
+    pub(crate) master_chain: Vec<Fx>,
     /// Where playback loops, in samples, while the cycle is on.
     pub(crate) cycle: Option<(u64, u64)>,
     /// The lane holding the master's plugins, and the track each of them hears as a sidechain.
@@ -62,6 +63,10 @@ pub struct Arrangement {
     pub(crate) master_sidechains: Vec<Option<usize>>,
     /// The order tracks are worked out in: a sidechain's source before what hears it.
     pub(crate) order: Vec<usize>,
+    /// Where `order` is divided: the tracks of a round hear none of each other and share no lane,
+    /// so they run at once, and each round starts where the last ended. The auxes' likewise.
+    pub(crate) rounds: Vec<usize>,
+    pub(crate) aux_rounds: Vec<usize>,
     /// Each track's output this block, kept for the plugins that hear it as a sidechain.
     pub(crate) sidechains: Vec<[Vec<f32>; 2]>,
     /// A beat, in quarter notes, and beats to a bar: for the metronome.
@@ -72,7 +77,7 @@ pub struct Arrangement {
 impl Arrangement {
     pub(crate) fn empty() -> Self {
         Arrangement {
-            tempo: 120.0,
+            tempo: crate::song::project::TempoMap::steady(120.0, 48_000.0),
             master: 1.0,
             plans: Vec::new(),
             auxes: Vec::new(),
@@ -80,10 +85,13 @@ impl Arrangement {
             buses: Vec::new(),
             lookahead: 0,
             master_strip: StripDsp::default(),
+            master_chain: Vec::new(),
             cycle: None,
             master_lane: None,
             master_sidechains: Vec::new(),
             order: Vec::new(),
+            rounds: Vec::new(),
+            aux_rounds: Vec::new(),
             sidechains: Vec::new(),
             beat: 1.0,
             beats_per_bar: 4,
@@ -91,31 +99,56 @@ impl Arrangement {
     }
 }
 
-/// A channel's built-in EQ, compressor and saturator, unless absent or bypassed; and what the
-/// EQ's linear phase or spectral dynamics need, made here, off the audio thread.
+/// A channel's built-in EQ, compressor and saturator, unless absent or bypassed, and its
+/// limiter (bypassed, it still holds the sound back); its other built-ins, each alone; and what
+/// the EQs' linear phase or spectral dynamics need, made here, off the audio thread.
 pub(crate) fn strip_dsp(
     eq: Option<&Eq>,
     comp: Option<&Comp>,
     sat: Option<&Saturator>,
+    limit: Option<&Limiter>,
+    more: &[Unit],
     rate: f64,
 ) -> StripDsp {
     let eq = eq.filter(|e| !e.bypass).copied();
+    let one = |u: &Unit| {
+        let (mut eq, mut comp, mut sat, mut limit, mut unit) = (None, None, None, None, None);
+        match u {
+            Unit::Eq(e) => eq = Some(e),
+            Unit::Comp(c) => comp = Some(c),
+            Unit::Sat(s) => sat = Some(s),
+            Unit::Limit(l) => limit = Some(l),
+            u => unit = Some(*u).filter(|u| !u.bypassed()),
+        }
+        StripDsp {
+            unit,
+            ..strip_dsp(eq, comp, sat, limit, &[], rate)
+        }
+    };
     StripDsp {
         made: eq.as_ref().map(|e| Arc::new(Made::new(e, rate))),
         eq,
         comp: comp.filter(|c| !c.bypass).copied(),
         sat: sat.filter(|s| !s.bypass).copied(),
+        limit: limit.copied(),
+        unit: None,
+        more: Arc::new(more.iter().map(one).collect()),
     }
 }
 
-/// What a channel's built-in EQ, compressor and saturator are set to; the lane's `Strip` (or the
-/// engine's, for the master) runs them.
+/// What a channel's built-in EQ, compressor, saturator and limiter are set to; the lane's `Strip`
+/// (or the engine's, for the master) runs them.
 #[derive(Default)]
 pub(crate) struct StripDsp {
     pub(crate) eq: Option<Eq>,
     pub(crate) made: Option<Arc<Made>>,
     pub(crate) comp: Option<Comp>,
     pub(crate) sat: Option<Saturator>,
+    pub(crate) limit: Option<Limiter>,
+    /// A stacked-only built-in, unless bypassed.
+    pub(crate) unit: Option<Unit>,
+    /// Its other built-ins, each alone, in the order `Fx::More` takes them.
+    pub(crate) more: Arc<Vec<StripDsp>>,
 }
 
 /// What a Live Loops cell plays, from 0, over `length` samples.
@@ -136,6 +169,7 @@ pub(crate) struct AuxPlan {
     pub(crate) mod_auto: Vec<(u8, ModParam, Vec<AutoPoint>)>,
     pub(crate) gain: [f32; 2],
     pub(crate) dsp: StripDsp,
+    pub(crate) chain: Vec<Fx>,
     /// Delay compensation after its inserts.
     pub(crate) delay: usize,
     /// The track each insert hears as a sidechain, if any.
@@ -217,6 +251,11 @@ pub(crate) struct Plan {
     pub(crate) eq_auto: Vec<(u8, EqField, Vec<AutoPoint>)>,
     /// Its modulators' settings' automation, in samples: (modulator, setting, points).
     pub(crate) mod_auto: Vec<(u8, ModParam, Vec<AutoPoint>)>,
+    /// Its limiter's settings' automation, in samples.
+    pub(crate) limit_auto: Vec<(LimitParam, Vec<AutoPoint>)>,
+    pub(crate) tool_auto: Vec<(u8, u8, Vec<AutoPoint>)>,
+    pub(crate) voice_auto: Vec<(u8, Vec<AutoPoint>)>,
+    pub(crate) poly_auto: Vec<(u16, Vec<AutoPoint>)>,
     /// Aux index, level, and whether it's taken before the fader.
     pub(crate) sends: Vec<(usize, f32, bool)>,
     /// Controller moves, sorted by time.
@@ -231,13 +270,68 @@ pub(crate) struct Plan {
     pub(crate) output: Option<usize>,
     /// The sampler's settings, which it follows as they change.
     pub(crate) sampler: Option<Arc<crate::song::project::Sampler>>,
+    pub(crate) poly: Option<Arc<crate::dsp::poly::PolyPlan>>,
     /// Delay compensation before the sends, and on the direct path after them.
     pub(crate) delay: usize,
     pub(crate) direct: usize,
     pub(crate) dsp: StripDsp,
+    /// The order its built-ins and inserts run in.
+    pub(crate) chain: Vec<Fx>,
 }
 
 impl Plan {
+    /// The effect at `place` with its knobs where their automation has them at `from`, then
+    /// moved by its modulators.
+    pub(crate) fn move_tool(&self, place: u8, from: u64, moved: &Offsets, u: &mut Unit) {
+        for (_, knob, points) in self.tool_auto.iter().filter(|a| a.0 == place) {
+            if let (Some(k), Some(v)) = (
+                knobs(u.kind()).get(*knob as usize),
+                value_at(points, from as f64),
+            ) {
+                (k.set)(u, v);
+            }
+        }
+        moved.tool(place, u);
+    }
+
+    /// The stacked effect at `j`, its knobs moved, if anything's moving them.
+    pub(crate) fn moved_more(
+        &self,
+        j: usize,
+        d: &StripDsp,
+        from: u64,
+        moved: &Offsets,
+    ) -> Option<StripDsp> {
+        let place = j as u8;
+        if !self.tool_auto.iter().any(|a| a.0 == place) && !moved.moves_tool(place) {
+            return None;
+        }
+        let mut u = d
+            .unit
+            .or(d.eq.map(Unit::Eq))
+            .or(d.comp.map(Unit::Comp))
+            .or(d.sat.map(Unit::Sat))
+            .or(d.limit.map(Unit::Limit))?;
+        self.move_tool(place, from, moved, &mut u);
+        let mut out = StripDsp {
+            eq: None,
+            made: d.made.clone(),
+            comp: None,
+            sat: None,
+            limit: None,
+            unit: None,
+            more: d.more.clone(),
+        };
+        match u {
+            Unit::Eq(e) => out.eq = Some(e),
+            Unit::Comp(c) => out.comp = Some(c),
+            Unit::Sat(s) => out.sat = Some(s),
+            Unit::Limit(l) => out.limit = Some(l),
+            other => out.unit = Some(other),
+        }
+        Some(out)
+    }
+
     /// Moves a plugin's automated parameters across a block, `from` to `to` (samples read), and
     /// its modulated ones about where they're automated or set.
     pub(crate) fn automate(
@@ -322,17 +416,44 @@ pub fn compile(
 ) -> (Arrangement, Vec<String>) {
     files.begin();
     let mut problems = Vec::new();
-    // Each channel's plugins' latency, and its EQ's.
-    let eq_latency = |eq: &Option<Eq>| eq.as_ref().map_or(0, crate::dsp::eq::latency);
-    let latencies = |l: &[(usize, u32)], eqs: &mut dyn Iterator<Item = &Option<Eq>>| {
+    // Each channel's plugins' latency, and its EQ's and limiter's.
+    let strip_latency = |eq: &Option<Eq>, limit: &Option<Limiter>, more: &[Unit]| {
+        let eq_late = |e: &Eq| crate::dsp::eq::latency(e);
+        let limit_late = |l: &Limiter| crate::dsp::limit::latency(l, rate);
+        eq.as_ref().map_or(0, eq_late)
+            + limit.as_ref().map_or(0, limit_late)
+            + more
+                .iter()
+                .map(|u| match u {
+                    Unit::Eq(e) if !e.bypass => eq_late(e),
+                    Unit::Limit(l) => limit_late(l),
+                    Unit::Pitch(p) if !p.bypass => crate::dsp::pitch::PITCH_LATENCY,
+                    Unit::Tune(t) if !t.bypass => crate::dsp::pitch::tune_latency(rate),
+                    _ => 0,
+                })
+                .sum::<u32>()
+    };
+    let latencies = |l: &[(usize, u32)], strips: &mut dyn Iterator<Item = u32>| {
         l.iter()
-            .zip(eqs)
-            .map(|(&(_, l), eq)| l + eq_latency(eq))
+            .zip(strips)
+            .map(|(&(_, l), s)| l + s)
             .collect::<Vec<_>>()
     };
     let pdc = compensate(
-        &latencies(tracks, &mut project.tracks.iter().map(|t| &t.eq)),
-        &latencies(auxes, &mut project.auxes.iter().map(|a| &a.eq)),
+        &latencies(
+            tracks,
+            &mut project
+                .tracks
+                .iter()
+                .map(|t| strip_latency(&t.eq, &t.limit, &t.more)),
+        ),
+        &latencies(
+            auxes,
+            &mut project
+                .auxes
+                .iter()
+                .map(|a| strip_latency(&a.eq, &a.limit, &a.more)),
+        ),
     );
     let any_solo = project.tracks.iter().any(|t| t.solo);
     let mut plans = Vec::new();
@@ -427,6 +548,28 @@ pub fn compile(
                 start += region.length.max(1);
             }
         }
+        // A kit's pad: its kit track's notes on its note; one of its choke group's cuts it off.
+        if let Some(pad) = t.pad {
+            for e in kit_events(project, rate, pad.kit, files, &mut problems) {
+                let choked = e.velocity > 0.0
+                    && pad.choke.is_some()
+                    && project.tracks.iter().filter_map(|o| o.pad).any(|o| {
+                        o.kit == pad.kit
+                            && o.note != pad.note
+                            && o.choke == pad.choke
+                            && o.note == e.pitch
+                    });
+                match (e.pitch == pad.note, choked) {
+                    (true, _) => events.push(e),
+                    (false, true) => events.push(Event {
+                        at: e.at,
+                        pitch: pad.note,
+                        velocity: -1.0,
+                    }),
+                    _ => {}
+                }
+            }
+        }
         // A loop cell plays its region from 0, every note ending by the loop's end.
         let cells = t
             .cells
@@ -447,6 +590,8 @@ pub fn compile(
                     &mut clips,
                     &mut problems,
                 );
+                // ponytail: a cell loops at the song's first tempo; at the tempo where it's
+                // launched if the tempo changes matter to Live Loops.
                 let length = project.samples(region.length, rate).max(1);
                 for e in &mut events {
                     e.at = e.at.min(length - 1);
@@ -573,6 +718,34 @@ pub fn compile(
                 .filter(|a| !a.points.is_empty())
                 .map(|a| (a.band, a.field, in_samples(&a.points)))
                 .collect(),
+            limit_auto: auto
+                .map(|a| &a.limit[..])
+                .unwrap_or_default()
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| (a.field, in_samples(&a.points)))
+                .collect(),
+            tool_auto: auto
+                .map(|a| &a.tools[..])
+                .unwrap_or_default()
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| (a.place, a.knob, in_samples(&a.points)))
+                .collect(),
+            poly_auto: auto
+                .map(|a| &a.poly[..])
+                .unwrap_or_default()
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| (a.param, in_samples(&a.points)))
+                .collect(),
+            voice_auto: auto
+                .map(|a| &a.voice[..])
+                .unwrap_or_default()
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| (a.knob, in_samples(&a.points)))
+                .collect(),
             mod_auto: auto
                 .map(|a| &a.mods[..])
                 .unwrap_or_default()
@@ -595,7 +768,19 @@ pub fn compile(
                 .and_then(|bus| project.auxes.iter().position(|a| a.bus == bus)),
             // Through an aux, the aux's own compensation lines it up.
             direct: if t.output.is_some() { 0 } else { pdc.direct },
-            dsp: strip_dsp(t.eq.as_ref(), t.comp.as_ref(), t.sat.as_ref(), rate),
+            dsp: strip_dsp(
+                t.eq.as_ref(),
+                t.comp.as_ref(),
+                t.sat.as_ref(),
+                t.limit.as_ref(),
+                &t.more,
+                rate,
+            ),
+            chain: chain(&t.chain, t.inserts.len(), t.more.len()),
+            poly: match &t.instrument {
+                Some(Instrument::Poly(p)) => Some(Arc::new(crate::dsp::poly::PolyPlan::new(p))),
+                _ => None,
+            },
             sampler: match &t.instrument {
                 Some(Instrument::Sampler(s)) => Some(Arc::new(s.clone())),
                 _ => None,
@@ -650,7 +835,15 @@ pub fn compile(
                 mods,
                 mod_auto,
                 gain: balance(g, a.pan),
-                dsp: strip_dsp(a.eq.as_ref(), a.comp.as_ref(), a.sat.as_ref(), rate),
+                dsp: strip_dsp(
+                    a.eq.as_ref(),
+                    a.comp.as_ref(),
+                    a.sat.as_ref(),
+                    a.limit.as_ref(),
+                    &a.more,
+                    rate,
+                ),
+                chain: chain(&a.chain, a.inserts.len(), a.more.len()),
                 delay,
                 sidechains,
             }
@@ -660,8 +853,13 @@ pub fn compile(
         plan.feeds = f;
     }
     let order = sidechain_order(&track_sidechains);
+    let rounds = rounds(&order, |o, t| {
+        plans[o].slot == plans[t].slot || track_sidechains[t].contains(&Some(o))
+    });
+    let every_aux: Vec<usize> = (0..auxes.len()).collect();
+    let aux_rounds = self::rounds(&every_aux, |a, b| auxes[a].slot == auxes[b].slot);
     let arrangement = Arrangement {
-        tempo: project.tempo,
+        tempo: crate::song::project::TempoMap::new(project, rate),
         master: db(project.master_volume_db),
         sidechains: feeds
             .iter()
@@ -672,19 +870,34 @@ pub fn compile(
             .collect(),
         master_sidechains,
         order,
+        rounds,
+        aux_rounds,
         plans,
         stack_mods: vec![[0.0; MAX_MODS]; auxes.len()],
         buses: (0..auxes.len())
             .map(|_| [vec![0.0; MAX_BLOCK], vec![0.0; MAX_BLOCK]])
             .collect(),
         auxes,
-        // The master's EQ holds back everything heard: the engine reads that much further ahead.
-        lookahead: pdc.lookahead + eq_latency(&project.master_eq) as u64,
+        // The master's EQ and limiter hold back everything heard: the engine reads that much
+        // further ahead.
+        lookahead: pdc.lookahead
+            + strip_latency(
+                &project.master_eq,
+                &project.master_limit,
+                &project.master_more,
+            ) as u64,
         master_strip: strip_dsp(
             project.master_eq.as_ref(),
             project.master_comp.as_ref(),
             project.master_sat.as_ref(),
+            project.master_limit.as_ref(),
+            &project.master_more,
             rate,
+        ),
+        master_chain: chain(
+            &project.master_chain,
+            project.master_inserts.len(),
+            project.master_more.len(),
         ),
         cycle: project
             .cycle
@@ -696,6 +909,20 @@ pub fn compile(
     };
     files.end();
     (arrangement, problems)
+}
+
+/// Where to divide `order` so nothing runs alongside what it `clashes` with, as (earlier, later).
+pub(crate) fn rounds(order: &[usize], clashes: impl Fn(usize, usize) -> bool) -> Vec<usize> {
+    let mut rounds = Vec::new();
+    let mut start = 0;
+    for (at, &t) in order.iter().enumerate() {
+        if order[start..at].iter().any(|&o| clashes(o, t)) {
+            rounds.push(at);
+            start = at;
+        }
+    }
+    rounds.push(order.len());
+    rounds
 }
 
 /// The order to work tracks out in, given the track each one's inserts hear as a sidechain:
@@ -724,6 +951,48 @@ pub(crate) fn sidechain_order(hears: &[Vec<Option<usize>>]) -> Vec<usize> {
 
 /// Adds the note events, controller moves and audio clips a region plays, in samples; a pattern's
 /// steps as the track's modulators move its sounds.
+/// Every note a kit track (by id) plays, as its regions play them.
+fn kit_events(
+    project: &Project,
+    rate: f64,
+    kit: u64,
+    files: &mut AudioFiles,
+    problems: &mut Vec<String>,
+) -> Vec<Event> {
+    let Some(k) = project.tracks.iter().position(|t| t.id == kit) else {
+        return Vec::new();
+    };
+    let track = &project.tracks[k];
+    let mods = project.mods_of(k);
+    let (mut events, mut controls, mut clips) = (Vec::new(), Vec::new(), Vec::new());
+    for (r, region) in track.regions.iter().enumerate().filter(|(_, r)| !r.mute) {
+        let until = match region.looped {
+            true => project.loop_end((k, r)),
+            false => region.start + region.length,
+        };
+        let mut start = region.start;
+        while start < until {
+            let pass = Region {
+                start,
+                length: region.length.min(until - start),
+                ..region.clone()
+            };
+            play_region(
+                project,
+                rate,
+                &pass,
+                &mods,
+                files,
+                (&mut events, &mut controls),
+                &mut clips,
+                problems,
+            );
+            start += region.length.max(1);
+        }
+    }
+    events
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn play_region(
     project: &Project,
@@ -748,7 +1017,7 @@ pub(crate) fn play_region(
                         (to as i64 - at).max(0) as u64,
                         (region.start as i64 + at).max(0) as u64,
                         mods,
-                        project.tempo,
+                        project.tempo_at(region.start),
                     ))
                 }
                 _ => content.notes((to as i64 - at).max(0) as u64).unwrap(),
@@ -837,57 +1106,60 @@ pub(crate) fn play_region(
         }
         Content::Audio {
             file,
-            offset,
-            stretch,
-            flex,
+            stretch_mode,
             formants,
-            warps,
             ..
         } => {
             let begin = (from as i64).max(at);
             if begin >= to as i64 {
                 return;
             }
-            // Warps are at the project's rate; the engine may run at another.
-            let scale = rate / project.sample_rate as f64;
-            let warps: Vec<(usize, usize)> = warps
-                .iter()
-                .map(|w| {
-                    (
-                        (w[0] as f64 * scale) as usize,
-                        (w[1] as f64 * scale) as usize,
-                    )
-                })
-                .collect();
-            // In the stretched audio, the offset is stretched too (and warped, if it's warped).
-            let offset = match (warps.is_empty(), files.frames(file)) {
-                (false, Some(n)) => {
-                    let len = (n as f64 * stretch).round() as usize;
-                    stretch::Map::new(n, len, &warps).at(*offset as usize) as u64
-                }
-                _ => (*offset as f64 * stretch) as u64,
+            // Where its file plays: as recorded, or following the song's tempo map (see
+            // `timing`). Its offset plays at the region's start, each time round a loop.
+            let n = match files.get(file) {
+                Ok(data) => data.channels[0].len(),
+                Err(e) => return problems.push(e),
             };
-            let skip = project.samples((begin - at) as u64, rate);
+            let n = (n as f64 * project.sample_rate as f64 / rate).round() as u64;
+            let anchor = (region.start as i64 + at) as f64;
+            let Some(crate::song::project::AudioFit { ratio, warps, zero }) =
+                project.audio_fit(content, anchor, n, rate)
+            else {
+                return;
+            };
             let start = project.samples(region.start + begin as u64, rate);
             let end = project.samples(region.start + to, rate);
+            let offset = ((project.seconds_at((region.start as i64 + begin) as f64) - zero) * rate)
+                .round()
+                .max(0.0) as u64;
             let fit = Fit {
-                ratio: *stretch,
+                ratio,
                 semitones: region.transpose as f64,
-                flex: *flex,
+                mode: *stretch_mode,
                 formants: *formants,
                 warps,
             };
-            match files.stretched(file, fit) {
-                Ok(data) => clips.push(Clip {
+            let (from, to) = (offset as usize, (offset + end - start) as usize);
+            match files.stretched(file, fit, from, to) {
+                Ok((data, offset)) => clips.push(Clip {
                     start,
                     len: end - start,
-                    offset: offset + skip,
+                    offset: offset as u64,
                     data,
                     fades: [
                         project.samples(region.start, rate),
-                        project.samples(region.fade_in.min(region.length), rate),
+                        project.span(
+                            region.start,
+                            region.start + region.fade_in.min(region.length),
+                            rate,
+                        ),
                         project.samples(region.start + region.length, rate),
-                        project.samples(region.fade_out.min(region.length), rate),
+                        project.span(
+                            (region.start + region.length)
+                                .saturating_sub(region.fade_out.min(region.length)),
+                            region.start + region.length,
+                            rate,
+                        ),
                     ],
                 }),
                 Err(e) => problems.push(e),

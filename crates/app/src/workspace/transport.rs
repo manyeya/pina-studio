@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// How often the CPU number changes.
+const LOAD_SHOWN: Duration = Duration::from_millis(500);
+
 impl Workspace {
     pub fn playhead(&self) -> u64 {
         self.session.project.ticks(self.player.position())
@@ -19,6 +22,7 @@ impl Workspace {
     pub fn locate_tick(&mut self, tick: u64, cx: &mut Context<Self>) {
         let at = self.session.project.samples(tick, self.player.rate());
         self.player.locate(at);
+        self.caught = true;
         cx.notify();
     }
 
@@ -32,6 +36,7 @@ impl Workspace {
             }
         } else {
             self.play_from = self.playhead();
+            self.caught = true;
             self.player.play();
         }
         cx.notify();
@@ -181,19 +186,35 @@ impl Workspace {
             .map(|t| t.id)
             .chain(self.session.project.auxes.iter().map(|a| a.id))
             .collect();
+        let watched = self.fx_view.as_ref().map(|v| self.channel_id(v.ch));
         for id in ids.iter().map(|&id| Some(id)).chain([None]) {
             let peak = match id {
                 Some(id) => self.player.meter(id),
                 None => self.player.master_meter(),
             };
             self.levels.entry(id).or_default().update(peak);
+            let raw = self.player.reduction(id);
+            if let Some(v) = self.fx_view.as_mut().filter(|_| watched == Some(id)) {
+                v.reduction = raw;
+            }
             let gr = self.reductions.entry(id).or_default();
-            *gr = self.player.reduction(id).max(*gr * 0.9);
+            *gr = raw.max(*gr * 0.9);
         }
         self.read_mods();
-        // A spike shows, then falls away by half every half second.
-        let since = std::mem::replace(&mut self.load_read, Instant::now()).elapsed();
-        self.load = (self.player.load()).max(self.load * 0.5f32.powf(since.as_secs_f32() / 0.5));
+        // Every frame's number would be a blur: it's the average, twice a second. Running late
+        // doesn't wait for that, it shows at once.
+        let load = self.player.load();
+        if load > 0.0 {
+            (self.load_sum, self.load_reads) = (self.load_sum + load, self.load_reads + 1);
+        }
+        if load >= 1.0 {
+            self.load_late = Some(Instant::now());
+        }
+        if self.load_read.elapsed() >= LOAD_SHOWN && self.load_reads > 0 {
+            self.load = self.load_sum / self.load_reads as f32;
+            (self.load_sum, self.load_reads) = (0.0, 0);
+            self.load_read = Instant::now();
+        }
     }
 
     /// Keeps the playhead on screen while playing, a page at a time.

@@ -8,6 +8,7 @@
 //! audio thread never frees memory.
 
 mod block;
+mod crew;
 mod decode;
 mod files;
 mod lanes;
@@ -29,6 +30,7 @@ pub use shared::*;
 
 use std::{
     collections::{HashMap, HashSet},
+    ops::Range,
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex, Weak,
@@ -39,6 +41,8 @@ use std::{
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+use crew::{Crew, helpers_wanted};
+
 use crate::dsp::modulate::{
     self, MAX_MODS, ModInput, ModKind, ModOver, ModParam, ModRoute, ModState, ModTarget, Modulator,
     Offsets,
@@ -46,15 +50,16 @@ use crate::dsp::modulate::{
 use crate::{
     audio::peaks::Peaks,
     audio::stretch::{self, Fit},
-    dsp::Strip,
     dsp::drums::Drums,
     dsp::eq::Made,
     dsp::sampler::Sampler,
     dsp::synth::Synth,
+    dsp::{Clock, Strip},
     plugin::{self, Control, ControlKind, Libraries, Note, Plugin, Processor},
     song::project::{
-        AutoMode, AutoPoint, Comp, Content, Eq, EqField, Flex, Instrument, PanLaw, PanMode, Param,
-        Place, PluginRef, Project, Region, Saturator, Which, chase, comp_segments, value_at,
+        AutoMode, AutoPoint, Comp, Content, Eq, EqField, Fx, Instrument, LimitParam, Limiter,
+        OWN_COMP, OWN_SAT, PanLaw, PanMode, Param, Place, PluginRef, Project, Region, Saturator,
+        StretchMode, Unit, VOICE, Which, chain, chase, comp_segments, knobs, value_at,
     },
 };
 
@@ -86,7 +91,10 @@ pub struct Engine {
     release: bool,
     /// What the song plays has changed while playing: notes it no longer has let go.
     rechase: bool,
-    scratch: [Vec<f32>; 2],
+    /// The threads that share the tracks out with it; for a bounce, nobody.
+    crew: Crew,
+    /// How much of its time the last buffer took, 0 to 1.
+    took: f32,
     link: Option<Link>,
     /// Notes asked for by `Msg::Note`, for the next block.
     pending: [(usize, Note); LIVE_NOTES],
@@ -96,6 +104,10 @@ pub struct Engine {
     click: (u32, f32),
     /// Where the next block reads from if playback carries on; reading anywhere else is a jump.
     next_read: u64,
+    /// How much it has yet to read before the playhead moves: play starting (or a locate) reads
+    /// from where the playhead is, delay compensation's lookahead of it, so nothing at the start
+    /// is skipped.
+    preroll: u64,
     /// A sample being previewed.
     audition: Option<Box<Audition>>,
     /// Each lane's peak last block, for the modulators that follow it.
@@ -112,13 +124,15 @@ impl Engine {
             playing: false,
             release: false,
             rechase: false,
-            scratch: [vec![0.0; MAX_BLOCK], vec![0.0; MAX_BLOCK]],
+            crew: Crew::default(),
+            took: 0.0,
             link: None,
             pending: [(0, Note::default()); LIVE_NOTES],
             pending_len: 0,
             master_strip: Box::new(Strip::new(rate)),
             click: (0, 0.0),
             next_read: 0,
+            preroll: 0,
             audition: None,
             peaks: vec![0.0; SLOTS + 1].into_boxed_slice(),
         }
@@ -132,8 +146,19 @@ impl Engine {
         rate: f64,
     ) -> Result<(Engine, Vec<LanePlugins>), String> {
         let (mut modules, mut plugins, mut lanes) = (Modules::new(), Vec::new(), Vec::new());
-        let mut add = |instrument: Option<&Instrument>, inserts: &[PluginRef]| {
-            let (lane, p, latency) = make_lane(instrument, inserts, rate, &mut modules, dir)?;
+        let mut add = |instrument: Option<&Instrument>, inserts: &[PluginRef], more: &[Unit]| {
+            let (lane, p, latency) = make_lane(
+                instrument,
+                inserts,
+                &mut Vec::new(),
+                rate,
+                &mut modules,
+                dir,
+            )?;
+            // A bounce plays what the song has, or says what it can't.
+            if !p.problems.is_empty() {
+                return Err(p.problems.join("; "));
+            }
             // The preset and parameters the project sets, as the player gives them live; a
             // preset a saved state already holds isn't loaded again.
             let instrument_ref = match instrument {
@@ -150,6 +175,10 @@ impl Engine {
                 }
             }
             let mut lane = lane;
+            lane.more = more
+                .iter()
+                .map(|u| Strip::for_kind(u.kind(), rate))
+                .collect();
             lane.settle();
             lanes.push(Some(Box::new(lane)));
             plugins.push(p);
@@ -158,14 +187,14 @@ impl Engine {
         let tracks = project
             .tracks
             .iter()
-            .map(|t| add(t.instrument.as_ref(), &t.inserts))
+            .map(|t| add(t.instrument.as_ref(), &t.inserts, &t.more))
             .collect::<Result<Vec<_>, _>>()?;
         let auxes = project
             .auxes
             .iter()
-            .map(|a| add(None, &a.inserts))
+            .map(|a| add(None, &a.inserts, &a.more))
             .collect::<Result<Vec<_>, _>>()?;
-        let master = add(None, &project.master_inserts)?.0;
+        let master = add(None, &project.master_inserts, &project.master_more)?.0;
         let mut files = AudioFiles::new(dir, rate);
         let (arrangement, problems) =
             compile(project, rate, &tracks, &auxes, Some(master), &mut files);
@@ -195,7 +224,10 @@ impl Engine {
     }
 
     pub fn play(&mut self) {
-        self.playing = true;
+        if !self.playing {
+            self.playing = true;
+            self.begin_preroll();
+        }
     }
 
     pub fn stop(&mut self) {
@@ -206,6 +238,22 @@ impl Engine {
     pub fn locate(&mut self, sample: u64) {
         self.position = sample;
         self.release = true;
+        self.begin_preroll();
+    }
+
+    /// Reads the lookahead from where the playhead is before moving it. Offline (a bounce, a
+    /// test), nobody's listening: it's read now, and what it made let go, so what comes out
+    /// next is at the playhead.
+    fn begin_preroll(&mut self) {
+        self.preroll = self.arrangement.lookahead;
+        if self.link.is_none() && self.playing {
+            let mut scratch = [vec![0f32; MAX_BLOCK], vec![0f32; MAX_BLOCK]];
+            while self.preroll > 0 {
+                let n = (self.preroll as usize).min(MAX_BLOCK);
+                let [l, r] = &mut scratch;
+                self.process([l, r], n);
+            }
+        }
     }
 
     /// Whether the player driving this engine has gone.
@@ -231,6 +279,13 @@ impl Engine {
         while let Ok(msg) = link.rx.pop() {
             match msg {
                 Msg::Arrange(a) => {
+                    // More lookahead while playing (a limiter put on): the playhead waits while
+                    // reading catches up, rather than skipping what's between.
+                    let grew = a.lookahead.saturating_sub(self.arrangement.lookahead);
+                    if self.playing {
+                        self.preroll = (self.preroll + grew).min(a.lookahead);
+                    }
+                    self.preroll = self.preroll.min(a.lookahead);
                     let old = std::mem::replace(&mut self.arrangement, a);
                     trash(&mut link.garbage, Garbage::Arrangement(old));
                     self.rechase = true;
@@ -240,12 +295,34 @@ impl Engine {
                         trash(&mut link.garbage, Garbage::Lane(old));
                     }
                 }
+                Msg::Inserts(mut r) => {
+                    if let Some(lane) = self.lanes[r.slot].as_deref_mut() {
+                        r.apply(&mut lane.inserts);
+                    }
+                    trash(&mut link.garbage, Garbage::Inserts(r));
+                }
+                Msg::Strips(mut s) => {
+                    if let Some(lane) = self.lanes[s.slot].as_deref_mut() {
+                        s.apply(&mut lane.more);
+                    }
+                    trash(&mut link.garbage, Garbage::Strips(s));
+                }
+                Msg::Reorder { slot, was } => {
+                    if let Some(lane) = self.lanes[slot].as_deref_mut() {
+                        reorder(&mut lane.inserts, &was);
+                    }
+                }
                 Msg::Remove(slot) => {
                     if let Some(old) = self.lanes[slot].take() {
                         trash(&mut link.garbage, Garbage::Lane(old));
                     }
                 }
-                Msg::Play => self.playing = true,
+                Msg::Play => {
+                    if !self.playing {
+                        self.playing = true;
+                        self.preroll = self.arrangement.lookahead;
+                    }
+                }
                 Msg::Stop => {
                     self.playing = false;
                     self.release = true;
@@ -253,6 +330,7 @@ impl Engine {
                 Msg::Locate(at) => {
                     self.position = at;
                     self.release = true;
+                    self.preroll = self.arrangement.lookahead;
                 }
                 Msg::Launch { slot, cell, at } => {
                     if let Some(lane) = self.lanes.get_mut(slot).and_then(|l| l.as_deref_mut()) {
@@ -287,6 +365,16 @@ impl Engine {
     }
 
     /// Tells the engine how many frames the output device asks for at a time, to report.
+    /// How much of its time the device gave it `frames` took, from `began`: over 1 it was late.
+    fn note_load(&mut self, began: Instant, frames: usize) {
+        self.took = (began.elapsed().as_secs_f64() * self.rate / frames.max(1) as f64) as f32;
+        if let Some(link) = &self.link {
+            link.shared
+                .load
+                .fetch_max(self.took.to_bits(), Ordering::Relaxed);
+        }
+    }
+
     pub fn note_buffer(&self, frames: usize) {
         if let Some(link) = &self.link {
             link.shared.buffer.store(frames as u32, Ordering::Relaxed);
@@ -297,7 +385,6 @@ impl Engine {
     /// the playhead on, back to the cycle's start when it reaches its end. Instruments and effects
     /// run while stopped too, so tails ring out. Allocation-free: safe on the audio thread.
     pub fn process(&mut self, out: [&mut [f32]; 2], frames: usize) {
-        let began = Instant::now();
         let [l, r] = out;
         // Past the cycle's end (it was drawn behind the playhead, or play began after it): back
         // to its start, so the cycle is what plays. Before it, play runs on into it.
@@ -307,6 +394,7 @@ impl Engine {
         {
             self.position = start;
             self.release = true;
+            self.preroll = self.arrangement.lookahead;
         }
         // What's heard wraps here; what's read, ahead of it by the plugins' latency, wraps in
         // `block`.
@@ -325,14 +413,29 @@ impl Engine {
             }
             None => self.block([l, r], frames),
         }
-        if let Some(link) = &self.link {
-            let load = began.elapsed().as_secs_f64() * self.rate / frames.max(1) as f64;
-            link.shared
-                .load
-                .fetch_max((load as f32).to_bits(), Ordering::Relaxed);
-        }
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+/// Puts `items` in a new order in place, without allocating: `was[new]` the old place of each
+/// (as many as there are items).
+pub(crate) fn reorder<T>(items: &mut [T], was: &[u8]) {
+    let n = items.len().min(was.len());
+    // Where each old item is now, and which old item each place holds.
+    let mut at: [u8; MAX_REORDER] = std::array::from_fn(|i| i as u8);
+    let mut holds = at;
+    for new in 0..n {
+        let old = was[new] as usize;
+        let from = at[old] as usize;
+        if from != new {
+            items.swap(new, from);
+            let displaced = holds[new] as usize;
+            holds[from] = displaced as u8;
+            at[displaced] = from as u8;
+            holds[new] = old as u8;
+            at[old] = new as u8;
+        }
+    }
+}

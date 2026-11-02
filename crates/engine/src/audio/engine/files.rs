@@ -26,25 +26,30 @@ impl AudioData {
     }
 }
 
-/// A stretched copy of a file: the file, and how it's fitted.
+/// A stretched copy of part of a file: the file, its frames from `from` to `to`, and how they're
+/// fitted.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Stretched {
     pub(crate) file: PathBuf,
+    pub(crate) from: usize,
+    pub(crate) to: usize,
     /// The fit's numbers, as bits.
     pub(crate) ratio: u64,
     pub(crate) semitones: u64,
-    pub(crate) flex: Flex,
+    pub(crate) mode: StretchMode,
     pub(crate) formants: bool,
     pub(crate) warps: Vec<(usize, usize)>,
 }
 
 impl Stretched {
-    pub(crate) fn new(file: &Path, fit: &Fit) -> Stretched {
+    pub(crate) fn new(file: &Path, part: Range<usize>, fit: &Fit) -> Stretched {
         Stretched {
             file: file.to_path_buf(),
+            from: part.start,
+            to: part.end,
             ratio: fit.ratio.to_bits(),
             semitones: fit.semitones.to_bits(),
-            flex: fit.flex,
+            mode: fit.mode,
             formants: fit.formants,
             warps: fit.warps.clone(),
         }
@@ -54,10 +59,26 @@ impl Stretched {
         Fit {
             ratio: f64::from_bits(self.ratio),
             semitones: f64::from_bits(self.semitones),
-            flex: self.flex,
+            mode: self.mode,
             formants: self.formants,
             warps: self.warps.clone(),
         }
+    }
+
+    /// Its part of `source` (the whole file), as recorded.
+    fn of(&self, source: &AudioData) -> AudioData {
+        AudioData {
+            channels: source
+                .channels
+                .iter()
+                .map(|c| c[self.from.min(c.len())..self.to.min(c.len())].to_vec())
+                .collect(),
+        }
+    }
+
+    /// Its part of `source` (the whole file, at `rate`), fitted.
+    pub(crate) fn make(&self, source: &AudioData, rate: f64) -> AudioData {
+        stretch::render(&self.of(source), &self.fit(), rate)
     }
 }
 
@@ -120,7 +141,7 @@ pub(crate) fn render_thread(renders: Weak<Renders>, rate: f64) {
         let Some((key, source)) = job else {
             return;
         };
-        let data = Arc::new(stretch::render(&source, &key.fit(), rate));
+        let data = Arc::new(key.make(&source, rate));
         let mut s = r.state.lock().unwrap();
         s.busy.remove(&key);
         s.made.push((key, data));
@@ -193,6 +214,14 @@ impl AudioFiles {
         })
     }
 
+    /// Part of `file` is still being stretched, or waiting to be: a stand-in plays there.
+    pub fn stretching(&self, file: &Path) -> bool {
+        self.renders.as_ref().is_some_and(|r| {
+            let s = r.state.lock().unwrap();
+            s.wanted.iter().any(|w| w.0.file == file) || s.busy.iter().any(|k| k.file == file)
+        })
+    }
+
     /// A stretch has been made since the last call: the arrangement can use it.
     pub fn fresh(&self) -> bool {
         self.renders
@@ -220,29 +249,34 @@ impl AudioFiles {
         }
     }
 
-    /// A file fitted as `fit` says (see `crate::audio::stretch`), made once for each.
+    /// A file fitted as `fit` says (see `crate::audio::stretch`), as much of it as plays from
+    /// output frame `from` to `to` (with a second or two either side), made once for each; and
+    /// where `from` is in it.
     pub(crate) fn stretched(
         &mut self,
         file: &Path,
         mut fit: Fit,
-    ) -> Result<Arc<AudioData>, String> {
+        from: usize,
+        to: usize,
+    ) -> Result<(Arc<AudioData>, usize), String> {
         // Speed can't move pitch without moving time.
-        if fit.flex == Flex::Speed {
+        if fit.mode == StretchMode::Speed {
             fit.semitones = 0.0;
         }
+        let source = self.get(file)?;
         if fit.ratio == 1.0 && fit.semitones == 0.0 && fit.warps.is_empty() {
-            return self.get(file);
+            return Ok((source, from));
         }
-        let key = Stretched::new(file, &fit);
+        let (part, fit, at) = fit.part(source.channels[0].len(), from, to, self.rate as usize);
+        let key = Stretched::new(file, part, &fit);
         self.asked.insert(key.clone());
         if let Some(data) = self.stretched.get(&key) {
-            return Ok(data.clone());
+            return Ok((data.clone(), at));
         }
-        let source = self.get(file)?;
         let Some(r) = &self.renders else {
-            let data = Arc::new(stretch::render(&source, &fit, self.rate));
+            let data = Arc::new(key.make(&source, self.rate));
             self.stretched.insert(key, data.clone());
-            return Ok(data);
+            return Ok((data, at));
         };
         {
             let mut s = r.state.lock().unwrap();
@@ -256,11 +290,12 @@ impl AudioFiles {
             }
             r.work.notify_all();
         }
-        // Meanwhile: the nearest copy made (else the file), read faster or slower to fit.
-        let len = (source.channels[0].len() as f64 * fit.ratio).round() as usize;
+        // Meanwhile: the nearest copy of the part made (else the part as recorded), read faster
+        // or slower to fit.
+        let len = ((key.to - key.from) as f64 * fit.ratio).round() as usize;
         let alike = |k: &Stretched| {
-            k.file == key.file
-                && (k.semitones, k.flex, k.formants) == (key.semitones, key.flex, key.formants)
+            (&k.file, k.from, k.to) == (&key.file, key.from, key.to)
+                && (k.semitones, k.mode, k.formants) == (key.semitones, key.mode, key.formants)
         };
         let nearest = self
             .stretched
@@ -270,8 +305,8 @@ impl AudioFiles {
                 let off = |k: &Stretched| (f64::from_bits(k.ratio) / fit.ratio).ln().abs();
                 off(a.0).total_cmp(&off(b.0))
             })
-            .map_or(source, |(_, d)| d.clone());
-        Ok(Arc::new(stand_in(&nearest, len)))
+            .map_or_else(|| Arc::new(key.of(&source)), |(_, d)| d.clone());
+        Ok((Arc::new(stand_in(&nearest, len)), at))
     }
 
     pub(crate) fn get(&mut self, file: &Path) -> Result<Arc<AudioData>, String> {
