@@ -18,6 +18,14 @@ pub enum Edge {
 }
 
 /// A mouse drag in progress. Edits checkpoint when they start, so a drag is one undo step.
+/// What dragging a marker does: its section moves, a copy of it goes, or the marker alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkerHow {
+    Section,
+    Copy,
+    Marker,
+}
+
 #[derive(Clone, Copy)]
 pub enum Drag {
     Region {
@@ -52,9 +60,39 @@ pub enum Drag {
         y: f32,
         level: f32,
     },
+    /// The tempo display dragged up or down (`at`: the change it sets, 0 the song's own); a
+    /// click, not moving, opens its menu.
     Tempo {
         y: f32,
+        x: f32,
         bpm: f64,
+        at: u64,
+        moved: bool,
+    },
+    /// A box dragged across empty lanes, picking the regions it touches.
+    RegionBox {
+        from: Point<f32>,
+        to: Point<f32>,
+        moved: bool,
+    },
+    /// A tempo change's point in the tempo lane, from where it was picked up (`now` where it is
+    /// as it's dragged), moved in time and tempo; `range` the lane's tempos then.
+    TempoPoint {
+        tick: u64,
+        now: u64,
+        x: f32,
+        y: f32,
+        bpm: f64,
+        range: (f64, f64),
+        moved: bool,
+    },
+    /// A stretch of the tempo lane dragged up or down (`at`: its change, 0 the song's own).
+    TempoLine {
+        at: u64,
+        y: f32,
+        bpm: f64,
+        range: (f64, f64),
+        moved: bool,
     },
     Locate,
     /// Notes in the piano roll, picked up together: each as it began, `lead` the one grabbed
@@ -101,9 +139,17 @@ pub enum Drag {
         y: f32,
         height: f32,
     },
-    /// A track's fader in its header, dragged across.
+    /// Text being selected in the Studio Agent's conversation.
+    ChatText,
+    /// A stack's row, by its bottom edge.
+    StackHeight {
+        aux: usize,
+        y: f32,
+        height: f32,
+    },
+    /// A track's or stack's fader in its header, dragged across.
     HFader {
-        track: usize,
+        channel: Channel,
         x: f32,
         pos: f32,
         width: f32,
@@ -239,11 +285,14 @@ pub enum Drag {
         anchor: u64,
         moved: bool,
     },
-    /// A marker, from the x where it was picked up.
+    /// A marker, from the x where it was picked up (`at`: where it is now): its section moved
+    /// or copied with everything in it, or (⌘) the marker alone.
     Marker {
         index: usize,
         x: f32,
+        at: f32,
         tick: u64,
+        how: MarkerHow,
         moved: bool,
     },
     /// A knob turned by dragging up and down.
@@ -310,6 +359,80 @@ pub enum Drag {
         start: (f32, f32),
         resize: bool,
     },
+    /// A point of a sampler envelope's graph (1 attack, 2 decay and the level held, 4
+    /// release), the graph where it was drawn.
+    SamplerEnv {
+        track: usize,
+        env: crate::editors::sampler::EnvKind,
+        point: u8,
+        left: f32,
+        top: f32,
+        width: f32,
+        height: f32,
+    },
+    /// The sampler filter's point: its cutoff across, its resonance up and down.
+    SamplerFilter {
+        track: usize,
+        left: f32,
+        top: f32,
+        width: f32,
+        height: f32,
+    },
+    /// An effect in a strip, or its card in the mixer's panel (its `row`, pressed at `from`, the
+    /// pointer `at`), dragged to another row; let go unmoved, it opens.
+    Effect {
+        ch: Channel,
+        row: usize,
+        to: usize,
+        card: bool,
+        from: (f32, f32),
+        at: (f32, f32),
+        moved: bool,
+    },
+    /// The navigation bar's view of the song on screen, dragged to scroll, held `grab` px into
+    /// it; and the tracks' scrollbar, likewise.
+    Overview {
+        grab: f32,
+    },
+    TrackScroll {
+        grab: f32,
+    },
+    /// The compressor's or saturator's window, moved by its title.
+    /// The synth's window moved by its title.
+    PolyWindow {
+        from: Point<f32>,
+        start: (f32, f32),
+    },
+    /// A point on one of the synth's pictures.
+    PolyPoint {
+        id: u8,
+    },
+    /// One of the synth's sources on its way to a knob.
+    PolySource {
+        track: usize,
+        source: pina_engine::song::project::PolySource,
+    },
+    /// A route's depth, from the x and depth it had.
+    PolyDepth {
+        track: usize,
+        route: usize,
+        x: f32,
+        depth: f32,
+    },
+    FxWindow {
+        from: Point<f32>,
+        start: (f32, f32),
+    },
+    /// A split between the saturator's bands (the `k`th), moved sideways.
+    SatSplit {
+        k: usize,
+    },
+    /// A point on the reverb's or delay's displays, dragged; `span` the seconds across the
+    /// time picture as the drag began (so it holds still under the pointer).
+    Space {
+        handle: crate::mix::fx::SpaceHandle,
+        span: f32,
+    },
     /// The editor's top edge, from the y and height it had.
     Editor {
         y: f32,
@@ -326,10 +449,33 @@ pub enum Drag {
         x: f32,
         width: f32,
     },
+    /// A Drum Machine pad (by its note) dragged to another, to trade places with it.
+    Pad {
+        note: u8,
+        from: Point<f32>,
+        at: Point<f32>,
+        moved: bool,
+    },
     /// A sample from the browser, by its index in the library, on its way to the tracks: where
     /// it was picked up, and where it is.
     Sample {
         index: usize,
+        from: Point<f32>,
+        at: Point<f32>,
+        moved: bool,
+    },
+    /// A MIDI file from the browser, by its index in the library's, on its way to the tracks.
+    Midi {
+        index: usize,
+        /// Semitones it's moved, as it was heard when it was picked up.
+        shift: i32,
+        from: Point<f32>,
+        at: Point<f32>,
+        moved: bool,
+    },
+    /// A MIDI card from the Agent panel, by its place on the shelf, on its way to the tracks.
+    ChatMidi {
+        card: usize,
         from: Point<f32>,
         at: Point<f32>,
         moved: bool,
@@ -368,11 +514,16 @@ impl Workspace {
                 | Drag::Editor { .. }
                 | Drag::Panel { .. }
                 | Drag::Sample { .. }
+                | Drag::Midi { .. }
+                | Drag::ChatMidi { .. }
                 | Drag::Device { .. }
                 | Drag::MapBox { .. }
                 | Drag::Marquee { .. }
+                | Drag::RegionBox { .. }
                 | Drag::Width { .. }
                 | Drag::LaneHeight { .. }
+                | Drag::StackHeight { .. }
+                | Drag::ChatText
                 | Drag::Orbit { .. }
                 | Drag::Modulator { .. }
                 | Drag::ZoomSpan
@@ -380,6 +531,13 @@ impl Workspace {
                 | Drag::AutoMarquee { .. }
                 | Drag::AutoDraw { .. }
                 | Drag::EqWindow { .. }
+                | Drag::FxWindow { .. }
+                | Drag::PolyWindow { .. }
+                | Drag::PolySource { .. }
+                | Drag::Overview { .. }
+                | Drag::Pad { .. }
+                | Drag::TrackScroll { .. }
+                | Drag::Effect { .. }
                 | Drag::EqPress { .. }
                 | Drag::EqScale { .. }
                 | Drag::EqSketch

@@ -28,6 +28,17 @@ impl Workspace {
             _ => self.region,
         };
         let (title, detail, color) = match (pane, shown) {
+            (Bottom::Drums, _) => match self.drum_kit() {
+                Some(k) => (
+                    self.session.project.tracks[k].name.clone(),
+                    match self.session.project.pads_of(k).len() {
+                        1 => "1 pad".to_string(),
+                        n => format!("{n} pads"),
+                    },
+                    self.color(k),
+                ),
+                None => ("Drum Machine".to_string(), String::new(), TEXT_4),
+            },
             (Bottom::Sampler, _) => match self.sampler_track() {
                 Some(t) => {
                     let zones = match &self.session.project.tracks[t].instrument {
@@ -82,6 +93,7 @@ impl Workspace {
         let controls = match pane {
             Bottom::PianoRoll => Some(self.roll_controls(cx)),
             Bottom::Sampler => self.sampler_controls(cx),
+            Bottom::Drums => Some(self.drums_controls(cx)),
             _ => None,
         };
         let bar = div()
@@ -139,22 +151,31 @@ impl Workspace {
                     .gap(px(8.))
                     .px(px(10.))
                     .child(
-                        tray()
-                            .p(px(2.))
-                            .rounded(px(8.))
-                            // Those Settings shows, and the one open.
-                            .children(
-                                Bottom::ALL
-                                    .into_iter()
-                                    .filter(|&b| b == pane || self.settings.shows(b))
-                                    .map(|b| tab(b.name(), b, cx))
-                                    .collect::<Vec<_>>(),
+                        div()
+                            .id("editor-tabs")
+                            .min_w(px(0.))
+                            .flex()
+                            .overflow_x_scroll()
+                            .child(
+                                tray()
+                                    .flex_none()
+                                    .p(px(2.))
+                                    .rounded(px(8.))
+                                    // Those Settings shows, and the one open.
+                                    .children(
+                                        Bottom::ALL
+                                            .into_iter()
+                                            .filter(|&b| b == pane || self.settings.shows(b))
+                                            .map(|b| tab(b.name(), b, cx))
+                                            .collect::<Vec<_>>(),
+                                    ),
                             ),
                     )
                     .child(div().flex_1())
-                    .children(controls)
+                    .children(controls.map(|c| c.flex_none()))
                     .child(
                         icon_seg(Icon::Close, false, 26.)
+                            .flex_none()
                             .debug_selector(|| "close-editor".into())
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -168,6 +189,7 @@ impl Workspace {
         let body = match pane {
             Bottom::PianoRoll => self.roll_body(cx).into_any_element(),
             Bottom::Steps => self.steps_body(cx).into_any_element(),
+            Bottom::Drums => self.drums_body(cx).into_any_element(),
             Bottom::Sampler => self.sampler_body(cx).into_any_element(),
             Bottom::Modulation => self.modulation_body(cx).into_any_element(),
             Bottom::Score => self.score_body(cx).into_any_element(),

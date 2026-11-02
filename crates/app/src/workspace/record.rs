@@ -193,13 +193,15 @@ impl Workspace {
             } => match recorder.finish() {
                 Ok(0) => return,
                 Ok(frames) => {
-                    let length = self.session.project.ticks(frames).max(1);
+                    let length = self.session.project.ticks_for(start, frames).max(1);
                     let content = Content::Audio {
                         file,
                         offset: 0,
                         stretch: 1.0,
-                        flex: Default::default(),
-                        follow: false,
+                        stretch_mode: Default::default(),
+                        follow: pina_engine::song::project::Follow::Off,
+                        tempo: None,
+                        grid: None,
                         formants: false,
                         warps: Vec::new(),
                     };
@@ -238,5 +240,15 @@ impl Workspace {
             ws.region = Some(at);
             ws.picked.clear();
         });
+        // A take of its own (not in a folder): listened to for its tempo, the song's tempo mode
+        // saying what's done with it.
+        if let Some(at) = self.region
+            && matches!(
+                self.session.project.region(at).content,
+                Content::Audio { .. }
+            )
+        {
+            self.find_tempo(at, crate::arrange::tempo::After::Mode, cx);
+        }
     }
 }

@@ -30,7 +30,7 @@ use pina_engine::{
         self, LfoShape, MAX_MODS, ModKind, ModParam, ModRate, ModRoute, ModTarget, Modulator,
         SamplerParam,
     },
-    song::project::{Instrument, Param, Sampler, Which},
+    song::project::{Instrument, LimitParam, Param, Sampler, Which},
 };
 
 use crate::{
@@ -38,7 +38,7 @@ use crate::{
     mix::strip::{self, Channel},
     ui::menu::{Menu, MenuAction},
     ui::theme::*,
-    workspace::{CompField, Drag, SatField, Target, Workspace, pt},
+    workspace::{CompField, Drag, LimitField, SatField, Target, Workspace, pt},
 };
 
 /// Each modulator's colour, by its place on its track.

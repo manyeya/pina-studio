@@ -185,9 +185,16 @@ impl Workspace {
             self.delete_notes(at, cx);
             return;
         }
+        if self.delete_selected(cx) {
+            return;
+        }
         let Some((t, r)) = self.region else { return };
         self.edit(cx, |ws| {
-            ws.session.project.tracks[t].regions.remove(r);
+            let gone = ws.session.project.tracks[t].regions.remove(r);
+            // Shuffle: the gap it leaves closed up.
+            if ws.drag_mode == DragMode::Shuffle {
+                ws.session.project.close_up(t, gone.start);
+            }
             ws.region = None;
         });
     }
@@ -242,6 +249,8 @@ impl Workspace {
             Some(Instrument::Drums) => format!("Drums {}", n + 1),
             Some(Instrument::Plugin(p)) => p.class.clone(),
             Some(Instrument::Sampler(_)) => format!("Sampler {}", n + 1),
+            Some(Instrument::Poly(_)) => format!("Synth {}", n + 1),
+            Some(Instrument::Kit) => format!("Kit {}", n + 1),
             Some(Instrument::Synth) => format!("Synth {}", n + 1),
             None => format!("Audio {}", n + 1),
         });

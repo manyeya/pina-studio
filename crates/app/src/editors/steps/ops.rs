@@ -532,8 +532,8 @@ impl Workspace {
         let mut copy = row.clone();
         copy.name.clear();
         if !row.is_automation() {
-            let instrument = self.session.project.tracks[at.0].instrument.as_ref();
-            let next = match kit_sounds(instrument) {
+            let instrument = played_by(&self.session.project, at.0);
+            let next = match kit_sounds(instrument.as_deref()) {
                 Some(sounds) => sounds
                     .iter()
                     .map(|s| s.0)
@@ -578,7 +578,8 @@ impl Workspace {
         }
         let bar = project.bar();
         let steps = (bar / (PPQ / 4)).clamp(1, 64) as usize;
-        let instrument = project.tracks[t].instrument.as_ref();
+        let instrument = played_by(project, t);
+        let instrument = instrument.as_deref();
         let starting: Vec<u8> = match (instrument, kit_sounds(instrument)) {
             (Some(Instrument::Drums), _) => STARTING_ROWS.to_vec(),
             (_, Some(sounds)) => sounds.iter().take(6).map(|s| s.0).collect(),
@@ -843,14 +844,13 @@ impl Workspace {
             return Vec::new();
         };
         let project = &self.session.project;
-        let track = &project.tracks[at.0];
         match *menu {
             StepsMenu::Notes(row) => {
                 let make = |pitch: u8| match row {
                     Some(r) => StepsOp::AssignNote(r, pitch),
                     None => StepsOp::AddNote(pitch),
                 };
-                match kit_sounds(track.instrument.as_ref()) {
+                match kit_sounds(played_by(project, at.0).as_deref()) {
                     Some(sounds) => sounds
                         .into_iter()
                         .map(|(pitch, name)| op(name, make(pitch)))

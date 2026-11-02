@@ -60,9 +60,13 @@ impl Workspace {
             }
             ModTarget::CompThreshold => "Threshold".into(),
             ModTarget::CompMakeup => "Makeup".into(),
+            ModTarget::Tool(k, i) => self.param_name(t, Param::Tool(k, i)),
+            ModTarget::Poly(i) => self.param_name(t, Param::Poly(i)),
             ModTarget::SatDrive => "Drive".into(),
             ModTarget::SatTone => "Tone".into(),
             ModTarget::SatMix => "Saturation mix".into(),
+            ModTarget::LimitGain => "Limiter gain".into(),
+            ModTarget::LimitCeiling => "Limiter ceiling".into(),
             ModTarget::Sampler(p) => match p {
                 SamplerParam::Cutoff => "Cutoff",
                 SamplerParam::Resonance => "Resonance",
@@ -72,6 +76,13 @@ impl Workspace {
                 SamplerParam::Vibrato => "Vibrato",
                 SamplerParam::LfoFilter => "LFO to filter",
                 SamplerParam::Tremolo => "Tremolo",
+                SamplerParam::Drive => "Filter drive",
+                SamplerParam::Position => "Grain position",
+                SamplerParam::Speed => "Speed",
+                SamplerParam::GrainSize => "Grain size",
+                SamplerParam::Spray => "Spray",
+                SamplerParam::Fm => "FM",
+                SamplerParam::Sub => "Sub",
             }
             .into(),
             ModTarget::Plugin(which, id) => {
@@ -114,8 +125,9 @@ impl Workspace {
                 _ => None,
             })
             .next()?;
+        let instrument = crate::editors::steps::played_by(&self.session.project, t);
         Some(crate::editors::steps::row_name(
-            track.instrument.as_ref(),
+            instrument.as_deref(),
             self.session.project.song_key(),
             pitch,
         ))
@@ -182,9 +194,18 @@ impl Workspace {
                     ModTarget::SatDrive,
                     ModTarget::SatTone,
                     ModTarget::SatMix,
+                    ModTarget::LimitGain,
+                    ModTarget::LimitCeiling,
                 ])
                 .collect(),
         );
+        for (k, u) in track.more.iter().enumerate() {
+            if let Some((_, name)) = self.stacked(crate::mix::strip::Channel::Track(t), k) {
+                let n = crate::mix::strip::knobs(u.kind()).len();
+                let targets = (0..n).map(|i| ModTarget::Tool(k as u8, i as u8)).collect();
+                group(&mut items, &name, targets);
+            }
+        }
         if matches!(track.instrument, Some(Instrument::Sampler(_))) {
             group(
                 &mut items,
@@ -253,6 +274,10 @@ impl Workspace {
             Param::Plugin(which, id) => ModTarget::Plugin(which, id),
             Param::Eq(band, EqField::Gain) => ModTarget::EqGain(band),
             Param::Eq(band, EqField::Freq) => ModTarget::EqFreq(band),
+            Param::Tool(k, i) => ModTarget::Tool(k, i),
+            Param::Poly(i) => ModTarget::Poly(i),
+            Param::Limit(LimitParam::Gain) => ModTarget::LimitGain,
+            Param::Limit(LimitParam::Ceiling) => ModTarget::LimitCeiling,
             _ => return None,
         })
     }

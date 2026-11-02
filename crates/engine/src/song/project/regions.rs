@@ -89,22 +89,33 @@ pub enum Content {
         file: PathBuf,
         #[serde(default)]
         offset: u64,
-        /// Flex: how much longer the audio plays than it was recorded, its pitch kept. 2 is half
+        /// How much longer the audio plays than it was recorded, its pitch kept. 2 is half
         /// speed. `offset` is in the file's own samples.
         #[serde(default = "one", skip_serializing_if = "is_one")]
         stretch: f64,
         /// How it's stretched: Polyphonic, Slicing or Speed (see `crate::audio::stretch`).
-        #[serde(default, skip_serializing_if = "Flex::is_default")]
-        flex: Flex,
-        /// It follows the song's tempo, as a loop from the browser does: a tempo change
-        /// stretches it, so its beats stay on the song's.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        follow: bool,
+        #[serde(
+            default,
+            skip_serializing_if = "StretchMode::is_default",
+            alias = "flex"
+        )]
+        stretch_mode: StretchMode,
+        /// How it keeps time with the song: played as recorded, or following the song's tempo
+        /// (its beats on the song's), maybe locked to its bars or beats (see `timing`).
+        #[serde(default, skip_serializing_if = "Follow::is_off")]
+        follow: Follow,
+        /// Its own tempo, as listening found it or as typed: what following keeps to the song's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tempo: Option<f64>,
+        /// Where its beats are, as listening found them: what locking pins.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        grid: Option<Grid>,
         /// Moved in pitch, its formants kept, as a voice wants.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         formants: bool,
-        /// Warp markers: [a frame of the file, where it plays in the
-        /// stretched audio], both at the project's rate. The audio between is fitted to them.
+        /// Warp markers: [a frame of the file, where it plays], both at the project's rate: in
+        /// the stretched audio, or following, in its own steady time at its tempo. The audio
+        /// between is fitted to them.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warps: Vec<[u64; 2]>,
     },

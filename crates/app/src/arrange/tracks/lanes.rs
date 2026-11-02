@@ -20,7 +20,7 @@ impl Workspace {
         // Each stack's lane: its tracks' regions, a line each, in their colours.
         // (Its top, a line's height, and each region's x, top, width and colour.)
         type Bars = Vec<(f32, f32, f32, u32)>;
-        let mut stacks: Vec<(f32, f32, Bars)> = Vec::new();
+        let mut stacks: Vec<(f32, f32, f32, Bars)> = Vec::new();
         for first in 0..tracks {
             let Some(a) = self.stack_above(first) else {
                 continue;
@@ -29,7 +29,8 @@ impl Workspace {
             let members: Vec<usize> = (0..tracks)
                 .filter(|&i| p.tracks[i].output == Some(bus))
                 .collect();
-            let line = (STACK_H - 10.0) / members.len().max(1) as f32;
+            let height = self.stack_h(a);
+            let line = (height - 10.0) / members.len().max(1) as f32;
             let bars = members
                 .iter()
                 .enumerate()
@@ -45,7 +46,8 @@ impl Workspace {
                         })
                 })
                 .collect();
-            stacks.push((self.row_top(first) - STACK_H, (line - 1.0).max(1.5), bars));
+            let top = self.row_top(first) - height;
+            stacks.push((top, height, (line - 1.0).max(1.5), bars));
         }
         let auto_h = self.auto_h();
         let bounds = self.lanes_bounds.clone();
@@ -96,16 +98,9 @@ impl Workspace {
                     );
                 }
                 // Stacks' lanes, a shade darker (their tracks' regions go on them over the grid).
-                for (y, _, _) in &stacks {
-                    quad(window, 0.0, *y, w, STACK_H, rgb(0x0e0e12).into());
-                    quad(
-                        window,
-                        0.0,
-                        y + STACK_H - 1.0,
-                        w,
-                        1.0,
-                        rgb(LINE_SOFT).into(),
-                    );
+                for (y, height, _, _) in &stacks {
+                    quad(window, 0.0, *y, w, *height, rgb(0x0e0e12).into());
+                    quad(window, 0.0, y + height - 1.0, w, 1.0, rgb(LINE_SOFT).into());
                 }
                 for (i, &(y, lh, ah)) in rows_at.iter().enumerate() {
                     if selected.contains(&i) {
@@ -149,12 +144,14 @@ impl Workspace {
                         rgb(color).into(),
                     );
                 }
-                for (y, line, bars) in &stacks {
+                for (y, _, line, bars) in &stacks {
                     for &(x, top, bw, color) in bars {
                         if x + bw < 0.0 || x > w {
                             continue;
                         }
-                        quad(window, x, y + top, bw.max(1.0), *line, alpha(color, 0.7));
+                        // A little region: soft, its top edge bright, however tall it's drawn.
+                        quad(window, x, y + top, bw.max(1.0), *line, alpha(color, 0.3));
+                        quad(window, x, y + top, bw.max(1.0), 1.5, alpha(color, 0.85));
                     }
                 }
             },
@@ -199,8 +196,21 @@ impl Workspace {
                         cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                             ws.select_track(i);
                             ws.region = None;
+                            ws.picks.clear();
                             if ws.tool == Tool::Zoom {
                                 return ws.zoom_press(e, cx);
+                            }
+                            // A box from here picks the regions it touches.
+                            if ws.tool == Tool::Pointer && e.click_count == 1 {
+                                let at = crate::workspace::pt(e.position);
+                                ws.begin_drag(
+                                    Drag::RegionBox {
+                                        from: at,
+                                        to: at,
+                                        moved: false,
+                                    },
+                                    cx,
+                                );
                             }
                             // The pencil draws a region; so does a double-click, opening the
                             // piano roll on it to write in.
@@ -298,6 +308,39 @@ impl Workspace {
                     .border_r_1()
                     .border_color(alpha(ACCENT, 0.7))
             }))
+            // A region being dragged: where its edges meet another's.
+            .children(self.guides().into_iter().map(|x| {
+                div()
+                    .absolute()
+                    .top_0()
+                    .left(px(x))
+                    .w(px(1.))
+                    .h_full()
+                    .bg(alpha(ACCENT, 0.8))
+            }))
+            // A box being dragged across the lanes: what it'll pick.
+            .children(match self.drag {
+                Some(Drag::RegionBox {
+                    from,
+                    to,
+                    moved: true,
+                }) => {
+                    let o = self.lanes_bounds.get().origin;
+                    Some(
+                        div()
+                            .absolute()
+                            .left(px(from.x.min(to.x) - f32::from(o.x)))
+                            .top(px(from.y.min(to.y) - f32::from(o.y)))
+                            .w(px((from.x - to.x).abs()))
+                            .h(px((from.y - to.y).abs()))
+                            .rounded(px(2.))
+                            .border_1()
+                            .border_color(alpha(ACCENT, 0.9))
+                            .bg(alpha(ACCENT, 0.12)),
+                    )
+                }
+                _ => None,
+            })
             .children(self.sample_drop_view())
             .children(self.file_drop_view(cx))
             .when(tracks == 0, |d| {
@@ -319,7 +362,34 @@ impl Workspace {
                     .h_full()
                     .bg(rgb(TEXT)),
             )
+            .children(self.tracks_scrollbar(cx))
             .on_scroll_wheel(self.on_scroll(cx))
+    }
+
+    /// While a region is dragged: the x of each of its edges that meets another region's edge.
+    pub(crate) fn guides(&self) -> Vec<f32> {
+        let Some(Drag::Region {
+            at, moved: true, ..
+        }) = self.drag
+        else {
+            return Vec::new();
+        };
+        let p = &self.session.project;
+        let Some(r) = p.tracks.get(at.0).and_then(|t| t.regions.get(at.1)) else {
+            return Vec::new();
+        };
+        let mut edges = vec![r.start, r.start + r.length];
+        edges.retain(|&e| {
+            p.tracks.iter().enumerate().any(|(t, track)| {
+                track
+                    .regions
+                    .iter()
+                    .enumerate()
+                    .any(|(i, o)| (t, i) != at && (o.start == e || o.start + o.length == e))
+            })
+        });
+        let (ppt, sx) = (self.px_per_tick(), self.scroll_x);
+        edges.into_iter().map(|e| e as f32 * ppt - sx).collect()
     }
 
     /// Where the agent is working, while it is: an outline round what it touched, and its cursor.

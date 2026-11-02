@@ -214,8 +214,8 @@ impl Workspace {
         let steps = matches!(kind, ModKind::Steps { .. });
         let bounds = self.mod_steps.clone();
         div()
-            .h(px(64.))
-            .flex_none()
+            .flex_1()
+            .min_h(px(0.))
             .rounded(px(8.))
             .bg(rgb(0x0b0b0e))
             .border_1()

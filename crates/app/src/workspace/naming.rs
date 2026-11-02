@@ -12,6 +12,10 @@ pub enum Name {
     /// A track's volume or pan, typed: "-6", "L30", "C".
     Volume(usize),
     Pan(usize),
+    /// A stack's volume, typed, as a track's.
+    AuxVolume(usize),
+    /// A conversation, by its place in the Studio Agent's list.
+    Chat(usize),
     /// A value of the EQ window's: a band's (by id; 0 the EQ's own), typed.
     Eq(u16, crate::mix::eq::EqKnob),
     /// A step pattern's row, by its region and place; the pattern browser's search; a pattern
@@ -22,6 +26,8 @@ pub enum Name {
     PatternFolder,
     /// A collection on the Plugins page.
     PluginCollection(usize),
+    /// An audio region's own tempo, typed.
+    RegionTempo(At),
 }
 
 /// A name being typed, in a text field where the name shows.
@@ -38,6 +44,7 @@ impl Workspace {
         match what {
             Name::Track(i) => p.tracks.get(i).map(|t| t.name.clone()),
             Name::Aux(i) => p.auxes.get(i).map(|a| a.name.clone()),
+            Name::Chat(i) => self.chat.past.get(i).map(|p| p.title.clone()),
             Name::Marker(i) => p.markers.get(i).map(|m| m.name.clone()),
             Name::Region(at) => p
                 .tracks
@@ -49,6 +56,10 @@ impl Workspace {
                 false => format!("{:.1}", t.volume_db),
             }),
             Name::Pan(i) => p.tracks.get(i).map(|t| strip::pan_label(t.pan)),
+            Name::AuxVolume(a) => p.auxes.get(a).map(|x| match x.volume_db <= strip::SILENT {
+                true => "-inf".into(),
+                false => format!("{:.1}", x.volume_db),
+            }),
             Name::Eq(id, knob) => Some(self.eq_value_text(id, knob)),
             Name::PatternRow(at, r) => p
                 .tracks
@@ -67,6 +78,15 @@ impl Workspace {
                 .or_else(|| Some("Pattern".into())),
             Name::PatternFolder => Some("New Folder".into()),
             Name::PluginCollection(i) => self.catalog.collections.get(i).map(|c| c.name.clone()),
+            Name::RegionTempo(at) => p
+                .tracks
+                .get(at.0)
+                .and_then(|t| t.regions.get(at.1))
+                .and_then(|r| match &r.content {
+                    pina_engine::song::project::Content::Audio { tempo, .. } => *tempo,
+                    _ => None,
+                })
+                .map(|t| format!("{t:.2}")),
         }
         .unwrap_or_default()
     }
@@ -153,11 +173,22 @@ impl Workspace {
                 cx.notify();
                 return;
             }
+            (Name::RegionTempo(at), Some(text)) => {
+                match text.trim().trim_end_matches("bpm").trim().parse::<f64>() {
+                    Ok(bpm) if bpm.is_finite() && bpm > 0.0 => {
+                        self.edit(cx, |ws| ws.session.project.set_audio_tempo(at, bpm))
+                    }
+                    _ => self.status = Some(format!("{text:?} isn't a tempo: type BPM, as 92.5")),
+                }
+                cx.notify();
+                return;
+            }
             (
                 Name::PatternRow(..)
                 | Name::PatternSave(_)
                 | Name::PatternFolder
-                | Name::PluginCollection(_),
+                | Name::PluginCollection(_)
+                | Name::RegionTempo(_),
                 _,
             ) => {
                 cx.notify();
@@ -168,6 +199,14 @@ impl Workspace {
         let text = text.filter(|t| *t != self.name_of(what));
         if let (Name::Eq(id, knob), Some(text)) = (what, &text) {
             self.eq_value_typed(id, knob, text, cx);
+            cx.notify();
+            return;
+        }
+        if let (Name::AuxVolume(a), Some(text)) = (what, &text) {
+            match strip::parse_db(text) {
+                Some(db) => self.edit(cx, |ws| ws.set_volume(Channel::Aux(a), db)),
+                None => self.status = Some(format!("{text:?} isn't a level: type dB, as -6 or 0")),
+            }
             cx.notify();
             return;
         }
@@ -190,6 +229,13 @@ impl Workspace {
             cx.notify();
             return;
         }
+        if let Name::Chat(i) = what {
+            if let Some(text) = text.filter(|t| !t.trim().is_empty()) {
+                self.name_chat(i, text.trim().to_string());
+            }
+            cx.notify();
+            return;
+        }
         if let Some(text) = text.filter(|t| !t.is_empty() || matches!(what, Name::Region(_))) {
             self.edit(cx, |ws| {
                 let p = &mut ws.session.project;
@@ -200,12 +246,15 @@ impl Workspace {
                     Name::Region(at) => p.tracks[at.0].regions[at.1].name = text,
                     Name::Volume(_)
                     | Name::Pan(_)
+                    | Name::AuxVolume(_)
+                    | Name::Chat(_)
                     | Name::Eq(..)
                     | Name::PatternRow(..)
                     | Name::PatternSearch
                     | Name::PatternSave(_)
                     | Name::PatternFolder
-                    | Name::PluginCollection(_) => {}
+                    | Name::PluginCollection(_)
+                    | Name::RegionTempo(_) => {}
                 }
             });
         }
@@ -228,6 +277,11 @@ impl Workspace {
                 let db = strip::fader_db((pos + dx * 0.002).clamp(0.0, 1.0));
                 self.set_volume(Channel::Track(i), db);
                 self.moved_once(i, Param::Volume, db);
+            }
+            Name::AuxVolume(a) => {
+                let now = self.session.project.auxes[a].volume_db;
+                let pos = (strip::fader_pos(now) + dx * 0.002).clamp(0.0, 1.0);
+                self.set_volume(Channel::Aux(a), strip::fader_db(pos));
             }
             Name::Pan(i) => {
                 let pan = (self.now_value(i, Param::Pan) + dx * 0.004).clamp(-1.0, 1.0);

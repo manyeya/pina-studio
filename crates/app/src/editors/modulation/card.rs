@@ -2,6 +2,12 @@
 
 use super::*;
 
+const CARD_W: f32 = 248.0;
+/// A little knob's width, whatever its value says.
+const MINI_W: f32 = 46.0;
+/// The least the picture shrinks to in a short pane.
+const VISUAL_MIN_H: f32 = 44.0;
+
 impl Workspace {
     pub(crate) fn mod_card(&self, t: usize, k: usize, cx: &mut Context<Self>) -> Div {
         let track = &self.session.project.tracks[t];
@@ -37,6 +43,7 @@ impl Workspace {
                     cx: &mut Context<Self>| {
             div()
                 .h(px(22.))
+                .min_w(px(0.))
                 .px(px(7.))
                 .flex()
                 .items_center()
@@ -49,7 +56,13 @@ impl Workspace {
                 .cursor_pointer()
                 .hover(|d| d.bg(rgb(RAISED)))
                 .debug_selector(move || name.clone())
-                .child(label)
+                .child(
+                    div()
+                        .min_w(px(0.))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(label),
+                )
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
@@ -84,6 +97,8 @@ impl Workspace {
         let mini = |label: &'static str, field: ModField, text: String, cx: &mut Context<Self>| {
             let v = self.mod_field(t, k, field);
             div()
+                .w(px(MINI_W))
+                .flex_none()
                 .flex()
                 .flex_col()
                 .items_center()
@@ -102,6 +117,7 @@ impl Workspace {
                         .font_family(MONO)
                         .text_size(px(9.5))
                         .text_color(rgb(TEXT_2))
+                        .whitespace_nowrap()
                         .child(text),
                 )
                 // Right-click: automate it.
@@ -310,12 +326,19 @@ impl Workspace {
                     .gap(px(6.))
                     .child(
                         div()
-                            .text_size(px(10.5))
-                            .text_color(rgb(TEXT_3))
-                            .child("Hears"),
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.))
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(rgb(TEXT_3))
+                                    .child("Hears"),
+                            )
+                            .child(menu(heard, sources, format!("mod-{k}-source"), cx)),
                     )
-                    .child(menu(heard, sources, format!("mod-{k}-source"), cx))
-                    .child(div().flex_1())
                     .child(mini("Attack", ModField::Attack, ms(*attack_ms), cx))
                     .child(mini("Release", ModField::Release, ms(*release_ms), cx))
             }
@@ -399,15 +422,24 @@ impl Workspace {
                     .overflow_hidden()
                     .cursor_ew_resize()
                     .debug_selector(move || format!("mod-{k}-route-{mt:?}"))
-                    // How far, as a bar from the middle.
+                    // How far, as a meter along its foot, out from a mark in the middle.
                     .child(
                         div()
                             .absolute()
-                            .top_0()
                             .bottom_0()
                             .left(gpui::relative(0.5 + share.min(0.0) / 2.0))
                             .w(gpui::relative(share.abs() / 2.0))
-                            .bg(alpha(color, 0.22)),
+                            .h(px(2.))
+                            .bg(rgb(color)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .bottom_0()
+                            .left(gpui::relative(0.5))
+                            .w(px(1.))
+                            .h(px(4.))
+                            .bg(rgb(TEXT_4)),
                     )
                     .child(div().text_color(rgb(color)).text_size(px(11.)).child("→"))
                     .child(
@@ -469,10 +501,11 @@ impl Workspace {
             .collect();
         let none = m.routes.is_empty();
         div()
-            .w(px(248.))
+            .w(px(CARD_W))
             .flex_none()
             .h_full()
             .min_h(px(0.))
+            .overflow_hidden()
             .flex()
             .flex_col()
             .gap(px(8.))
@@ -503,32 +536,39 @@ impl Workspace {
             )
             .child(
                 div()
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .gap(px(7.))
+                    .gap(px(2.))
                     .child(
                         div()
                             .flex_none()
+                            .mr(px(5.))
                             .size(px(9.))
                             .rounded(px(5.))
                             .bg(rgb(color)),
                     )
                     .child(
                         div()
-                            .flex_none()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .mr(px(3.))
                             .text_size(px(12.5))
                             .font_weight(FontWeight::SEMIBOLD)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
                             .child(name),
                     )
-                    .child(div().flex_1())
                     // Its handle: drag it onto a knob.
                     .child(
                         div()
+                            .flex_none()
                             .h(px(22.))
-                            .px(px(8.))
+                            .px(px(6.))
                             .flex()
                             .items_center()
-                            .gap(px(4.))
+                            .gap(px(3.))
                             .rounded(px(6.))
                             .bg(alpha(color, 0.18))
                             .border_1()
@@ -555,8 +595,9 @@ impl Workspace {
                             .as_ref()
                             .is_some_and(|l| (l.track, l.index) == (t, k));
                         div()
+                            .flex_none()
                             .h(px(22.))
-                            .px(px(7.))
+                            .px(px(6.))
                             .flex()
                             .items_center()
                             .rounded(px(6.))
@@ -582,7 +623,8 @@ impl Workspace {
                     // Or pick where from a list.
                     .child({
                         div()
-                            .size(px(22.))
+                            .flex_none()
+                            .size(px(20.))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -607,7 +649,8 @@ impl Workspace {
                     })
                     .child(
                         div()
-                            .size(px(22.))
+                            .flex_none()
+                            .size(px(20.))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -627,66 +670,79 @@ impl Workspace {
                             ),
                     ),
             )
+            // All under its title goes round in the room there is: the picture takes what's
+            // spare, and in a short pane the rest scrolls rather than spilling out of the card.
             .child(
                 div()
-                    .relative()
-                    .child(self.mod_visual(t, k, &m.kind, color, cx))
-                    // Where it is now.
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(6.))
-                            .right(px(8.))
-                            .font_family(MONO)
-                            .text_size(px(10.))
-                            .text_color(rgb(TEXT_3))
-                            .child(format!("{value:+.2}")),
-                    )
-                    .when_some(stack, |d, s| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .top(px(6.))
-                                .left(px(8.))
-                                .px(px(6.))
-                                .h(px(16.))
-                                .flex()
-                                .items_center()
-                                .rounded(px(4.))
-                                .bg(alpha(color, 0.18))
-                                .text_size(px(9.5))
-                                .text_color(rgb(TEXT_2))
-                                .child(format!("Shared · {s}")),
-                        )
-                    }),
-            )
-            .child(controls.flex_none())
-            .child(
-                div()
-                    .id(("mod-routes", k))
+                    .id(("mod-body", k))
                     .flex_1()
                     .min_h(px(0.))
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    .gap(px(4.))
-                    .children(routes)
-                    .when(none, |d| {
-                        d.child(
-                            div()
-                                .h(px(24.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(6.))
-                                .border_1()
-                                .border_dashed()
-                                .border_color(rgb(LINE_STRONG))
-                                .text_size(px(10.5))
-                                .text_color(rgb(TEXT_3))
-                                .child("drag ↗ Map onto a knob"),
-                        )
-                    }),
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h(px(VISUAL_MIN_H))
+                            .flex()
+                            .flex_col()
+                            .relative()
+                            .child(self.mod_visual(t, k, &m.kind, color, cx))
+                            // Where it is now.
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(6.))
+                                    .right(px(8.))
+                                    .font_family(MONO)
+                                    .text_size(px(10.))
+                                    .text_color(rgb(TEXT_3))
+                                    .child(format!("{value:+.2}")),
+                            )
+                            .when_some(stack, |d, s| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .top(px(6.))
+                                        .left(px(8.))
+                                        .px(px(6.))
+                                        .h(px(16.))
+                                        .flex()
+                                        .items_center()
+                                        .rounded(px(4.))
+                                        .bg(alpha(color, 0.18))
+                                        .text_size(px(9.5))
+                                        .text_color(rgb(TEXT_2))
+                                        .child(format!("Shared · {s}")),
+                                )
+                            }),
+                    )
+                    .child(controls.flex_none())
+                    .child(
+                        div()
+                            .flex_none()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .children(routes)
+                            .when(none, |d| {
+                                d.child(
+                                    div()
+                                        .h(px(24.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(6.))
+                                        .border_1()
+                                        .border_dashed()
+                                        .border_color(rgb(LINE_STRONG))
+                                        .text_size(px(10.5))
+                                        .text_color(rgb(TEXT_3))
+                                        .child("drag ↗ Map onto a knob"),
+                                )
+                            }),
+                    ),
             )
     }
 }

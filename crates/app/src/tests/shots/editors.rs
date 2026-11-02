@@ -12,11 +12,20 @@ pub(super) fn set_up(
     let Shot { page, song, out } = *shot;
     let _ = (song, out, &window);
     match page {
-        "roll" => {
+        "roll" | "roll-more" => {
             ws.track = 0;
             ws.region = Some((0, 0));
             ws.editor_h = 460.0;
             ws.show_bottom(Bottom::PianoRoll, cx);
+            if page == "roll-more" {
+                ws.roll.by_velocity = true;
+                let at = gpui::point(gpui::px(1310.), gpui::px(452.));
+                ws.menu = Some(crate::ui::menu::Menu {
+                    at,
+                    items: ws.roll_more(at),
+                    ..Default::default()
+                });
+            }
         }
         "roll-pro" => {
             ws.track = 0;
@@ -33,17 +42,19 @@ pub(super) fn set_up(
                 }
             }
         }
-        "sampler" => {
+        "sampler" | "sampler-grains" | "sampler-matrix" | "sampler-vintage" => {
+            use pina_engine::dsp::sampler::Playing;
             use pina_engine::song::project::{
-                FilterMode, Instrument, Sampler, SamplerVoice, Track,
+                FilterMode, Instrument, LoopMode, ModDest, ModSource, Route, Routes,
+                SampleCharacter, SampleMode, Sampler, SamplerVoice, Track,
             };
             let file =
                 PathBuf::from(std::env::var("PINA_SHOT_SAMPLE").expect("PINA_SHOT_SAMPLE: a loop"));
             let (sides, rate) = pina_engine::audio::engine::read_audio(&file).unwrap();
             let found = pina_engine::dsp::sampler::onsets(&sides[0], rate as f32);
             let cut = pina_engine::dsp::sampler::cuts(&found, 8);
-            let zones = pina_engine::dsp::sampler::slices(&file, &cut, 36);
-            let voice = SamplerVoice {
+            let mut zones = pina_engine::dsp::sampler::slices(&file, &cut, 36);
+            let mut voice = SamplerVoice {
                 filter: FilterMode::LowPass,
                 cutoff_hz: 6000.0,
                 resonance: 0.3,
@@ -54,6 +65,90 @@ pub(super) fn set_up(
                 release_ms: 180.0,
                 ..Default::default()
             };
+            // Playing: a voice in the picked slice, another in the next.
+            let mut playing = vec![
+                Playing {
+                    zone: 2,
+                    at: zones[2].start + 0.02,
+                    level: 0.9,
+                    grain: false,
+                },
+                Playing {
+                    zone: 3,
+                    at: zones[3].start + 0.05,
+                    level: 0.6,
+                    grain: false,
+                },
+            ];
+            match page {
+                "sampler-grains" => {
+                    // One sound, frozen in a cloud: the whole loop, grains about its middle.
+                    zones = vec![pina_engine::song::project::Zone {
+                        file: file.clone(),
+                        name: "Break".into(),
+                        note: 24,
+                        high: Some(96),
+                        root: Some(60),
+                        gate: true,
+                        loop_mode: LoopMode::Forward,
+                        loop_start: Some(0.3),
+                        loop_end: Some(0.8),
+                        loop_fade: 0.25,
+                        ..Default::default()
+                    }];
+                    voice.mode = SampleMode::Grains;
+                    voice.position = 0.46;
+                    voice.spray = 0.25;
+                    voice.density = 48.0;
+                    voice.grain_ms = 140.0;
+                    voice.freeze = true;
+                    voice.filter = FilterMode::Ladder;
+                    voice.cutoff_hz = 2400.0;
+                    voice.resonance = 0.55;
+                    playing = (0..26)
+                        .map(|k| Playing {
+                            zone: 0,
+                            at: 0.46 + ((k * 37 % 50) as f32 / 50.0 - 0.5) * 0.12,
+                            level: 0.3 + (k % 5) as f32 * 0.15,
+                            grain: true,
+                        })
+                        .chain([Playing {
+                            zone: 0,
+                            at: 0.46,
+                            level: 1.0,
+                            grain: false,
+                        }])
+                        .collect();
+                }
+                "sampler-matrix" => {
+                    voice.matrix = Routes::from_slice(&[
+                        Route {
+                            source: ModSource::Velocity,
+                            dest: ModDest::Cutoff,
+                            amount: 0.45,
+                        },
+                        Route {
+                            source: ModSource::Lfo2,
+                            dest: ModDest::Pan,
+                            amount: -0.6,
+                        },
+                        Route {
+                            source: ModSource::Random,
+                            dest: ModDest::Pitch,
+                            amount: 0.04,
+                        },
+                    ]);
+                }
+                "sampler-vintage" => {
+                    voice.character = SampleCharacter::Vintage;
+                    voice.mode = SampleMode::Stretch;
+                    voice.filter = FilterMode::Formant;
+                    voice.cutoff_hz = 400.0;
+                    voice.sub = 0.4;
+                    voice.pitch_env = 12.0;
+                }
+                _ => {}
+            }
             ws.session.project.tracks.push(Track {
                 name: "Break".into(),
                 instrument: Some(Instrument::Sampler(Sampler { zones, voice })),
@@ -61,7 +156,14 @@ pub(super) fn set_up(
             });
             ws.session.project.assign_ids();
             ws.select_track(ws.session.project.tracks.len() - 1);
-            ws.sampler_ui.zone = 2;
+            ws.sampler_ui.zone = if page == "sampler-grains" { 0 } else { 2 };
+            ws.sampler_ui.pretend = playing;
+            ws.sampler_ui.tab = match page {
+                "sampler-matrix" => crate::editors::sampler::ModTab::Matrix,
+                "sampler-vintage" => crate::editors::sampler::ModTab::Layers,
+                "sampler-grains" => crate::editors::sampler::ModTab::Env,
+                _ => crate::editors::sampler::ModTab::Lfo1,
+            };
             ws.show_bottom(Bottom::Sampler, cx);
         }
         "steps-empty" => {

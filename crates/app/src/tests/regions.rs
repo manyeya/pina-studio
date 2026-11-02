@@ -284,42 +284,157 @@ fn region_playback_settings_loop_transpose_and_quantize_without_touching_notes(
 }
 
 #[gpui::test]
-fn an_audio_regions_flex_and_tempo_following_are_set_in_its_inspector(cx: &mut TestAppContext) {
-    use pina_engine::song::project::Flex;
+fn an_audio_regions_stretch_mode_and_tempo_following_are_set_in_its_inspector(
+    cx: &mut TestAppContext,
+) {
+    use pina_engine::song::project::StretchMode;
     let (ws, cx) = open(cx);
     let drums = ws.read_with(cx, |ws, _| {
         let p = &ws.session.project;
         p.tracks.iter().position(|t| t.name == "Drums").unwrap()
     });
     cx.simulate_click(spot(&ws, cx, PPQ, drums), Modifiers::none());
-    click_on(cx, "region-flex", Modifiers::none(), MouseButton::Left);
+    click_on(
+        cx,
+        "region-stretch-mode",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
     click_on(cx, "menu-1", Modifiers::none(), MouseButton::Left); // Slicing
     click_on(cx, "region-follow", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "menu-1", Modifiers::none(), MouseButton::Left); // Follow
+    use pina_engine::song::project::Follow;
     let audio = |ws: &Entity<Workspace>, cx: &VisualTestContext| {
         ws.read_with(cx, |ws, _| {
             match &ws.session.project.tracks[drums].regions[0].content {
                 Content::Audio {
-                    flex,
+                    stretch_mode,
                     follow,
-                    stretch,
+                    tempo,
                     ..
-                } => (*flex, *follow, *stretch),
+                } => (*stretch_mode, *follow, *tempo),
                 c => panic!("{c:?}"),
             }
         })
     };
-    assert_eq!(audio(&ws, cx), (Flex::Slicing, true, 1.0));
-    // The tempo halved: it plays twice as long, its beats on the song's.
+    // Following, its own tempo is the song's where it is.
+    let song = ws.read_with(cx, |ws, _| ws.session.project.tempo);
+    assert_eq!(
+        audio(&ws, cx),
+        (StretchMode::Slicing, Follow::On, Some(song))
+    );
+    // The tempo halved: half way through the bar it's played only a quarter of its file's bar.
+    let frame = |ws: &Entity<Workspace>, cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let p = &ws.session.project;
+            let r = &p.tracks[drums].regions[0];
+            p.frame_at(&r.content, r.start as f64, (r.start + BAR / 2) as f64)
+                .unwrap()
+        })
+    };
+    let before = frame(&ws, cx);
     ws.update(cx, |ws, cx| {
         ws.edit(cx, |ws| {
             let p = &mut ws.session.project;
             p.set_tempo(p.tempo / 2.0);
         })
     });
-    assert_eq!(audio(&ws, cx), (Flex::Slicing, true, 2.0));
-    // Undo takes the tempo and the stretch back together.
+    assert_eq!(frame(&ws, cx), before);
+    // Undo takes the tempo back.
     cx.simulate_keystrokes("cmd-z");
-    assert_eq!(audio(&ws, cx).2, 1.0);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.session.project.tempo), song);
+    // Its own tempo doubled: heard at double time.
+    let value = cx.debug_bounds("region-tempo").unwrap();
+    let double = point(value.right() + px(12.), value.center().y);
+    cx.simulate_click(double, Modifiers::none());
+    assert_eq!(audio(&ws, cx).2, Some(song * 2.0));
+}
+
+#[gpui::test]
+fn shift_t_stretches_audio_to_the_tempo_and_back(cx: &mut TestAppContext) {
+    use pina_engine::song::project::Follow;
+    let (ws, cx) = open(cx);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    // Its own tempo known, a fifth slower than the song's.
+    let (song, was) = ws.update(cx, |ws, cx| {
+        let song = ws.session.project.tempo;
+        ws.edit(cx, |ws| {
+            ws.session.project.set_audio_tempo((drums, 0), song * 0.8)
+        });
+        (song, ws.session.project.tracks[drums].regions[0].clone())
+    });
+    cx.simulate_click(spot(&ws, cx, PPQ, drums), Modifiers::none());
+    let now = |ws: &Entity<Workspace>, cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            ws.session.project.tracks[drums].regions[0].clone()
+        })
+    };
+    // Stretched to the song: it plays faster, so the same audio takes a fifth less.
+    cx.simulate_keystrokes("shift-t");
+    let fast = now(&ws, cx);
+    assert!(matches!(
+        fast.content,
+        Content::Audio {
+            follow: Follow::On,
+            ..
+        }
+    ));
+    let ratio = fast.length as f64 / was.length as f64;
+    assert!((ratio - 0.8).abs() < 1e-3, "{ratio} at {song}");
+    // Again: back as it was.
+    cx.simulate_keystrokes("shift-t");
+    assert_eq!(now(&ws, cx), was);
+}
+
+#[gpui::test]
+fn holding_alt_puts_a_stretch_grip_on_every_region_and_dragging_it_stretches(
+    cx: &mut TestAppContext,
+) {
+    let (ws, cx) = open(cx);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    let grip: &'static str = format!("stretch-grip-{drums}-0").leak();
+    assert!(cx.debug_bounds(grip).is_none());
+    cx.simulate_modifiers_change(Modifiers::alt());
+    let at = cx
+        .debug_bounds(grip)
+        .expect("a grip while ⌥ is held")
+        .center();
+    // Dragged a bar on: its audio plays slower, to fill it.
+    let was = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[drums].regions[0].clone()
+    });
+    let to = point(spot(&ws, cx, was.start + was.length + BAR, drums).x, at.y);
+    drag_with(cx, at, to, Modifiers::alt());
+    let now = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[drums].regions[0].clone()
+    });
+    let (Content::Audio { stretch: a, .. }, Content::Audio { stretch: b, .. }) =
+        (&was.content, &now.content)
+    else {
+        unreachable!()
+    };
+    assert!(b > a && now.length > was.length, "{a} {b}");
+    cx.simulate_modifiers_change(Modifiers::none());
+    assert!(cx.debug_bounds(grip).is_none());
+}
+
+#[gpui::test]
+fn a_regions_tempo_being_found_is_said_on_it_till_it_is(cx: &mut TestAppContext) {
+    use crate::arrange::tempo::After;
+    let (ws, cx) = open(cx);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    ws.update(cx, |ws, cx| ws.find_tempo((drums, 0), After::Nothing, cx));
+    assert_eq!(ws.read_with(cx, |ws, _| ws.listening.len()), 1);
+    until(cx, &ws, |ws| ws.listening.is_empty());
 }
 
 #[gpui::test]
@@ -356,7 +471,7 @@ fn a_hit_dragged_in_an_audio_region_makes_a_warp_marker(cx: &mut TestAppContext)
         [hits[0] as u64, from, hits[2] as u64]
     );
     let w = ws.read_with(cx, |ws, _| ws.warping(at).unwrap());
-    let moved = w.tick(from as usize);
+    let moved = ws.read_with(cx, |ws, _| w.tick(&ws.session.project, from as usize));
     assert!(
         moved > 0.0 && (moved / (PPQ / 4) as f64).fract().abs() < 1e-6,
         "{moved}"
@@ -525,4 +640,41 @@ fn writing_notes_starts_with_a_double_click_anywhere(cx: &mut TestAppContext) {
     });
     assert_eq!(last, (0, BAR));
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn q_on_an_audio_region_puts_its_hits_on_the_grid(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    cx.simulate_click(spot(&ws, cx, PPQ, drums), Modifiers::none());
+    let warps = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let p = &ws.session.project;
+            let r = p.region((drums, 0));
+            let t =
+                pina_engine::song::project::Timing::of(&r.content, p.sample_rate as f64).unwrap();
+            let Content::Audio { warps, .. } = &r.content else {
+                unreachable!()
+            };
+            let grid = ws.grid().min(PPQ) as f64;
+            let off: Vec<f64> = warps
+                .iter()
+                .map(|w| {
+                    let tick = p.audio_tick(&t, r.start as f64, w[0] as f64);
+                    (tick - (tick / grid).round() * grid).abs()
+                })
+                .collect();
+            off
+        })
+    };
+    assert!(warps(cx).is_empty());
+    cx.simulate_keystrokes("q");
+    let off = warps(cx);
+    assert!(!off.is_empty());
+    assert!(off.iter().all(|&o| o < 1.0), "{off:?}");
+    cx.simulate_keystrokes("cmd-z");
+    assert!(warps(cx).is_empty());
 }

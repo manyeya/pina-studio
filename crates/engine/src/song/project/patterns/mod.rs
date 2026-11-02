@@ -234,6 +234,19 @@ pub enum RowTarget {
         modulator: u8,
         field: ModParam,
     },
+    Limit {
+        field: LimitParam,
+    },
+    Tool {
+        place: u8,
+        knob: u8,
+    },
+    Voice {
+        knob: u8,
+    },
+    Poly {
+        param: u16,
+    },
     /// A MIDI controller, 0 to 127.
     Cc(u8),
     PitchBend,
@@ -251,6 +264,10 @@ impl RowTarget {
             RowTarget::Plugin { plugin, param } => Param::Plugin(plugin, param),
             RowTarget::Eq { band, field } => Param::Eq(band, field),
             RowTarget::Modulator { modulator, field } => Param::Mod(modulator, field),
+            RowTarget::Limit { field } => Param::Limit(field),
+            RowTarget::Tool { place, knob } => Param::Tool(place, knob),
+            RowTarget::Voice { knob } => Param::Voice(knob),
+            RowTarget::Poly { param } => Param::Poly(param),
             RowTarget::Cc(_) | RowTarget::PitchBend | RowTarget::Pressure => return None,
         })
     }
@@ -264,6 +281,10 @@ impl RowTarget {
             Param::Plugin(plugin, param) => RowTarget::Plugin { plugin, param },
             Param::Eq(band, field) => RowTarget::Eq { band, field },
             Param::Mod(modulator, field) => RowTarget::Modulator { modulator, field },
+            Param::Limit(field) => RowTarget::Limit { field },
+            Param::Tool(place, knob) => RowTarget::Tool { place, knob },
+            Param::Voice(knob) => RowTarget::Voice { knob },
+            Param::Poly(param) => RowTarget::Poly { param },
         }
     }
 
@@ -286,6 +307,12 @@ impl RowTarget {
                 Some(Param::Plugin(..)) => "Plugin parameter".into(),
                 Some(Param::Eq(band, field)) => format!("EQ {} {:?}", band + 1, field),
                 Some(Param::Mod(m, field)) => format!("Modulator {} {:?}", m + 1, field),
+                Some(Param::Limit(field)) => format!("Limiter {}", field.name()),
+                Some(Param::Tool(..)) => "Effect knob".into(),
+                Some(Param::Voice(k)) => VOICE.get(k as usize).map_or("Voice", |v| v.name).into(),
+                Some(Param::Poly(i)) => POLY_PARAMS
+                    .get(i as usize)
+                    .map_or("Synth".into(), |p| p.name.clone()),
                 None => String::new(),
             },
         }

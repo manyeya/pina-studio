@@ -9,10 +9,11 @@ use pina_engine::{
     audio::player::Which,
     music::NoteEdit,
     plugin::PluginParam,
-    song::project::{Content, Flex, Instrument, PPQ, Project},
+    song::project::{Content, Follow, Instrument, PPQ, Project, StretchMode},
 };
 
 use crate::{
+    arrange::tempo::TempoOp,
     mix::eq::Quick,
     mix::strip::{self, Channel, Layout},
     ui::menu::{Menu, MenuAction},
@@ -375,8 +376,9 @@ impl Workspace {
             Content::Audio {
                 file,
                 stretch,
-                flex,
+                stretch_mode,
                 follow,
+                tempo,
                 formants,
                 warps,
                 ..
@@ -385,7 +387,8 @@ impl Workspace {
                 let name = file
                     .file_name()
                     .map_or(String::new(), |n| n.to_string_lossy().into_owned());
-                let (follow, stretch) = (*follow, *stretch);
+                let (follow, stretch, own) = (*follow, *stretch, *tempo);
+                let tempo_op = |o: TempoOp| MenuAction::Tempo(o);
                 let signed = |v: i8| match v {
                     0 => "0".to_string(),
                     v if v > 0 => format!("+{v}"),
@@ -399,18 +402,21 @@ impl Workspace {
                             .overflow_hidden()
                             .whitespace_nowrap(),
                     ))
-                    // How it's stretched: its flex mode.
+                    // How it's stretched: Polyphonic, Slicing or Speed.
                     .child(row(
-                        "Flex",
-                        dropdown(flex.name(), 22.)
-                            .debug_selector(|| "region-flex".into())
+                        "Stretch",
+                        dropdown(stretch_mode.name(), 22.)
+                            .debug_selector(|| "region-stretch-mode".into())
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                                    let items = Flex::ALL
+                                    let items = StretchMode::ALL
                                         .into_iter()
                                         .map(|f| {
-                                            (f.name().to_string(), MenuAction::RegionFlex(at, f))
+                                            (
+                                                f.name().to_string(),
+                                                MenuAction::RegionStretchMode(at, f),
+                                            )
                                         })
                                         .collect();
                                     ws.menu = Some(Menu {
@@ -422,21 +428,117 @@ impl Workspace {
                                 }),
                             ),
                     ))
-                    .child(row("Stretch", mono(format!("×{stretch:.3}"))))
+                    // How it keeps time: as recorded, or following the song (locked to its
+                    // bars or beats, for a take that drifts).
                     .child(row(
-                        "Follow tempo",
-                        switch(follow)
+                        "Time",
+                        dropdown(follow.name(), 22.)
                             .debug_selector(|| "region-follow".into())
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(move |ws, _, _, cx| {
-                                    ws.edit(cx, |ws| {
-                                        let r = &mut ws.session.project.tracks[at.0].regions[at.1];
-                                        if let Content::Audio { follow, .. } = &mut r.content {
-                                            *follow ^= true;
-                                        }
-                                    })
+                                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                    let items = Follow::ALL
+                                        .into_iter()
+                                        .map(|f| {
+                                            let mark = if f == follow { "✓ " } else { "    " };
+                                            (
+                                                format!("{mark}{}", f.name()),
+                                                tempo_op(TempoOp::Follow(at, f)),
+                                            )
+                                        })
+                                        .collect();
+                                    ws.open_menu(e.position, items, cx);
                                 }),
+                            ),
+                    ))
+                    // Its own tempo: halved, doubled (heard at half or double time), typed, or
+                    // found by listening.
+                    .child(row(
+                        "Its tempo",
+                        match own {
+                            Some(t) => tray()
+                                .p(px(2.))
+                                .rounded(px(7.))
+                                .child(seg("½", false, 20.).on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, _, _, cx| {
+                                        ws.tempo_op(TempoOp::Times(at, 0.5), cx)
+                                    }),
+                                ))
+                                .child(
+                                    match self.name_field(Name::RegionTempo(at)) {
+                                        Some(field) => div().w(px(56.)).child(field),
+                                        None => mono(format!("{t:.2}")).px(px(4.)),
+                                    }
+                                    .debug_selector(|| "region-tempo".into())
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
+                                            if e.click_count == 2 {
+                                                ws.start_naming(Name::RegionTempo(at), window, cx);
+                                            }
+                                        }),
+                                    ),
+                                )
+                                .child(seg("×2", false, 20.).on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, _, _, cx| {
+                                        ws.tempo_op(TempoOp::Times(at, 2.0), cx)
+                                    }),
+                                )),
+                            None => button("Find", false)
+                                .debug_selector(|| "region-find-tempo".into())
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, _, _, cx| {
+                                        ws.tempo_op(TempoOp::Find(at), cx)
+                                    }),
+                                ),
+                        },
+                    ))
+                    .when(follow.is_off(), |d| {
+                        d.child(row("Stretched", mono(format!("×{stretch:.3}"))))
+                    })
+                    // The song keeping time with it: its tempo, bar by bar (from the menu,
+                    // steady), or the tempo that makes it fill the cycle.
+                    .child(row(
+                        "Song",
+                        div()
+                            .flex()
+                            .gap(px(4.))
+                            .child(
+                                button("Keep time", false)
+                                    .debug_selector(|| "region-adapt".into())
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                            ws.open_menu(
+                                                e.position,
+                                                vec![
+                                                    (
+                                                        "The song takes its tempo, bar by bar"
+                                                            .into(),
+                                                        tempo_op(TempoOp::Adapt(at, false)),
+                                                    ),
+                                                    (
+                                                        "The song takes its tempo, steady".into(),
+                                                        tempo_op(TempoOp::Adapt(at, true)),
+                                                    ),
+                                                ],
+                                                cx,
+                                            );
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                button("Fit cycle", false)
+                                    .debug_selector(|| "region-fit".into())
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |ws, _, _, cx| {
+                                            ws.tempo_op(TempoOp::Fit(at), cx)
+                                        }),
+                                    ),
                             ),
                     ))
                     .child(row(
@@ -689,20 +791,34 @@ impl Workspace {
                     }),
             )
             .child({
-                // Side by side, row for row.
-                let (mut effects, mut sends) = strip::rows(self, Channel::Master);
-                if has_track {
-                    let (e, s) = strip::rows(self, Channel::Track(self.track));
+                // The channel picked and where it plays into, side by side, row for row: a stack
+                // and the master; a track and its stack (its effects and level right there), or
+                // the master.
+                let pair = match self.channel {
+                    Channel::Aux(a) if a < project.auxes.len() => {
+                        [Some(Channel::Aux(a)), Some(Channel::Master)]
+                    }
+                    _ => {
+                        let into = project
+                            .tracks
+                            .get(self.track)
+                            .and_then(|t| t.output)
+                            .and_then(|b| project.auxes.iter().position(|a| a.bus == b))
+                            .map_or(Channel::Master, Channel::Aux);
+                        [has_track.then_some(Channel::Track(self.track)), Some(into)]
+                    }
+                };
+                let (mut effects, mut sends) = (0, 0);
+                for ch in pair.iter().flatten() {
+                    let (e, s) = strip::rows(self, *ch);
                     (effects, sends) = (effects.max(e), sends.max(s));
                 }
                 let layout = Layout::Compact { effects, sends };
-                div()
-                    .flex()
-                    .gap(px(8.))
-                    .when(has_track, |d| {
-                        d.child(strip::strip(self, Channel::Track(self.track), layout, cx))
-                    })
-                    .child(strip::strip(self, Channel::Master, layout, cx))
+                div().flex().gap(px(8.)).children(
+                    pair.into_iter()
+                        .flatten()
+                        .map(|ch| strip::strip(self, ch, layout, cx)),
+                )
             })
     }
 }

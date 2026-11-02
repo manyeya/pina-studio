@@ -4,6 +4,7 @@
 
 mod headers;
 mod lanes;
+mod navigator;
 mod regions;
 mod ruler;
 mod stacks;
@@ -16,21 +17,22 @@ pub use regions::*;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, Bounds, BoxShadow, Context, Div, FontWeight, Hsla, MouseButton,
-    MouseDownEvent, PathBuilder, Pixels, Point, SharedString, Window, canvas, div, fill,
-    linear_color_stop, linear_gradient, point, prelude::*, px, rgb, size,
+    Animation, AnimationExt, AnyElement, App, Bounds, BoxShadow, Context, Div, FontWeight, Hsla,
+    MouseButton, MouseDownEvent, PathBuilder, Pixels, Point, SharedString, Window, canvas, div,
+    fill, linear_color_stop, linear_gradient, point, prelude::*, px, rgb, size,
 };
 use pina_engine::{
     audio::peaks::Peaks,
-    audio::stretch::Map,
-    song::project::{At, Content, Instrument, PPQ, PanMode, Param, Region, comp_segments},
+    song::project::{
+        At, Content, Instrument, PPQ, PanMode, Param, Project, Region, Timing, comp_segments,
+    },
 };
 
 use crate::{
     mix::strip::{self, Channel},
     ui::menu::{MARKER_NAMES, Menu, MenuAction},
     ui::theme::*,
-    workspace::{Bottom, Drag, Edge, Name, Snap, Tool, Workspace},
+    workspace::{Bottom, Drag, Edge, MarkerHow, Name, Snap, Tool, Workspace},
 };
 
 impl Workspace {
@@ -56,6 +58,7 @@ impl Workspace {
                             .child(self.ruler(cx)),
                     ),
             )
+            .when(self.tempo_lane_shown(), |d| d.child(self.tempo_row(cx)))
             .child(
                 div()
                     .flex_1()
@@ -64,6 +67,7 @@ impl Workspace {
                     .child(self.headers(cx))
                     .child(self.lanes(cx)),
             )
+            .child(self.navigator(cx))
     }
 }
 

@@ -25,7 +25,11 @@ use std::{
 use cli::server::Request;
 use gpui::{App, AppContext, Bounds, Menu, MenuItem, WindowBounds, WindowOptions, px, size};
 use pina_engine::{
-    audio::engine::Engine, audio::player::Player, song::project::Project, song::session::Session,
+    audio::engine::{AudioSetup, Engine},
+    audio::player::Player,
+    song::commands::ChannelRef,
+    song::project::Project,
+    song::session::Session,
 };
 use serde_json::Value;
 use workspace::topbar::MIN_W;
@@ -73,17 +77,36 @@ const USAGE: &str = "usage:
                                    into the song, made to fit: a loop stretched to its
                                    tempo and moved into its key; a one-shot as a sampler
                                    zone in tune
+  pina learn <project> --track N | --master [--limit LUFS | --sat]
+  pina learn <project> --aux N --limit LUFS
+                                   the compressor listening sets for a track or the master,
+                                   as JSON (null with nothing to hear); with --limit, its
+                                   limiter (an aux's too), set to come out at that loudness;
+                                   with --sat, its saturator (bands, styles, drive, tone,
+                                   level) for its part in the song's genre, and why
   pina critique <project> [--quick] [--bars 9-16]
                                    a producer's notes on the song, worst first, each with
                                    the command that fixes it; --quick skips the render
   pina study <file> [--summary] [--playbook] [--offline]
+  pina midi <file> [--notes]       a MIDI file studied: key, tempo, chords and progression, each
+                                   part's role, range, rhythm on the bar, swing, feel, contour,
+                                   drums' patterns; --notes, its notes bar by bar
+  pina midi find [words] [--role bass] [--key 'A minor'] [--tempo 122] [--for <project>]
+                                   the library's MIDI files that fit, each with the semitones
+                                   into the key
+  pina like <audio or picture> [--seconds N] [--hz LOW-HIGH] [--scale linear|log|mel]
+                 [--colors viridis|magma|inferno|plasma|jet|gray|gray_inverted] [--crop x,y,w,h] [--db N]
+  pina like create <audio or picture> [--style '…'] [--rhythm|--form|--sound loose|close|tight]
+                 [--title '…'] [--folder DIR] [the reading flags above]
+  pina like compare <project> [--request 'closer drums']
                                    everything about a song: its tempo, key, chords, form,
-                                   groove, what plays, its mix, the genres it's nearest, and
+                                   groove, what plays, its mix, your playbooks it's nearest, and
                                    (online) its lyrics, year and genre; --playbook makes a
                                    playbook from it to write songs like it
-  pina playbook [genre]           what a genre is: tempo, swing, parts and their sounds,
-                                   sections, progressions, mix targets
-  pina playbook --edit [genre]    open the playbooks (JSON, one a genre) to edit or add to
+  pina playbook [genre]           one of your genre playbooks (none come with Pina Studio):
+                                   tempo, swing, parts and their sounds, sections,
+                                   progressions, mix targets; without a genre, yours
+  pina playbook --edit [genre]    open your playbooks folder (JSON, one a genre) to add to
   pina theory <key> [words]       the key's chords, and progressions for a genre or mood
   pina reference <file> [project] measure a finished song; with a project, aim its mix there
   pina sounds <role> [--genre g] [words]
@@ -95,7 +118,7 @@ const USAGE: &str = "usage:
                                    a limiter on the master, set to the loudness
   pina ask [--agent <id>] <project> <words>
                                    an agent does what's asked to the song, saying so as it
-                                   goes (live in the app, and its Agent panel, if it's open):
+                                   goes (live in the app, and its Studio Agent panel, if it's open):
                                    claude-code or codex; the last one picked in the app by
                                    default
   pina projects                   every song in ~/Music/Pina Studio (and opened lately), as JSON
@@ -194,6 +217,37 @@ fn main() {
             }
         }
         ["samples", rest @ ..] => print(cli::samples::command(rest)),
+        ["learn", dir, "--master"] => print(agent::produce::learn(p(dir), None)),
+        ["learn", dir, "--master", "--sat"] => print(agent::produce::learn_saturator(p(dir), None)),
+        ["learn", dir, "--track", t, "--sat"] => match t.parse() {
+            Ok(t) => print(agent::produce::learn_saturator(p(dir), Some(t))),
+            Err(_) => Err(USAGE.to_string()),
+        },
+        ["learn", dir, "--master", "--limit", lufs] => match lufs.parse() {
+            Ok(l) => print(agent::produce::learn_limiter(p(dir), ChannelRef::Master, l)),
+            Err(_) => Err(USAGE.to_string()),
+        },
+        [
+            "learn",
+            dir,
+            which @ ("--track" | "--aux"),
+            i,
+            "--limit",
+            lufs,
+        ] => match (i.parse(), lufs.parse()) {
+            (Ok(i), Ok(l)) => {
+                let ch = match *which {
+                    "--track" => ChannelRef::Track(i),
+                    _ => ChannelRef::Aux(i),
+                };
+                print(agent::produce::learn_limiter(p(dir), ch, l))
+            }
+            _ => Err(USAGE.to_string()),
+        },
+        ["learn", dir, "--track", t] => match t.parse() {
+            Ok(t) => print(agent::produce::learn(p(dir), Some(t))),
+            Err(_) => Err(USAGE.to_string()),
+        },
         ["critique", dir, rest @ ..] => {
             let quick = rest.contains(&"--quick");
             match rest.iter().position(|a| *a == "--bars") {
@@ -213,14 +267,78 @@ fn main() {
                     Ok(())
                 }
                 Ok(s) if rest.contains(&"--playbook") => {
-                    let taken = pina_engine::music::playbook::ids();
-                    let book = pina_engine::study::to_playbook(&s, &taken);
+                    let book = pina_engine::study::song_book(&s);
                     pina_engine::music::playbook::save(&book)
                         .map(|f| println!("{} ({}): {}", book.name, book.id, f.display()))
                 }
                 Ok(s) => print(Ok(cli::study::for_agent(&s))),
             }
         }
+        ["midi", "find", rest @ ..] => {
+            let flag = |k: &str| {
+                rest.iter()
+                    .position(|a| *a == k)
+                    .and_then(|i| rest.get(i + 1).copied())
+            };
+            let words: Vec<&str> = rest
+                .iter()
+                .enumerate()
+                .filter(|(i, a)| {
+                    !a.starts_with("--") && (*i == 0 || !rest[i - 1].starts_with("--"))
+                })
+                .map(|(_, a)| *a)
+                .collect();
+            let q = pina_engine::samples::midi::MidiQuery {
+                words: words.join(" "),
+                role: flag("--role").map(str::to_string),
+                key: flag("--key").map(str::to_string),
+                tempo: flag("--tempo").and_then(|t| t.parse().ok()),
+                limit: flag("--limit").and_then(|t| t.parse().ok()),
+            };
+            print(cli::midi::find(q, flag("--for").map(Path::new)))
+        }
+        ["midi", file, rest @ ..] => print(cli::midi::study(p(file), rest.contains(&"--notes"))),
+        ["like", "create", file, rest @ ..] => {
+            use pina_engine::study::reference::Closeness;
+            let flag = |k: &str| {
+                rest.iter()
+                    .position(|a| *a == k)
+                    .and_then(|i| rest.get(i + 1).copied())
+            };
+            let close = |k: &str| flag(k).and_then(Closeness::parse).unwrap_or_default();
+            let choices = cli::reference::Choices {
+                title: flag("--title").map(str::to_string),
+                style: flag("--style").unwrap_or("").to_string(),
+                rhythm: close("--rhythm"),
+                form: close("--form"),
+                sound: close("--sound"),
+            };
+            let root = flag("--folder")
+                .map(PathBuf::from)
+                .unwrap_or_else(pages::projects::root);
+            cli::reference::calibration_from_args(rest)
+                .and_then(|given| cli::reference::create(p(file), &given, &choices, &root))
+                .and_then(|(dir, bp)| {
+                    let like = cli::project(&dir)?
+                        .like
+                        .ok_or("the reference wasn't kept")?;
+                    print(Ok(serde_json::json!({
+                        "project": dir,
+                        "brief": cli::reference::for_agent(&bp),
+                        "next": cli::reference::compose_prompt(&dir, &like, &bp),
+                    })))
+                })
+        }
+        ["like", "compare", project, rest @ ..] => {
+            let request = rest
+                .iter()
+                .position(|a| *a == "--request")
+                .and_then(|i| rest.get(i + 1).copied());
+            print(cli::reference::compare(p(project), request))
+        }
+        ["like", file, rest @ ..] => cli::reference::calibration_from_args(rest)
+            .and_then(|given| cli::reference::blueprint(p(file), &given))
+            .and_then(|bp| print(Ok(cli::reference::for_agent(&bp)))),
         ["playbook"] => print(agent::produce::playbook(None)),
         ["playbook", "--edit"] => agent::produce::edit_playbooks(None),
         ["playbook", "--edit", genre] => agent::produce::edit_playbooks(Some(genre)),
@@ -414,7 +532,8 @@ fn open(dir: &Path) -> Result<(), String> {
     if session.on_disk {
         pages::projects::opened(dir);
     }
-    let player = Player::start(&session.project, dir)?;
+    let setup = pages::settings::Settings::load().audio;
+    let player = Player::start(&session.project, dir, &setup)?;
     gpui_platform::application().run(move |cx: &mut App| {
         if let Err(e) = cx.text_system().add_fonts(ui::theme::fonts()) {
             eprintln!("fonts: {e}");
@@ -455,7 +574,7 @@ fn open(dir: &Path) -> Result<(), String> {
                 MenuItem::action("Live Loops", ToggleLoops),
                 MenuItem::action("Sample Browser", ToggleSamples),
                 MenuItem::action("Samples Page", ToggleSamplesPage),
-                MenuItem::action("Agent", ToggleAgent),
+                MenuItem::action("Studio Agent", ToggleAgent),
                 MenuItem::action("Score", ToggleScore),
                 MenuItem::action("Automation", ToggleAutomation),
                 MenuItem::action("Inspector", ToggleInspector),
@@ -541,12 +660,13 @@ fn new_song(name: &str, rest: &[&str]) -> Result<(), String> {
 /// Plays a project through the default output, without the app.
 fn play(dir: &Path) -> Result<(), String> {
     let project = Project::load(dir)?;
-    let rate = pina_engine::audio::engine::output_rate(project.sample_rate)? as f64;
+    let setup = AudioSetup::default();
+    let rate = pina_engine::audio::engine::output_rate(project.sample_rate, &setup)? as f64;
     let (mut engine, _plugins) = Engine::load(&project, dir, rate)?;
     let frames = project.samples(project.end(), rate) + (cli::TAIL * rate) as u64;
     let seconds = frames as f64 / rate;
     engine.play();
-    let _stream = engine.start_output()?;
+    let _output = engine.start_output(&setup)?;
     println!("playing {seconds:.1} s (ctrl-c stops)");
     thread::sleep(Duration::from_secs_f64(seconds));
     Ok(())

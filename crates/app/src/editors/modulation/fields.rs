@@ -48,6 +48,13 @@ pub(crate) fn field_of(p: SamplerParam) -> Field {
         SamplerParam::Vibrato => Field::Vibrato,
         SamplerParam::LfoFilter => Field::LfoFilter,
         SamplerParam::Tremolo => Field::Tremolo,
+        SamplerParam::Drive => Field::Drive,
+        SamplerParam::Position => Field::Position,
+        SamplerParam::Speed => Field::Speed,
+        SamplerParam::GrainSize => Field::GrainSize,
+        SamplerParam::Spray => Field::Spray,
+        SamplerParam::Fm => Field::Fm,
+        SamplerParam::Sub => Field::Sub,
     }
 }
 

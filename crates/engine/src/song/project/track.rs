@@ -129,8 +129,17 @@ pub struct Track {
     /// The built-in saturator, after the compressor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sat: Option<Saturator>,
+    /// The built-in limiter, last in the chain unless moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<Limiter>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inserts: Vec<PluginRef>,
+    /// More built-in effects, past its own of each kind, each where the chain puts it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub more: Vec<Unit>,
+    /// The order its built-ins and inserts run in (none: the built-ins, then the inserts).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chain: Vec<Fx>,
     #[serde(default)]
     pub volume_db: f32,
     /// -1 is hard left, 1 hard right.
@@ -184,6 +193,20 @@ pub struct Track {
     /// stored from the step sequencer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern_template: Option<super::Pattern>,
+    /// A kit's pad: it plays its kit track's notes on its note (as well as its own regions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad: Option<Pad>,
+}
+
+/// A kit's pad: the kit track (by id) whose notes it plays, the note that's its, and the choke
+/// group it's in (a pad playing cuts off the others in its group, as a closed hat does an open
+/// one).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pad {
+    pub kit: u64,
+    pub note: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choke: Option<u8>,
 }
 
 /// Input channels to record from.
@@ -209,21 +232,7 @@ impl Track {
     /// Puts a plugin in insert slot `index` (past the end adds one), or takes it out with None.
     /// Automation follows: a slot's lanes go with its plugin.
     pub fn set_insert(&mut self, index: usize, plugin: Option<PluginRef>) -> Result<(), String> {
-        match plugin {
-            Some(p) if index < self.inserts.len() => {
-                if !self.inserts[index].same_plugin(&p) {
-                    self.automation.forget(Which::Insert(index));
-                }
-                self.inserts[index] = p;
-            }
-            Some(p) => self.inserts.push(p),
-            None if index < self.inserts.len() => {
-                self.inserts.remove(index);
-                self.automation.insert_removed(index);
-            }
-            None => return Err(format!("no insert {index} to remove")),
-        }
-        Ok(())
+        self.chain_mut().set_insert(index, plugin)
     }
 
     /// Changes the instrument; another plugin's parameters aren't this one's, so its lanes go.
@@ -293,8 +302,15 @@ pub struct Aux {
     pub comp: Option<Comp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sat: Option<Saturator>,
+    /// The built-in limiter, last in the chain unless moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<Limiter>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inserts: Vec<PluginRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub more: Vec<Unit>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chain: Vec<Fx>,
     #[serde(default)]
     pub volume_db: f32,
     #[serde(default)]
@@ -311,6 +327,9 @@ pub struct Aux {
     /// A stack's tracks folded away under it in the arrangement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub folded: bool,
+    /// How tall a stack's row shows, as dragged (pixels; the usual height without).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -322,9 +341,38 @@ pub enum Instrument {
     Drums,
     /// The built-in sampler: samples on notes.
     Sampler(Sampler),
+    /// The built-in synth.
+    Poly(Box<Poly>),
+    /// A kit: its notes play its pads, the tracks whose `pad` is it; it sounds nothing itself.
+    Kit,
     /// A plugin of any format (once only VST3, which is still read as `"vst3"`).
     #[serde(alias = "vst3")]
     Plugin(PluginRef),
+}
+
+impl Track {
+    /// The effect at `place`: one of its stacked ones, or its own compressor or saturator.
+    pub fn unit_at(&self, place: u8) -> Option<Unit> {
+        match place {
+            OWN_COMP => self.comp.map(Unit::Comp),
+            OWN_SAT => self.sat.map(Unit::Sat),
+            k => self.more.get(k as usize).copied(),
+        }
+    }
+
+    /// Puts `u` back at `place`.
+    pub fn set_unit_at(&mut self, place: u8, u: Unit) {
+        match (place, u) {
+            (OWN_COMP, Unit::Comp(c)) => self.comp = Some(c),
+            (OWN_SAT, Unit::Sat(s)) => self.sat = Some(s),
+            (k, u) if k < OWN_COMP => {
+                if let Some(slot) = self.more.get_mut(k as usize) {
+                    *slot = u;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Instrument {
@@ -332,7 +380,7 @@ impl Instrument {
     /// on each note. A key change leaves them be, and they don't count towards the key.
     pub fn is_kit(&self) -> bool {
         match self {
-            Instrument::Drums => true,
+            Instrument::Drums | Instrument::Kit => true,
             Instrument::Sampler(s) => {
                 !s.zones.is_empty() && s.zones.iter().all(|z| z.high.is_none())
             }

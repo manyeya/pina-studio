@@ -41,10 +41,12 @@ impl Workspace {
             .or_else(|| tracks.iter().find(|o| o.id != track.id))
             .map_or(track.id, |o| o.id);
         let adders = div()
+            .id("mod-add")
+            .min_w(px(0.))
             .flex()
             .items_center()
             .gap(px(4.))
-            .flex_none()
+            .overflow_x_scroll()
             .child(
                 div()
                     .mr(px(2.))
@@ -113,6 +115,7 @@ impl Workspace {
                     .px(px(14.))
                     .border_b_1()
                     .border_color(rgb(LINE_SOFT))
+                    .child(adders)
                     .child(
                         div()
                             .flex_1()
@@ -123,8 +126,7 @@ impl Workspace {
                             .overflow_hidden()
                             .text_ellipsis()
                             .child(hint),
-                    )
-                    .child(adders),
+                    ),
             )
             .child(
                 div()

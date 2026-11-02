@@ -39,6 +39,8 @@ pub enum TrackOp {
     /// A stack (by its bus): flattened, its tracks back on the master; its tracks folded or shown.
     Flatten(u32),
     Fold(u32),
+    /// A kit track's notes moved onto its pads' own tracks.
+    SplitKit(usize),
     Look(usize, Point<Pixels>),
     /// The Binaural Panner, on a track.
     Panner(usize),
@@ -209,6 +211,12 @@ impl Workspace {
                     TrackOp::Stack(t),
                 ),
             },
+            match self.session.project.tracks[t].instrument {
+                Some(pina_engine::song::project::Instrument::Kit) => {
+                    op("Split Notes onto Pads".into(), TrackOp::SplitKit(t))
+                }
+                _ => (String::new(), MenuAction::Nothing),
+            },
             rule(),
             op("Modulation…".into(), TrackOp::Modulation(t)),
             ("Bounce in Place".to_string(), MenuAction::BounceInPlace(t)),
@@ -280,6 +288,38 @@ impl Workspace {
         if pattern {
             items.push(op("Open in Step Sequencer", RegionOp::Open));
             items.push(op("Convert to MIDI Region", RegionOp::ToMidi));
+        }
+        // Audio: how it keeps time, and the song keeping time with it.
+        if let Content::Audio { follow, .. } = &region.content {
+            items.push(op("Quantize Hits", RegionOp::Quantize));
+            use crate::arrange::tempo::TempoOp;
+            use pina_engine::song::project::Follow;
+            let tempo = |label: &str, o: TempoOp| (label.to_string(), MenuAction::Tempo(o));
+            for (f, label) in [
+                (Follow::Off, "Play as Recorded"),
+                (Follow::On, "Follow the Tempo"),
+                (Follow::Bars, "Follow, Locked to Its Bars"),
+                (Follow::Beats, "Follow, Locked to Its Beats"),
+            ] {
+                items.push((
+                    ticked(*follow == f, label),
+                    MenuAction::Tempo(TempoOp::Follow(r, f)),
+                ));
+            }
+            items.push(tempo("Find Its Tempo", TempoOp::Find(r)));
+            items.push(tempo(
+                "The Song Takes Its Tempo, Bar by Bar",
+                TempoOp::Adapt(r, false),
+            ));
+            items.push(tempo(
+                "The Song Takes Its Tempo, Steady",
+                TempoOp::Adapt(r, true),
+            ));
+            items.push(match self.session.project.cycle.is_some() {
+                true => tempo("Fit the Tempo to the Cycle", TempoOp::Fit(r)),
+                false => ("Fit the Tempo to the Cycle".into(), MenuAction::Nothing),
+            });
+            items.push(rule());
         }
         items.push(op("Bounce in Place", RegionOp::Bounce));
         items.push(rule());
@@ -406,6 +446,14 @@ impl Workspace {
             TrackOp::Flatten(bus) => {
                 self.edit(cx, |ws| ws.session.project.flatten_stack(bus));
                 self.channel = crate::mix::strip::Channel::Track(self.track);
+            }
+            TrackOp::SplitKit(t) if t < n => {
+                let mut made = 0;
+                self.edit(cx, |ws| made = ws.session.project.split_kit(t));
+                self.status = Some(match made {
+                    0 => "Nothing on it is any pad's to split.".into(),
+                    n => format!("Split onto the pads: {n} regions, each on its pad's track"),
+                });
             }
             // Folding is how it's seen, not an edit to undo.
             TrackOp::Fold(bus) => {
@@ -545,6 +593,11 @@ impl Workspace {
             RegionOp::Alias => self.choose(MenuAction::Alias(at), cx),
             RegionOp::ToPattern => self.midi_to_pattern(at, cx),
             RegionOp::ToMidi => self.pattern_to_midi(at, cx),
+            RegionOp::Quantize if matches!(region.content, Content::Audio { .. }) => {
+                if !self.quantize_audio(&[at], cx) {
+                    self.status = Some("Its hits aren't found yet: try again in a moment".into());
+                }
+            }
             RegionOp::Quantize => {
                 let edit = NoteEdit::Quantize {
                     grid: self.roll.grid,

@@ -1,6 +1,7 @@
 //! The toolbar over the track headers: the tools, snap, and adding tracks.
 
 use super::*;
+use crate::workspace::{DragMode, Help};
 
 impl Workspace {
     /// Over the track headers: the tools, the snap, and adding a track.
@@ -24,6 +25,11 @@ impl Workspace {
             },
             s => s.label(),
         };
+        // The drag mode, when it isn't the usual.
+        let snap = match self.drag_mode {
+            DragMode::Overlap => snap.to_string(),
+            m => format!("{snap} · {}", m.label()),
+        };
         div()
             .w(px(self.header_w))
             .flex_none()
@@ -39,7 +45,7 @@ impl Workspace {
             .border_color(rgb(LINE))
             .child({
                 // The four always to hand, then the one other in hand (or the rest's menu): Text,
-                // Glue, Solo, Mute, Zoom, Fade, Flex: the rest of the Tool menu (T).
+                // Glue, Solo, Mute, Zoom, Fade, Stretch: the rest of the Tool menu (T).
                 let mains: Vec<_> = Tool::ALL
                     .into_iter()
                     .filter(|t| t.main())
@@ -90,20 +96,36 @@ impl Workspace {
                     .child(icon(Icon::Magnet, 13.).text_color(rgb(TEXT_3)))
                     .child(snap)
                     .debug_selector(|| "snap".into())
+                    .help(
+                        "Snap, and what a region let go on others does · ⌘G turns snap off and on",
+                        cx,
+                    )
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                            let items = Snap::ALL
+                            let tick = |on: bool| if on { "✓ " } else { "" };
+                            let mut items: Vec<_> = Snap::ALL
                                 .iter()
                                 .map(|&s| {
-                                    let label = if s == Snap::Smart {
-                                        "Smart (follows zoom)".to_string()
-                                    } else {
-                                        s.label().to_string()
+                                    let label = match s {
+                                        Snap::Smart => "Smart (follows zoom)",
+                                        s => s.label(),
                                     };
+                                    let label = format!("{}{label}", tick(s == ws.snap));
                                     (label, MenuAction::Snap(s))
                                 })
                                 .collect();
+                            // What a region let go on others does.
+                            items.push((String::new(), MenuAction::Nothing));
+                            items.extend(DragMode::ALL.iter().map(|&m| {
+                                let label = match m {
+                                    DragMode::Overlap => "Regions Overlap",
+                                    DragMode::NoOverlap => "No Overlap (cut what's under)",
+                                    DragMode::Shuffle => "Shuffle (close up the track)",
+                                };
+                                let label = format!("{}{label}", tick(m == ws.drag_mode));
+                                (label, MenuAction::DragMode(m))
+                            }));
                             ws.menu = Some(Menu {
                                 at: e.position,
                                 items,
@@ -128,6 +150,7 @@ impl Workspace {
                     .text_color(rgb(TEXT_2))
                     .child(icon(Icon::Plus, 14.).text_color(rgb(TEXT_2)))
                     .debug_selector(|| "new-track".into())
+                    .help("New track · ⌥⌘N", cx)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, e: &MouseDownEvent, window, cx| {

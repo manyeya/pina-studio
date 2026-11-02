@@ -41,6 +41,19 @@ impl Workspace {
             self.carry_automation((track, start, end), to, copy);
             self.changed(cx);
         }
+        // The drag mode: what's under the regions let go cut back, or their tracks closed up.
+        if let Some(Drag::Region {
+            edge,
+            start,
+            track,
+            moved: true,
+            ..
+        }) = self.drag
+            && self.drag_mode != DragMode::Overlap
+        {
+            self.settle_regions(edge == Edge::Move, (track, start));
+            self.changed(cx);
+        }
         match self.drag {
             Some(Drag::ZoomSpan) => self.zoom_release(cx),
             Some(Drag::SoloHold) => self.solo_release(cx),
@@ -95,6 +108,7 @@ impl Workspace {
                 self.drag = None;
                 self.finish_sketch(cx);
             }
+            Some(Drag::Effect { .. }) => self.release_effect(cx),
             _ => {}
         }
         if let Some(Drag::Modulator { track, index }) = self.drag
@@ -102,9 +116,14 @@ impl Workspace {
         {
             self.drop_modulator(track, index, at, cx);
         }
+        if let Some(Drag::PolySource { track, source }) = self.drag
+            && let Some(at) = self.mod_drag_at.take()
+        {
+            self.drop_poly_source(track, source, at, cx);
+        }
         self.steps_release();
         // A lane made taller is the song's to keep, not an undo step.
-        if let Some(Drag::LaneHeight { .. }) = self.drag {
+        if let Some(Drag::LaneHeight { .. } | Drag::StackHeight { .. }) = self.drag {
             self.session.edited = true;
         }
         // An option-click that didn't drag leaves no copy behind.
@@ -125,7 +144,10 @@ impl Workspace {
                 channel: Channel::Track(t),
                 ..
             })
-            | Some(Drag::HFader { track: t, .. }) => Some((t, Param::Volume)),
+            | Some(Drag::HFader {
+                channel: Channel::Track(t),
+                ..
+            }) => Some((t, Param::Volume)),
             Some(Drag::Pan {
                 channel: Channel::Track(t),
                 ..
@@ -181,10 +203,29 @@ impl Workspace {
             | Drag::Notes { moved: false, .. }
             | Drag::Auto { moved: false, .. }
             | Drag::AutoLine { moved: false, .. }
-            | Drag::Marker { moved: false, .. },
+            | Drag::Marker { moved: false, .. }
+            | Drag::Tempo { moved: false, .. }
+            | Drag::TempoPoint { moved: false, .. }
+            | Drag::TempoLine { moved: false, .. },
         ) = self.drag
         {
             self.session.cancel()
+        }
+        // A box let go: the regions it touches, picked.
+        if let Some(Drag::RegionBox {
+            from,
+            to,
+            moved: true,
+        }) = self.drag
+        {
+            self.box_pick(from, to);
+        }
+        // A click on the tempo display, not a drag: its menu.
+        if let Some(Drag::Tempo {
+            moved: false, x, y, ..
+        }) = self.drag
+        {
+            self.menu = Some(self.tempo_menu(gpui::point(px(x), px(y + 14.))));
         }
         if let Some(Drag::Marker {
             index,
@@ -196,8 +237,27 @@ impl Workspace {
             let at = self.session.project.samples(m.tick, self.player.rate());
             self.player.locate(at);
         }
-        if let Some(Drag::Marker { moved: true, .. }) = self.drag {
+        if let Some(Drag::Marker {
+            moved: true,
+            how: MarkerHow::Marker,
+            ..
+        }) = self.drag
+        {
             self.session.project.markers.sort_by_key(|m| m.tick);
+        }
+        // A section let go: it goes there with everything in it, or nothing changed.
+        if let Some(Drag::Marker {
+            index,
+            at,
+            how: how @ (MarkerHow::Section | MarkerHow::Copy),
+            moved: true,
+            ..
+        }) = self.drag
+        {
+            match self.drop_section(index, at, how) {
+                true => self.changed(cx),
+                false => self.session.cancel(),
+            }
         }
         // A click in the cycle strip, without sweeping, turns the cycle on or off.
         if let Some(Drag::Cycle {
@@ -235,9 +295,23 @@ impl Workspace {
                 self.changed(cx);
             }
         }
+        if let Some(Drag::Pad {
+            note, at, moved, ..
+        }) = self.drag
+        {
+            self.drop_pad(note, at, moved, cx);
+        }
         if let Some(Drag::Sample { .. } | Drag::MapBox { .. }) = self.drag {
             let drag = self.drag.take();
             self.drop_sample(drag, cx);
+        }
+        if let Some(Drag::Midi { .. }) = self.drag {
+            let drag = self.drag.take();
+            self.drop_midi(drag, cx);
+        }
+        if let Some(Drag::ChatMidi { .. }) = self.drag {
+            let drag = self.drag.take();
+            self.drop_card(drag, cx);
         }
         // Release whatever note the drag was sounding.
         match self.drag {

@@ -1,8 +1,11 @@
 mod automation;
 mod files;
+mod kits;
 
 mod regions;
+mod sections;
 mod takes;
+mod tempo;
 mod tracks;
 
 use super::*;
@@ -36,8 +39,10 @@ fn audio(start: u64, length: u64, offset: u64) -> Region {
             file: "a.wav".into(),
             offset,
             stretch: 1.0,
-            flex: Flex::default(),
-            follow: false,
+            stretch_mode: StretchMode::default(),
+            follow: crate::song::project::Follow::Off,
+            tempo: None,
+            grid: None,
             formants: false,
             warps: Vec::new(),
         },

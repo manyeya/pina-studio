@@ -8,7 +8,7 @@ use crate::{
     ui::looks::family_shade,
     ui::menu::{Menu, MenuAction},
     ui::theme::*,
-    workspace::{Bottom, Drag, View, Workspace, pt},
+    workspace::{Bottom, Drag, Help, View, Workspace, pt},
 };
 
 /// The narrowest the window goes.
@@ -35,7 +35,12 @@ const SIGNATURES: [[u64; 2]; 12] = [
 ];
 
 /// A field of the transport display: a value over its label.
-fn field(value: impl IntoElement, label: &'static str, big: bool, pad: f32) -> Div {
+fn field(
+    value: impl IntoElement,
+    label: impl Into<gpui::SharedString>,
+    big: bool,
+    pad: f32,
+) -> Div {
     div()
         .px(px(pad))
         .flex()
@@ -54,7 +59,7 @@ fn field(value: impl IntoElement, label: &'static str, big: bool, pad: f32) -> D
                 .line_height(px(10.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(rgb(TEXT_3))
-                .child(label),
+                .child(label.into()),
         )
 }
 
@@ -184,12 +189,17 @@ impl Workspace {
             .child(div().flex_1())
             .child(
                 tray()
-                    .child(transport(Icon::ToStart, None, TEXT_2, 32.).on_mouse_down(
+                    .child(
+                        transport(Icon::ToStart, None, TEXT_2, 32.)
+                            .help("Go to the start · ↩ (⌥↩ the end)", cx)
+                            .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, _, _, cx| ws.go_to_start(cx)),
                     ))
                     .child(
-                        transport(Icon::Stop, None, TEXT_2, 32.).on_mouse_down(
+                        transport(Icon::Stop, None, TEXT_2, 32.)
+                            .help("Stop · Space plays and stops", cx)
+                            .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|ws, _, _, cx| ws.stop(cx)),
                         ),
@@ -202,6 +212,7 @@ impl Workspace {
                             40.,
                         )
                         .debug_selector(|| "play".into())
+                        .help("Play · Space (⇧Space from what's picked)", cx)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|ws, _, _, cx| {
@@ -217,6 +228,7 @@ impl Workspace {
                             if recording { 0xffffff } else { RECORD },
                             32.,
                         )
+                        .help("Record on the armed tracks · R (⌃R arms one)", cx)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|ws, _, _, cx| ws.record(cx)),
@@ -231,6 +243,7 @@ impl Workspace {
                             32.,
                         )
                         .debug_selector(|| "cycle".into())
+                        .help("Cycle: play a stretch round and round · C · sweep the ruler to set it, U for what's picked", cx)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|ws, _, _, cx| ws.toggle_cycle(cx)),
@@ -244,6 +257,7 @@ impl Workspace {
                             32.,
                         )
                         .debug_selector(|| "metronome".into())
+                        .help("Metronome · K", cx)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|ws, _, _, cx| ws.toggle_metronome(cx)),
@@ -270,28 +284,43 @@ impl Workspace {
                         pad,
                     ))
                     .child(divider(24.))
+                    // The tempo where the playhead is: dragged, that stretch's (the song's, with no
+                    // changes); clicked, its menu (Keep, Adapt, Auto; the tempo lane).
                     .child(
-                        field(format!("{:.2}", project.tempo), "BPM", false, pad)
-                            .cursor_ns_resize()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                                    let bpm = ws.session.project.tempo;
-                                    ws.begin_drag(
-                                        Drag::Tempo {
-                                            y: pt(e.position).y,
-                                            bpm,
-                                        },
-                                        cx,
-                                    );
-                                }),
-                            ),
+                        field(
+                            format!("{:.2}", project.tempo_at(self.playhead())),
+                            format!("BPM · {}", project.tempo_mode.name().to_uppercase()),
+                            false,
+                            pad,
+                        )
+                        .cursor_ns_resize()
+                        .debug_selector(|| "tempo".into())
+                        .help("The tempo where the playhead is · drag or double-click to change it · click for the tempo mode · G shows the tempo lane", cx)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                                let at = ws.tempo_change_at(ws.playhead());
+                                let bpm = ws.session.project.tempo_at(at);
+                                let p = pt(e.position);
+                                ws.begin_drag(
+                                    Drag::Tempo {
+                                        y: p.y,
+                                        x: p.x,
+                                        bpm,
+                                        at,
+                                        moved: false,
+                                    },
+                                    cx,
+                                );
+                            }),
+                        ),
                     )
                     .child(divider(24.))
                     .child(
                         field(format!("{beats}/{unit}"), "TIME SIG", false, pad)
                             .cursor_pointer()
                             .debug_selector(|| "time-signature".into())
+                            .help("Time signature · click to change it", cx)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|ws, e: &MouseDownEvent, _, cx| {
@@ -318,6 +347,7 @@ impl Workspace {
                         field(key_label, "KEY", false, pad)
                             .cursor_pointer()
                             .debug_selector(|| "key".into())
+                            .help("The song's key · click to change it", cx)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|ws, e: &MouseDownEvent, _, cx| {
@@ -336,6 +366,7 @@ impl Workspace {
                     .child(
                         seg("Pattern", self.pattern_mode, 30.)
                             .debug_selector(|| "pattern-mode".into())
+                            .help("Pattern mode: the selected region plays round and round, the song stays put", cx)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|ws, _, _, cx| ws.set_pattern_mode(true, cx)),
@@ -351,6 +382,7 @@ impl Workspace {
                             self.show_inspector && self.view == View::Arrange,
                             30.,
                         )
+                        .help("Inspector · I", cx)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|ws, _, _, cx| {
@@ -363,17 +395,17 @@ impl Workspace {
                     .child(
                         icon_seg(
                             Icon::PanelBottom,
-                            self.bottom.is_some_and(|b| b != Bottom::Loops)
-                                && self.view == View::Arrange,
+                            self.bottom.is_some() && self.view == View::Arrange,
                             30.,
                         )
+                        .help("Editors: piano roll, step sequencer, sampler and more · E (P the piano roll)", cx)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|ws, _, _, cx| {
                                 ws.view = View::Arrange;
                                 ws.bottom = match ws.bottom {
-                                    Some(b) if b != Bottom::Loops => None,
-                                    _ => Some(Bottom::PianoRoll),
+                                    Some(_) => None,
+                                    None => Some(Bottom::PianoRoll),
                                 };
                                 ws.focus_roll();
                                 cx.notify();
@@ -383,21 +415,11 @@ impl Workspace {
                     .child(
                         icon_seg(Icon::Mixer, self.view == View::Mixer, 30.)
                             .debug_selector(|| "mixer".into())
+                            .help("Mixer · X", cx)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|ws, _, _, cx| ws.toggle_mixer(cx)),
                             ),
-                    )
-                    .child(
-                        icon_seg(
-                            Icon::Grid,
-                            self.bottom == Some(Bottom::Loops) && self.view == View::Arrange,
-                            30.,
-                        )
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|ws, _, _, cx| ws.toggle_bottom(Bottom::Loops, cx)),
-                        ),
                     )
                     .child(
                         icon_seg(
@@ -407,18 +429,11 @@ impl Workspace {
                             30.,
                         )
                         .debug_selector(|| "samples".into())
+                        .help("Browser: sounds and plugins · F (⇧F its page)", cx)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|ws, _, _, cx| ws.toggle_samples(cx)),
                         ),
-                    )
-                    .child(
-                        icon_seg(Icon::Settings, self.view == View::Settings, 30.)
-                            .debug_selector(|| "settings".into())
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|ws, _, _, cx| ws.open_settings(cx)),
-                            ),
                     ),
             )
             .child(self.presence(cx))
@@ -448,6 +463,7 @@ impl Workspace {
                         })
                     })
                     .debug_selector(|| "export".into())
+                    .help("Export the song, its tracks or stems · ⌘B", cx)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, _, _, cx| ws.open_export(cx)),
@@ -480,6 +496,7 @@ impl Workspace {
             .hover(|d| d.bg(rgb(RAISED)))
             .child(crate::agent::chat::logo(self.chat.kind, 15.))
             .debug_selector(|| "agent".into())
+            .help("Studio Agent: ask it to make or change the song · ⌘L", cx)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|ws, _, window, cx| ws.toggle_agent(window, cx)),

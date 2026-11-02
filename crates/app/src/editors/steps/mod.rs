@@ -314,6 +314,35 @@ fn scale_notes(key: Option<Key>) -> Vec<u8> {
     (48..=72).rev().filter(|&p| key.contains(p)).collect()
 }
 
+/// What a track's notes play, for its rows: its instrument, or for a kit its pads, as a sampler
+/// with each pad's sound on its note, named for its track.
+pub(crate) fn played_by(
+    project: &pina_engine::song::project::Project,
+    t: usize,
+) -> Option<std::borrow::Cow<'_, Instrument>> {
+    let track = project.tracks.get(t)?;
+    match &track.instrument {
+        Some(Instrument::Kit) => Some(std::borrow::Cow::Owned(Instrument::Sampler(
+            pina_engine::song::project::Sampler {
+                zones: project
+                    .pads_of(t)
+                    .into_iter()
+                    .filter_map(|p| {
+                        let pad = &project.tracks[p];
+                        Some(pina_engine::song::project::Zone {
+                            note: pad.pad?.note,
+                            name: pad.name.clone(),
+                            ..Default::default()
+                        })
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+        ))),
+        i => i.as_ref().map(std::borrow::Cow::Borrowed),
+    }
+}
+
 /// A sound's name on a note: a drum on the kit, a sampler's sound on its note, else the note
 /// spelled by the key.
 pub(crate) fn row_name(instrument: Option<&Instrument>, key: Option<Key>, pitch: u8) -> String {
@@ -446,7 +475,8 @@ impl Workspace {
     pub(crate) fn row_looks(&self, at: At, p: &Pattern) -> Vec<RowLook> {
         let project = &self.session.project;
         let track = at.0;
-        let instrument = project.tracks[track].instrument.as_ref();
+        let instrument = played_by(project, track);
+        let instrument = instrument.as_deref();
         let key = project.song_key();
         p.rows
             .iter()

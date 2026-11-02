@@ -1,5 +1,7 @@
 //! The roll's control bar.
 
+use gpui::{App, Pixels, Window};
+
 use super::*;
 
 /// A note's length as a fraction of a bar of 4/4: "1/16", "3/8", "1/1".
@@ -58,26 +60,128 @@ pub(crate) fn chip(on: bool) -> Div {
         .hover(|s| s.bg(rgb(RAISED)))
 }
 
+/// What an editor keeps out of its bar, in its More menu.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum More {
+    /// A list of its own, opened where More's was.
+    Chords(Point<Pixels>),
+    Ghost(Point<Pixels>),
+    Velocity,
+    Fit,
+    /// A sampler's, by its track.
+    Mono(usize),
+    Legato(usize),
+}
+
+/// The bar's way to what's used less; `on` while something in it is.
+pub(crate) fn more_button(
+    on: bool,
+    open: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    chip(on)
+        .flex_none()
+        .debug_selector(|| "editor-more".into())
+        .child("More")
+        .child(icon(Icon::Chevron, 11.).text_color(rgb(if on { ACCENT_TEXT } else { TEXT_3 })))
+        .on_mouse_down(MouseButton::Left, open)
+}
+
 impl Workspace {
+    /// What's used less, in the bar's More: chord stamps, ghost notes, colour by velocity, fit.
+    /// Chords and ghost notes are lists of their own, opened from here.
+    pub(crate) fn roll_more(&self, at: Point<Pixels>) -> Vec<(String, MenuAction)> {
+        let stamp = self.roll.stamp;
+        let chords = match stamp {
+            Stamp::Note => "Chords".to_string(),
+            s => format!("Chords: {}", s.name()),
+        };
+        let shown = self.roll.ghost;
+        let ghost = shown.and_then(|g| self.session.project.tracks.iter().find(|t| t.id == g));
+        let ghost = ghost.map_or("Ghost notes".to_string(), |t| {
+            format!("Ghost notes: {}", t.name)
+        });
+        let velocity = match self.roll.by_velocity {
+            true => "✓ Colour by velocity",
+            false => "Colour by velocity",
+        };
+        vec![
+            (format!("{chords} ▸"), MenuAction::More(More::Chords(at))),
+            (format!("{ghost} ▸"), MenuAction::More(More::Ghost(at))),
+            (velocity.to_string(), MenuAction::More(More::Velocity)),
+            ("Fit notes".to_string(), MenuAction::More(More::Fit)),
+        ]
+    }
+
+    /// The chord stamps to write with.
+    fn stamp_menu(&self, at: Point<Pixels>) -> Menu {
+        let stamps = Stamp::ALL.iter();
+        let item = |s: &Stamp| {
+            let tick = if *s == self.roll.stamp { "✓ " } else { "" };
+            (format!("{tick}{}", s.name()), MenuAction::Stamp(*s))
+        };
+        Menu {
+            at,
+            items: stamps.map(item).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The tracks whose notes can show behind these.
+    fn ghost_menu(&self, at: Point<Pixels>) -> Menu {
+        let now = self.roll.ghost;
+        let tick = |on: bool| if on { "✓ " } else { "" };
+        let mut items = vec![(
+            format!("{}Off", tick(now.is_none())),
+            MenuAction::Ghost(None),
+        )];
+        let p = &self.session.project;
+        let shown = self.roll_region().map(|at| p.tracks[at.0].id);
+        items.extend(
+            p.tracks
+                .iter()
+                .filter(|t| t.instrument.is_some() && Some(t.id) != shown)
+                .map(|t| {
+                    let label = format!("{}{}", tick(now == Some(t.id)), t.name);
+                    (label, MenuAction::Ghost(Some(t.id)))
+                }),
+        );
+        Menu {
+            at,
+            items,
+            ..Default::default()
+        }
+    }
+
+    /// One of the bar's More items.
+    pub fn pick_more(&mut self, item: More, cx: &mut Context<Self>) {
+        match item {
+            More::Chords(at) => self.menu = Some(self.stamp_menu(at)),
+            More::Ghost(at) => self.menu = Some(self.ghost_menu(at)),
+            More::Velocity => self.roll.by_velocity ^= true,
+            More::Fit => self.fit_roll(),
+            More::Mono(t) => self.edit_sampler(t, cx, |s| s.voice.mono ^= true),
+            More::Legato(t) => self.edit_sampler(t, cx, |s| {
+                s.voice.legato ^= true;
+                s.voice.mono |= s.voice.legato;
+            }),
+        }
+        cx.notify();
+    }
+
     /// The piano roll's own controls in the editor's bar: scale, writing in key, chord stamps,
     /// ghost notes, colour by velocity, quantize, fit and zoom.
     pub fn roll_controls(&mut self, cx: &mut Context<Self>) -> Div {
         let key = self.session.project.song_key();
         let scale_label = key.map_or("Scale".to_string(), |k| k.short());
-        let ghost = self
-            .roll
-            .ghost
-            .and_then(|g| self.session.project.tracks.iter().find(|t| t.id == g))
-            .map_or("Ghost".to_string(), |t| t.name.clone());
         let at = self.roll_region();
         let grid = self.roll.grid;
-        let stamp = self.roll.stamp;
+        // More lights while something in it is on, so nothing's on unseen.
+        let extras =
+            self.roll.stamp != Stamp::Note || self.roll.ghost.is_some() || self.roll.by_velocity;
         div()
             .flex()
             .items_center()
             .gap(px(5.))
-            .min_w(px(0.))
-            .overflow_hidden()
             .child(
                 chip_button(Icon::Scale, scale_label, self.roll.scale)
                     .debug_selector(|| "roll-scale".into())
@@ -106,78 +210,6 @@ impl Workspace {
                     ),
             )
             .child(
-                chip_text(
-                    if stamp == Stamp::Note {
-                        "Chords"
-                    } else {
-                        stamp.name()
-                    },
-                    stamp != Stamp::Note,
-                )
-                .debug_selector(|| "roll-stamp".into())
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                        let items = Stamp::ALL
-                            .iter()
-                            .map(|&s| (s.name().to_string(), MenuAction::Stamp(s)))
-                            .collect();
-                        ws.menu = Some(Menu {
-                            at: e.position,
-                            items,
-                            ..Default::default()
-                        });
-                        cx.notify();
-                    }),
-                ),
-            )
-            .child(
-                chip_button(Icon::Ghost, ghost, self.roll.ghost.is_some())
-                    .debug_selector(|| "roll-ghost".into())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                            let mut items = vec![("Off".to_string(), MenuAction::Ghost(None))];
-                            let shown = ws
-                                .roll_region()
-                                .map(|at| ws.session.project.tracks[at.0].id);
-                            items.extend(
-                                ws.session
-                                    .project
-                                    .tracks
-                                    .iter()
-                                    .filter(|t| t.instrument.is_some() && Some(t.id) != shown)
-                                    .map(|t| (t.name.clone(), MenuAction::Ghost(Some(t.id)))),
-                            );
-                            ws.menu = Some(Menu {
-                                at: e.position,
-                                items,
-                                ..Default::default()
-                            });
-                            cx.notify();
-                        }),
-                    ),
-            )
-            .child(
-                chip(self.roll.by_velocity)
-                    // A swatch of the colours velocities take.
-                    .child(
-                        div().flex().rounded(px(2.)).overflow_hidden().children(
-                            [20u8, 64, 96, 127]
-                                .map(|v| div().w(px(3.)).h(px(10.)).bg(rgb(velocity_color(v)))),
-                        ),
-                    )
-                    .child("Velocity")
-                    .debug_selector(|| "roll-colours".into())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| {
-                            ws.roll.by_velocity ^= true;
-                            cx.notify();
-                        }),
-                    ),
-            )
-            .child(
                 button(
                     format!(
                         "Q {}",
@@ -192,17 +224,17 @@ impl Workspace {
                     cx.listener(move |ws, _, _, cx| ws.roll_op(RollOp::Quantize, cx)),
                 ),
             )
-            .child(
-                button("Fit", false)
-                    .debug_selector(|| "roll-fit".into())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| {
-                            ws.fit_roll();
-                            cx.notify();
-                        }),
-                    ),
-            )
+            .child(more_button(
+                extras,
+                cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                    ws.menu = Some(Menu {
+                        at: e.position,
+                        items: ws.roll_more(e.position),
+                        ..Default::default()
+                    });
+                    cx.notify();
+                }),
+            ))
             .child(div().w(px(1.)).h(px(18.)).bg(rgb(LINE)))
             .child(
                 div()

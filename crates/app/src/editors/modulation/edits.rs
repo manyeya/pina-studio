@@ -231,7 +231,11 @@ impl Workspace {
         };
         let (key, x, y) = match drag {
             Drag::Knob { target, y, .. } => (self.mod_key(target), 0.0, y),
-            Drag::HFader { track, x, .. } => (Some((track, ModTarget::Volume)), x, 0.0),
+            Drag::HFader {
+                channel: Channel::Track(track),
+                x,
+                ..
+            } => (Some((track, ModTarget::Volume)), x, 0.0),
             Drag::Pan {
                 channel: Channel::Track(track),
                 x,

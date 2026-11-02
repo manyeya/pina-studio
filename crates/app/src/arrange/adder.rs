@@ -15,7 +15,7 @@ use pina_engine::{
     samples::{
         Category, Kind,
         place::place_zone,
-        search::{self, KitSeed, Query},
+        search::{self, Query},
     },
     song::commands::{self, Command},
     song::project::{Instrument, Preset, Sampler},
@@ -481,9 +481,11 @@ impl Workspace {
                 self.new_sampler_track(cx);
                 self.show_bottom(Bottom::Sampler, cx);
             }
+            // A kit of pads; with no drums in the library, the synthesized kit and a pattern.
             Item::Kind(Kind2::Beat) => {
-                self.new_track(Some(Instrument::Drums), cx);
-                self.new_pattern(cx);
+                if !self.new_drum_kit(cx) {
+                    self.new_pattern(cx);
+                }
             }
             Item::Device(d) => self.use_device(d, Target::NewTrack, None, cx),
             Item::Preset(d, p) => self.use_device(d, Target::NewTrack, Some(p), cx),
@@ -493,43 +495,10 @@ impl Workspace {
         self.close_adder(cx);
     }
 
-    /// A kit from one pack in the library: a hit for each drum, on its General MIDI note.
+    /// A kit from one pack in the library, in the Drum Machine: its drum hits on pads (a pad a
+    /// kind of sound, for a big pack), each with the pack's others of its kind to step through.
     fn kit_from_pack(&mut self, pack: &str, cx: &mut Context<Self>) {
-        let samples: Vec<pina_engine::samples::Sample> = self
-            .browser
-            .library
-            .samples
-            .iter()
-            .filter(|s| pack_of(&s.folder) == pack)
-            .cloned()
-            .collect();
-        let kit = search::kit(
-            &samples,
-            &KitSeed {
-                alternatives: 1,
-                ..Default::default()
-            },
-        );
-        let mut sampler = Sampler::default();
-        for slot in kit.slots {
-            if let Some(hit) = slot.pick
-                && let Some(s) = samples.get(hit.index)
-            {
-                let _ = place_zone(&mut sampler, s, Some(slot.role));
-            }
-        }
-        if sampler.zones.is_empty() {
-            self.status = Some(format!(
-                "{pack} has no drums Pina Studio could make a kit of."
-            ));
-            cx.notify();
-            return;
-        }
-        let n = sampler.zones.len();
-        self.add_sampler_track(format!("{pack} Kit"), sampler, cx);
-        self.status = Some(format!(
-            "A {n}-piece kit from {pack}: play it, or ⌥⌘P for a pattern."
-        ));
+        self.kit_from_folder(pack, None, cx);
     }
 
     /// A single sound on a sampler: across the keys if it has a pitch, else on its drum's note.

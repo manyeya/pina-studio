@@ -255,3 +255,69 @@ fn a_modulators_knob_is_automated_from_its_right_click(cx: &mut TestAppContext) 
     });
     assert!((shown - 0.6).abs() < 1e-4, "{shown}");
 }
+
+#[gpui::test]
+fn a_card_keeps_everything_inside_it_at_any_height_and_with_any_name(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| {
+        ws.session.project.tracks[1].name = "KICK — Afro House with a very long name".into();
+        ws.show_bottom(Bottom::Modulation, cx);
+    });
+    cx.run_until_parked();
+    click_on(cx, "add-mod-Follower", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "add-mod-Envelope", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "add-mod-LFO", Modifiers::none(), MouseButton::Left);
+    cx.run_until_parked();
+    // Every height the pane can be, the least to the usual.
+    for height in [160.0, 220.0, 296.0, 420.0] {
+        ws.update(cx, |ws, cx| {
+            ws.editor_h = height;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let inside = |cx: &mut VisualTestContext, card: &'static str, what: &'static str| {
+            let (c, w) = (
+                cx.debug_bounds(card).unwrap(),
+                cx.debug_bounds(what).unwrap(),
+            );
+            assert!(
+                w.origin.x >= c.origin.x && w.right() <= c.right(),
+                "{what} at {height}: {w:?} in {c:?}"
+            );
+        };
+        for what in [
+            "mod-0-Attack",
+            "mod-0-Release",
+            "mod-0-source",
+            "mod-0-remove",
+        ] {
+            inside(cx, "mod-card-0", what);
+        }
+        for what in ["mod-1-Attack", "mod-1-Sustain", "mod-1-Release"] {
+            inside(cx, "mod-card-1", what);
+        }
+        for what in ["mod-2-shape", "mod-2-rate", "mod-2-Phase"] {
+            inside(cx, "mod-card-2", what);
+        }
+        // Nothing hangs out of the bottom: the card ends where the pane does.
+        let card = cx.debug_bounds("mod-card-0").unwrap();
+        let window = ws.read_with(cx, |ws, _| ws.viewport_h);
+        assert!(f32::from(card.bottom()) <= window, "{height}");
+    }
+}
+
+#[gpui::test]
+fn adding_a_modulator_is_never_pushed_out_by_the_hint(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| ws.show_bottom(Bottom::Modulation, cx));
+    cx.run_until_parked();
+    let add = cx.debug_bounds("add-mod-Macro").expect("the last of them");
+    let lfo = cx.debug_bounds("add-mod-LFO").unwrap();
+    // They lead the bar, so what comes first is always in reach.
+    assert!(lfo.origin.x < add.origin.x);
+    click_on(cx, "add-mod-Macro", Modifiers::none(), MouseButton::Left);
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[0].modulators.len()),
+        1
+    );
+}

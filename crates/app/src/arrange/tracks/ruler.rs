@@ -9,6 +9,26 @@ impl Workspace {
         let markers = &self.session.project.markers;
         let playhead = self.playhead();
         let bar = self.session.project.bar();
+        // A section being dragged: how far, and where it would go.
+        let dragging = match self.drag {
+            Some(Drag::Marker {
+                index,
+                x,
+                at,
+                how: how @ (MarkerHow::Section | MarkerHow::Copy),
+                moved: true,
+                ..
+            }) => Some((index, at - x, self.section_drop(index, at, how))),
+            _ => None,
+        };
+        let target_x = dragging
+            .and_then(|d| d.2)
+            .and_then(|at| self.section_drop_x(at));
+        let swap = match dragging {
+            Some((_, _, Some(crate::arrange::sections::SectionDrop::Swap(k)))) => Some(k),
+            _ => None,
+        };
+        let end = self.session.project.sections().last().map_or(0, |s| s.1);
         let chips: Vec<Div> = markers
             .iter()
             .enumerate()
@@ -19,6 +39,8 @@ impl Workspace {
                 let current = (m.tick..end).contains(&playhead);
                 let (x, w) = (m.tick as f32 * ppt - sx, (end - m.tick) as f32 * ppt);
                 let tick = m.tick;
+                let lifted = dragging.filter(|d| d.0 == i).map(|d| d.1);
+                let x = x + lifted.unwrap_or(0.0);
                 div()
                     .absolute()
                     .left(px(x + 1.))
@@ -31,6 +53,11 @@ impl Workspace {
                     .rounded(px(5.))
                     .bg(rgb(if current { 0x23232b } else { 0x18181e }))
                     .text_color(rgb(if current { TEXT } else { TEXT_3 }))
+                    // Lifted, or where a lifted one would swap in.
+                    .when(lifted.is_some() || swap == Some(i), |d| {
+                        d.border_1().border_color(rgb(ACCENT)).text_color(rgb(TEXT))
+                    })
+                    .when(lifted.is_some(), |d| d.opacity(0.85))
                     .text_size(px(10.5))
                     .font_weight(FontWeight::SEMIBOLD)
                     .whitespace_nowrap()
@@ -51,11 +78,19 @@ impl Workspace {
                                 return;
                             }
                             let x = f32::from(e.position.x);
+                            // Its section, with everything in it; ⌥ a copy; ⌘ the marker alone.
+                            let how = match (e.modifiers.alt, e.modifiers.platform) {
+                                (true, _) => MarkerHow::Copy,
+                                (_, true) => MarkerHow::Marker,
+                                _ => MarkerHow::Section,
+                            };
                             ws.begin_drag(
                                 Drag::Marker {
                                     index: i,
                                     x,
+                                    at: x,
                                     tick,
+                                    how,
                                     moved: false,
                                 },
                                 cx,
@@ -74,7 +109,8 @@ impl Workspace {
                                     MenuAction::NameMarker(i, n.to_string()),
                                 )
                             }));
-                            items.push(("Delete Marker".into(), MenuAction::DeleteMarker(i)));
+                            items.extend(ws.section_items(i));
+                            items.push(("Delete Marker Only".into(), MenuAction::DeleteMarker(i)));
                             ws.menu = Some(Menu {
                                 at: e.position,
                                 items,
@@ -86,6 +122,30 @@ impl Workspace {
             })
             .collect();
         let empty = markers.is_empty();
+        // After the last section: + adds one.
+        let add = div()
+            .absolute()
+            .left(px(end as f32 * ppt - sx + 4.))
+            .top(px(3.))
+            .w(px(18.))
+            .h(px(15.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.))
+            .bg(rgb(0x18181e))
+            .text_color(rgb(TEXT_3))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(OFF)).text_color(rgb(TEXT)))
+            .debug_selector(|| "add-section".into())
+            .child(icon(Icon::Plus, 10.).text_color(rgb(TEXT_3)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|ws, _, _, cx| {
+                    cx.stop_propagation();
+                    ws.section_op(crate::arrange::sections::SectionOp::Add, cx)
+                }),
+            );
         div()
             .h(px(MARKERS_H))
             .flex_none()
@@ -95,15 +155,25 @@ impl Workspace {
             .border_b_1()
             .border_color(rgb(LINE_SOFT))
             .children(chips)
+            .child(add)
+            .children(target_x.map(|x| {
+                div()
+                    .absolute()
+                    .left(px(x - 1.))
+                    .top_0()
+                    .w(px(2.))
+                    .h_full()
+                    .bg(rgb(ACCENT))
+            }))
             .when(empty, |d| {
                 d.child(
                     div()
                         .absolute()
-                        .left(px(8.))
+                        .left(px(30.))
                         .top(px(4.))
                         .text_size(px(10.5))
                         .text_color(rgb(TEXT_4))
-                        .child("Double-click to add a marker"),
+                        .child("Double-click to add a marker, or + a section"),
                 )
             })
             .debug_selector(|| "markers".into())

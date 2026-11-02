@@ -21,7 +21,7 @@ impl Workspace {
     /// A track's row: its stack's row above it if it's the stack's first track, then its lane
     /// and its automation lanes (none of them while the stack's folded).
     pub fn row_h_of(&self, i: usize) -> f32 {
-        let above = self.stack_above(i).map_or(0.0, |_| STACK_H);
+        let above = self.stack_above(i).map_or(0.0, |a| self.stack_h(a));
         match self.folded(i) {
             true => above,
             false => above + self.lane_h(i) + self.autos_h(i),
@@ -56,9 +56,16 @@ impl Workspace {
             .clamp(MIN_LANE_H, MAX_LANE_H)
     }
 
+    /// A stack's row's height, as dragged (the usual, if it hasn't been).
+    pub fn stack_h(&self, a: usize) -> f32 {
+        let auxes = &self.session.project.auxes;
+        let dragged = auxes.get(a).and_then(|x| x.height);
+        dragged.unwrap_or(STACK_H).clamp(MIN_STACK_H, MAX_LANE_H)
+    }
+
     /// Where track `i`'s row begins, from the top of the lanes, scrolled.
     pub fn row_top(&self, i: usize) -> f32 {
-        let above = self.stack_above(i).map_or(0.0, |_| STACK_H);
+        let above = self.stack_above(i).map_or(0.0, |a| self.stack_h(a));
         (0..i).map(|j| self.row_h_of(j)).sum::<f32>() + above - self.scroll_y
     }
 
@@ -73,7 +80,7 @@ impl Workspace {
     pub fn track_at_y(&self, y: f32) -> Option<usize> {
         let mut top = -self.scroll_y;
         for i in 0..self.session.project.tracks.len() {
-            top += self.stack_above(i).map_or(0.0, |_| STACK_H);
+            top += self.stack_above(i).map_or(0.0, |a| self.stack_h(a));
             if self.folded(i) {
                 continue;
             }
@@ -116,8 +123,60 @@ impl Workspace {
     /// The editor's height: as dragged, but never so tall the tracks lose their room, nor so
     /// short its tools don't fit.
     pub fn editor_height(&self) -> f32 {
-        let room = self.viewport_h - CONTROL_BAR_H - STATUS_H - MARKERS_H - RULER_H - LANE_H * 2.0;
+        let tempo = match self.tempo_lane_shown() {
+            true => crate::arrange::tempo::TEMPO_H,
+            false => 0.0,
+        };
+        let room =
+            self.viewport_h - CONTROL_BAR_H - STATUS_H - MARKERS_H - RULER_H - tempo - LANE_H * 2.0;
         self.editor_h.min(room).max(EDITOR_MIN_H)
+    }
+
+    /// How far the song runs for scrolling, in ticks: its end (or the cycle's, or the
+    /// playhead's), and eight bars more to write into.
+    pub fn timeline_end(&self) -> u64 {
+        let p = &self.session.project;
+        let cycle = p.cycle.map_or(0, |c| c.end);
+        p.end().max(cycle).max(self.playhead()) + p.bar() * 8
+    }
+
+    /// The furthest right the lanes scroll.
+    pub fn max_scroll_x(&self) -> f32 {
+        let width = f32::from(self.lanes_bounds.get().size.width);
+        (self.timeline_end() as f32 * self.px_per_tick() - width).max(0.0)
+    }
+
+    /// The furthest down the tracks scroll.
+    pub fn max_scroll_y(&self) -> f32 {
+        let height = f32::from(self.lanes_bounds.get().size.height);
+        (self.rows_h() - height + LANE_H).max(0.0)
+    }
+
+    /// Scrolled sideways by hand: while playing, the view stops following the playhead until
+    /// play starts again or the playhead's moved.
+    pub(crate) fn scrolled_by_hand(&mut self) {
+        if self.player.playing() {
+            self.caught = false;
+        }
+    }
+
+    /// The region picked (and a little either side) filling the lanes, else the whole song.
+    pub fn zoom_to_fit(&mut self) {
+        let p = &self.session.project;
+        let region = self
+            .region
+            .filter(|at| p.tracks.get(at.0).is_some_and(|t| at.1 < t.regions.len()));
+        let (from, to) = match region {
+            Some(at) => {
+                let r = p.region(at);
+                (r.start, r.start + r.length)
+            }
+            None => (0, p.end().max(p.bar() * 4)),
+        };
+        let width = f32::from(self.lanes_bounds.get().size.width).max(200.0);
+        let beats = (to - from) as f32 / PPQ as f32;
+        self.px_per_beat = (width * 0.9 / beats.max(0.25)).clamp(4.0, 800.0);
+        self.scroll_x = (from as f32 * self.px_per_tick() - width * 0.05).max(0.0);
     }
 
     pub(crate) fn scroll(&mut self, e: &ScrollWheelEvent, cx: &mut Context<Self>) {
@@ -125,15 +184,21 @@ impl Workspace {
             ScrollDelta::Pixels(p) => p.map(f32::from),
             ScrollDelta::Lines(l) => l.map(|v| v * 24.0),
         };
+        // ⇧ turns a mouse's wheel sideways.
+        let d = match e.modifiers.shift && d.x == 0.0 {
+            true => gpui::point(d.y, 0.0),
+            false => d,
+        };
         if e.modifiers.platform {
             // Zoom around the pointer.
             let x = f32::from(e.position.x) - f32::from(self.lanes_bounds.get().origin.x);
             self.zoom_around(self.px_per_beat * (1.0 + d.y * 0.01), x);
         } else {
-            let height = f32::from(self.lanes_bounds.get().size.height);
-            let content = self.rows_h();
-            self.scroll_x = (self.scroll_x - d.x).max(0.0);
-            self.scroll_y = (self.scroll_y - d.y).clamp(0.0, (content - height + LANE_H).max(0.0));
+            self.scroll_x = (self.scroll_x - d.x).clamp(0.0, self.max_scroll_x());
+            self.scroll_y = (self.scroll_y - d.y).clamp(0.0, self.max_scroll_y());
+            if d.x != 0.0 {
+                self.scrolled_by_hand();
+            }
         }
         cx.notify();
     }

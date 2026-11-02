@@ -3,5 +3,7 @@
 pub mod adder;
 pub mod automation;
 pub mod liveloops;
+pub mod sections;
 pub mod takes;
+pub mod tempo;
 pub mod tracks;

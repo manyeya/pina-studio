@@ -11,7 +11,11 @@ impl Workspace {
             | Drag::Auto { moved, .. }
             | Drag::AutoLine { moved, .. }
             | Drag::Cycle { moved, .. }
-            | Drag::Marker { moved, .. },
+            | Drag::Marker { moved, .. }
+            | Drag::Tempo { moved, .. }
+            | Drag::RegionBox { moved, .. }
+            | Drag::TempoPoint { moved, .. }
+            | Drag::TempoLine { moved, .. },
         ) = &mut self.drag
         {
             *moved = true;
@@ -44,6 +48,24 @@ impl Workspace {
                         }
                         self.region = Some(now);
                         self.select_track(now.0);
+                        // The others picked with it go as far.
+                        let (original, copy) = match self.drag {
+                            Some(Drag::Region {
+                                start, track, copy, ..
+                            }) => ((start, track), copy),
+                            _ => ((start, now.0), false),
+                        };
+                        // ponytail: a ⌥-drag copies the one grabbed only; copy them all if asked.
+                        if !self.picks.is_empty() && !copy {
+                            let dstart = start as i64 - original.0 as i64;
+                            let dtrack = now.0 as i64 - original.1 as i64;
+                            self.move_picks(dstart, dtrack);
+                            if let (Some(Drag::Region { at, .. }), Some(focus)) =
+                                (&mut self.drag, self.region)
+                            {
+                                *at = focus;
+                            }
+                        }
                     }
                     Edge::Start => {
                         let start = self.snap(start as f64 + dt);
@@ -69,9 +91,9 @@ impl Workspace {
                     // Stretching audio is slow, so the engine hears of it when the drag ends.
                     Edge::Stretch => {
                         let length = self.snap(end as f64 + dt).max(start + 1) - start;
-                        let _ = self.session.project.flex(at, length);
+                        let _ = self.session.project.time_stretch(at, length);
                         let ratio = length as f64 / (end - start).max(1) as f64;
-                        self.status = Some(format!("Flex ×{ratio:.2}"));
+                        self.status = Some(format!("Time stretch ×{ratio:.2}"));
                         cx.notify();
                         return;
                     }
@@ -124,11 +146,19 @@ impl Workspace {
                 let bus = self.session.project.tracks[track].sends[index].bus;
                 self.moved(track, Param::Send(bus), db);
             }
-            Some(Drag::Tempo { y, bpm }) => {
+            Some(Drag::Tempo { y, bpm, at, .. }) => {
                 let to = (bpm + ((y - p.y) / 4.0) as f64).round().clamp(20.0, 400.0);
-                if to != self.session.project.tempo {
-                    self.session.project.set_tempo(to);
+                if to != self.session.project.tempo_at(at) {
+                    self.set_tempo_from(at, to);
                 }
+            }
+            Some(Drag::TempoPoint { .. } | Drag::TempoLine { .. }) => self.drag_tempo(p),
+            Some(Drag::RegionBox { .. }) => {
+                if let Some(Drag::RegionBox { to, .. }) = &mut self.drag {
+                    *to = p;
+                }
+                cx.notify();
+                return;
             }
             Some(Drag::Locate) => self.locate_at(p.x, cx),
             Some(Drag::Notes { .. }) => self.drag_notes(p),
@@ -152,6 +182,8 @@ impl Workspace {
             Some(Drag::VelocityLine { .. }) => self.drag_velocity_line(p),
             Some(Drag::Control { .. }) => self.drag_control(p),
             Some(Drag::Mark { .. }) => self.drag_mark(p),
+            Some(Drag::SamplerEnv { .. }) => self.drag_sampler_env(p),
+            Some(Drag::SamplerFilter { .. }) => self.drag_sampler_filter(p),
             Some(Drag::Width { side, x, width }) => {
                 let w = width + (p.x - x);
                 match side {
@@ -168,8 +200,20 @@ impl Workspace {
                 cx.notify();
                 return;
             }
+            Some(Drag::ChatText) => {
+                self.drag_chat_text(p);
+                cx.notify();
+                return;
+            }
+            Some(Drag::StackHeight { aux, y, height }) => {
+                if let Some(a) = self.session.project.auxes.get_mut(aux) {
+                    a.height = Some((height + (p.y - y)).clamp(MIN_STACK_H, MAX_LANE_H).round());
+                }
+                cx.notify();
+                return;
+            }
             Some(Drag::HFader {
-                track,
+                channel,
                 x,
                 pos,
                 width,
@@ -180,8 +224,10 @@ impl Workspace {
                     (*x, *was) = (p.x, pos);
                 }
                 let db = strip::fader_db(pos);
-                self.set_volume(Channel::Track(track), db);
-                self.moved(track, Param::Volume, db);
+                self.set_volume(channel, db);
+                if let Channel::Track(track) = channel {
+                    self.moved(track, Param::Volume, db);
+                }
             }
             Some(Drag::Orbit { x, y, yaw, pitch }) => {
                 self.orbit = (
@@ -297,18 +343,35 @@ impl Workspace {
                     self.pattern_mode = false;
                 }
             }
-            Some(Drag::Marker { index, x, tick, .. }) => {
-                let to = self.snap(tick as f64 + ((p.x - x) / ppt) as f64);
-                let markers = &mut self.session.project.markers;
-                if let Some(m) = markers.get_mut(index) {
-                    m.tick = to;
+            // The marker alone moves; a section (or its copy) goes where it's let go.
+            Some(Drag::Marker {
+                index,
+                x,
+                tick,
+                how,
+                ..
+            }) => match how {
+                MarkerHow::Marker => {
+                    let to = self.snap(tick as f64 + ((p.x - x) / ppt) as f64);
+                    let markers = &mut self.session.project.markers;
+                    if let Some(m) = markers.get_mut(index) {
+                        m.tick = to;
+                    }
                 }
-            }
+                _ => {
+                    if let Some(Drag::Marker { at, .. }) = &mut self.drag {
+                        *at = p.x;
+                    }
+                    cx.notify();
+                    return;
+                }
+            },
             Some(Drag::Knob { target, y, value }) => {
                 let v = (value - (p.y - y) / 150.0).clamp(0.0, 1.0);
                 self.set_target(target, v);
                 if let Some((t, param)) = self.target_param(target) {
-                    self.moved(t, param, v);
+                    let set = self.own_value(t, param);
+                    self.moved(t, param, set);
                 }
             }
             Some(Drag::Slider {
@@ -383,6 +446,62 @@ impl Workspace {
                 cx.notify();
                 return;
             }
+            Some(Drag::Effect { .. }) => {
+                self.drag_effect(p);
+                cx.notify();
+                return;
+            }
+            Some(Drag::Pad {
+                note, from, moved, ..
+            }) => {
+                let moved = moved || (p.x - from.x).hypot(p.y - from.y) > 5.0;
+                self.drag = Some(Drag::Pad {
+                    note,
+                    from,
+                    at: p,
+                    moved,
+                });
+                cx.notify();
+                return;
+            }
+            Some(Drag::Overview { grab }) => {
+                self.overview_to(p.x - grab);
+                cx.notify();
+                return;
+            }
+            Some(Drag::TrackScroll { grab }) => {
+                self.tracks_to(p.y - grab);
+                cx.notify();
+                return;
+            }
+            Some(Drag::PolyWindow { from, start }) => {
+                self.drag_poly_window(from, start, p);
+                cx.notify();
+                return;
+            }
+            Some(Drag::PolyPoint { id }) => self.drag_poly_point(id, p),
+            Some(Drag::PolySource { .. }) => {
+                self.mod_drag_at = Some(p);
+                cx.notify();
+                return;
+            }
+            Some(Drag::PolyDepth {
+                track,
+                route,
+                x,
+                depth,
+            }) => {
+                if let Some(r) = self.poly_mut(track).and_then(|s| s.routes.get_mut(route)) {
+                    r.depth = (depth + (p.x - x) / 130.0).clamp(-1.0, 1.0);
+                }
+            }
+            Some(Drag::FxWindow { from, start }) => {
+                self.drag_fx_window(from, start, p);
+                cx.notify();
+                return;
+            }
+            Some(Drag::SatSplit { k }) => self.drag_sat_split(k, p),
+            Some(Drag::Space { handle, span }) => self.drag_space(handle, span, p),
             Some(Drag::Editor { y, height }) => {
                 self.editor_h = height - (p.y - y);
                 self.editor_h = self.editor_height();
@@ -397,6 +516,14 @@ impl Workspace {
             }
             Some(Drag::Sample { .. } | Drag::MapBox { .. }) => {
                 self.drag_sample(p, cx);
+                return;
+            }
+            Some(Drag::Midi { .. }) => {
+                self.drag_midi(p, cx);
+                return;
+            }
+            Some(Drag::ChatMidi { .. }) => {
+                self.drag_card(p, cx);
                 return;
             }
             Some(Drag::Device { .. }) => {
@@ -428,6 +555,28 @@ impl Workspace {
 
     /// The automatable parameter a knob turns, if it is one: a track and its parameter.
     pub(crate) fn target_param(&self, target: Target) -> Option<(usize, Param)> {
+        if let Target::Limit(Channel::Track(t), field) = target {
+            return Some((t, Param::Limit(field.param()?)));
+        }
+        if let Target::Stacked(Channel::Track(t), k, knob) = target {
+            return Some((t, Param::Tool(k as u8, knob.table()? as u8)));
+        }
+        use crate::workspace::Knob;
+        use pina_engine::song::project::{OWN_COMP, OWN_SAT, VOICE};
+        if let Target::Comp(Channel::Track(t), f) = target {
+            return Some((t, Param::Tool(OWN_COMP, Knob::Comp(f).table()? as u8)));
+        }
+        if let Target::Sat(Channel::Track(t), f) = target {
+            return Some((t, Param::Tool(OWN_SAT, Knob::Sat(f).table()? as u8)));
+        }
+        if let Target::Poly { track, param } = target {
+            return Some((track, Param::Poly(param as u16)));
+        }
+        if let Target::Sampler { track, field } = target {
+            let name = crate::editors::sampler::voice_name(field)?;
+            let knob = VOICE.iter().position(|k| k.name == name)?;
+            return Some((track, Param::Voice(knob as u8)));
+        }
         let Target::Param { track, param } = target else {
             return None;
         };

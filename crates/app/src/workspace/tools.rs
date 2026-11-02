@@ -1,7 +1,7 @@
 //! The tracks' tools beyond the pointer, pencil, scissors and eraser, in the Tool menu (T):
 //! Text renames a region; Glue joins one to the next on its track; Solo plays one alone while
 //! held; Mute mutes one; Zoom zooms in where clicked (⌥ out) or onto the bars dragged across;
-//! Fade draws an audio region's fade in or out; Flex makes dragging a region's end stretch it.
+//! Fade draws an audio region's fade in or out; Stretch makes dragging a region's end time-stretch it.
 
 use gpui::{Context, MouseDownEvent, Pixels, Point};
 use pina_engine::song::project::{At, Content, PPQ, Region};
@@ -24,7 +24,7 @@ impl Tool {
         Tool::Mute,
         Tool::Zoom,
         Tool::Fade,
-        Tool::Flex,
+        Tool::Stretch,
     ];
 
     /// The four always in the toolbar; the rest are a click (or T) away.
@@ -47,7 +47,7 @@ impl Tool {
             Tool::Mute => "Mute",
             Tool::Zoom => "Zoom",
             Tool::Fade => "Fade",
-            Tool::Flex => "Flex",
+            Tool::Stretch => "Stretch",
         }
     }
 
@@ -63,7 +63,7 @@ impl Tool {
             Tool::Mute => Icon::Mute,
             Tool::Zoom => Icon::Zoom,
             Tool::Fade => Icon::Fade,
-            Tool::Flex => Icon::Flex,
+            Tool::Stretch => Icon::Stretch,
         }
     }
 
@@ -82,7 +82,14 @@ impl Tool {
                 "Click to zoom in · ⌥-click out · drag across bars to fill the window with them"
             }
             Tool::Fade => "Drag in from an audio region's start or end to fade it in or out",
-            Tool::Flex => "Drag a region's end to stretch what's in it",
+            Tool::Stretch => match cfg!(windows) {
+                true => {
+                    "Drag a region's end to time-stretch it (or hold Alt, any tool) · ⇧T stretches audio to the tempo"
+                }
+                false => {
+                    "Drag a region's end to time-stretch it (or hold ⌥, any tool) · ⇧T stretches audio to the tempo"
+                }
+            },
         }
     }
 }
@@ -152,12 +159,7 @@ impl Workspace {
                 Some(Content::Midi { notes, controls })
             }
             (
-                Content::Audio {
-                    file,
-                    offset,
-                    stretch,
-                    ..
-                },
+                Content::Audio { file, stretch, .. },
                 Content::Audio {
                     file: f2,
                     offset: o2,
@@ -166,8 +168,9 @@ impl Workspace {
                 },
             ) if file == f2 && stretch == s2 && b.start == end => {
                 // Where the first leaves off in its file is where the second picks up.
-                let samples = p.samples(a.length, p.sample_rate as f64) as f64 / stretch;
-                ((*offset as f64 + samples - *o2 as f64).abs() < 4.0).then(|| a.content.clone())
+                let left = p.frame_at(&a.content, a.start as f64, (a.start + a.length) as f64);
+                left.filter(|&f| f.abs_diff(*o2) < 4)
+                    .map(|_| a.content.clone())
             }
             (Content::Audio { .. }, Content::Audio { .. }) => None,
             _ => {

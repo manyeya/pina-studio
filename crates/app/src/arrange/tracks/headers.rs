@@ -37,11 +37,171 @@ pub(crate) fn strip_button(label: &'static str, on: bool, glow: u32, ink: u32) -
         .child(label)
 }
 
+/// A header's fader's length.
+pub(crate) const FADER_W: f32 = 98.0;
+
+/// A channel's level, left over right, as LEDs: green to -7 dB, amber, then red at 0.
+pub(crate) fn level_leds(now: [f32; 2], held: [f32; 2]) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |b, _, window, _| {
+            const AT: [f32; 12] = [
+                -42.0, -36.0, -30.0, -24.0, -18.0, -14.0, -10.0, -7.0, -4.5, -2.5, -1.0, 0.0,
+            ];
+            let w = f32::from(b.size.width);
+            let seg = (w - 11.0) / 12.0;
+            for (row, (l, h)) in [(now[0], held[0]), (now[1], held[1])]
+                .into_iter()
+                .enumerate()
+            {
+                let (db, peak) = (20.0 * l.max(1e-9).log10(), 20.0 * h.max(1e-9).log10());
+                let top = (AT.iter().rposition(|&a| peak >= a)).filter(|_| h > 1e-6);
+                for (k, &at) in AT.iter().enumerate() {
+                    let on = db >= at || top == Some(k);
+                    let ink = match (on, k) {
+                        (false, _) => rgb(0x2a2a31),
+                        (true, 0..=7) => rgb(METER_LOW),
+                        (true, 8..=9) => rgb(METER_MID),
+                        _ => rgb(METER_HIGH),
+                    };
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(
+                                b.origin.x + px(k as f32 * (seg + 1.0)),
+                                b.origin.y + px(row as f32 * 5.0),
+                            ),
+                            size(px(seg), px(3.)),
+                        ),
+                        ink,
+                    ));
+                }
+            }
+        },
+    )
+    .flex_1()
+    .h(px(8.))
+}
+
+/// A header's fader: a groove filled in its colour, a scale under it, what moves it (`over`) and
+/// a ridged cap. What it does is the caller's.
+pub(crate) fn header_fader(pos: f32, color: u32, mute: bool, over: impl IntoElement) -> Div {
+    let ticks = [strip::SILENT, -24.0, -12.0, -6.0, 0.0, 6.0].map(|db| {
+        div()
+            .absolute()
+            .left(px(
+                (FADER_W * strip::fader_pos(db) - 0.5).clamp(0.0, FADER_W - 1.0)
+            ))
+            .top(px(16.))
+            .w(px(1.))
+            .h(px(4.))
+            .bg(rgb(if db == 0.0 { TEXT_3 } else { 0x3a3a44 }))
+    });
+    div()
+        .w(px(FADER_W))
+        .h(px(22.))
+        .flex_none()
+        .relative()
+        .cursor_ew_resize()
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(px(9.))
+                .h(px(3.))
+                .rounded(px(1.5))
+                .bg(rgb(0x0b0b0e)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .top(px(9.))
+                .w(px(FADER_W * pos))
+                .h(px(3.))
+                .rounded(px(1.5))
+                .bg(alpha(color, if mute { 0.35 } else { 0.8 })),
+        )
+        .children(ticks)
+        .child(over)
+        // The cap, as the mixer's are, stood on end.
+        .child(
+            div()
+                .absolute()
+                .left(px((FADER_W * pos - 7.0).clamp(0.0, FADER_W - 14.0)))
+                .top(px(1.))
+                .w(px(14.))
+                .h(px(20.))
+                .rounded(px(4.))
+                .bg(rgb(0x3a3a44))
+                .border_1()
+                .border_color(rgb(0x4e4e5a))
+                .shadow_md()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(div().w(px(1.)).h(px(12.)).bg(rgb(TEXT))),
+        )
+}
+
+/// A header's readout, an LCD; `marked` the colour of what's automating it.
+pub(crate) fn header_lcd(marked: Option<u32>, lit: u32) -> Div {
+    div()
+        .w(px(40.))
+        .h(px(18.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .bg(rgb(0x0b0b0e))
+        .border_1()
+        .border_color(match marked {
+            Some(c) => alpha(c, 0.45),
+            None => rgb(0x22222a).into(),
+        })
+        .font_family(MONO)
+        .text_size(px(10.))
+        .text_color(rgb(lit))
+        .whitespace_nowrap()
+        .overflow_hidden()
+}
+
+/// A header's strip: a raised panel, a row, or `roomy` two: buttons and LEDs over a fader.
+pub(crate) fn header_panel(roomy: bool) -> Div {
+    div()
+        .w(px(190.))
+        .h(px(if roomy { 60. } else { 28. }))
+        .flex_none()
+        .mr(px(8.))
+        .px(px(8.))
+        .py(px(if roomy { 6. } else { 4. }))
+        .flex()
+        .flex_col()
+        .justify_between()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(rgb(RAISED))
+        .bg(linear_gradient(
+            180.,
+            linear_color_stop(rgb(0x1e1e24), 0.),
+            linear_color_stop(rgb(0x17171c), 1.),
+        ))
+        .shadow(vec![BoxShadow {
+            color: alpha(0xffffff, 0.05),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+            inset: true,
+        }])
+}
+
 /// The instrument's kind, in a word or two: for a track set in under its stack, where a name
 /// won't fit.
 pub(crate) fn instrument_kind(i: Option<&Instrument>) -> String {
     match i {
         Some(i @ Instrument::Sampler(_)) if i.is_kit() => "Kit".into(),
+        Some(Instrument::Poly(_)) => "Synth".into(),
         Some(Instrument::Sampler(_)) => "Sampler".into(),
         _ => instrument_name(i),
     }
@@ -53,7 +213,9 @@ pub fn instrument_name(i: Option<&Instrument>) -> String {
         None => "Audio".into(),
         Some(Instrument::Synth) => "Sine Synth".into(),
         Some(Instrument::Drums) => "Drum Kit".into(),
+        Some(Instrument::Kit) => "Kit".into(),
         Some(Instrument::Sampler(s)) => sampler_name(s),
+        Some(Instrument::Poly(_)) => "Synth".into(),
         Some(Instrument::Plugin(r)) => r.class.clone(),
     }
 }
@@ -267,9 +429,14 @@ impl Workspace {
             t.pan_mode,
             t.spread.unwrap_or(1.0),
         );
-        let kind = match nested {
-            Some(_) => instrument_kind(t.instrument.as_ref()),
-            None => instrument_name(t.instrument.as_ref()),
+        let kind = match (t.pad, nested) {
+            // A kit's pad: the note it plays from its kit.
+            (Some(pad), _) => format!(
+                "Pad · {}",
+                crate::editors::pianoroll::name_in(None, pad.note)
+            ),
+            (None, Some(_)) => instrument_kind(t.instrument.as_ref()),
+            (None, None) => instrument_name(t.instrument.as_ref()),
         };
         let level = self.levels.get(&Some(t.id)).copied().unwrap_or_default();
         let shown = self.settings.clone();
@@ -352,110 +519,14 @@ impl Workspace {
                         ),
                 )
             });
-        // The level, left over right, as LEDs: green to -7 dB, amber, then red at 0.
-        let (now, held) = (level.now, level.held);
-        let leds = canvas(
-            |_, _, _| {},
-            move |b, _, window, _| {
-                const AT: [f32; 12] = [
-                    -42.0, -36.0, -30.0, -24.0, -18.0, -14.0, -10.0, -7.0, -4.5, -2.5, -1.0, 0.0,
-                ];
-                let w = f32::from(b.size.width);
-                let seg = (w - 11.0) / 12.0;
-                for (row, (l, h)) in [(now[0], held[0]), (now[1], held[1])]
-                    .into_iter()
-                    .enumerate()
-                {
-                    let (db, peak) = (20.0 * l.max(1e-9).log10(), 20.0 * h.max(1e-9).log10());
-                    let top = (AT.iter().rposition(|&a| peak >= a)).filter(|_| h > 1e-6);
-                    for (k, &at) in AT.iter().enumerate() {
-                        let on = db >= at || top == Some(k);
-                        let ink = match (on, k) {
-                            (false, _) => rgb(0x2a2a31),
-                            (true, 0..=7) => rgb(METER_LOW),
-                            (true, 8..=9) => rgb(METER_MID),
-                            _ => rgb(METER_HIGH),
-                        };
-                        window.paint_quad(fill(
-                            Bounds::new(
-                                point(
-                                    b.origin.x + px(k as f32 * (seg + 1.0)),
-                                    b.origin.y + px(row as f32 * 5.0),
-                                ),
-                                size(px(seg), px(3.)),
-                            ),
-                            ink,
-                        ));
-                    }
-                }
-            },
-        )
-        .flex_1()
-        .h(px(8.));
+        let leds = level_leds(level.now, level.held);
 
         // The fader: a groove filled in the track's colour, a scale under it, and a ridged
         // cap. Drag it (⇧ for fine), swipe sideways over it, double-click to type a level,
         // ⌥-click for 0 dB.
-        const FADER_W: f32 = 98.0;
-        let ticks = [strip::SILENT, -24.0, -12.0, -6.0, 0.0, 6.0].map(|db| {
-            div()
-                .absolute()
-                .left(px(
-                    (FADER_W * strip::fader_pos(db) - 0.5).clamp(0.0, FADER_W - 1.0)
-                ))
-                .top(px(16.))
-                .w(px(1.))
-                .h(px(4.))
-                .bg(rgb(if db == 0.0 { TEXT_3 } else { 0x3a3a44 }))
-        });
-        let fader = div()
+        let fader = header_fader(pos, color, mute, self.modded_fader(i, FADER_W, 22.))
             .id(("fader", i))
-            .w(px(FADER_W))
-            .h(px(22.))
-            .flex_none()
-            .relative()
-            .cursor_ew_resize()
             .debug_selector(move || format!("track-fader-{i}"))
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .top(px(9.))
-                    .h(px(3.))
-                    .rounded(px(1.5))
-                    .bg(rgb(0x0b0b0e)),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top(px(9.))
-                    .w(px(FADER_W * pos))
-                    .h(px(3.))
-                    .rounded(px(1.5))
-                    .bg(alpha(color, if mute { 0.35 } else { 0.8 })),
-            )
-            .children(ticks)
-            .child(self.modded_fader(i, FADER_W, 22.))
-            // The cap, as the mixer's are, stood on end.
-            .child(
-                div()
-                    .absolute()
-                    .left(px((FADER_W * pos - 7.0).clamp(0.0, FADER_W - 14.0)))
-                    .top(px(1.))
-                    .w(px(14.))
-                    .h(px(20.))
-                    .rounded(px(4.))
-                    .bg(rgb(0x3a3a44))
-                    .border_1()
-                    .border_color(rgb(0x4e4e5a))
-                    .shadow_md()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(div().w(px(1.)).h(px(12.)).bg(rgb(TEXT))),
-            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |ws, e: &MouseDownEvent, window, cx| {
@@ -476,7 +547,7 @@ impl Workspace {
                     let x = f32::from(e.position.x);
                     ws.begin_drag(
                         Drag::HFader {
-                            track: i,
+                            channel: Channel::Track(i),
                             x,
                             pos,
                             width: FADER_W,
@@ -491,25 +562,7 @@ impl Workspace {
         let field = self
             .name_field(Name::Volume(i))
             .or_else(|| self.name_field(Name::Pan(i)));
-        let readout = div()
-            .w(px(40.))
-            .h(px(18.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(4.))
-            .bg(rgb(0x0b0b0e))
-            .border_1()
-            .border_color(match marked {
-                Some(c) => alpha(c, 0.45),
-                None => rgb(0x22222a).into(),
-            })
-            .font_family(MONO)
-            .text_size(px(10.))
-            .text_color(rgb(lit))
-            .whitespace_nowrap()
-            .overflow_hidden()
+        let readout = header_lcd(marked, lit)
             .debug_selector(move || format!("track-db-{i}"))
             .child(match field {
                 Some(field) => div().w_full().px(px(2.)).child(field),
@@ -590,31 +643,7 @@ impl Workspace {
             );
 
         // The strip: a raised panel, its buttons and LEDs over its fader, readout and knob.
-        let strip_panel = div()
-            .w(px(190.))
-            .h(px(if roomy { 60. } else { 28. }))
-            .flex_none()
-            .mr(px(8.))
-            .px(px(8.))
-            .py(px(if roomy { 6. } else { 4. }))
-            .flex()
-            .flex_col()
-            .justify_between()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(rgb(RAISED))
-            .bg(linear_gradient(
-                180.,
-                linear_color_stop(rgb(0x1e1e24), 0.),
-                linear_color_stop(rgb(0x17171c), 1.),
-            ))
-            .shadow(vec![BoxShadow {
-                color: alpha(0xffffff, 0.05),
-                offset: point(px(0.), px(1.)),
-                blur_radius: px(0.),
-                spread_radius: px(0.),
-                inset: true,
-            }])
+        let strip_panel = header_panel(roomy)
             .child(
                 div()
                     .flex()

@@ -11,6 +11,8 @@ mod naming;
 mod panels;
 mod params;
 mod saving;
+mod selection;
+mod shortcuts;
 mod status;
 mod transport;
 
@@ -22,6 +24,8 @@ pub use naming::*;
 pub use panels::*;
 pub use params::*;
 pub(crate) use saving::*;
+pub use shortcuts::*;
+pub use status::Help;
 pub use status::*;
 
 pub mod context;
@@ -80,7 +84,7 @@ pub enum Tool {
     Mute,
     Zoom,
     Fade,
-    Flex,
+    Stretch,
 }
 
 /// What edits snap to.
@@ -93,6 +97,28 @@ pub enum Snap {
     Eighth,
     Sixteenth,
     Off,
+}
+
+/// What a region let go on others does: lies over them, cuts them back, or the track closes up
+/// round it (as one deleted closes the gap it leaves).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DragMode {
+    #[default]
+    Overlap,
+    NoOverlap,
+    Shuffle,
+}
+
+impl DragMode {
+    pub const ALL: [DragMode; 3] = [DragMode::Overlap, DragMode::NoOverlap, DragMode::Shuffle];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DragMode::Overlap => "Overlap",
+            DragMode::NoOverlap => "No Overlap",
+            DragMode::Shuffle => "Shuffle",
+        }
+    }
 }
 
 impl Snap {
@@ -226,6 +252,11 @@ pub struct Workspace {
     pub px_per_beat: f32,
     pub scroll_x: f32,
     pub scroll_y: f32,
+    /// Whether the view follows the playhead while playing (with the setting on): scrolling by
+    /// hand lets go of it till play starts again or the playhead's moved.
+    pub caught: bool,
+    /// Where the navigation bar's overview of the song was drawn.
+    pub nav_bounds: Rc<Cell<Bounds<Pixels>>>,
     pub view: View,
     pub bottom: Option<Bottom>,
     pub show_inspector: bool,
@@ -265,6 +296,11 @@ pub struct Workspace {
     pub trying: Option<(usize, crate::ui::looks::Trying)>,
     pub tool: Tool,
     pub snap: Snap,
+    /// What snap was before ⌘G turned it off.
+    pub snap_was: Snap,
+    pub drag_mode: DragMode,
+    /// What the control under the pointer does, for the status bar.
+    pub help: Option<&'static str>,
     /// Playing the selected region alone, looped (pattern mode); and the region it
     /// plays, with the start and length it had then.
     pub pattern_mode: bool,
@@ -294,13 +330,30 @@ pub struct Workspace {
     pub export: Option<crate::mix::export::Export>,
     /// The track headers' column and the inspector, as wide as they've been dragged.
     pub header_w: f32,
+    /// The tempo lane, shown or hidden as asked (else shown while the tempo changes), and
+    /// where it was drawn.
+    pub tempo_lane: Option<bool>,
+    pub tempo_area: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
     pub inspector_w: f32,
     /// Regions copied (⌘C on the tracks), to paste at the playhead.
     pub region_clip: Option<pina_engine::song::project::Region>,
+    /// Regions copied together, by their track from the first's and their start from the
+    /// earliest's.
+    pub region_clips: Vec<(usize, pina_engine::song::project::Region)>,
+    /// The regions picked with the focused one (by track and start), and where they were when a
+    /// drag of them began.
+    pub picks: Vec<selection::Pick>,
+    pub picks_from: Vec<selection::Pick>,
     /// A MIDI or pattern region's contents as they were when its time-stretch drag began.
     pub stretching: Option<pina_engine::song::project::Content>,
     /// ⇧ held while dragging a fader or knob: it moves a fifth as far.
     pub fine: bool,
+    /// A channel whose compressor is being set by listening.
+    pub learning: Option<crate::mix::strip::Channel>,
+    /// ⌥ (Alt) held: a region's end time-stretches it, and shows a grip to say so.
+    pub alt: bool,
+    /// Audio regions being listened to for their tempo: their files and where they start.
+    pub listening: Vec<(std::path::PathBuf, u64)>,
     /// Modulation: each track's modulators' values and their recent ones; the knobs a
     /// modulator can be dropped on, where they were drawn; the steps' editors; the modulator
     /// being dragged, where; the one picked (knobs it moves set its depth); a clock for those
@@ -340,11 +393,19 @@ pub struct Workspace {
     /// What the window shows, kept for every song (Settings, ⌘,); the page's section shown;
     /// where play last started (to go back to on stop, if Settings say).
     pub settings: crate::pages::settings::Settings,
+    /// What Settings offers to play through.
+    pub outputs: Vec<String>,
+    pub buffers: Vec<u32>,
     pub settings_section: crate::pages::settings::Section,
     pub play_from: u64,
     /// The Sampler editor: the zone picked and the waveforms read; where its waveform was drawn.
     pub sampler_ui: crate::editors::sampler::SamplerUi,
+    /// The Drum Machine: the pads shown and the one picked, and where they were drawn.
+    pub drums: crate::editors::drums::DrumsUi,
     pub sampler_wave_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// Where each effect's row (a strip's slot, or a card in the mixer's panel) was drawn this
+    /// frame: its channel, whether it's a card, its row.
+    pub effect_rows: crate::mix::strip::EffectRows,
     /// The piano roll's vertical scroll, and where its grid was drawn last frame.
     pub roll_scroll_y: f32,
     pub roll_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -403,7 +464,11 @@ pub struct Workspace {
     pub reductions: HashMap<Option<u64>, f32>,
     /// How busy the audio thread is: 1 is all of its time; and when that was last read.
     pub load: f32,
+    /// Since it was last shown: its readings added up, how many, and the last time one ran late.
     load_read: Instant,
+    load_sum: f32,
+    load_reads: u32,
+    pub load_late: Option<Instant>,
     pub status: Option<String>,
     /// What agents have done, newest last.
     pub agent: Vec<AgentEdit>,
@@ -415,6 +480,9 @@ pub struct Workspace {
     pub lanes_bounds: Rc<Cell<Bounds<Pixels>>>,
     /// The Channel EQ's window, when it's open; and bands copied from it.
     pub eq_view: Option<crate::mix::eq::EqView>,
+    /// The compressor's or saturator's window, when one's open.
+    pub fx_view: Option<crate::mix::fx::FxView>,
+    pub poly_view: Option<crate::editors::poly::PolyView>,
     pub eq_clipboard: Vec<pina_engine::song::project::EqBand>,
     /// The window's size, for what fits.
     pub viewport_h: f32,
@@ -484,6 +552,8 @@ impl Workspace {
             region: None,
             px_per_beat: 48.0,
             scroll_x: 0.0,
+            caught: true,
+            nav_bounds: Rc::new(Cell::new(Bounds::default())),
             scroll_y: 0.0,
             view,
             bottom: None,
@@ -493,6 +563,9 @@ impl Workspace {
             picking: false,
             tool: Tool::Pointer,
             snap: Snap::Smart,
+            snap_was: Snap::Smart,
+            drag_mode: DragMode::Overlap,
+            help: None,
             pattern_mode: false,
             pattern: None,
             key_moves_notes: true,
@@ -508,10 +581,18 @@ impl Workspace {
             lane_bounds: Rc::new(Cell::new(Bounds::default())),
             export: None,
             header_w: HEADER_W,
+            tempo_lane: None,
+            tempo_area: Default::default(),
             inspector_w: INSPECTOR_W,
             region_clip: None,
+            region_clips: Vec::new(),
+            picks: Vec::new(),
+            picks_from: Vec::new(),
             stretching: None,
             fine: false,
+            learning: None,
+            alt: false,
+            listening: Vec::new(),
             panner: None,
             mod_values: HashMap::new(),
             mod_trace: HashMap::new(),
@@ -533,10 +614,14 @@ impl Workspace {
             steps: Default::default(),
             plugin_page: crate::sounds::plugins::PluginPage::new(cx),
             settings: crate::pages::settings::Settings::load(),
+            outputs: Vec::new(),
+            buffers: Vec::new(),
             settings_section: Default::default(),
             play_from: 0,
             sampler_ui: Default::default(),
+            drums: Default::default(),
             sampler_wave_bounds: Rc::new(Cell::new(Bounds::default())),
+            effect_rows: Rc::default(),
             roll_scroll_y: crate::editors::pianoroll::scroll_to(72),
             roll_bounds: Rc::new(Cell::new(Bounds::default())),
             roll: RollSettings {
@@ -583,12 +668,17 @@ impl Workspace {
             reductions: HashMap::new(),
             load: 0.0,
             load_read: Instant::now(),
+            load_sum: 0.0,
+            load_reads: 0,
+            load_late: None,
             status,
             agent: Vec::new(),
             smart: HashMap::new(),
             exporting: false,
             lanes_bounds: Rc::new(Cell::new(Bounds::default())),
             eq_view: None,
+            fx_view: None,
+            poly_view: None,
             eq_clipboard: Vec::new(),
             slider_bounds: Rc::new(RefCell::new(HashMap::new())),
             viewport_h: 900.0,
@@ -676,8 +766,10 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The knobs a modulator can be dropped on, as this frame draws them.
+        // The knobs a modulator can be dropped on, and the effects' rows, as this frame draws
+        // them.
         self.mod_targets.borrow_mut().clear();
+        self.effect_rows.borrow_mut().clear();
         if let Some(what) = self.pending_name.take() {
             self.start_naming(what, window, cx);
         }
@@ -724,13 +816,15 @@ impl Render for Workspace {
         self.follow_pattern(cx);
         self.read_meters();
         self.eq_frame();
+        self.fx_frame();
+        let sampling = self.sampler_frame();
         self.capture(cx);
         self.automation_frame(cx);
         self.show_automation_values();
         let armed = self.armed().map(|t| self.session.project.tracks[t].id);
         self.player.arm(armed);
         let playing = self.player.playing();
-        if playing && self.settings.follow_playhead {
+        if playing && self.settings.follow_playhead && self.caught {
             self.follow_playhead();
         }
         // ponytail: redraws every frame while anything moves; fine until the UI gets heavy.
@@ -743,6 +837,9 @@ impl Render for Workspace {
             || self.browser.auditioning()
             || self.player.rendering()
             || self.eq_view.as_ref().is_some_and(|v| playing || v.moving())
+            || (self.fx_view.is_some() && playing)
+            || (self.poly_view.is_some() && playing)
+            || sampling
             || (self.bottom == Some(Bottom::Modulation)
                 && self
                     .session
@@ -750,7 +847,17 @@ impl Render for Workspace {
                     .tracks
                     .get(self.track)
                     .is_some_and(|t| !t.modulators.is_empty()));
-        if busy || self.drag.is_some() {
+        // A study heard is left behind with its page.
+        if self.view != View::Study && self.studies.playing.is_some() {
+            self.studies.playing = None;
+            self.player.stop_audition();
+        }
+        if self.view != View::Playbooks && self.genres.heard.is_some() {
+            self.genres.heard = None;
+            self.player.stop_audition();
+        }
+        let hearing = self.studies.playing.is_some() || self.genres.heard.is_some();
+        if busy || self.drag.is_some() || hearing {
             window.request_animation_frame();
         }
         let dir = self
@@ -781,6 +888,12 @@ impl Render for Workspace {
             .text_size(px(12.))
             .font_weight(FontWeight::NORMAL)
             .track_focus(&self.focus)
+            .on_modifiers_changed(cx.listener(|ws, e: &gpui::ModifiersChangedEvent, _, cx| {
+                if ws.alt != e.modifiers.alt {
+                    ws.alt = e.modifiers.alt;
+                    cx.notify();
+                }
+            }))
             .key_context({
                 let context = match (
                     &self.naming,
@@ -847,6 +960,140 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &NextPlugin, _, cx| ws.step_plugin(1, cx)))
             .on_action(cx.listener(|ws, _: &AddPlugin, _, cx| ws.add_picked_plugin(cx)))
             .on_action(
+                cx.listener(|ws, _: &RegionPrev, w, cx| ws.shortcut(Shortcut::PrevRegion, w, cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &RegionNext, w, cx| ws.shortcut(Shortcut::NextRegion, w, cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &TrackPrev, w, cx| ws.shortcut(Shortcut::PrevTrack, w, cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &TrackNext, w, cx| ws.shortcut(Shortcut::NextTrack, w, cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &NudgeRegionLeft, w, cx| {
+                    ws.shortcut(Shortcut::Nudge(-1), w, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|ws, _: &NudgeRegionRight, w, cx| {
+                    ws.shortcut(Shortcut::Nudge(1), w, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|ws, _: &TransposeUp, w, cx| {
+                    ws.shortcut(Shortcut::Transpose(1), w, cx)
+                }),
+            )
+            .on_action(cx.listener(|ws, _: &TransposeDown, w, cx| {
+                ws.shortcut(Shortcut::Transpose(-1), w, cx)
+            }))
+            .on_action(cx.listener(|ws, _: &TransposeOctaveUp, w, cx| {
+                ws.shortcut(Shortcut::Transpose(12), w, cx)
+            }))
+            .on_action(cx.listener(|ws, _: &TransposeOctaveDown, w, cx| {
+                ws.shortcut(Shortcut::Transpose(-12), w, cx)
+            }))
+            .on_action(
+                cx.listener(|ws, _: &LoopRegion, w, cx| ws.shortcut(Shortcut::LoopRegion, w, cx)),
+            )
+            .on_action(cx.listener(|ws, _: &QuantizeRegion, w, cx| {
+                ws.shortcut(Shortcut::QuantizeRegion, w, cx)
+            }))
+            .on_action(
+                cx.listener(|ws, _: &JoinRegions, w, cx| ws.shortcut(Shortcut::JoinRegions, w, cx)),
+            )
+            .on_action(cx.listener(|ws, _: &RegionToPlayhead, w, cx| {
+                ws.shortcut(Shortcut::RegionToPlayhead, w, cx)
+            }))
+            .on_action(cx.listener(|ws, _: &StartToPlayhead, w, cx| {
+                ws.shortcut(Shortcut::StartToPlayhead, w, cx)
+            }))
+            .on_action(cx.listener(|ws, _: &EndToPlayhead, w, cx| {
+                ws.shortcut(Shortcut::EndToPlayhead, w, cx)
+            }))
+            .on_action(
+                cx.listener(|ws, _: &ToggleSnap, w, cx| ws.shortcut(Shortcut::ToggleSnap, w, cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &BounceRegion, w, cx| {
+                    ws.shortcut(Shortcut::BounceRegion, w, cx)
+                }),
+            )
+            .on_action(cx.listener(|ws, _: &StretchToCycle, w, cx| {
+                ws.shortcut(Shortcut::StretchToCycle, w, cx)
+            }))
+            .on_action(
+                cx.listener(|ws, _: &StretchToBar, w, cx| {
+                    ws.shortcut(Shortcut::StretchToBar, w, cx)
+                }),
+            )
+            .on_action(cx.listener(|ws, _: &StretchToTempo, w, cx| {
+                ws.shortcut(Shortcut::StretchToTempo, w, cx)
+            }))
+            .on_action(cx.listener(|ws, _: &CycleToSelection, w, cx| {
+                ws.shortcut(Shortcut::CycleToSelection, w, cx)
+            }))
+            .on_action(
+                cx.listener(|ws, _: &AddMarkerHere, w, cx| ws.shortcut(Shortcut::AddMarker, w, cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &PrevMarker, w, cx| ws.shortcut(Shortcut::PrevMarker, w, cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &NextMarker, w, cx| ws.shortcut(Shortcut::NextMarker, w, cx)),
+            )
+            .on_action(cx.listener(|ws, _: &BarBack, w, cx| ws.shortcut(Shortcut::Bars(-1), w, cx)))
+            .on_action(
+                cx.listener(|ws, _: &BarForward, w, cx| ws.shortcut(Shortcut::Bars(1), w, cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &EightBarsBack, w, cx| ws.shortcut(Shortcut::Bars(-8), w, cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &EightBarsForward, w, cx| {
+                    ws.shortcut(Shortcut::Bars(8), w, cx)
+                }),
+            )
+            .on_action(cx.listener(|ws, _: &GoToEnd, w, cx| ws.shortcut(Shortcut::GoToEnd, w, cx)))
+            .on_action(cx.listener(|ws, _: &PlayFromSelection, w, cx| {
+                ws.shortcut(Shortcut::PlayFromSelection, w, cx)
+            }))
+            .on_action(
+                cx.listener(|ws, _: &ZoomToFit, w, cx| ws.shortcut(Shortcut::ZoomToFit, w, cx)),
+            )
+            .on_action(cx.listener(|ws, _: &TallerLanes, w, cx| {
+                ws.shortcut(Shortcut::LaneHeight(1.25), w, cx)
+            }))
+            .on_action(cx.listener(|ws, _: &ShorterLanes, w, cx| {
+                ws.shortcut(Shortcut::LaneHeight(0.8), w, cx)
+            }))
+            .on_action(
+                cx.listener(|ws, _: &MuteTrack, w, cx| ws.shortcut(Shortcut::MuteTrack, w, cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &SoloTrack, w, cx| ws.shortcut(Shortcut::SoloTrack, w, cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &ArmTrack, w, cx| ws.shortcut(Shortcut::ArmTrack, w, cx)),
+            )
+            .on_action(
+                cx.listener(|ws, _: &RenameTrack, w, cx| ws.shortcut(Shortcut::RenameTrack, w, cx)),
+            )
+            .on_action(cx.listener(|ws, _: &DuplicateTrack, w, cx| {
+                ws.shortcut(Shortcut::DuplicateTrack, w, cx)
+            }))
+            .on_action(
+                cx.listener(|ws, _: &ToggleEditor, w, cx| {
+                    ws.shortcut(Shortcut::ToggleEditor, w, cx)
+                }),
+            )
+            .on_action(cx.listener(|ws, _: &ToggleTempoLane, _, cx| {
+                let shown = ws.tempo_lane_shown();
+                ws.tempo_op(crate::arrange::tempo::TempoOp::Lane(!shown), cx)
+            }))
+            .on_action(
                 cx.listener(|ws, _: &ToggleScore, _, cx| ws.toggle_bottom(Bottom::Score, cx)),
             )
             .on_action(
@@ -881,17 +1128,20 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &DeleteTrack, _, cx| ws.delete_track(cx)))
             .on_action(cx.listener(|ws, _: &Split, _, cx| ws.split(cx)))
             .on_action(cx.listener(|ws, _: &CopyRegion, _, cx| {
-                if ws.eq_key(crate::mix::eq::EqOp::Copy, cx) {
+                if ws.copy_chat_pick(cx) || ws.eq_key(crate::mix::eq::EqOp::Copy, cx) {
                     return;
                 }
-                if !ws.copy_picked(cx) {
+                if !ws.copy_picked(cx) && !ws.copy_selected() {
                     ws.auto_clip = None;
                     ws.region_key(RegionOp::Copy, cx)
                 }
+                cx.notify();
             }))
             .on_action(cx.listener(|ws, _: &CutRegion, _, cx| {
                 if ws.copy_picked(cx) {
                     ws.delete_picked(cx);
+                } else if ws.copy_selected() {
+                    ws.delete_selected(cx);
                 } else {
                     ws.auto_clip = None;
                     ws.region_key(RegionOp::Cut, cx)
@@ -901,14 +1151,19 @@ impl Render for Workspace {
                 if ws.eq_key(crate::mix::eq::EqOp::Paste, cx) {
                     return;
                 }
-                if !ws.paste_points(cx) {
+                let (t, tick) = (ws.track, ws.playhead());
+                if !ws.paste_points(cx) && !ws.paste_selected(t, tick, cx) {
                     ws.paste_key(cx)
                 }
             }))
             .on_action(
                 cx.listener(|ws, _: &RepeatRegion, _, cx| ws.region_key(RegionOp::Duplicate, cx)),
             )
-            .on_action(cx.listener(|ws, _: &MuteRegion, _, cx| ws.region_key(RegionOp::Mute, cx)))
+            .on_action(cx.listener(|ws, _: &MuteRegion, _, cx| {
+                if !ws.each_selected(cx, |r| r.mute ^= true) {
+                    ws.region_key(RegionOp::Mute, cx)
+                }
+            }))
             .on_action(cx.listener(|ws, _: &NewTrack, window, cx| {
                 let at = gpui::point(px(12.), px(CONTROL_BAR_H + 44.));
                 ws.open_adder(at, window, cx)
@@ -1031,11 +1286,17 @@ impl Render for Workspace {
                 d.child(self.file_listener(cx))
             })
             .children(self.sample_ghost())
+            .children(self.midi_ghost())
+            .children(self.card_ghost())
             .children(self.device_ghost())
             .children(self.panner_view(cx))
             .children(self.mod_ghost())
+            .children(self.poly_window(cx))
             .children(self.eq_window(cx))
+            .children(self.fx_window(cx))
+            .children(self.effect_ghost())
             .children(self.mini_view(cx))
+            .children(self.like_create_view(cx))
             .children(self.menu_view(cx))
             .children(self.adder_view(cx))
             .children(self.export_view(cx))

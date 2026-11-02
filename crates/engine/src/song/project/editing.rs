@@ -69,12 +69,18 @@ impl Project {
         (track, i)
     }
 
-    /// Flex: stretches a plain audio region to `length` ticks, its audio slower or faster and its
+    /// Time-stretches a plain audio region to `length` ticks, its audio slower or faster and its
     /// pitch kept, as option-dragging its end does. From a quarter to four times as long
     /// as it was recorded.
-    pub fn flex(&mut self, at: At, length: u64) -> Result<(), String> {
+    pub fn time_stretch(&mut self, at: At, length: u64) -> Result<(), String> {
+        // Played as recorded, its audio lasts seconds, not ticks: the tempo may change under it.
+        let (start, old) = (self.region(at).start as f64, self.region(at).length);
+        let zero = self.seconds_at(start);
+        let (was, now) = (
+            self.seconds_at(start + old.max(1) as f64) - zero,
+            self.seconds_at(start + length.max(1) as f64) - zero,
+        );
         let r = &mut self.tracks[at.0].regions[at.1];
-        let old = r.length;
         // MIDI and patterns: their notes or steps, longer or shorter; an alias its own then.
         if let Some(c) = r
             .content
@@ -85,18 +91,36 @@ impl Project {
             r.link = None;
             return Ok(());
         }
-        let Content::Audio { stretch, warps, .. } = &mut r.content else {
+        let Content::Audio {
+            stretch,
+            warps,
+            follow,
+            tempo,
+            ..
+        } = &mut r.content
+        else {
             return Err("a take folder doesn't stretch: flatten it first".into());
         };
+        // Following: its own tempo, so its beats fill `length` (its warps are in its own time).
+        if !follow.is_off()
+            && let Some(t) = tempo
+        {
+            let k = (old as f64 / length.max(1) as f64).clamp(0.25, 4.0);
+            let was = *t;
+            *t = (*t * k).clamp(MIN_BPM, MAX_BPM);
+            r.length = (old as f64 * was / *t).round().max(1.0) as u64;
+            return Ok(());
+        }
         // The stretch that fills `length`, within limits, and the length that gives; warp
         // markers stretch with it.
-        let wanted = *stretch * length.max(1) as f64 / old as f64;
+        let wanted = *stretch * now / was.max(1e-9);
         let ratio = wanted.clamp(0.25, 4.0);
         for w in warps.iter_mut() {
             w[1] = (w[1] as f64 * ratio / *stretch).round() as u64;
         }
         *stretch = ratio;
-        r.length = (length.max(1) as f64 * ratio / wanted).round() as u64;
+        let end = self.tick_at_seconds(zero + now * ratio / wanted);
+        self.tracks[at.0].regions[at.1].length = (end - start).round().max(1.0) as u64;
         Ok(())
     }
 
@@ -139,7 +163,6 @@ impl Project {
         let Content::Takes { takes, comp } = &r.content else {
             return vec![at];
         };
-        let rate = self.sample_rate as f64;
         let segments = comp_segments(comp, takes.len(), r.length);
         let mut out = Vec::new();
         if r.content.is_midi() {
@@ -172,17 +195,15 @@ impl Project {
             for &(a, b, t) in &segments {
                 let take = &takes[t];
                 let from = (a as i64).max(take.start);
-                if let (
-                    Content::Audio {
-                        offset, stretch, ..
-                    },
-                    true,
-                ) = (&take.content, from < b as i64)
-                {
-                    let skip = self.samples((from - take.start) as u64, rate);
+                if let (Content::Audio { .. }, true) = (&take.content, from < b as i64) {
+                    let frame = self.frame_at(
+                        &take.content,
+                        (r.start as i64 + take.start) as f64,
+                        (r.start as i64 + from) as f64,
+                    );
                     let mut content = take.content.clone();
                     if let Content::Audio { offset: o, .. } = &mut content {
-                        *o = offset + (skip as f64 / stretch) as u64;
+                        *o = frame.unwrap_or(*o);
                     }
                     out.push(Region {
                         start: r.start + from as u64,
@@ -229,21 +250,18 @@ impl Project {
         let r = self.region(at);
         let end = r.start + r.length;
         let mut start = start.min(end - 1);
-        if let Content::Audio {
-            offset, stretch, ..
-        } = r.content
-        {
-            start = start.max(
-                r.start
-                    .saturating_sub(self.ticks((offset as f64 * stretch) as u64)),
+        // Audio: no earlier than where its file starts; its offset is what plays at the new start.
+        let mut new_offset = None;
+        if let Some(t) = Timing::of(&r.content, self.sample_rate as f64) {
+            let first = self.audio_tick(&t, r.start as f64, 0.0).ceil().max(0.0) as u64;
+            start = start.max(first);
+            new_offset = Some(
+                self.audio_frame(&t, r.start as f64, start as f64)
+                    .round()
+                    .max(0.0) as u64,
             );
         }
-        let (old, rate) = (r.start, self.sample_rate as f64);
-        let moved = if start >= old {
-            self.samples(start - old, rate) as i64
-        } else {
-            -(self.samples(old - start, rate) as i64)
-        };
+        let old = r.start;
         let r = &mut self.tracks[at.0].regions[at.1];
         match &mut r.content {
             // Its notes move, so an alias trimmed at the start becomes a region of its own.
@@ -256,9 +274,7 @@ impl Project {
                     c.start -= start as i64 - old as i64;
                 }
             }
-            Content::Audio {
-                offset, stretch, ..
-            } => *offset = (*offset as f64 + moved as f64 / *stretch).max(0.0) as u64,
+            Content::Audio { offset, .. } => *offset = new_offset.unwrap_or(*offset),
             // A pattern starts over from the region's start.
             Content::Pattern { .. } => {}
             // Takes keep their place on the timeline; the comp keeps its, from the new start.
@@ -294,6 +310,56 @@ impl Project {
     pub fn trim_end(&mut self, at: At, end: u64) {
         let r = &mut self.tracks[at.0].regions[at.1];
         r.length = end.max(r.start + 1) - r.start;
+    }
+
+    /// What's under the region at `at` on its track made way for it: one it covers taken out, one
+    /// across its start cut back to there, one across its end started after it. Returns where it
+    /// is now.
+    // ponytail: by length; a looped neighbour's loops play on under it.
+    pub fn clear_under(&mut self, at: At) -> At {
+        let (a, b) = {
+            let r = self.region(at);
+            (r.start, r.start + r.length)
+        };
+        let mut at = at;
+        let mut i = 0;
+        while i < self.tracks[at.0].regions.len() {
+            let r = &self.tracks[at.0].regions[i];
+            let (s, e) = (r.start, r.start + r.length);
+            if i == at.1 || e <= a || s >= b {
+            } else if s >= a && e <= b {
+                self.tracks[at.0].regions.remove(i);
+                if i < at.1 {
+                    at.1 -= 1;
+                }
+                continue;
+            } else if s < a {
+                self.trim_end((at.0, i), a);
+            } else {
+                self.trim_start((at.0, i), b);
+            }
+            i += 1;
+        }
+        at
+    }
+
+    /// Track `t`'s regions from `from` on laid end to end, in order, from `from` (or the end of
+    /// one across it).
+    pub fn close_up(&mut self, t: usize, from: u64) {
+        let regions = &mut self.tracks[t].regions;
+        let mut at = regions
+            .iter()
+            .filter(|r| r.start < from)
+            .map(|r| r.start + r.length)
+            .fold(from, u64::max);
+        let mut order: Vec<usize> = (0..regions.len())
+            .filter(|&i| regions[i].start >= from)
+            .collect();
+        order.sort_by_key(|&i| regions[i].start);
+        for i in order {
+            regions[i].start = at;
+            at += regions[i].length;
+        }
     }
 
     /// Makes an alias of a MIDI or pattern region at `start` on `track`: a region linked to it,
@@ -393,7 +459,7 @@ impl Project {
             return None;
         }
         let first = tick - r.start;
-        let skip = self.samples(first, self.sample_rate as f64);
+        let frame = self.frame_at(&r.content, r.start as f64, tick as f64);
         let r = &mut self.tracks[at.0].regions[at.1];
         let mut second = r.clone();
         second.start = tick;
@@ -427,12 +493,7 @@ impl Project {
                     })
                     .collect();
             }
-            (
-                _,
-                Content::Audio {
-                    offset, stretch, ..
-                },
-            ) => *offset += (skip as f64 / *stretch) as u64,
+            (_, Content::Audio { offset, .. }) => *offset = frame.unwrap_or(*offset),
             (Content::Pattern { .. }, _) => {}
             (
                 Content::Takes { takes, comp: left },

@@ -7,6 +7,7 @@ use super::*;
 pub enum Bottom {
     PianoRoll,
     Steps,
+    Drums,
     Sampler,
     Modulation,
     Score,
@@ -49,9 +50,12 @@ impl Workspace {
     pub fn show_bottom(&mut self, pane: Bottom, cx: &mut Context<Self>) {
         self.view = View::Arrange;
         self.bottom = Some(pane);
-        // The Sampler wants room for its waveform, keys and knobs.
+        // The Sampler wants room for its waveform, keys and knobs; the Drum Machine for its pads.
         if pane == Bottom::Sampler {
-            self.editor_h = self.editor_h.max(500.0);
+            self.editor_h = self.editor_h.max(580.0);
+        }
+        if pane == Bottom::Drums {
+            self.editor_h = self.editor_h.max(crate::editors::drums::DRUMS_H);
         }
         if pane == Bottom::PianoRoll {
             self.focus_roll();

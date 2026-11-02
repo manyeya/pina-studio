@@ -3,43 +3,6 @@
 use super::*;
 
 #[test]
-fn audio_that_follows_the_tempo_keeps_its_beats() {
-    let mut p = Project::new(48_000);
-    p.tempo = 100.0;
-    // A loop at 90 stretched to 100 BPM, following; a recording that doesn't.
-    let mut follows = audio(0, PPQ * 4, 0);
-    if let Content::Audio {
-        stretch, follow, ..
-    } = &mut follows.content
-    {
-        (*stretch, *follow) = (0.9, true);
-    }
-    p.tracks.push(Track {
-        regions: vec![follows, audio(0, PPQ * 4, 0)],
-        ..Default::default()
-    });
-    let stretch = |p: &Project, r: usize| match p.tracks[0].regions[r].content {
-        Content::Audio { stretch, .. } => stretch,
-        _ => unreachable!(),
-    };
-    if let Content::Audio { warps, .. } = &mut p.tracks[0].regions[0].content {
-        warps.push([1000, 900]);
-    }
-    p.set_tempo(120.0);
-    assert_eq!((stretch(&p, 0), stretch(&p, 1)), (0.75, 1.0));
-    // Its warp markers move with it: a beat still lands on its beat.
-    let warp = match &p.tracks[0].regions[0].content {
-        Content::Audio { warps, .. } => warps[0],
-        _ => unreachable!(),
-    };
-    assert_eq!(warp, [1000, 750]);
-    assert_eq!(p.tracks[0].regions[0].length, PPQ * 4);
-    // Back where it was, exactly.
-    p.set_tempo(100.0);
-    assert_eq!(stretch(&p, 0), 0.9);
-}
-
-#[test]
 fn splitting_midi_keeps_notes_with_the_half_they_start_in() {
     let mut p = project(
         vec![midi(960, 1920, &[(0, 60), (900, 62), (960, 64)])],
@@ -163,4 +126,69 @@ fn aliases_share_their_notes_until_unlinked() {
     // Audio has no aliases.
     let mut p = project(vec![audio(0, 960, 0)], false);
     assert!(p.alias((0, 0), 0, 960).is_err());
+}
+
+#[test]
+fn a_region_dropped_clears_what_is_under_it_or_the_track_closes_up() {
+    // 0..960, 960..1920, 1920..2880, and one dropped across the first two: 480..1440.
+    let spans = |p: &Project| -> Vec<(u64, u64)> {
+        let mut all: Vec<_> = p.tracks[0]
+            .regions
+            .iter()
+            .map(|r| (r.start, r.length))
+            .collect();
+        all.sort();
+        all
+    };
+    let three = || {
+        let mut regions: Vec<Region> = (0..3).map(|k| midi(k * 960, 960, &[(0, 60)])).collect();
+        regions.push(midi(480, 960, &[(0, 64)]));
+        project(regions, true)
+    };
+    let mut p = three();
+    let at = p.clear_under((0, 3));
+    assert_eq!(p.region(at).start, 480);
+    assert_eq!(
+        spans(&p),
+        vec![(0, 480), (480, 960), (1440, 480), (1920, 960)]
+    );
+    // One covering a region whole takes it out.
+    let mut p = three();
+    p.tracks[0].regions[3].length = 1920;
+    let at = p.clear_under((0, 3));
+    assert_eq!(
+        (at.1, spans(&p)),
+        (2, vec![(0, 480), (480, 1920), (2400, 480)])
+    );
+    // Closing up from 480: the rest end to end after the first.
+    let mut p = three();
+    p.close_up(0, 480);
+    assert_eq!(
+        spans(&p),
+        vec![(0, 960), (960, 960), (1920, 960), (2880, 960)]
+    );
+}
+
+#[test]
+fn quantizing_audio_puts_each_hit_on_the_grid_by_warp_markers() {
+    let quarter = 48_000 * 60 / Project::new(48_000).tempo as usize;
+    let off = |ticks: i64| (ticks * quarter as i64 / PPQ as i64) as usize;
+    // Hits a little off the beats, two near the second (the nearer goes); from 1000 frames in.
+    let hits = [
+        1000 + off(30),
+        1000 + quarter + off(60),
+        1000 + quarter + off(200),
+        1000 + 2 * quarter - off(80),
+        1000 + 3 * quarter + off(5),
+    ];
+    let mut p = project(vec![audio(0, 4 * PPQ, 1000)], false);
+    assert_eq!(p.quantize_hits((0, 0), &hits, PPQ), 3);
+    let t = Timing::of(&p.region((0, 0)).content, 48_000.0).unwrap();
+    let ticks: Vec<i64> = [1, 3, 4]
+        .iter()
+        .map(|&i| p.audio_tick(&t, 0.0, hits[i] as f64).round() as i64)
+        .collect();
+    assert_eq!(ticks, [PPQ as i64, 2 * PPQ as i64, 3 * PPQ as i64]);
+    // Where it starts plays where it did.
+    assert!((p.audio_frame(&t, 0.0, 0.0) - 1000.0).abs() < 1.0);
 }

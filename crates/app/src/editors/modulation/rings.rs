@@ -1,6 +1,9 @@
 //! Knobs that modulators move: their rings, and where each is now.
 
+use pina_engine::song::project::{OWN_COMP, OWN_SAT};
+
 use super::*;
+use crate::workspace::Knob;
 
 /// The knobs a modulator can be dropped on (track, setting), where each was drawn; the steps'
 /// editors (track, modulator), where.
@@ -75,6 +78,9 @@ impl Workspace {
             _ => None,
         };
         Some(match target {
+            Target::Stacked(ch, k, knob) => {
+                (track(ch)?, ModTarget::Tool(k as u8, knob.table()? as u8))
+            }
             Target::Param { track: id, param } => {
                 let t = self
                     .session
@@ -92,11 +98,21 @@ impl Workspace {
             }
             Target::Comp(ch, CompField::Threshold) => (track(ch)?, ModTarget::CompThreshold),
             Target::Comp(ch, CompField::Makeup) => (track(ch)?, ModTarget::CompMakeup),
-            Target::Comp(..) => return None,
+            Target::Comp(ch, f) => {
+                let i = Knob::Comp(f).table()? as u8;
+                (track(ch)?, ModTarget::Tool(OWN_COMP, i))
+            }
             Target::Sat(ch, SatField::Drive) => (track(ch)?, ModTarget::SatDrive),
             Target::Sat(ch, SatField::Tone) => (track(ch)?, ModTarget::SatTone),
             Target::Sat(ch, SatField::Mix) => (track(ch)?, ModTarget::SatMix),
-            Target::Sat(..) => return None,
+            Target::Sat(ch, f) => {
+                let i = Knob::Sat(f).table()? as u8;
+                (track(ch)?, ModTarget::Tool(OWN_SAT, i))
+            }
+            Target::Limit(ch, LimitField::Gain) => (track(ch)?, ModTarget::LimitGain),
+            Target::Limit(ch, LimitField::Ceiling) => (track(ch)?, ModTarget::LimitCeiling),
+            Target::Limit(..) => return None,
+            Target::Poly { track, param } => (track, ModTarget::Poly(param as u16)),
             Target::Sampler { track, field } => (track, ModTarget::Sampler(param_of(field)?)),
         })
     }
@@ -109,6 +125,7 @@ impl Workspace {
         let eq = track.eq.unwrap_or_default();
         let comp = track.comp.unwrap_or_default();
         let sat = track.sat.unwrap_or_default();
+        let limit = track.limit.unwrap_or_default();
         match mt {
             ModTarget::Volume => strip::fader_pos(modulate::apply_volume(track.volume_db, by)),
             ModTarget::Pan => (modulate::apply_pan(track.pan, by) + 1.0) / 2.0,
@@ -150,6 +167,31 @@ impl Workspace {
                     _ => SatField::Mix,
                 };
                 strip::sat_pos(field, &s)
+            }
+            ModTarget::Poly(i) => match &track.instrument {
+                Some(Instrument::Poly(p)) => {
+                    let q = &pina_engine::song::project::POLY_PARAMS[i as usize];
+                    (q.scale.pos(p.params[i as usize]) + by).clamp(0.0, 1.0)
+                }
+                _ => 0.0,
+            },
+            ModTarget::Tool(k, i) => {
+                let Some(mut u) = track.unit_at(k) else {
+                    return 0.0;
+                };
+                modulate::apply_tool(&mut u, i, by);
+                strip::knobs(u.kind())
+                    .get(i as usize)
+                    .map_or(0.0, |p| (p.pos)(&u))
+            }
+            ModTarget::LimitGain | ModTarget::LimitCeiling => {
+                let mut l = limit;
+                modulate::apply_limit(&mut l, mt, by);
+                let field = match mt {
+                    ModTarget::LimitGain => LimitField::Gain,
+                    _ => LimitField::Ceiling,
+                };
+                strip::limit_pos(field, &l)
             }
             ModTarget::Sampler(p) => {
                 let Some(Instrument::Sampler(s)) = &track.instrument else {
@@ -204,6 +246,45 @@ impl Workspace {
                     live: self.mod_pos(t, mt, depth * values[k]),
                 }
             })
+            .chain(self.poly_rings(t, mt))
+            .collect()
+    }
+
+    /// What the synth's own matrix does to a knob.
+    fn poly_rings(&self, t: usize, mt: ModTarget) -> Vec<Ring> {
+        use pina_engine::song::project::{PolyDest, PolySource};
+        let Some(p) = self.poly(t) else {
+            return Vec::new();
+        };
+        let dest = match mt {
+            ModTarget::Poly(i) => PolyDest::Param(i),
+            ModTarget::Tool(k, i) => PolyDest::Effect(k, i),
+            _ => return Vec::new(),
+        };
+        p.routes
+            .iter()
+            .filter(|r| r.dest == dest)
+            .map(|r| {
+                let low = match r.source {
+                    PolySource::Lfo(_) | PolySource::Bend => -1.0,
+                    _ => 0.0,
+                };
+                let (a, b) = (
+                    self.mod_pos(t, mt, r.depth * low),
+                    self.mod_pos(t, mt, r.depth),
+                );
+                let color = match r.source {
+                    PolySource::Env(i) => MOD_COLORS[i as usize % MAX_MODS],
+                    PolySource::Lfo(i) => MOD_COLORS[(i as usize + 3) % MAX_MODS],
+                    _ => MOD_COLORS[6],
+                };
+                Ring {
+                    color,
+                    lo: a.min(b),
+                    hi: a.max(b),
+                    live: a,
+                }
+            })
             .collect()
     }
 
@@ -220,7 +301,10 @@ impl Workspace {
             return wrap;
         };
         let rings = self.mod_rings(t, mt);
-        let offering = matches!(self.drag, Some(Drag::Modulator { track, .. }) if track == t);
+        let offering = matches!(
+            self.drag,
+            Some(Drag::Modulator { track, .. } | Drag::PolySource { track, .. }) if track == t
+        );
         let targets = self.mod_targets.clone();
         wrap.child(
             canvas(

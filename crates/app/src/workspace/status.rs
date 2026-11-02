@@ -1,9 +1,29 @@
 //! The status bar along the bottom.
 
 use super::*;
+use gpui::{Div, Stateful};
 
 /// How long an agent's outline stays on what it touched.
 pub const PRESENCE: Duration = Duration::from_secs(12);
+
+/// Hover help: what a control does, in the status bar while the pointer's over it.
+pub trait Help {
+    fn help(self, text: &'static str, cx: &mut Context<Workspace>) -> Stateful<Div>;
+}
+
+impl Help for Div {
+    fn help(self, text: &'static str, cx: &mut Context<Workspace>) -> Stateful<Div> {
+        self.id(text)
+            .on_hover(cx.listener(move |ws, over: &bool, _, cx| {
+                if *over {
+                    ws.help = Some(text);
+                } else if ws.help == Some(text) {
+                    ws.help = None;
+                }
+                cx.notify();
+            }))
+    }
+}
 
 impl Workspace {
     /// The agent's most recent edit, while its outline still shows.
@@ -28,6 +48,15 @@ impl Workspace {
             (View::Samples, ..) => {
                 "Click a sound to hear it · ↑ ↓ for the next · drag one out to put it on a track · F for the compact browser"
             }
+            // Held: what it does to regions, as the grips on their ends show.
+            (View::Arrange, _, None) if self.alt => match cfg!(windows) {
+                true => {
+                    "Alt held: drag a region's end to time-stretch it · drag a region to copy it"
+                }
+                false => {
+                    "⌥ held: drag a region's end to time-stretch it · drag a region to copy it"
+                }
+            },
             (_, _, None) if self.show_browser => {
                 "Click a sound to hear it · ↑ ↓ for the next · drag it onto a track, or double-click to add it · F hides it"
             }
@@ -39,12 +68,15 @@ impl Workspace {
                 "Click for a point · drag to select · drag a line or its ◇ to move or bend it · ⌥-click deletes · ⌘C ⌘V · right-click for shapes · the pencil draws"
             }
             _ => {
-                "Drag to move · ⌥-drag to copy · ⌥⇧-drag for an alias · drag an edge to trim · drag the top of its end to loop · ⌥-drag its end to time-stretch"
+                "Drag to move · ⌥-drag to copy · ⌥⇧-drag for an alias · drag an edge to trim · drag the top of its end to loop · ⌥-drag its end to time-stretch · ⇧T stretches audio to the tempo"
             }
         };
-        let (text, color) = match &self.status {
-            Some(s) => (s.clone(), TEXT_2),
-            None => (hint.to_string(), TEXT_3),
+        // How to work the arrangement, only over the arrangement.
+        let hint = if self.view == View::Arrange { hint } else { "" };
+        let (text, color) = match (self.help, &self.status) {
+            (Some(h), _) => (h.to_string(), TEXT_2),
+            (None, Some(s)) => (s.clone(), TEXT_2),
+            (None, None) => (hint.to_string(), TEXT_3),
         };
         let rate = self.player.rate();
         let buffer = self.player.buffer();
@@ -59,6 +91,10 @@ impl Workspace {
         } else {
             format!("{khz} kHz")
         };
+        // Red for a few seconds after a buffer came too late, which is a dropout.
+        let late = self
+            .load_late
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(3));
         let agent = self
             .agent
             .last()
@@ -93,10 +129,16 @@ impl Workspace {
                         .text_color(rgb(AGENT_TEXT))
                         .whitespace_nowrap()
                         .child(div().size(px(6.)).rounded(px(3.)).bg(rgb(AGENT)))
-                        .child(format!("Agent: {} · {}", a.what, a.ago())),
+                        .child(format!("Studio Agent: {} · {}", a.what, a.ago())),
                 )
             })
-            .child(format!("CPU {:.0}%", (self.load * 100.0).min(999.0)))
+            .child(
+                div()
+                    .font_family(MONO)
+                    .debug_selector(|| "status-cpu".to_string())
+                    .when(late, |d| d.text_color(rgb(METER_HIGH)))
+                    .child(format!("CPU {:.0}%", (self.load * 100.0).min(999.0))),
+            )
             .child(div().font_family(MONO).child(format))
             .when_some(self.typing, |d, octave| {
                 // Musical typing is on: letters are notes, so say so, and where they are.

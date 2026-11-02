@@ -78,8 +78,8 @@ fn the_tool_menu_and_its_tools_text_glue_solo_mute_zoom_fade_flex(cx: &mut TestA
         "{}",
         drums.fade_in
     );
-    // Flex: the lead's end dragged a bar on stretches its notes.
-    use_tool(cx, "Flex");
+    // Stretch: the lead's end dragged a bar on stretches its notes.
+    use_tool(cx, "Stretch");
     let lead = region(cx, (1, 0));
     let b = cx.debug_bounds("region-1-0").unwrap();
     let end = point(b.right() - px(2.), b.bottom() - px(6.));
@@ -169,7 +169,7 @@ fn recording_over_a_region_makes_takes_to_comp_and_flatten(cx: &mut TestAppConte
 fn live_loops_take_a_region_and_launch_it(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     cx.simulate_click(spot(&ws, cx, PPQ, 1), Modifiers::none()); // select the Lead region
-    cx.simulate_keystrokes("l");
+    cx.simulate_keystrokes("alt-l");
     assert_eq!(ws.read_with(cx, |ws, _| ws.bottom), Some(Bottom::Loops));
     click_on(cx, "cell-1-2", Modifiers::none(), MouseButton::Left); // copy it into scene 3
     let cells = ws.read_with(cx, |ws, _| ws.session.project.tracks[1].cells.clone());
@@ -245,9 +245,14 @@ fn markers_are_added_moved_named_and_deleted(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("escape");
     assert_eq!(markers(cx)[0].1, "Cold open");
     cx.run_until_parked();
-    // Dragged a bar on.
+    // ⌘-dragged a bar on: the marker alone moves.
     let at = cx.debug_bounds("marker-0").unwrap().center();
-    drag(cx, at, at + point(px(48. * 4.), px(0.)));
+    drag_with(
+        cx,
+        at,
+        at + point(px(48. * 4.), px(0.)),
+        Modifiers::command(),
+    );
     assert_eq!(markers(cx)[0].0, BAR * 2);
     // Right-click: rename, a name, or delete.
     click_on(cx, "marker-0", Modifiers::none(), MouseButton::Right);
@@ -407,4 +412,345 @@ fn the_cycle_is_swept_in_the_rulers_top_half_and_c_follows_the_selection(cx: &mu
     ws.update(cx, |ws, cx| ws.toggle_cycle(cx));
     assert!(ws.read_with(cx, |ws, _| ws.session.project.cycle.unwrap().off));
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn sections_move_swap_copy_and_go_with_what_is_in_them(cx: &mut TestAppContext) {
+    use pina_engine::song::project::Marker;
+    let (ws, cx) = open(cx);
+    // Three sections, a bar each, then the rest of the song.
+    ws.update(cx, |ws, cx| {
+        ws.session.project.markers = ["A", "B", "C"]
+            .iter()
+            .enumerate()
+            .map(|(k, n)| Marker {
+                tick: k as u64 * BAR,
+                name: n.to_string(),
+                ..Default::default()
+            })
+            .collect();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let names = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            ws.session
+                .project
+                .markers
+                .iter()
+                .map(|m| m.name.clone())
+                .collect::<Vec<_>>()
+        })
+    };
+    let first_note = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let r = &ws.session.project.tracks[0].regions[0];
+            r.content.notes(r.length).unwrap()[0].pitch
+        })
+    };
+    let (keys_c, row) = (
+        ws.read_with(cx, |ws, _| {
+            let r = &ws.session.project.tracks[0].regions[0];
+            r.content
+                .notes(r.length)
+                .unwrap()
+                .iter()
+                .find(|n| n.start >= (BAR * 2) as i64)
+                .map(|n| n.pitch)
+        }),
+        cx.debug_bounds("markers").unwrap(),
+    );
+    // C dragged to the song's start: C A B, the keys' bar 3 first now.
+    let c = cx.debug_bounds("marker-2").unwrap().center();
+    let start = point(spot(&ws, cx, PPQ / 2, 0).x, row.center().y);
+    drag(cx, c, start);
+    assert_eq!(names(cx), ["C", "A", "B"]);
+    assert_eq!(Some(first_note(cx)), keys_c);
+    // B dropped on C's middle: they swap.
+    let b = point(spot(&ws, cx, BAR * 3 + PPQ, 0).x, row.center().y);
+    let middle = cx.debug_bounds("marker-0").unwrap().center();
+    drag(cx, b, middle);
+    assert_eq!(names(cx), ["B", "A", "C"]);
+    // ⌥: a copy of A at the end.
+    let a = point(
+        cx.debug_bounds("marker-1").unwrap().origin.x + px(20.),
+        row.center().y,
+    );
+    let end = point(spot(&ws, cx, BAR * 4 + PPQ, 0).x, row.center().y);
+    drag_with(cx, a, end, Modifiers::alt());
+    assert_eq!(names(cx).last().map(String::as_str), Some("A"));
+    assert_eq!(names(cx).len(), 4);
+    // Deleted from its menu: gone, the gap closed. Undo brings it back.
+    click_on(cx, "marker-0", Modifiers::none(), MouseButton::Right);
+    let delete = ws.read_with(cx, |ws, _| {
+        ws.menu
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .position(|i| i.0.starts_with("Delete Section"))
+            .unwrap()
+    });
+    let name: &'static str = Box::leak(format!("menu-{delete}").into_boxed_str());
+    click_on(cx, name, Modifiers::none(), MouseButton::Left);
+    assert_eq!(names(cx), ["A", "C", "A"]);
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.markers[0].tick),
+        0
+    );
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(names(cx).len(), 4);
+    // + adds one after the last, ready to name.
+    click_on(cx, "add-section", Modifiers::none(), MouseButton::Left);
+    assert_eq!(names(cx).len(), 5);
+}
+
+#[gpui::test]
+fn the_arrangements_keys_pick_move_loop_and_go(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let selected = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.region);
+    // The Lead's first region picked; → the next on its track, ← back.
+    cx.simulate_click(spot(&ws, cx, PPQ, 1), Modifiers::none());
+    let first = selected(cx).unwrap();
+    cx.simulate_keystrokes("escape");
+    ws.update(cx, |ws, _| ws.region = Some(first));
+    let starts = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let r = ws.session.project.region(ws.region.unwrap());
+            (r.start, r.length, r.transpose, r.looped)
+        })
+    };
+    let (start, length, _, looped) = starts(cx);
+    // ⌥→: a grid step later. ⌥↑: a semitone up, ⌥⇧↑ an octave. L: looped.
+    cx.simulate_keystrokes("alt-right");
+    let grid = ws.read_with(cx, |ws, _| ws.grid());
+    assert_eq!(starts(cx).0, start + grid);
+    cx.simulate_keystrokes("alt-left alt-up alt-shift-up l");
+    assert_eq!(starts(cx), (start, length, 13, !looped));
+    // U: the cycle on the region. ⌥': a marker at the playhead's bar.
+    cx.simulate_keystrokes("u");
+    let cycle = ws.read_with(cx, |ws, _| ws.session.project.cycle.unwrap());
+    assert_eq!(
+        (cycle.start, cycle.end, cycle.off),
+        (start, start + length, false)
+    );
+    // . and , move the playhead a bar; ⌥' marks it.
+    cx.simulate_keystrokes(". .");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.playhead()), BAR * 2);
+    cx.simulate_keystrokes(",");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.playhead()), BAR);
+    cx.simulate_keystrokes("alt-'");
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.markers[0].tick),
+        BAR
+    );
+    // ; moves the region to the playhead.
+    cx.simulate_keystrokes(";");
+    assert_eq!(starts(cx).0, BAR);
+    // M and S: the selected track muted and soloed. ⌘G: snap off and back.
+    let track = ws.read_with(cx, |ws, _| ws.track);
+    cx.simulate_keystrokes("m s");
+    let t = ws.read_with(cx, |ws, _| ws.session.project.tracks[track].clone());
+    assert!(t.mute && t.solo);
+    cx.simulate_keystrokes("cmd-g");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.snap), Snap::Off);
+    cx.simulate_keystrokes("cmd-g");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.snap), Snap::Smart);
+    // ↓: the next track; Z: the whole song fits.
+    cx.simulate_keystrokes("down");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.track), track + 1);
+    cx.simulate_keystrokes("z");
+    let (ppb, end, width) = ws.read_with(cx, |ws, _| {
+        (
+            ws.px_per_beat,
+            ws.session.project.end(),
+            f32::from(ws.lanes_bounds.get().size.width),
+        )
+    });
+    let shown = end as f32 / PPQ as f32 * ppb;
+    assert!(shown <= width && shown > width * 0.8, "{shown} of {width}");
+}
+
+#[gpui::test]
+fn regions_picked_together_move_change_copy_and_go_together(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let picked = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let mut all: Vec<(usize, u64, i8)> = ws
+                .selected_regions()
+                .iter()
+                .map(|&at| {
+                    let r = ws.session.project.region(at);
+                    (at.0, r.start, r.transpose)
+                })
+                .collect();
+            all.sort();
+            all
+        })
+    };
+    // The Lead's region, then ⇧ the Drums' second: both picked.
+    cx.simulate_click(spot(&ws, cx, PPQ, 1), Modifiers::none());
+    cx.simulate_click(spot(&ws, cx, BAR + PPQ, 2), Modifiers::shift());
+    assert_eq!(picked(cx), vec![(1, 0, 0), (2, BAR, 0)]);
+    // ⌥↑ transposes both; dragging one a bar on takes the other too.
+    cx.simulate_keystrokes("alt-up");
+    assert_eq!(picked(cx), vec![(1, 0, 1), (2, BAR, 1)]);
+    drag(cx, spot(&ws, cx, PPQ, 1), spot(&ws, cx, BAR + PPQ, 1));
+    assert_eq!(picked(cx), vec![(1, BAR, 1), (2, BAR * 2, 1)]);
+    // ⇧ again takes one out.
+    cx.simulate_click(spot(&ws, cx, BAR * 2 + PPQ, 2), Modifiers::shift());
+    assert_eq!(picked(cx), vec![(1, BAR, 1)]);
+    cx.simulate_click(spot(&ws, cx, BAR * 2 + PPQ, 2), Modifiers::shift());
+    // Copied and pasted at the playhead's bar, as they lay; then both deleted.
+    let count = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            ws.session
+                .project
+                .tracks
+                .iter()
+                .map(|t| t.regions.len())
+                .sum::<usize>()
+        })
+    };
+    let before = count(cx);
+    cx.simulate_keystrokes("cmd-c");
+    ws.update(cx, |ws, cx| ws.locate_tick(BAR * 8, cx));
+    cx.simulate_keystrokes("cmd-v");
+    assert_eq!(count(cx), before + 2);
+    let pasted = picked(cx);
+    assert_eq!(pasted.len(), 2);
+    assert_eq!(pasted[1].1 - pasted[0].1, BAR);
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(count(cx), before);
+    // A box from an empty spot past the song's end back across every track picks them all.
+    let end = ws.read_with(cx, |ws, _| ws.session.project.end());
+    drag(cx, spot(&ws, cx, end + PPQ, 0), spot(&ws, cx, 0, 2));
+    assert_eq!(picked(cx).len(), before);
+}
+
+#[gpui::test]
+fn no_overlap_cuts_back_what_a_region_lands_on_and_shuffle_closes_up(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let drums = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let mut all: Vec<(u64, u64)> = ws.session.project.tracks[2]
+                .regions
+                .iter()
+                .map(|r| (r.start, r.length))
+                .collect();
+            all.sort();
+            all
+        })
+    };
+    // No Overlap: the second bar dragged two beats on cuts the third back to start after it.
+    ws.update(cx, |ws, _| ws.drag_mode = DragMode::NoOverlap);
+    drag(
+        cx,
+        spot(&ws, cx, BAR + PPQ, 2),
+        spot(&ws, cx, BAR + PPQ * 3, 2),
+    );
+    assert_eq!(
+        drums(cx),
+        vec![
+            (0, BAR),
+            (BAR + PPQ * 2, BAR),
+            (BAR * 3 - PPQ * 2, PPQ * 2),
+            (BAR * 3, BAR)
+        ]
+    );
+    // Shuffle: the first deleted, the rest close up from where it was.
+    ws.update(cx, |ws, _| ws.drag_mode = DragMode::Shuffle);
+    cx.simulate_click(spot(&ws, cx, PPQ, 2), Modifiers::none());
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(
+        drums(cx),
+        vec![(0, BAR), (BAR, PPQ * 2), (BAR + PPQ * 2, BAR)]
+    );
+}
+
+#[gpui::test]
+fn a_region_dragged_shows_where_its_edges_meet_others(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    // The Lead dragged a bar on: its start meets the Drums' second region's.
+    let (from, to) = (spot(&ws, cx, PPQ, 1), spot(&ws, cx, BAR + PPQ, 1));
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    let (guides, x) = ws.read_with(cx, |ws, _| {
+        (ws.guides(), BAR as f32 * ws.px_per_tick() - ws.scroll_x)
+    });
+    // Its end meets nothing: only its start.
+    assert_eq!(guides, vec![x]);
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    assert!(ws.read_with(cx, |ws, _| ws.guides().is_empty()));
+}
+
+#[gpui::test]
+fn hovering_a_control_says_what_it_does(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let mixer = cx.debug_bounds("mixer").unwrap().center();
+    cx.simulate_mouse_move(mixer, None, Modifiers::none());
+    assert_eq!(ws.read_with(cx, |ws, _| ws.help), Some("Mixer · X"));
+    let snap = cx.debug_bounds("snap").unwrap().center();
+    cx.simulate_mouse_move(snap, None, Modifiers::none());
+    let help = ws.read_with(cx, |ws, _| ws.help).unwrap();
+    assert!(help.starts_with("Snap"), "{help}");
+    cx.simulate_mouse_move(spot(&ws, cx, PPQ, 1), None, Modifiers::none());
+    assert_eq!(ws.read_with(cx, |ws, _| ws.help), None);
+}
+
+#[gpui::test]
+fn a_long_song_scrolls_by_its_overview_the_wheel_and_shift(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| {
+        let bar = ws.session.project.bar();
+        for t in &mut ws.session.project.tracks {
+            for r in &mut t.regions {
+                r.length = bar * 32;
+            }
+        }
+        ws.px_per_beat = 90.0;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let sx = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.scroll_x);
+    // The part on screen, dragged along the overview: the song scrolls with it.
+    let thumb = cx.debug_bounds("nav-thumb").unwrap().center();
+    drag(cx, thumb, thumb + point(px(200.), px(0.)));
+    let dragged = sx(cx);
+    assert!(dragged > 500.0, "{dragged}");
+    // A click elsewhere on it jumps there; a double-click fits the song.
+    let overview = cx.debug_bounds("nav-overview").unwrap();
+    cx.simulate_click(
+        point(overview.left() + px(4.), overview.center().y),
+        Modifiers::none(),
+    );
+    assert!(sx(cx) < dragged, "{} {dragged}", sx(cx));
+    // ⇧ and a mouse's wheel: sideways, never past the song's end.
+    let lanes = ws.read_with(cx, |ws, _| ws.lanes_bounds.get());
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: lanes.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-100_000.))),
+        modifiers: Modifiers::shift(),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    let (end, max) = ws.read_with(cx, |ws, _| (ws.scroll_x, ws.max_scroll_x()));
+    assert!(end > 1000.0 && (end - max).abs() < 0.5, "{end} {max}");
+    // Zoomed out: more of the song on screen.
+    let before = ws.read_with(cx, |ws, _| ws.px_per_beat);
+    click_on(cx, "nav-zoom-out", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.px_per_beat) < before);
+    // Playing, scrolling by hand lets go of the playhead; Follow catches it again.
+    ws.update(cx, |ws, _| ws.player.play());
+    until(cx, &ws, |ws| ws.player.playing());
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: lanes.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(300.), px(0.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    assert!(!ws.read_with(cx, |ws, _| ws.caught));
+    click_on(cx, "nav-follow", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.caught && ws.settings.follow_playhead));
+    ws.update(cx, |ws, cx| ws.stop(cx));
 }

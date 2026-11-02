@@ -95,6 +95,8 @@ pub(super) fn set_up(
                     ws.plugin_page.picked = None;
                 }
                 "plugins-reverb" => page.cats = vec![crate::sounds::catalog::Cat::Reverb],
+                "plugins-pitch" => page.cats = vec![crate::sounds::catalog::Cat::Pitch],
+                "plugins-dynamics" => page.cats = vec![crate::sounds::catalog::Cat::Dynamics],
                 _ => {}
             }
             // The Browser beside the tracks, its effects with their pictures.
@@ -146,7 +148,7 @@ pub(super) fn set_up(
                     .update(cx, |s, cx| s.set_text(q, cx));
             }
         }
-        "stack-rows" | "stack-folded" => {
+        "stack-rows" | "stack-folded" | "stack-tall" => {
             use pina_engine::dsp::modulate::{ModKind, ModRoute, ModTarget, Modulator};
             ws.session.project.tracks[0].modulators.push(Modulator {
                 kind: ModKind::lfo(),
@@ -159,6 +161,9 @@ pub(super) fn set_up(
             ws.session.project.auxes[0].name = "Rhythm".into();
             ws.session.project.auxes[0].volume_db = -3.0;
             ws.show_automation = page == "stack-rows";
+            if page == "stack-tall" {
+                ws.session.project.auxes[0].height = Some(84.0);
+            }
             if page == "stack-folded" {
                 ws.session.project.auxes[0].folded = true;
             }
@@ -291,6 +296,29 @@ pub(super) fn set_up(
             }
         }
         // The Songs page: as Pina Studio opens with no song ("home"), or with one open.
+        // Regions picked together, a box being dragged across empty lanes, and Shuffle on.
+        "picks" => {
+            ws.region = Some((1, 0));
+            ws.picks = vec![(2, BAR, 1), (2, BAR * 2, 2)];
+            ws.drag_mode = crate::workspace::DragMode::Shuffle;
+            // Window positions: the lanes aren't laid out yet.
+            ws.drag = Some(crate::workspace::Drag::RegionBox {
+                from: point(1000., 130.),
+                to: point(1180., 330.),
+                moved: true,
+            });
+            cx.notify();
+        }
+        // ⌥ held: a stretch grip on every region's end; the drums' first listened to for its tempo.
+        "stretch" => {
+            ws.session.project.tracks[2].height = Some(110.0);
+            ws.alt = true;
+            let r = &ws.session.project.tracks[2].regions[0];
+            if let Content::Audio { file, .. } = &r.content {
+                ws.listening.push((file.clone(), r.start));
+            }
+            cx.notify();
+        }
         "tools" => {
             let drums = &mut ws.session.project.tracks[2];
             drums.height = Some(110.0);

@@ -72,7 +72,14 @@ impl Workspace {
             };
             for (i, take) in takes.iter().enumerate() {
                 let mut inside = Inside::default();
-                self.add_inside(&mut inside, &take.content, take.start, 0, region.length);
+                self.add_inside(
+                    &mut inside,
+                    &take.content,
+                    region.start,
+                    take.start,
+                    0,
+                    region.length,
+                );
                 // Where this take is in the comp, and where it's being swiped.
                 let mut lit: Vec<(u64, u64)> = segments
                     .iter()

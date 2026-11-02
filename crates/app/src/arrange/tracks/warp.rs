@@ -2,21 +2,19 @@
 
 use super::*;
 
-/// Where an audio region's file plays: its frames (at the project's rate) in the stretched,
-/// warped audio, and those in ticks from where the region starts.
+/// Where an audio region's file plays: its timing (as recorded, or following the song's tempo
+/// map), its hits and warp markers, from the tick it starts at.
 pub struct Warping {
-    pub map: Map,
+    pub timing: Timing,
     pub hits: Arc<Vec<usize>>,
     pub warps: Vec<[u64; 2]>,
-    /// The stretched frame the region starts at, and frames a tick.
     start: f64,
-    per_tick: f64,
 }
 
 impl Warping {
     /// Ticks from the region's start where file frame `f` plays.
-    pub fn tick(&self, f: usize) -> f64 {
-        (self.map.at(f) as f64 - self.start) / self.per_tick
+    pub fn tick(&self, p: &Project, f: usize) -> f64 {
+        p.audio_tick(&self.timing, self.start, f as f64) - self.start
     }
 }
 
@@ -24,38 +22,50 @@ impl Workspace {
     /// An audio region's warp geometry, once its file is loaded.
     pub fn warping(&self, at: At) -> Option<Warping> {
         let p = &self.session.project;
-        let Content::Audio {
-            file,
-            offset,
-            stretch,
-            warps,
-            ..
-        } = &p.region(at).content
-        else {
+        let r = p.region(at);
+        let Content::Audio { file, warps, .. } = &r.content else {
             return None;
         };
-        let (hits, n) = self.player.hits(file, p.sample_rate as f64)?;
-        let len = (n as f64 * stretch).round() as usize;
-        let pins: Vec<(usize, usize)> = warps
-            .iter()
-            .map(|w| (w[0] as usize, w[1] as usize))
-            .collect();
-        let map = Map::new(n, len, &pins);
-        let start = match pins.is_empty() {
-            true => *offset as f64 * stretch,
-            false => map.at(*offset as usize) as f64,
-        };
+        let (hits, _) = self.player.hits(file, p.sample_rate as f64)?;
         Some(Warping {
-            map,
+            timing: Timing::of(&r.content, p.sample_rate as f64)?,
             hits,
             warps: warps.clone(),
-            start,
-            per_tick: p.sample_rate as f64 * 60.0 / (p.tempo * PPQ as f64),
+            start: r.start as f64,
         })
     }
 
+    /// The audio regions' hits moved onto the grid by warp markers, one undo. Whether any were.
+    pub fn quantize_audio(&mut self, regions: &[At], cx: &mut Context<Self>) -> bool {
+        let p = &self.session.project;
+        let rate = p.sample_rate as f64;
+        let grid = self.grid().min(PPQ);
+        let found: Vec<(At, Arc<Vec<usize>>)> = regions
+            .iter()
+            .filter_map(|&at| match &p.region(at).content {
+                Content::Audio { file, .. } => Some((at, self.player.hits(file, rate)?.0)),
+                _ => None,
+            })
+            .collect();
+        if found.is_empty() {
+            return false;
+        }
+        let mut n = 0;
+        self.edit(cx, |ws| {
+            for (at, hits) in &found {
+                n += ws.session.project.quantize_hits(*at, hits, grid);
+            }
+        });
+        self.status = Some(match n {
+            0 => "No hits off the grid to move".into(),
+            1 => "1 hit moved onto the grid".into(),
+            n => format!("{n} hits moved onto the grid"),
+        });
+        true
+    }
+
     /// A hit (or a warp marker) of an audio region dragged to `x`: a warp marker there, on the
-    /// sixteenth, the hits either side pinned where they play (flex markers), and
+    /// sixteenth, the hits either side pinned where they play (as markers), and
     /// kept between its neighbours so the audio stays in order.
     pub fn drag_warp(&mut self, at: At, from: u64, x: f32) {
         let Some(w) = self.warping(at) else {
@@ -65,13 +75,17 @@ impl Workspace {
         let (start, length) = (r.start as f64, r.length as f64);
         let g = self.grid().min(PPQ / 4) as f64;
         let tick = (self.tick_at(x) - start).clamp(0.0, length);
-        let to = (w.start + (tick / g).round() * g * w.per_tick).round() as u64;
+        let p = &self.session.project;
+        let to = p
+            .warp_at(&w.timing, start, start + (tick / g).round() * g)
+            .round()
+            .max(0.0) as u64;
         let i = w.hits.iter().position(|&h| h as u64 == from);
         let pins: Vec<[u64; 2]> = [i.and_then(|i| i.checked_sub(1)), i.map(|i| i + 1)]
             .into_iter()
             .flatten()
             .filter_map(|j| w.hits.get(j))
-            .map(|&h| [h as u64, w.map.at(h) as u64])
+            .map(|&h| [h as u64, w.timing.warp_time(h as f64).round() as u64])
             .collect();
         let Content::Audio { warps, .. } =
             &mut self.session.project.tracks[at.0].regions[at.1].content
@@ -148,7 +162,7 @@ impl Workspace {
                 .into_any_element()
         };
         for m in &w.warps {
-            let tick = w.tick(m[0] as usize);
+            let tick = w.tick(&self.session.project, m[0] as usize);
             if (0.0..=width).contains(&tick) {
                 let x = (tick * ppt as f64) as f32;
                 out.push(
@@ -165,7 +179,7 @@ impl Workspace {
             }
         }
         for &h in w.hits.iter().filter(|&&h| !marked.contains(&(h as u64))) {
-            let tick = w.tick(h);
+            let tick = w.tick(&self.session.project, h);
             if (0.0..=width).contains(&tick) {
                 out.push(handle(h as u64, false, (tick * ppt as f64) as f32, cx));
             }

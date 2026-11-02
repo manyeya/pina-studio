@@ -454,3 +454,112 @@ fn the_inspectors_strips_line_up_row_for_row(cx: &mut TestAppContext) {
     assert_eq!(lined_up(cx, drums), (true, true));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[gpui::test]
+fn a_stack_is_dragged_taller_and_shows_what_a_track_does(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| ws.make_stack(&[0, 2], cx));
+    cx.run_until_parked();
+    let row = cx.debug_bounds("stack-0").unwrap();
+    let under = cx.debug_bounds("header-0").unwrap().origin.y;
+    let height = f32::from(row.size.height);
+    // Short, it has its level to drag but no room for a fader.
+    assert!(cx.debug_bounds("stack-level-0").is_some());
+    assert!(cx.debug_bounds("stack-fader-0").is_none());
+
+    // Its bottom edge, dragged: taller, what's under it moved down, and the song keeps it.
+    let edge = cx.debug_bounds("stack-edge-0").unwrap().center();
+    drag(cx, edge, edge + point(px(0.), px(40.)));
+    let taller = cx.debug_bounds("stack-0").unwrap();
+    assert_eq!(f32::from(taller.size.height), height + 40.0);
+    assert_eq!(
+        cx.debug_bounds("header-0").unwrap().origin.y,
+        under + px(40.)
+    );
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.auxes[0].height),
+        Some(height + 40.0)
+    );
+    assert!(ws.read_with(cx, |ws, _| ws.session.edited));
+
+    // Tall enough, its own fader and pan, working.
+    let fader = cx.debug_bounds("stack-fader-0").expect("room for a fader");
+    let from = fader.center();
+    drag(cx, from, from - point(px(30.), px(0.)));
+    assert!(ws.read_with(cx, |ws, _| ws.session.project.auxes[0].volume_db) < 0.0);
+    let knob = cx.debug_bounds("stack-pan-0").unwrap().center();
+    drag(cx, knob, knob + point(px(30.), px(0.)));
+    assert!(ws.read_with(cx, |ws, _| ws.session.project.auxes[0].pan) > 0.0);
+
+    // Its level, typed, as a track's.
+    let level = cx.debug_bounds("stack-level-0").unwrap().center();
+    cx.simulate_mouse_down(level, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(level, MouseButton::Left, Modifiers::none());
+    cx.simulate_event(gpui::MouseDownEvent {
+        button: MouseButton::Left,
+        position: level,
+        modifiers: Modifiers::none(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_up(level, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("-6");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.auxes[0].volume_db),
+        -6.0
+    );
+
+    // It can't go past what a row can be.
+    let edge = cx.debug_bounds("stack-edge-0").unwrap().center();
+    drag(cx, edge, edge + point(px(0.), px(900.)));
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.stack_h(0)),
+        crate::ui::theme::MAX_LANE_H
+    );
+
+    // A double-click on its edge: its usual height.
+    let edge = cx.debug_bounds("stack-edge-0").unwrap().center();
+    cx.simulate_event(gpui::MouseDownEvent {
+        button: MouseButton::Left,
+        position: edge,
+        modifiers: Modifiers::none(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_up(edge, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.auxes[0].height),
+        None
+    );
+}
+
+#[gpui::test]
+fn a_stack_shows_the_name_being_typed_for_it(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| ws.make_stack(&[0, 2], cx));
+    cx.run_until_parked();
+    let row = cx.debug_bounds("stack-0").unwrap();
+    let on_name = row.origin + point(px(90.), row.size.height / 2.0);
+    cx.simulate_event(gpui::MouseDownEvent {
+        button: MouseButton::Left,
+        position: on_name,
+        modifiers: Modifiers::none(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_up(on_name, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Rhythm");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.auxes[0].name.clone()),
+        "Rhythm"
+    );
+}

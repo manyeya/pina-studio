@@ -42,7 +42,9 @@ impl Workspace {
                     .position(|r| matches!(r.content, Content::Midi { .. }))
                     .map(|r| (self.track, r))
             });
-        let instrument = track.and_then(|t| t.instrument.clone());
+        let instrument = track
+            .and_then(|_| played_by(p, self.track))
+            .map(std::borrow::Cow::into_owned);
         let name = track.map_or(String::new(), |t| t.name.clone());
         let color = if track.is_some() {
             self.color(self.track)

@@ -29,7 +29,7 @@ pub(crate) fn region_name(track: &str, region: &Region) -> String {
             }
         }
         Content::Audio { stretch, .. } if *stretch != 1.0 => {
-            format!("{track} · Flex ×{stretch:.2}")
+            format!("{track} · Stretched ×{stretch:.2}")
         }
         Content::Audio { file, .. } => file
             .file_stem()
@@ -176,13 +176,19 @@ pub(crate) fn grab(
             }
             Tool::Zoom => return ws.zoom_press(e, cx),
             Tool::Fade => return ws.fade_press(at, e, cx),
-            Tool::Pointer | Tool::Pencil | Tool::Flex => {}
+            Tool::Pointer | Tool::Pencil | Tool::Stretch => {}
         }
         ws.auto_picked = None;
+        // ⇧-click: into the selection, or out of it.
+        if e.modifiers.shift && !e.modifiers.alt && ws.tool == Tool::Pointer {
+            ws.toggle_pick(at);
+            return cx.notify();
+        }
         if ws.region != Some(at) {
             ws.picked.clear();
         }
-        ws.region = Some(at);
+        ws.focus_region(at);
+        ws.picks_from = ws.picks.clone();
         ws.select_track(at.0);
         // Double-clicking a region opens it: MIDI in the piano roll, a pattern in the step
         // sequencer, a take folder its takes.
@@ -203,7 +209,7 @@ pub(crate) fn grab(
         let content = &ws.session.project.region(at).content;
         let edge = match (edge, content) {
             (Edge::End, Content::Takes { .. }) => Edge::End,
-            (Edge::End, _) if e.modifiers.alt || ws.tool == Tool::Flex => Edge::Stretch,
+            (Edge::End, _) if e.modifiers.alt || ws.tool == Tool::Stretch => Edge::Stretch,
             _ => edge,
         };
         ws.stretching = match (edge, content) {
@@ -317,14 +323,17 @@ impl Workspace {
         let y = self.row_top(at.0) + 4.0;
         let lh = self.lane_h(at.0);
         let color = self.color(at.0);
-        let selected = self.region == Some(at);
+        let selected = self.is_selected(at);
         let muted = region.mute;
-        let inside = self.inside(&region.content, region.length);
+        let inside = self.inside(&region.content, region.start, region.length);
         let (start, end) = (region.start, region.start + region.length);
         let ink = Hsla::from(rgb(color));
         // Its start trims; its end's bottom half trims (⌥ time-stretches), its top half loops.
+        // With ⌥ held (or the Stretch tool) all of its end time-stretches, a grip on it to say so.
         let half = (lh - 8.0) / 2.0;
-        let zone = self.settings.loop_zone;
+        let stretchy = (self.alt || self.tool == Tool::Stretch)
+            && !matches!(region.content, Content::Takes { .. });
+        let zone = self.settings.loop_zone && !stretchy;
         let handle = |edge: Edge, cx: &mut Context<Self>| {
             let h = div().absolute().w(px(6.)).cursor_ew_resize();
             let h = match (edge, zone) {
@@ -335,7 +344,29 @@ impl Workspace {
                 Edge::Start => h.left_0(),
                 _ => h.right_0(),
             };
+            let h = match edge == Edge::End && stretchy {
+                true => h
+                    .w(px(12.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_r(px(3.))
+                    .bg(alpha(ACCENT, 0.85))
+                    .debug_selector(move || format!("stretch-grip-{}-{}", at.0, at.1))
+                    .child(icon(Icon::Stretch, 10.).text_color(rgb(0xffffff))),
+                false => h,
+            };
             h.on_mouse_down(MouseButton::Left, grab(at, edge, start, end, cx))
+        };
+        // Slow work on it, said on it: its audio being stretched, or listened to for its tempo.
+        let working = match &region.content {
+            Content::Audio { file, .. }
+                if self.listening.iter().any(|l| &l.0 == file && l.1 == start) =>
+            {
+                Some("Finding tempo…")
+            }
+            Content::Audio { file, .. } if self.player.stretching(file) => Some("Stretching…"),
+            _ => None,
         };
         let group: SharedString = format!("region-{}-{}", at.0, at.1).into();
         let pill = |left: bool| {
@@ -406,6 +437,19 @@ impl Workspace {
                         .when(region.looped, |d| {
                             d.child(icon(Icon::Loop, 11.).text_color(rgb(ink)))
                         })
+                        // Audio that keeps time with the song: it bends with the tempo.
+                        .when(
+                            matches!(&region.content, Content::Audio { follow, .. } if !follow.is_off()),
+                            |d| {
+                                d.child(
+                                    icon(Icon::Stretch, 11.)
+                                        .text_color(rgb(ink))
+                                        .debug_selector(move || {
+                                            format!("follows-{}-{}", at.0, at.1)
+                                        }),
+                                )
+                            },
+                        )
                         .child(region_name(&track.name, region))
                 })
             })
@@ -490,12 +534,39 @@ impl Workspace {
             .child(handle(Edge::Start, cx))
             .child(handle(Edge::End, cx))
             .when(
-                self.settings.loop_zone && (!region.looped || project.loop_end(at) <= end),
+                zone && (!region.looped || project.loop_end(at) <= end),
                 |d| d.child(loop_tab(at, (start, end), half, color, group.clone(), cx)),
             )
+            .when_some(working, |d, label| {
+                d.child(
+                    div()
+                        .absolute()
+                        .bottom(px(4.))
+                        .left(px(4.))
+                        .h(px(15.))
+                        .px(px(6.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(7.5))
+                        .bg(alpha(0x000000, 0.6))
+                        .text_size(px(9.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(0xffffff))
+                        .whitespace_nowrap()
+                        .debug_selector(move || format!("working-{}-{}", at.0, at.1))
+                        .child(label)
+                        .with_animation(
+                            SharedString::from(format!("working-{}-{}", at.0, at.1)),
+                            Animation::new(std::time::Duration::from_millis(1200))
+                                .repeat()
+                                .with_easing(gpui::pulsating_between(0.45, 1.0)),
+                            |d, t| d.opacity(t),
+                        ),
+                )
+            })
             .when(selected, |d| d.children(self.warp_handles(at, cx)))
             .cursor(match self.tool {
-                Tool::Pointer | Tool::Pencil | Tool::Flex => gpui::CursorStyle::OpenHand,
+                Tool::Pointer | Tool::Pencil | Tool::Stretch => gpui::CursorStyle::OpenHand,
                 Tool::Scissors | Tool::Text => gpui::CursorStyle::IBeam,
                 Tool::Eraser => gpui::CursorStyle::OperationNotAllowed,
                 Tool::Fade => gpui::CursorStyle::ResizeLeftRight,
@@ -538,7 +609,7 @@ impl Workspace {
                 break;
             }
             if x + w >= 0.0 {
-                let inside = self.inside(&region.content, length);
+                let inside = self.inside(&region.content, start, length);
                 out.push(
                     div()
                         .absolute()
@@ -599,23 +670,32 @@ impl Workspace {
         out
     }
 
-    /// What a region's content shows, `length` ticks of it.
-    pub fn inside(&self, content: &Content, length: u64) -> Inside {
+    /// What a region's content shows, `length` ticks of it, the region starting at `start`.
+    pub fn inside(&self, content: &Content, start: u64, length: u64) -> Inside {
         let mut inside = Inside::default();
         match content {
             Content::Takes { takes, comp } => {
                 for (from, to, t) in comp_segments(comp, takes.len(), length) {
-                    self.add_inside(&mut inside, &takes[t].content, takes[t].start, from, to);
+                    let take = &takes[t];
+                    self.add_inside(&mut inside, &take.content, start, take.start, from, to);
                 }
             }
-            content => self.add_inside(&mut inside, content, 0, 0, length),
+            content => self.add_inside(&mut inside, content, start, 0, 0, length),
         }
         inside
     }
 
-    /// Adds what `content`, beginning `at` ticks into a region, shows from `from` to `to` ticks
-    /// into it.
-    pub fn add_inside(&self, inside: &mut Inside, content: &Content, at: i64, from: u64, to: u64) {
+    /// Adds what `content`, beginning `at` ticks into a region that starts at `start_tick`,
+    /// shows from `from` to `to` ticks into it.
+    pub fn add_inside(
+        &self,
+        inside: &mut Inside,
+        content: &Content,
+        start_tick: u64,
+        at: i64,
+        from: u64,
+        to: u64,
+    ) {
         let project = &self.session.project;
         let ppt = self.px_per_tick();
         match content {
@@ -628,44 +708,34 @@ impl Workspace {
                     .notes
                     .extend(shown.map(|n| (at + n.start, n.length, n.pitch)));
             }
-            Content::Audio {
-                file,
-                offset,
-                stretch,
-                warps,
-                ..
-            } => {
+            Content::Audio { file, .. } => {
                 let begin = (from as i64).max(at);
                 let Some(peaks) = self.player.peaks(file).filter(|_| begin < to as i64) else {
                     return;
                 };
-                let per_tick = project.sample_rate as f64 * 60.0 / (project.tempo * PPQ as f64);
-                // Warped, a piece of waveform for each stretch of it between the markers.
-                let n = peaks.len_samples();
-                let pins: Vec<(usize, usize)> = warps
-                    .iter()
-                    .map(|w| (w[0] as usize, w[1] as usize))
-                    .collect();
-                let map = Map::new(n, (n as f64 * stretch).round() as usize, &pins);
-                let start = match pins.is_empty() {
-                    true => *offset as f64 * stretch,
-                    false => map.at(*offset as usize) as f64,
+                let Some(timing) = Timing::of(content, project.sample_rate as f64) else {
+                    return;
                 };
-                for w in map.points.windows(2) {
-                    let ((i0, o0), (i1, o1)) = (w[0], w[1]);
-                    let tick = |o: usize| at as f64 + (o as f64 - start) / per_tick;
-                    let (t0, t1) = (tick(o0), tick(o1));
+                // A piece of waveform for each stretch of it that's straight in ticks: between
+                // its warp markers, and where the song's tempo changes.
+                let n = peaks.len_samples() as f64;
+                let anchor = start_tick as f64 + at as f64;
+                let corners = project.audio_corners(&timing, anchor, n);
+                for w in corners.windows(2) {
+                    let (i0, i1) = (w[0], w[1]);
+                    let tick = |f: f64| project.audio_tick(&timing, anchor, f) - start_tick as f64;
+                    let (t0, t1) = (tick(i0), tick(i1));
                     let (a, b) = (t0.max(begin as f64), t1.min(to as f64));
                     if a >= b {
                         continue;
                     }
                     // In the file's own samples: flexed audio covers fewer per tick.
-                    let samples_per_tick = (i1 - i0) as f64 / (t1 - t0).max(1e-9);
+                    let samples_per_tick = (i1 - i0) / (t1 - t0).max(1e-9);
                     inside.waves.push(Wave {
                         x0: a as f32 * ppt,
                         x1: b as f32 * ppt,
                         peaks: peaks.clone(),
-                        offset: (i0 as f64 + (a - t0) * samples_per_tick) as f32,
+                        offset: (i0 + (a - t0) * samples_per_tick) as f32,
                         samples_per_px: (samples_per_tick / ppt as f64) as f32,
                     });
                 }

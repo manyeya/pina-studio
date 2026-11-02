@@ -3,25 +3,47 @@
 //! people and agents can read, diff and edit it.
 
 mod automation;
+mod chain;
 mod editing;
 mod eq;
+mod kits;
+mod knobs;
 mod params;
 mod patterns;
 mod plugins;
+mod poly;
+mod poly_patches;
 mod regions;
 mod sampler;
+mod sections;
+mod space;
 mod stacks;
 mod strip;
+mod synth;
+mod tempo;
+mod timing;
+mod tools;
 mod track;
 
 pub use automation::*;
+pub use chain::*;
 pub use eq::*;
+pub use kits::*;
+pub use knobs::*;
 pub use params::*;
 pub use patterns::*;
 pub use plugins::*;
+pub use poly::*;
+pub use poly_patches::*;
 pub use regions::*;
 pub use sampler::*;
+pub use sections::*;
+pub use space::*;
 pub use strip::*;
+pub use synth::*;
+pub use tempo::*;
+pub use timing::*;
+pub use tools::*;
 pub use track::*;
 
 use std::{
@@ -35,7 +57,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::dsp::modulate::{MAX_MODS, ModKind, Modulator};
 
-pub use crate::audio::stretch::Flex;
+pub use crate::audio::stretch::StretchMode;
 
 /// Ticks per quarter note.
 pub const PPQ: u64 = 960;
@@ -50,8 +72,14 @@ pub const RECOVERY_DIR: &str = ".recovery";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Project {
-    /// Quarter notes per minute.
+    /// Quarter notes per minute, at the start.
     pub tempo: f64,
+    /// Where the tempo changes after the start, in time order (see `tempo`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tempos: Vec<TempoChange>,
+    /// What audio recorded or brought in does to the tempo.
+    #[serde(default, skip_serializing_if = "TempoMode::is_default")]
+    pub tempo_mode: TempoMode,
     /// Beats to a bar, and the note that is a beat: [4, 4], [3, 4], [6, 8].
     #[serde(default = "common_time", skip_serializing_if = "is_common_time")]
     pub time_signature: [u64; 2],
@@ -65,9 +93,17 @@ pub struct Project {
     pub master_comp: Option<Comp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master_sat: Option<Saturator>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_limit: Option<Limiter>,
     /// Plugins on the master, after its built-in effects.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub master_inserts: Vec<PluginRef>,
+    /// More built-in effects on the master, past its own of each kind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub master_more: Vec<Unit>,
+    /// The order the master's effects run in (none: its built-ins, then its inserts).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub master_chain: Vec<Fx>,
     /// How panning keeps level (the pan law).
     #[serde(default, skip_serializing_if = "PanLaw::is_flat")]
     pub pan_law: PanLaw,
@@ -87,12 +123,17 @@ pub struct Project {
     /// The song's chords, in time order: what its parts are written over.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chords: Vec<ChordSpan>,
-    /// What the song is, as a playbook's id ("lofi", "trap"): what its parts and mix aim for.
+    /// What the song is, in any words ("lofi"); one of the person's playbooks' ids if they chose
+    /// one, which its parts and mix then aim for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub genre: Option<String>,
     /// A finished song it's measured against: its mix targets, over the genre's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<Reference>,
+    /// The song it's written to be like (its recording or a picture of its spectrogram), and
+    /// how closely: what its renders are compared with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub like: Option<crate::study::reference::Like>,
     /// Sounds the person picked for an agent to build the song with.
     #[serde(default, skip_serializing_if = "Palette::is_empty")]
     pub palette: Palette,
@@ -195,11 +236,14 @@ fn is_common_time(t: &[u64; 2]) -> bool {
     *t == [4, 4]
 }
 
-/// A named place on the timeline.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+/// A named place on the timeline: a section, running to the next marker (the last to its
+/// `length` if it has one, else the song's end).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Marker {
     pub tick: u64,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<u64>,
 }
 
 /// Where playback loops, in ticks: from `start` back to it at `end`.
@@ -237,12 +281,17 @@ impl Project {
     pub fn new(sample_rate: u32) -> Self {
         Project {
             tempo: 120.0,
+            tempos: Vec::new(),
+            tempo_mode: TempoMode::Auto,
             sample_rate,
             master_volume_db: 0.0,
             master_eq: None,
             master_comp: None,
             master_sat: None,
+            master_limit: None,
             master_inserts: Vec::new(),
+            master_more: Vec::new(),
+            master_chain: Vec::new(),
             pan_law: PanLaw::Flat,
             time_signature: common_time(),
             tracks: Vec::new(),
@@ -253,6 +302,7 @@ impl Project {
             chords: Vec::new(),
             genre: None,
             reference: None,
+            like: None,
             palette: Palette::default(),
         }
     }
@@ -285,6 +335,30 @@ impl Project {
                 || self.auxes.iter().flat_map(|a| &a.inserts).any(same)
                 || self.master_inserts.iter().any(same);
         }
+        let stacked = |want: Fx| {
+            let on = |more: &[Unit]| more.iter().any(|u| u.kind() == want);
+            self.tracks.iter().any(|t| on(&t.more))
+                || self.auxes.iter().any(|a| on(&a.more))
+                || on(&self.master_more)
+        };
+        let tool = match d.own.as_deref() {
+            Some("reverb") => Some(Fx::Reverb),
+            Some("delay") => Some(Fx::Delay),
+            Some("filter") => Some(Fx::Filter),
+            Some("motion") => Some(Fx::Motion),
+            Some("shaper") => Some(Fx::Shaper),
+            Some("gate") => Some(Fx::Gate),
+            Some("de_esser") => Some(Fx::DeEsser),
+            Some("stereo") => Some(Fx::Stereo),
+            Some("multiband") => Some(Fx::Multiband),
+            Some("pitch") => Some(Fx::Pitch),
+            Some("tape_stop") => Some(Fx::TapeStop),
+            Some("tune") => Some(Fx::Tune),
+            _ => None,
+        };
+        if let Some(fx) = tool {
+            return stacked(fx);
+        }
         self.tracks.iter().any(|t| match d.own.as_deref() {
             Some("synth") => matches!(t.instrument, Some(Instrument::Synth)),
             Some("drums") => matches!(t.instrument, Some(Instrument::Drums)),
@@ -311,6 +385,8 @@ impl Project {
         p.assign_ids();
         p.resolve_sources();
         p.upgrade_patterns();
+        p.upgrade_audio();
+        p.upgrade_synths();
         Ok(p)
     }
 
@@ -401,41 +477,23 @@ impl Project {
         for a in self.auxes.iter_mut().filter(|a| a.id == 0) {
             a.id = next_id();
         }
+        let inserts = self.tracks.iter_mut().flat_map(|t| &mut t.inserts);
+        let inserts = inserts.chain(self.auxes.iter_mut().flat_map(|a| &mut a.inserts));
+        for r in inserts
+            .chain(&mut self.master_inserts)
+            .filter(|r| r.instance == 0)
+        {
+            r.instance = next_id();
+        }
     }
 
-    /// Sets the tempo. Audio that follows it stretches, so its beats stay on the song's.
+    /// Sets the tempo: the song's, and its changes in proportion (the whole song faster or
+    /// slower). Audio that follows it keeps its beats on the song's, through the tempo map.
     pub fn set_tempo(&mut self, bpm: f64) {
-        let by = self.tempo / bpm;
-        fn follow(content: &mut Content, by: f64) {
-            match content {
-                Content::Audio {
-                    stretch,
-                    follow: true,
-                    warps,
-                    ..
-                } => {
-                    // Rounded, so going back to a tempo comes back to the same stretch.
-                    let was = *stretch;
-                    *stretch = (*stretch * by * 1e9).round() / 1e9;
-                    for w in warps {
-                        w[1] = (w[1] as f64 * *stretch / was).round() as u64;
-                    }
-                }
-                Content::Takes { takes, .. } => {
-                    for take in takes {
-                        follow(&mut take.content, by);
-                    }
-                }
-                _ => {}
-            }
-        }
-        for t in &mut self.tracks {
-            for r in &mut t.regions {
-                follow(&mut r.content, by);
-            }
-            for c in &mut t.cells {
-                follow(&mut c.region.content, by);
-            }
+        let bpm = bpm.clamp(MIN_BPM, MAX_BPM);
+        let by = bpm / self.tempo;
+        for c in &mut self.tempos {
+            c.bpm = (c.bpm * by).clamp(MIN_BPM, MAX_BPM);
         }
         self.tempo = bpm;
     }
@@ -545,15 +603,13 @@ impl Project {
         stop.max(r.start + r.length)
     }
 
-    /// Ticks to samples at `rate`.
-    // ponytail: one tempo for the whole project; a tempo map replaces this.
-    pub fn samples(&self, ticks: u64, rate: f64) -> u64 {
-        (ticks as f64 / PPQ as f64 * 60.0 / self.tempo * rate).round() as u64
-    }
-
-    /// Samples at the project's rate to ticks, rounded down.
-    pub fn ticks(&self, samples: u64) -> u64 {
-        (samples as f64 / self.sample_rate as f64 * self.tempo / 60.0 * PPQ as f64) as u64
+    /// Where a region stops sounding: where its loops stop, else its own end.
+    pub fn plays_to(&self, at: At) -> u64 {
+        let r = self.region(at);
+        match r.looped {
+            true => self.loop_end(at),
+            false => r.start + r.length,
+        }
     }
 
     /// The tick where the last region ends.

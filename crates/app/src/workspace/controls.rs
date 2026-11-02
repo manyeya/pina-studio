@@ -16,6 +16,14 @@ pub enum Target {
     Quick(Channel, crate::mix::eq::Quick),
     Comp(Channel, CompField),
     Sat(Channel, SatField),
+    Limit(Channel, LimitField),
+    /// A knob of one of a channel's stacked built-ins, by its place among them.
+    Stacked(Channel, usize, Knob),
+    /// One of a track's synth's parameters, by its place.
+    Poly {
+        track: usize,
+        param: usize,
+    },
     /// A setting of a track's built-in sampler (by track index).
     Sampler {
         track: usize,
@@ -23,12 +31,100 @@ pub enum Target {
     },
 }
 
+/// A compressor's, saturator's or limiter's knob, on one stacked on a channel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Knob {
+    Comp(CompField),
+    Sat(SatField),
+    Limit(LimitField),
+    Reverb(crate::mix::strip::ReverbField),
+    Delay(crate::mix::strip::DelayField),
+    /// Knob `i` of a tool's table (`mix::strip::knobs`).
+    Param(usize),
+}
+
+impl Knob {
+    /// Its place in its effect's table: what automation and modulators move it by.
+    pub fn table(self) -> Option<usize> {
+        use crate::mix::strip::DelayField as D;
+        use pina_engine::song::project::SAT_BAND_KNOBS;
+        Some(match self {
+            Knob::Param(i) => i,
+            Knob::Comp(f) => f as usize,
+            Knob::Reverb(f) => f as usize,
+            Knob::Limit(f) => f.param()? as usize,
+            Knob::Sat(SatField::Drive) => 0,
+            Knob::Sat(SatField::Tone) => 1,
+            Knob::Sat(SatField::Mix) => 6 * SAT_BAND_KNOBS,
+            Knob::Sat(SatField::Output) => 6 * SAT_BAND_KNOBS + 1,
+            Knob::Sat(SatField::Band(b, k)) => b as usize * SAT_BAND_KNOBS + k as usize,
+            Knob::Delay(f) => match f {
+                D::Time(s) => s.min(1) as usize,
+                D::Feedback => 2,
+                D::Cross => 3,
+                D::LowCut => 4,
+                D::HighCut => 5,
+                D::Drive => 6,
+                D::Wow => 7,
+                D::Flutter => 8,
+                D::Diffusion => 9,
+                D::Ducking => 10,
+                D::Width => 11,
+                D::Mix => 12,
+                D::Output => 13,
+            },
+        })
+    }
+}
+
+/// A saturator's knob: drive and tone for every band at once, its mix and output, or one
+/// band's own.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SatField {
     Drive,
     Tone,
     Mix,
     Output,
+    Band(u8, SatKnob),
+}
+
+/// A knob of a saturator's band.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SatKnob {
+    Drive,
+    Tone,
+    Dynamics,
+    Feedback,
+    FeedbackHz,
+    Mix,
+    Level,
+}
+
+/// A limiter's knob.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LimitField {
+    Gain,
+    Ceiling,
+    Release,
+    Lookahead,
+    Attack,
+    Link,
+    Clip,
+}
+
+impl LimitField {
+    /// The automation it writes, if it's one automation moves (not the lookahead or attack,
+    /// whose moves would move the channel's delay; nor the link).
+    pub fn param(self) -> Option<pina_engine::song::project::LimitParam> {
+        use pina_engine::song::project::LimitParam;
+        Some(match self {
+            LimitField::Gain => LimitParam::Gain,
+            LimitField::Ceiling => LimitParam::Ceiling,
+            LimitField::Release => LimitParam::Release,
+            LimitField::Clip => LimitParam::Clip,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,6 +134,9 @@ pub enum CompField {
     Attack,
     Release,
     Makeup,
+    Mix,
+    Sidechain,
+    Spectral,
 }
 
 /// What a sideways drag sets: a slider, as a value from 0 to 1.
@@ -100,11 +199,35 @@ impl Workspace {
             ),
             Target::Quick(ch, q) => eq_gain_pos(self.strip_dsp(ch).0.map_or(0.0, |e| q.gain(&e))),
             Target::Comp(ch, field) => {
-                crate::mix::strip::comp_pos(field, &self.strip_dsp(ch).1.unwrap_or_default())
+                crate::mix::strip::comp_pos(field, &self.built_in(ch, None).unwrap_or_default())
             }
             Target::Sat(ch, field) => {
-                crate::mix::strip::sat_pos(field, &self.sat(ch).unwrap_or_default())
+                crate::mix::strip::sat_pos(field, &self.built_in(ch, None).unwrap_or_default())
             }
+            Target::Limit(ch, field) => {
+                crate::mix::strip::limit_pos(field, &self.limiter(ch).unwrap_or_default())
+            }
+            Target::Stacked(ch, k, knob) => {
+                use crate::mix::strip::{comp_pos, limit_pos, sat_pos};
+                let at = Some(k);
+                match knob {
+                    Knob::Comp(f) => comp_pos(f, &self.built_in(ch, at).unwrap_or_default()),
+                    Knob::Sat(f) => sat_pos(f, &self.built_in(ch, at).unwrap_or_default()),
+                    Knob::Limit(f) => limit_pos(f, &self.built_in(ch, at).unwrap_or_default()),
+                    Knob::Reverb(f) => {
+                        crate::mix::strip::reverb_pos(f, &self.built_in(ch, at).unwrap_or_default())
+                    }
+                    Knob::Delay(f) => {
+                        crate::mix::strip::delay_pos(f, &self.built_in(ch, at).unwrap_or_default())
+                    }
+                    Knob::Param(i) => self.tool_heard(ch, k).map_or(0.0, |u| {
+                        crate::mix::strip::knobs(u.kind())
+                            .get(i)
+                            .map_or(0.0, |p| (p.pos)(&u))
+                    }),
+                }
+            }
+            Target::Poly { track, param } => self.now_value(track, Param::Poly(param as u16)),
             Target::Sampler { track, field } => self.sampler_pos(track, field),
         }
     }
@@ -137,9 +260,46 @@ impl Workspace {
             Target::Comp(ch, field) => {
                 comp_set(field, self.strip_dsp_mut(ch).1.get_or_insert_default(), v)
             }
+            Target::Poly { track, param } => {
+                let q = &pina_engine::song::project::POLY_PARAMS[param];
+                let value = match q.reads {
+                    pina_engine::song::project::Reads::Whole => q.scale.value(v).round(),
+                    _ => q.scale.value(v),
+                };
+                if let Some(p) = self.poly_mut(track) {
+                    p.params[param] = value;
+                }
+            }
             Target::Sampler { track, field } => self.sampler_set(track, field, v),
             Target::Sat(ch, field) => {
                 crate::mix::strip::sat_set(field, self.sat_mut(ch).get_or_insert_default(), v)
+            }
+            Target::Limit(ch, field) => {
+                crate::mix::strip::limit_set(field, self.limiter_mut(ch).get_or_insert_default(), v)
+            }
+            Target::Stacked(ch, k, knob) => {
+                use crate::mix::strip::{limit_set, sat_set};
+                let at = Some(k);
+                match knob {
+                    Knob::Comp(f) => drop(self.unit_mut(ch, at).map(|c| comp_set(f, c, v))),
+                    Knob::Sat(f) => drop(self.unit_mut(ch, at).map(|s| sat_set(f, s, v))),
+                    Knob::Limit(f) => drop(self.unit_mut(ch, at).map(|l| limit_set(f, l, v))),
+                    Knob::Reverb(f) => drop(
+                        self.unit_mut(ch, at)
+                            .map(|r| crate::mix::strip::reverb_set(f, r, v)),
+                    ),
+                    Knob::Delay(f) => drop(
+                        self.unit_mut(ch, at)
+                            .map(|d| crate::mix::strip::delay_set(f, d, v)),
+                    ),
+                    Knob::Param(i) => {
+                        if let Some(u) = self.chain_mut(ch).more.get_mut(k)
+                            && let Some(p) = crate::mix::strip::knobs(u.kind()).get(i)
+                        {
+                            (p.set)(u, v);
+                        }
+                    }
+                }
             }
         }
     }
