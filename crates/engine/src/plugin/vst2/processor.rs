@@ -27,7 +27,7 @@ impl ProcessorApi for Vst2Processor {
         unsafe { (*self.instance.effect).initial_delay.max(0) as u32 }
     }
 
-    fn set_transport(&mut self, playing: bool, position: u64, tempo: f64) {
+    fn set_transport(&mut self, playing: bool, position: u64, beats: f64, tempo: f64) {
         let i = &self.instance;
         let started = playing != i.playing.swap(playing, Relaxed);
         let jumped = playing && position != i.position.swap(position, Relaxed);
@@ -35,6 +35,7 @@ impl ProcessorApi for Vst2Processor {
             i.changed.store(true, Relaxed);
         }
         i.tempo.store(tempo.to_bits(), Relaxed);
+        i.beats.store(beats.to_bits(), Relaxed);
     }
 
     /// ponytail: VST2 has no changes within a block, so a parameter takes its start value for

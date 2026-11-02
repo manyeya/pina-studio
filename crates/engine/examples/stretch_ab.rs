@@ -9,7 +9,7 @@ use std::{path::Path, time::Instant};
 
 use pina_engine::{
     audio::engine::{AudioData, load_audio},
-    audio::stretch::{Fit, Flex, onsets, render},
+    audio::stretch::{Fit, StretchMode, onsets, render},
 };
 
 const RATE: f64 = 44_100.0;
@@ -131,7 +131,7 @@ fn main() {
                         render(
                             &input,
                             &Fit {
-                                flex: Flex::Slicing,
+                                mode: StretchMode::Slicing,
                                 ..Fit::ratio(ratio)
                             },
                             RATE,
@@ -144,7 +144,7 @@ fn main() {
                         render(
                             &input,
                             &Fit {
-                                flex: Flex::Speed,
+                                mode: StretchMode::Speed,
                                 ..Fit::ratio(ratio)
                             },
                             RATE,

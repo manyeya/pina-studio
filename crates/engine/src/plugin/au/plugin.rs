@@ -32,6 +32,7 @@ impl AuPlugin {
                 changed: AtomicBool::new(false),
                 position: AtomicU64::new(0),
                 tempo: AtomicU64::new(120f64.to_bits()),
+                beats: AtomicU64::new(0),
             }),
         });
 

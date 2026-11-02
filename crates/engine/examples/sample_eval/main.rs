@@ -142,6 +142,7 @@ fn main() {
         let mut library = Library {
             folders: vec![pack],
             samples: Vec::new(),
+            midi: Vec::new(),
         };
         let start = Instant::now();
         let report = library.scan(&|_, _| {});

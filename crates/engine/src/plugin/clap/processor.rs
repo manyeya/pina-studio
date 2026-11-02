@@ -25,6 +25,8 @@ pub struct ClapProcessor {
     pub(crate) rate: f64,
     pub(crate) playing: bool,
     pub(crate) position: u64,
+    /// Where the song is in quarter notes, as the tempo map has it.
+    pub(crate) beats: f64,
     pub(crate) tempo: f64,
     pub(crate) steady: i64,
     pub(crate) max_block: usize,
@@ -41,8 +43,8 @@ impl ProcessorApi for ClapProcessor {
         self.latency
     }
 
-    fn set_transport(&mut self, playing: bool, position: u64, tempo: f64) {
-        (self.playing, self.position, self.tempo) = (playing, position, tempo);
+    fn set_transport(&mut self, playing: bool, position: u64, beats: f64, tempo: f64) {
+        (self.playing, self.position, self.beats, self.tempo) = (playing, position, beats, tempo);
     }
 
     fn automate(&mut self, id: u32, start: f64, end: f64) {
@@ -143,7 +145,13 @@ impl ProcessorApi for ClapProcessor {
         for port in &mut self.outputs {
             port.constant_mask = 0;
         }
-        self.transport = transport(self.playing, self.position, self.tempo, self.rate);
+        self.transport = transport(
+            self.playing,
+            self.position,
+            self.beats,
+            self.tempo,
+            self.rate,
+        );
         let (input, output) = (input_events(&self.events), output_events());
         let data = clap_process {
             steady_time: self.steady,
@@ -182,6 +190,7 @@ impl ProcessorApi for ClapProcessor {
         self.steady += frames as i64;
         if self.playing {
             self.position += frames as u64;
+            self.beats += frames as f64 / self.rate * self.tempo / 60.0;
         }
         // Mono output goes to both sides.
         let out = &self.outputs[0];

@@ -1,4 +1,5 @@
-//! Latency: delay compensation, linear phase waited for, sidechains in the same block, the cycle read ahead.
+//! Latency: delay compensation, linear phase and limiters' lookahead waited for, sidechains in the
+//! same block, the cycle read ahead.
 
 use super::*;
 
@@ -40,6 +41,7 @@ fn delay_compensation_waits_for_the_slowest_track() {
         let (lane, _, _) = make_lane(
             t.instrument.as_ref(),
             &[],
+            &mut Vec::new(),
             RATE,
             &mut Modules::new(),
             Path::new("."),
@@ -78,6 +80,37 @@ fn an_eq_in_linear_phase_is_waited_for() {
         ..Eq::default()
     });
     assert!(crate::dsp::eq::latency(p.tracks[0].eq.as_ref().unwrap()) > 2_000);
+    let onset = |s: &[f32]| s.iter().position(|x| x.abs() > 1e-3).unwrap() as i64;
+    let [l, r] = render(&p, Path::new("."), BEAT * 2);
+    let [on_time, _] = render(&plain, Path::new("."), BEAT * 2);
+    assert!(
+        (onset(&l) - onset(&r)).abs() <= 1,
+        "{} {}",
+        onset(&l),
+        onset(&r)
+    );
+    assert!((onset(&r) - onset(&on_time)).abs() <= 1, "{}", onset(&r));
+}
+
+#[test]
+fn a_limiters_lookahead_is_waited_for() {
+    // As the EQ above: the left's limiter reads 10 ms ahead, the master's 5, bypassed (it still
+    // holds the sound back), and everything's heard on time.
+    let mut a = synth_track("a", vec![note(PPQ as i64, PPQ, 69)], PPQ * 2);
+    a.pan = -1.0;
+    let mut b = a.clone();
+    b.pan = 1.0;
+    let plain = project(vec![a.clone(), b.clone()]);
+    a.limit = Some(crate::song::project::Limiter {
+        lookahead_ms: 10.0,
+        ..Default::default()
+    });
+    let mut p = project(vec![a, b]);
+    p.master_limit = Some(crate::song::project::Limiter {
+        lookahead_ms: 5.0,
+        bypass: true,
+        ..Default::default()
+    });
     let onset = |s: &[f32]| s.iter().position(|x| x.abs() > 1e-3).unwrap() as i64;
     let [l, r] = render(&p, Path::new("."), BEAT * 2);
     let [on_time, _] = render(&plain, Path::new("."), BEAT * 2);
@@ -139,6 +172,7 @@ fn the_cycle_wraps_what_plugins_read_ahead() {
     let lane = make_lane(
         Some(&Instrument::Synth),
         &[],
+        &mut Vec::new(),
         RATE,
         &mut Modules::new(),
         Path::new("."),
@@ -151,4 +185,29 @@ fn the_cycle_wraps_what_plugins_read_ahead() {
     // The note sounds again as the second pass begins, and not long before.
     assert!(peak(&l[BEAT - 64..BEAT + 2000]) > 0.1);
     assert!(peak(&l[BEAT / 2..BEAT - 100]) < 1e-3);
+}
+
+#[test]
+fn a_note_at_the_very_start_is_heard_on_time_whatever_the_latency() {
+    // Play from the start reads delay compensation's lookahead first: a note on the first
+    // sample, behind a linear-phase EQ or a limiter, isn't skipped, and lands where it would
+    // with no latency at all.
+    let a = synth_track("a", vec![note(0, PPQ, 69)], PPQ * 2);
+    let mut b = a.clone();
+    b.eq = Some(Eq {
+        processing: crate::song::project::Processing::Linear,
+        resolution: 0,
+        ..Eq::default()
+    });
+    let mut c = a.clone();
+    c.limit = Some(crate::song::project::Limiter::default());
+    let onset = |t: &Track| {
+        let out = render(&project(vec![t.clone()]), Path::new("."), BEAT);
+        out[0].iter().position(|x| x.abs() > 1e-3)
+    };
+    let on_time = onset(&a).unwrap();
+    for t in [b, c] {
+        let at = onset(&t).expect("heard");
+        assert!(at.abs_diff(on_time) <= 1, "{at} {on_time}");
+    }
 }

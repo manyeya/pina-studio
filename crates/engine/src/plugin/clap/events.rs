@@ -152,11 +152,11 @@ pub(crate) fn expression(kind: ExpressionKind, value: f64) -> (clap_note_express
 pub(crate) fn transport(
     playing: bool,
     position: u64,
+    beats: f64,
     tempo: f64,
     rate: f64,
 ) -> clap_event_transport {
     let seconds = position as f64 / rate;
-    let beats = seconds * tempo / 60.0;
     let bar = (beats / 4.0).floor();
     let fixed = |x: f64, factor: i64| (x * factor as f64).round() as i64;
     let playing = if playing {

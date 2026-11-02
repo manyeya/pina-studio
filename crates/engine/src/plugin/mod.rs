@@ -110,7 +110,9 @@ pub trait ProcessorApi: Send {
     /// How late its output is, in samples.
     fn latency(&self) -> u32;
     /// Where the transport is, before a `process`.
-    fn set_transport(&mut self, playing: bool, position: u64, tempo: f64);
+    /// Where the song is: playing or not, at `position` (samples), `beats` (quarter notes, as
+    /// the tempo map has them there) and `tempo`.
+    fn set_transport(&mut self, playing: bool, position: u64, beats: f64, tempo: f64);
     /// Moves a parameter (0 to 1) across the next block, from `start` to `end`, as automation
     /// does. Past `AUTOMATED` parameters a block, the rest wait.
     fn automate(&mut self, id: u32, start: f64, end: f64);
@@ -135,6 +137,83 @@ pub trait ProcessorApi: Send {
 
 pub type Plugin = Box<dyn PluginApi>;
 pub type Processor = Box<dyn ProcessorApi>;
+
+/// A plugin that won't load, in its place: the sound passes through untouched, and the settings
+/// it was saved with are kept, so saving the song doesn't lose them.
+struct Missing {
+    name: String,
+    state: Option<Vec<u8>>,
+}
+
+impl PluginApi for Missing {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn params(&self) -> Vec<PluginParam> {
+        Vec::new()
+    }
+    fn set_param(&self, _: u32, _: f64) {}
+    fn show_param(&self, _: u32, _: f64) {}
+    fn param_value(&self, _: u32) -> f64 {
+        0.0
+    }
+    fn param_text(&self, _: u32, _: f64) -> String {
+        String::new()
+    }
+    fn param_from_text(&self, _: u32, _: &str) -> Option<f64> {
+        None
+    }
+    fn state(&self) -> Option<Vec<u8>> {
+        self.state.clone()
+    }
+    fn set_state(&self, _: &[u8]) -> Result<(), String> {
+        Err(format!("{} isn't loaded", self.name))
+    }
+    fn presets(&self) -> Vec<Preset> {
+        Vec::new()
+    }
+    fn load_preset(&self, _: &Preset) -> Result<(), String> {
+        Err(format!("{} isn't loaded", self.name))
+    }
+    fn save_preset(&self, _: &str) -> Result<PathBuf, String> {
+        Err(format!("{} isn't loaded", self.name))
+    }
+    fn open_editor(&self, _: MainThreadMarker) -> Result<Editor, String> {
+        Err(format!("{} isn't loaded", self.name))
+    }
+}
+
+/// What stands in for a plugin that won't load on the audio thread: nothing.
+struct Passing;
+
+impl ProcessorApi for Passing {
+    fn latency(&self) -> u32 {
+        0
+    }
+    fn set_transport(&mut self, _: bool, _: u64, _: f64, _: f64) {}
+    fn automate(&mut self, _: u32, _: f64, _: f64) {}
+    fn pending(&self) -> bool {
+        false
+    }
+    fn process(
+        &mut self,
+        _: [&mut [f32]; 2],
+        _: usize,
+        _: &[Note],
+        _: &[Control],
+        _: Option<[&[f32]; 2]>,
+    ) {
+    }
+}
+
+/// Stands in for the plugin `r` names, which won't load, keeping `state`.
+pub fn missing(r: &PluginRef, state: Option<Vec<u8>>) -> (Plugin, Processor) {
+    let name = match r.class.is_empty() {
+        true => r.path.display().to_string(),
+        false => r.class.clone(),
+    };
+    (Box::new(Missing { name, state }), Box::new(Passing))
+}
 
 /// Most parameters one plugin follows automation for, per block.
 pub const AUTOMATED: usize = 32;

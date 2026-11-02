@@ -56,11 +56,11 @@ impl ProcessorApi for Vst3Processor {
         unsafe { self.processor.getLatencySamples() }
     }
 
-    fn set_transport(&mut self, playing: bool, position: u64, tempo: f64) {
+    fn set_transport(&mut self, playing: bool, position: u64, beats: f64, tempo: f64) {
         let c = &mut self.context;
         c.tempo = tempo;
         c.projectTimeSamples = position as i64;
-        c.projectTimeMusic = position as f64 / c.sampleRate * tempo / 60.0;
+        c.projectTimeMusic = beats;
         let playing = if playing { kPlaying } else { 0 };
         c.state = (kTempoValid | kTimeSigValid | kProjectTimeMusicValid | playing) as _;
     }

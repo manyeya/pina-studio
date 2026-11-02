@@ -389,7 +389,7 @@ fn notes_controls_and_automation_arrive_in_time_order() {
     use ControlKind::*;
     let (_plugin, mut processor) = load(c"pina.test-synth", None);
     // A second in, at 120 BPM: two beats.
-    processor.set_transport(true, 48_000, 120.0);
+    processor.set_transport(true, 48_000, 2.0, 120.0);
     processor.automate(2, 0.0, 1.0);
     let note = |offset, velocity| Note {
         offset,
@@ -450,7 +450,7 @@ fn notes_controls_and_automation_arrive_in_time_order() {
     processor.process([&mut l, &mut r], 128, &[], &[], None);
     assert_eq!(heard(&processor), []);
     let beats = unsafe { fake(processor.plugin) }.transport.get().unwrap().1;
-    let next = transport(true, 48_128, 120.0, 48_000.0);
+    let next = transport(true, 48_128, 48_128.0 / 48_000.0 * 2.0, 120.0, 48_000.0);
     assert_eq!(beats, next.song_pos_beats);
 }
 
@@ -471,7 +471,7 @@ fn values_turn_into_clap_s() {
     let (plain, normal) = (mode.plain(0.4), mode.normal(2.0));
     assert_eq!((plain, normal, mode.steps()), (1.0, 2.0 / 3.0, 3));
     // Five and a half beats in: the second bar, which starts on beat 4.
-    let t = transport(false, 132_000, 120.0, 48_000.0);
+    let t = transport(false, 132_000, 5.5, 120.0, 48_000.0);
     assert_eq!((t.bar_number, t.bar_start), (1, 4 * CLAP_BEATTIME_FACTOR));
     assert_eq!(t.flags & CLAP_TRANSPORT_IS_PLAYING, 0);
 }

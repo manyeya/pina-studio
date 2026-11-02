@@ -29,10 +29,12 @@ fn song() -> Project {
         Marker {
             tick: 0,
             name: "A".into(),
+            ..Default::default()
         },
         Marker {
             tick: PPQ * 2,
             name: "B".into(),
+            ..Default::default()
         },
     ];
     p.assign_ids();

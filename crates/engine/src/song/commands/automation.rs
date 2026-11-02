@@ -1,6 +1,7 @@
 //! Commands on automation: lanes set, smoothed and shaped, and the track's mode.
 
 use super::*;
+use crate::song::project::{Fx, OWN_COMP, OWN_SAT, POLY_PARAMS, knobs, poly_param};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -17,6 +18,102 @@ pub enum AutoParam {
     /// One of a modulator's settings: the modulator's place as `modulator`, the setting as
     /// `setting`.
     Modulator,
+    /// The limiter's gain (dB), ceiling (dB), release (ms) or clip (0 to 1).
+    LimitGain,
+    LimitCeiling,
+    LimitRelease,
+    LimitClip,
+    /// A knob of an effect stacked on the track: `fx`, `which` of those, `knob` by name; its
+    /// values in the knob's own units.
+    Fx,
+    /// One of the synth's parameters: `knob` its name or id, its values in their own units.
+    Synth,
+}
+
+/// One of a track's synth's parameters, as automation names it.
+pub(crate) fn synth_param(p: &mut Project, t: usize, knob: Option<&str>) -> Result<Param, String> {
+    if !matches!(track(p, t)?.instrument, Some(Instrument::Poly(_))) {
+        return Err(format!("track {t} has no synth: add one with set_synth"));
+    }
+    let Some(knob) = knob else {
+        return Err("a synth's automation needs `knob`: a parameter's id or name".into());
+    };
+    let i = poly_param(knob)
+        .ok_or_else(|| format!("the synth has no {knob}: `describe` lists them"))?;
+    Ok(Param::Poly(i as u16))
+}
+
+/// An effect's knob as a command names it: the effect, which of those, the knob, and whether it's
+/// the track's own.
+type Stacked<'a> = (Option<&'a str>, Option<usize>, Option<&'a str>, bool);
+
+/// A knob of a stacked effect, as automation names it.
+pub(crate) fn tool_param(
+    p: &mut Project,
+    t: usize,
+    (fx, which, knob, own): Stacked,
+) -> Result<Param, String> {
+    let (Some(name), Some(knob)) = (fx, knob) else {
+        return Err("an effect's automation needs `fx` and `knob`".into());
+    };
+    let Ok(fx) = serde_json::from_value::<Fx>(json!(name)) else {
+        return Err(format!(
+            "no {name}: `fx` is filter, motion, shaper, gate, de_esser, stereo, multiband, pitch, \
+             tape_stop, tune, reverb or delay"
+        ));
+    };
+    let which = which.unwrap_or(0);
+    let place = match (own, fx) {
+        (true, Fx::Comp) if track(p, t)?.comp.is_some() => OWN_COMP as usize,
+        (true, Fx::Sat) if track(p, t)?.sat.is_some() => OWN_SAT as usize,
+        (true, _) => return Err(format!("track {t} has no {name} of its own")),
+        _ => match track(p, t)?.chain_mut().nth_more(fx, which) {
+            Some(k) => k,
+            None => {
+                return Err(format!(
+                    "track {t} has no {name} {which}: add it with set_fx"
+                ));
+            }
+        },
+    };
+    let table = knobs(fx);
+    let Some(i) = table.iter().position(|k| k.name.eq_ignore_ascii_case(knob)) else {
+        let names: Vec<&str> = table.iter().map(|k| k.name).collect();
+        return Err(format!(
+            "{name} has no knob {knob}: it has {}",
+            names.join(", ")
+        ));
+    };
+    Ok(Param::Tool(place as u8, i as u8))
+}
+
+/// A value in a knob's own units, as where the knob sits: what its lane holds.
+fn lane_value(p: &mut Project, t: usize, param: Param, v: f32) -> Result<f32, String> {
+    if let Param::Poly(i) = param {
+        return Ok(POLY_PARAMS[i as usize].scale.pos(v));
+    }
+    let Param::Tool(place, knob) = param else {
+        return Ok(v);
+    };
+    let kind = track(p, t)?.unit_at(place).map(|u| u.kind());
+    Ok(kind
+        .and_then(|k| knobs(k).get(knob as usize))
+        .map_or(v, |k| k.scale.pos(v)))
+}
+
+/// A limiter's setting, as automation names it: the track must have a limiter.
+pub(crate) fn limit_param(p: &mut Project, t: usize, param: AutoParam) -> Result<Param, String> {
+    if track(p, t)?.limit.is_none() {
+        return Err(format!(
+            "track {t} has no limiter: add one with set_limiter"
+        ));
+    }
+    Ok(Param::Limit(match param {
+        AutoParam::LimitGain => LimitParam::Gain,
+        AutoParam::LimitCeiling => LimitParam::Ceiling,
+        AutoParam::LimitRelease => LimitParam::Release,
+        _ => LimitParam::Clip,
+    }))
 }
 
 /// An EQ band's setting, as automation names it: its place in the track's EQ.
@@ -52,8 +149,11 @@ pub(crate) fn auto_param(
     id: Option<u32>,
     modulator: Option<usize>,
     setting: Option<ModParam>,
+    tool: Stacked,
 ) -> Result<Param, String> {
     Ok(match param {
+        AutoParam::Fx => tool_param(p, t, tool)?,
+        AutoParam::Synth => synth_param(p, t, tool.2)?,
         AutoParam::Volume => Param::Volume,
         AutoParam::Pan => Param::Pan,
         AutoParam::Mute => Param::Mute,
@@ -69,6 +169,10 @@ pub(crate) fn auto_param(
         }
         AutoParam::EqFreq | AutoParam::EqGain | AutoParam::EqQ => eq_param(p, t, param, id)?,
         AutoParam::Modulator => mod_param(p, t, modulator, setting)?,
+        AutoParam::LimitGain
+        | AutoParam::LimitCeiling
+        | AutoParam::LimitRelease
+        | AutoParam::LimitClip => limit_param(p, t, param)?,
     })
 }
 
@@ -130,6 +234,10 @@ pub(super) fn run(p: &mut Project, _dir: &Path, cmd: Command) -> Result<Value, S
             name,
             modulator,
             setting,
+            fx,
+            which,
+            knob,
+            own,
             points,
         } => {
             let mut points = points
@@ -179,10 +287,16 @@ pub(super) fn run(p: &mut Project, _dir: &Path, cmd: Command) -> Result<Value, S
                     eq_param(p, t, param, band)?
                 }
                 AutoParam::Modulator => mod_param(p, t, modulator, setting)?,
+                AutoParam::LimitGain
+                | AutoParam::LimitCeiling
+                | AutoParam::LimitRelease
+                | AutoParam::LimitClip => limit_param(p, t, param)?,
+                AutoParam::Fx => tool_param(p, t, (fx.as_deref(), which, knob.as_deref(), own))?,
+                AutoParam::Synth => synth_param(p, t, knob.as_deref())?,
             };
             let (lo, hi) = param.range();
             for pt in &mut points {
-                pt.value = pt.value.clamp(lo, hi);
+                pt.value = lane_value(p, t, param, pt.value)?.clamp(lo, hi);
                 pt.step |= param.steps();
             }
             let a = &mut track(p, t)?.automation;
@@ -200,11 +314,16 @@ pub(super) fn run(p: &mut Project, _dir: &Path, cmd: Command) -> Result<Value, S
             id,
             modulator,
             setting,
+            fx,
+            which,
+            knob,
+            own,
             from,
             to,
             width,
         } => {
-            let param = auto_param(p, t, param, send, plugin, id, modulator, setting)?;
+            let tool = (fx.as_deref(), which, knob.as_deref(), own);
+            let param = auto_param(p, t, param, send, plugin, id, modulator, setting, tool)?;
             let a = &mut track(p, t)?.automation;
             let points = a.points(param);
             let (Some(first), Some(last)) = (points.first(), points.last()) else {
@@ -224,6 +343,10 @@ pub(super) fn run(p: &mut Project, _dir: &Path, cmd: Command) -> Result<Value, S
             id,
             modulator,
             setting,
+            fx,
+            which,
+            knob,
+            own,
             shape,
             from,
             to,
@@ -231,12 +354,17 @@ pub(super) fn run(p: &mut Project, _dir: &Path, cmd: Command) -> Result<Value, S
             low,
             high,
         } => {
-            let param = auto_param(p, t, param, send, plugin, id, modulator, setting)?;
+            let tool = (fx.as_deref(), which, knob.as_deref(), own);
+            let param = auto_param(p, t, param, send, plugin, id, modulator, setting, tool)?;
             if to <= from {
                 return Err("`to` must be after `from`".into());
             }
             let every = every.unwrap_or(PPQ).max(1);
             let (low, high) = (finite("low", low)?, finite("high", high)?);
+            let (low, high) = (
+                lane_value(p, t, param, low)?,
+                lane_value(p, t, param, high)?,
+            );
             track(p, t)?
                 .automation
                 .shape(param, shape, from, to, every, low, high);

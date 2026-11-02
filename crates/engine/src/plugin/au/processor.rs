@@ -210,13 +210,14 @@ impl ProcessorApi for AuProcessor {
         self.latency
     }
 
-    fn set_transport(&mut self, playing: bool, position: u64, tempo: f64) {
+    fn set_transport(&mut self, playing: bool, position: u64, beats: f64, tempo: f64) {
         let t = &self.unit.transport;
         if t.playing.swap(playing, Relaxed) != playing {
             t.changed.store(true, Relaxed);
         }
         t.position.store(position, Relaxed);
         t.tempo.store(tempo.to_bits(), Relaxed);
+        t.beats.store(beats.to_bits(), Relaxed);
     }
 
     fn automate(&mut self, id: u32, start: f64, end: f64) {

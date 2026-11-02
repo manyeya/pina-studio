@@ -25,6 +25,18 @@ pub struct Automation {
     /// Its modulators' settings over time: a macro turned, an LFO's phase.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mods: Vec<ModAuto>,
+    /// Its limiter's settings over time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limit: Vec<LimitAuto>,
+    /// Its stacked effects' knobs over time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolAuto>,
+    /// Its Sampler voice's settings over time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub voice: Vec<VoiceAuto>,
+    /// Its synth's parameters over time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub poly: Vec<PolyAuto>,
     #[serde(default, skip_serializing_if = "AutoMode::is_read")]
     pub mode: AutoMode,
 }
@@ -34,6 +46,36 @@ pub struct Automation {
 pub struct EqAuto {
     pub band: u8,
     pub field: EqField,
+    pub points: Vec<AutoPoint>,
+}
+
+/// A limiter's setting over time: dB, ms, or 0 to 1.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LimitAuto {
+    pub field: LimitParam,
+    pub points: Vec<AutoPoint>,
+}
+
+/// A stacked effect's knob over time: the effect by its place among them, the knob by its place
+/// in the effect's table, where it sits from 0 to 1.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ToolAuto {
+    pub place: u8,
+    pub knob: u8,
+    pub points: Vec<AutoPoint>,
+}
+
+/// A setting of the Sampler's voice over time: by its place in `VOICE`, 0 to 1.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct VoiceAuto {
+    pub knob: u8,
+    pub points: Vec<AutoPoint>,
+}
+
+/// One of a synth's parameters over time: by its place, where its knob sits, 0 to 1.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PolyAuto {
+    pub param: u16,
     pub points: Vec<AutoPoint>,
 }
 
@@ -247,6 +289,10 @@ impl Automation {
             && self.plugins.is_empty()
             && self.eq.is_empty()
             && self.mods.is_empty()
+            && self.limit.is_empty()
+            && self.tools.is_empty()
+            && self.voice.is_empty()
+            && self.poly.is_empty()
             && self.mode == AutoMode::Read
     }
 
@@ -274,6 +320,26 @@ impl Automation {
                 .mods
                 .iter()
                 .find(|a| a.modulator == k && a.field == field)
+                .map_or(&[], |a| &a.points),
+            Param::Limit(field) => self
+                .limit
+                .iter()
+                .find(|a| a.field == field)
+                .map_or(&[], |a| &a.points),
+            Param::Tool(place, knob) => self
+                .tools
+                .iter()
+                .find(|a| a.place == place && a.knob == knob)
+                .map_or(&[], |a| &a.points),
+            Param::Voice(knob) => self
+                .voice
+                .iter()
+                .find(|a| a.knob == knob)
+                .map_or(&[], |a| &a.points),
+            Param::Poly(param) => self
+                .poly
+                .iter()
+                .find(|a| a.param == param)
                 .map_or(&[], |a| &a.points),
         }
     }
@@ -352,7 +418,73 @@ impl Automation {
                 };
                 &mut self.mods[i].points
             }
+            Param::Limit(field) => {
+                let i = match self.limit.iter().position(|a| a.field == field) {
+                    Some(i) => i,
+                    None => {
+                        self.limit.push(LimitAuto {
+                            field,
+                            points: Vec::new(),
+                        });
+                        self.limit.len() - 1
+                    }
+                };
+                &mut self.limit[i].points
+            }
+            Param::Tool(place, knob) => {
+                let at = |a: &ToolAuto| a.place == place && a.knob == knob;
+                let i = match self.tools.iter().position(at) {
+                    Some(i) => i,
+                    None => {
+                        self.tools.push(ToolAuto {
+                            place,
+                            knob,
+                            points: Vec::new(),
+                        });
+                        self.tools.len() - 1
+                    }
+                };
+                &mut self.tools[i].points
+            }
+            Param::Voice(knob) => {
+                let i = match self.voice.iter().position(|a| a.knob == knob) {
+                    Some(i) => i,
+                    None => {
+                        self.voice.push(VoiceAuto {
+                            knob,
+                            points: Vec::new(),
+                        });
+                        self.voice.len() - 1
+                    }
+                };
+                &mut self.voice[i].points
+            }
+            Param::Poly(param) => {
+                let i = match self.poly.iter().position(|a| a.param == param) {
+                    Some(i) => i,
+                    None => {
+                        self.poly.push(PolyAuto {
+                            param,
+                            points: Vec::new(),
+                        });
+                        self.poly.len() - 1
+                    }
+                };
+                &mut self.poly[i].points
+            }
         }
+    }
+
+    /// The stacked effects moved or taken out: `place` says where each now is. Lanes follow them,
+    /// and go with them.
+    pub fn stacked_moved(&mut self, place: impl Fn(u8) -> Option<u8>) {
+        self.tools.retain_mut(|a| match place(a.place) {
+            Some(now) => {
+                a.place = now;
+                true
+            }
+            None => false,
+        });
     }
 
     /// A modulator taken off the track: its lanes go, and those of the ones after it follow
@@ -378,12 +510,39 @@ impl Automation {
         }
     }
 
-    /// Drops plugin, send, EQ and modulator lanes left without points.
+    /// Every lane's points from `at` on moved `by` ticks; moved later, the line at `at` holds
+    /// across the gap that opens.
+    pub fn shift(&mut self, at: u64, by: i64) {
+        for param in self.params() {
+            let held = match by > 0 {
+                true => value_at(self.points(param), at as f64),
+                false => None,
+            };
+            let points = self.points_mut(param);
+            for p in points.iter_mut().filter(|p| p.tick >= at) {
+                p.tick = (p.tick as i64 + by).max(0) as u64;
+            }
+            if let Some(v) = held {
+                let i = points.partition_point(|p| p.tick < at);
+                points.splice(
+                    i..i,
+                    [AutoPoint::new(at, v), AutoPoint::new(at + by as u64, v)],
+                );
+            }
+        }
+        self.tidy();
+    }
+
+    /// Drops plugin, send, EQ, modulator, limiter and tool lanes left without points.
     pub fn tidy(&mut self) {
         self.plugins.retain(|a| !a.points.is_empty());
         self.sends.retain(|a| !a.points.is_empty());
         self.eq.retain(|a| !a.points.is_empty());
         self.mods.retain(|a| !a.points.is_empty());
+        self.limit.retain(|a| !a.points.is_empty());
+        self.tools.retain(|a| !a.points.is_empty());
+        self.voice.retain(|a| !a.points.is_empty());
+        self.poly.retain(|a| !a.points.is_empty());
     }
 
     /// Every parameter with points, faders first.
@@ -421,6 +580,30 @@ impl Automation {
                 .iter()
                 .filter(|a| !a.points.is_empty())
                 .map(|a| Param::Mod(a.modulator, a.field)),
+        );
+        out.extend(
+            self.limit
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| Param::Limit(a.field)),
+        );
+        out.extend(
+            self.tools
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| Param::Tool(a.place, a.knob)),
+        );
+        out.extend(
+            self.voice
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| Param::Voice(a.knob)),
+        );
+        out.extend(
+            self.poly
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| Param::Poly(a.param)),
         );
         out
     }
@@ -475,6 +658,17 @@ impl Automation {
                 && *j > i
             {
                 *j -= 1;
+            }
+        }
+    }
+
+    /// The inserts put in a new order: `was[new]` the old place of each.
+    pub(crate) fn inserts_moved(&mut self, was: &[usize]) {
+        for a in &mut self.plugins {
+            if let Which::Insert(j) = &mut a.plugin
+                && let Some(new) = was.iter().position(|&old| old == *j)
+            {
+                *j = new;
             }
         }
     }

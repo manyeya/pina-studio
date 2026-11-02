@@ -89,6 +89,7 @@ pub fn resolve(
             modulator,
             setting,
             points,
+            ..
         } if matches!(id, ParamRef::Name(_)) || points.iter().any(|p| p.text.is_some()) => {
             let found = plugins.plugin(p, ChannelRef::Track(track), which)?;
             let info = find_param(&found.params(), &id)?;
@@ -114,6 +115,10 @@ pub fn resolve(
                 name: name.or(Some(info.name)),
                 modulator,
                 setting,
+                fx: None,
+                which: None,
+                knob: None,
+                own: false,
                 points,
             }
         }

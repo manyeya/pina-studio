@@ -13,12 +13,13 @@ pub(crate) struct Transport {
     pub(crate) position: AtomicU64,
     /// The tempo's bits.
     pub(crate) tempo: AtomicU64,
+    /// Where the song is in quarter notes, its bits.
+    pub(crate) beats: AtomicU64,
 }
 
 impl Transport {
     pub(crate) fn beat(&self) -> f64 {
-        let seconds = self.position.load(Relaxed) as f64 / self.rate;
-        seconds * self.tempo() / 60.0
+        f64::from_bits(self.beats.load(Relaxed))
     }
 
     pub(crate) fn tempo(&self) -> f64 {

@@ -15,6 +15,8 @@ pub(crate) struct Instance {
     pub(crate) playing: AtomicBool,
     pub(crate) position: AtomicU64,
     pub(crate) tempo: AtomicU64,
+    /// Where the song is in quarter notes, its bits.
+    pub(crate) beats: AtomicU64,
     /// Whether it started or stopped, or jumped, since the last block.
     pub(crate) changed: AtomicBool,
     /// What Pina Studio last set each parameter to, until the processor has applied it (`NOTHING`
@@ -234,7 +236,7 @@ impl Instance {
     pub(crate) fn time(&self) -> VstTimeInfo {
         let tempo = f64::from_bits(self.tempo.load(Relaxed));
         let position = self.position.load(Relaxed) as f64;
-        let ppq = position / self.rate * tempo / 60.0;
+        let ppq = f64::from_bits(self.beats.load(Relaxed));
         let mut flags = PINA_VALID | PPQ_POS_VALID | BARS_VALID | TIME_SIG_VALID;
         if self.playing.load(Relaxed) {
             flags |= TRANSPORT_PLAYING;

@@ -43,8 +43,48 @@ fn strip_cost() {
         time(None, None, s),
     ];
     let all = time(e, c, s);
+    // The saturator at its most: six bands, each eight times over.
+    let mut most = Saturator {
+        bands: crate::song::project::SatBands::from_slice(
+            &[crate::song::project::SatBand {
+                style: crate::song::project::SatStyle::WarmTube,
+                ..Default::default()
+            }; 6],
+        ),
+        crossovers: crate::song::project::sat_crossovers(6),
+        quality: 8,
+        ..Saturator::default()
+    };
+    most.slope = 48;
+    let heaviest = time(None, None, Some(&most));
+    let spectral = Comp {
+        spectral: 1.0,
+        ..comp
+    };
+    let spectral = time(None, Some(&spectral), None);
+    // The limiter, metered, plain and at its heaviest (multiband, clipping at 8x).
+    let mut limit = |lim: &Limiter| {
+        let began = std::time::Instant::now();
+        for _ in 0..(seconds * 48_000) / MAX_BLOCK {
+            strip.limit(Some(lim), &mut l, &mut r, true);
+        }
+        began.elapsed().as_secs_f64() / seconds as f64 * 100.0
+    };
+    let plain = limit(&Limiter {
+        gain_db: 12.0,
+        ..Limiter::default()
+    });
+    let limit_most = limit(&Limiter {
+        gain_db: 12.0,
+        style: crate::song::project::LimitStyle::Multiband,
+        clip: 0.5,
+        oversample: 8,
+        ..Limiter::default()
+    });
     eprintln!(
-        "% of real time: EQ {:.3}, compressor {:.3}, saturator {:.3}, all {all:.3}",
+        "% of real time: EQ {:.3}, compressor {:.3}, saturator {:.3}, all {all:.3}; saturator \
+         six bands at 8x {heaviest:.3}; spectral compressor {spectral:.3}; limiter {plain:.3}, \
+         multiband clipping at 8x {limit_most:.3}",
         parts[0], parts[1], parts[2]
     );
     assert!(all < 1.0);

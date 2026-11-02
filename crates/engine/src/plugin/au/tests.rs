@@ -260,7 +260,7 @@ fn automation_moves_parameters() {
 #[test]
 fn the_transport_reaches_the_host_callbacks() {
     let (_, mut p) = load("aumu samp appl");
-    p.set_transport(true, 48_000, 90.0);
+    p.set_transport(true, 48_000, 1.5, 90.0);
     let user = (&*p.unit.transport as *const Transport).cast_mut().cast();
     let (mut beat, mut tempo) = (0.0, 0.0);
     unsafe { beat_and_tempo(user, &mut beat, &mut tempo) };
@@ -268,7 +268,7 @@ fn the_transport_reaches_the_host_callbacks() {
     let (mut next, mut num, mut den, mut downbeat) = (0, 0.0, 0, 0.0);
     unsafe { musical_time(user, &mut next, &mut num, &mut den, &mut downbeat) };
     assert_eq!((next, num, den, downbeat), (16_000, 4.0, 4, 0.0));
-    p.set_transport(false, 0, 90.0);
+    p.set_transport(false, 0, 0.0, 90.0);
     let (mut playing, mut changed) = (1u8, 0u8);
     let none = ptr::null_mut();
     unsafe {

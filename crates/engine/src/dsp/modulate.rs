@@ -12,7 +12,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::song::project::{Comp, Eq, MAX_BANDS, SamplerVoice, Saturator, Shape, Which};
+use crate::song::project::{
+    Comp, Eq, LimitParam, Limiter, MAX_BANDS, SamplerVoice, Saturator, Shape, Which,
+};
+use crate::song::project::{Unit, knobs};
 
 /// The most modulators a track has.
 pub const MAX_MODS: usize = 8;
@@ -123,9 +126,17 @@ pub enum ModTarget {
     SatDrive,
     SatTone,
     SatMix,
+    /// The limiter's gain and ceiling: dB.
+    LimitGain,
+    LimitCeiling,
     Sampler(SamplerParam),
     /// A plugin's parameter: 0 to 1.
     Plugin(Which, u32),
+    /// A knob of a stacked effect, by the effect's place among them and the knob's in its table:
+    /// a share of the knob's travel, 0 to 1.
+    Tool(u8, u8),
+    /// One of the synth's parameters, by its place: a share of its knob's travel.
+    Poly(u16),
     /// A step pattern's sound (by its row), each step as it falls in the song: its velocity, its
     /// pitch (semitones), its chance (%). Worked out ahead, so only an LFO, steps, random or a
     /// macro can move it.
@@ -160,6 +171,20 @@ pub enum SamplerParam {
     LfoFilter,
     /// 0 to 1.
     Tremolo,
+    /// 0 to 1: into the filter.
+    Drive,
+    /// 0 to 1: where the grains read.
+    Position,
+    /// How fast it plays through the sample: 1 is as recorded.
+    Speed,
+    /// Octaves: the grains' size.
+    GrainSize,
+    /// 0 to 1.
+    Spray,
+    /// 0 to 1.
+    Fm,
+    /// 0 to 1: the sine an octave under.
+    Sub,
 }
 
 impl ModKind {
@@ -632,9 +657,14 @@ pub struct Offsets {
     pub eq_freq: [f32; MAX_BANDS],
     pub comp: [f32; 2],
     pub sat: [f32; 3],
-    pub sampler: [f32; 8],
+    pub limit: [f32; 2],
+    pub sampler: [f32; 15],
     pub plugins: [(Which, u32, f32); 16],
     pub plugin_count: usize,
+    pub tools: [(u8, u8, f32); 16],
+    pub tool_count: usize,
+    pub poly: [(u16, f32); 32],
+    pub poly_count: usize,
     /// Whether anything moves the strip, the Sampler.
     pub strip: bool,
     pub voice: bool,
@@ -651,9 +681,14 @@ impl Default for Offsets {
             eq_freq: [0.0; MAX_BANDS],
             comp: [0.0; 2],
             sat: [0.0; 3],
-            sampler: [0.0; 8],
+            limit: [0.0; 2],
+            sampler: [0.0; 15],
             plugins: [(Which::Instrument, 0, 0.0); 16],
             plugin_count: 0,
+            tools: [(0, 0, 0.0); 16],
+            tool_count: 0,
+            poly: [(0, 0.0); 32],
+            poly_count: 0,
             strip: false,
             voice: false,
         }
@@ -661,7 +696,7 @@ impl Default for Offsets {
 }
 
 impl SamplerParam {
-    pub const ALL: [SamplerParam; 8] = [
+    pub const ALL: [SamplerParam; 15] = [
         SamplerParam::Cutoff,
         SamplerParam::Resonance,
         SamplerParam::FilterEnv,
@@ -670,6 +705,13 @@ impl SamplerParam {
         SamplerParam::Vibrato,
         SamplerParam::LfoFilter,
         SamplerParam::Tremolo,
+        SamplerParam::Drive,
+        SamplerParam::Position,
+        SamplerParam::Speed,
+        SamplerParam::GrainSize,
+        SamplerParam::Spray,
+        SamplerParam::Fm,
+        SamplerParam::Sub,
     ];
 
     fn index(self) -> usize {
@@ -704,12 +746,38 @@ impl Offsets {
             ModTarget::SatDrive => (self.sat[0], self.strip) = (self.sat[0] + amount, true),
             ModTarget::SatTone => (self.sat[1], self.strip) = (self.sat[1] + amount, true),
             ModTarget::SatMix => (self.sat[2], self.strip) = (self.sat[2] + amount, true),
+            ModTarget::LimitGain => (self.limit[0], self.strip) = (self.limit[0] + amount, true),
+            ModTarget::LimitCeiling => (self.limit[1], self.strip) = (self.limit[1] + amount, true),
             ModTarget::Sampler(p) => {
                 self.sampler[p.index()] += amount;
                 self.voice = true;
             }
             // Worked out with the pattern's notes.
             ModTarget::Sound(..) => {}
+            ModTarget::Poly(i) => {
+                let n = self.poly_count;
+                match self.poly[..n].iter().position(|p| p.0 == i) {
+                    Some(k) => self.poly[k].1 += amount,
+                    None if n < self.poly.len() => {
+                        self.poly[n] = (i, amount);
+                        self.poly_count += 1;
+                    }
+                    None => {}
+                }
+            }
+            ModTarget::Tool(k, knob) => {
+                let n = self.tool_count;
+                let at = self.tools[..n].iter().position(|t| t.0 == k && t.1 == knob);
+                self.strip = true;
+                match at {
+                    Some(i) => self.tools[i].2 += amount,
+                    None if n < self.tools.len() => {
+                        self.tools[n] = (k, knob, amount);
+                        self.tool_count += 1;
+                    }
+                    None => {}
+                }
+            }
             ModTarget::Plugin(which, id) => {
                 let n = self.plugin_count;
                 let at = self.plugins[..n]
@@ -753,10 +821,43 @@ impl Offsets {
         apply_sat(s, ModTarget::SatMix, self.sat[2]);
     }
 
+    /// The stacked effect at `place`, its knobs moved.
+    pub fn tool(&self, place: u8, u: &mut Unit) {
+        for &(k, knob, by) in &self.tools[..self.tool_count] {
+            if k == place {
+                apply_tool(u, knob, by);
+            }
+        }
+    }
+
+    /// What modulators do to the synth: each parameter's place, and how far along its knob.
+    pub fn polys(&self) -> impl Iterator<Item = (usize, f32)> + '_ {
+        self.poly[..self.poly_count]
+            .iter()
+            .map(|p| (p.0 as usize, p.1))
+    }
+
+    /// Whether a modulator's on the effect at `place`.
+    pub fn moves_tool(&self, place: u8) -> bool {
+        self.tools[..self.tool_count].iter().any(|t| t.0 == place)
+    }
+
+    pub fn limit(&self, l: &mut Limiter) {
+        apply_limit(l, ModTarget::LimitGain, self.limit[0]);
+        apply_limit(l, ModTarget::LimitCeiling, self.limit[1]);
+    }
+
     pub fn voice(&self, v: &mut SamplerVoice) {
         for p in SamplerParam::ALL {
             apply_voice(v, p, self.sampler[p.index()]);
         }
+    }
+}
+
+/// A stacked effect's knob moved `by` of its travel: as the engine plays it and the app draws it.
+pub fn apply_tool(u: &mut Unit, knob: u8, by: f32) {
+    if let Some(k) = knobs(u.kind()).get(knob as usize) {
+        (k.set)(u, (k.pos)(u) + by);
     }
 }
 
@@ -812,11 +913,32 @@ pub fn apply_comp(c: &mut Comp, target: ModTarget, by: f32) {
 
 pub fn apply_sat(s: &mut Saturator, target: ModTarget, by: f32) {
     match target {
-        ModTarget::SatDrive => s.drive_db = (s.drive_db + by).clamp(0.0, 24.0),
-        ModTarget::SatTone => s.tone = (s.tone + by).clamp(-1.0, 1.0),
+        // Every band moves together, as a macro over them.
+        ModTarget::SatDrive => {
+            for b in s.bands.iter_mut() {
+                b.drive_db = (b.drive_db + by).clamp(0.0, 24.0);
+            }
+        }
+        ModTarget::SatTone => {
+            for b in s.bands.iter_mut() {
+                b.tone = (b.tone + by).clamp(-1.0, 1.0);
+            }
+        }
         ModTarget::SatMix => s.mix = (s.mix + by).clamp(0.0, 1.0),
         _ => {}
     }
+}
+
+pub fn apply_limit(l: &mut Limiter, target: ModTarget, by: f32) {
+    if by == 0.0 {
+        return;
+    }
+    let field = match target {
+        ModTarget::LimitGain => LimitParam::Gain,
+        ModTarget::LimitCeiling => LimitParam::Ceiling,
+        _ => return,
+    };
+    field.set(l, field.get(l) + by);
 }
 
 pub fn apply_voice(v: &mut SamplerVoice, p: SamplerParam, by: f32) {
@@ -832,6 +954,13 @@ pub fn apply_voice(v: &mut SamplerVoice, p: SamplerParam, by: f32) {
         SamplerParam::Vibrato => v.vibrato_cents = (v.vibrato_cents + by).clamp(0.0, 1200.0),
         SamplerParam::LfoFilter => v.lfo_filter = (v.lfo_filter + by).clamp(0.0, 6.0),
         SamplerParam::Tremolo => v.tremolo = (v.tremolo + by).clamp(0.0, 1.0),
+        SamplerParam::Drive => v.drive = (v.drive + by).clamp(0.0, 1.0),
+        SamplerParam::Position => v.position = (v.position + by).clamp(0.0, 1.0),
+        SamplerParam::Speed => v.speed = (v.speed + by).clamp(-4.0, 4.0),
+        SamplerParam::GrainSize => v.grain_ms = (v.grain_ms * 2f32.powf(by)).clamp(5.0, 2_000.0),
+        SamplerParam::Spray => v.spray = (v.spray + by).clamp(0.0, 1.0),
+        SamplerParam::Fm => v.fm = (v.fm + by).clamp(0.0, 1.0),
+        SamplerParam::Sub => v.sub = (v.sub + by).clamp(0.0, 1.0),
     }
 }
 
@@ -846,13 +975,15 @@ pub fn default_depth(target: ModTarget) -> f32 {
         ModTarget::CompThreshold => -12.0,
         ModTarget::CompMakeup | ModTarget::SatDrive => 9.0,
         ModTarget::SatMix => 0.5,
+        ModTarget::LimitGain => 6.0,
+        ModTarget::LimitCeiling => -3.0,
         ModTarget::Sampler(SamplerParam::Cutoff) => 2.0,
         ModTarget::Sampler(SamplerParam::Transpose) => 12.0,
         ModTarget::Sampler(SamplerParam::Volume) => -12.0,
         ModTarget::Sampler(SamplerParam::Vibrato) => 50.0,
         ModTarget::Sampler(SamplerParam::FilterEnv | SamplerParam::LfoFilter) => 2.0,
         ModTarget::Sampler(_) => 0.5,
-        ModTarget::Plugin(..) => 0.3,
+        ModTarget::Plugin(..) | ModTarget::Tool(..) | ModTarget::Poly(_) => 0.3,
         ModTarget::Sound(_, SoundParam::Velocity) => -40.0,
         ModTarget::Sound(_, SoundParam::Pitch) => 12.0,
         ModTarget::Sound(_, SoundParam::Chance) => -50.0,
@@ -866,12 +997,16 @@ pub fn depth_range(target: ModTarget) -> f32 {
         ModTarget::Pan | ModTarget::SatTone => 2.0,
         ModTarget::LowCut | ModTarget::EqFreq(_) => 6.0,
         ModTarget::EqGain(_) | ModTarget::CompMakeup | ModTarget::SatDrive => 24.0,
-        ModTarget::SatMix | ModTarget::Plugin(..) => 1.0,
+        ModTarget::LimitGain => 30.0,
+        ModTarget::LimitCeiling => 12.0,
+        ModTarget::SatMix | ModTarget::Plugin(..) | ModTarget::Tool(..) | ModTarget::Poly(_) => 1.0,
         ModTarget::Sampler(SamplerParam::Cutoff | SamplerParam::FilterEnv) => 8.0,
         ModTarget::Sampler(SamplerParam::LfoFilter) => 6.0,
         ModTarget::Sampler(SamplerParam::Transpose) => 24.0,
         ModTarget::Sampler(SamplerParam::Volume) => 48.0,
         ModTarget::Sampler(SamplerParam::Vibrato) => 1200.0,
+        ModTarget::Sampler(SamplerParam::Speed) => 4.0,
+        ModTarget::Sampler(SamplerParam::GrainSize) => 4.0,
         ModTarget::Sampler(_) => 1.0,
         ModTarget::Sound(_, SoundParam::Velocity) => 127.0,
         ModTarget::Sound(_, SoundParam::Pitch) => 24.0,
@@ -896,6 +1031,8 @@ pub fn depth_text(target: ModTarget, depth: f32) -> String {
         | ModTarget::CompThreshold
         | ModTarget::CompMakeup
         | ModTarget::SatDrive
+        | ModTarget::LimitGain
+        | ModTarget::LimitCeiling
         | ModTarget::Sampler(SamplerParam::Volume) => format!("{sign}{d:.1} dB"),
         ModTarget::LowCut
         | ModTarget::EqFreq(_)

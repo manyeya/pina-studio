@@ -55,6 +55,10 @@ pub struct PluginRef {
     /// For a plugin with a sidechain input: the track (by id) it hears there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidechain: Option<u64>,
+    /// Which running plugin it is (0: none yet), so the same plugin twice on a channel are told
+    /// apart as they're moved, added and taken out. Not saved.
+    #[serde(skip)]
+    pub instance: u64,
 }
 
 impl PluginRef {

@@ -14,6 +14,9 @@ pub const LANE_LEN: usize = 2048;
 pub struct Tap {
     /// The lane watched (`usize::MAX`: none).
     pub slot: AtomicUsize,
+    /// Which of its EQs: `usize::MAX` its own, else its place among the lane's other
+    /// built-ins.
+    pub more: AtomicUsize,
     /// A band of it heard alone, by id (0: none), and the level it's heard at (dB, f32 bits).
     pub solo: AtomicU32,
     pub solo_db: AtomicU32,
@@ -47,6 +50,7 @@ impl Tap {
         let ring = || (0..TAP_LEN).map(|_| AtomicU32::new(0)).collect();
         Tap {
             slot: AtomicUsize::new(usize::MAX),
+            more: AtomicUsize::new(usize::MAX),
             solo: AtomicU32::new(0),
             solo_db: AtomicU32::new(0),
             pre: ring(),
@@ -118,6 +122,12 @@ impl Tap {
     /// Whether `slot`'s EQ is watched.
     pub fn watches(&self, slot: usize) -> bool {
         self.slot.load(Ordering::Relaxed) == slot
+    }
+
+    /// Whether it watches lane `slot`'s EQ `more` (None its own, else its place among the
+    /// lane's other built-ins).
+    pub fn watches_eq(&self, slot: usize, more: Option<usize>) -> bool {
+        self.watches(slot) && self.more.load(Ordering::Relaxed) == more.unwrap_or(usize::MAX)
     }
 
     /// The band heard alone, and its level.

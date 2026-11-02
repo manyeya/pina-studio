@@ -121,10 +121,8 @@ fn the_compressor_turns_loud_signals_down_by_the_ratio() {
 
 #[test]
 fn the_saturator_keeps_quiet_sounds_and_rounds_off_loud_ones() {
-    let sat = Saturator {
-        drive_db: 12.0,
-        ..Saturator::default()
-    };
+    let mut sat = Saturator::default();
+    sat.bands[0].drive_db = 12.0;
     assert!((sat_curve(&sat, 0.001) / 0.001 - 1.0).abs() < 0.01); // quiet: unity
     assert!(sat_curve(&sat, 1.0) < 0.3); // loud: rounded off
     let level = |sat: &Saturator, freq: f64, level: f32| {
@@ -149,10 +147,8 @@ fn hard_drive_hardly_aliases() {
     // back down between the harmonics: at 1, 6, 8 and 13 kHz (the 7th, 6th, 8th and 5th
     // folded at 48 kHz), and at 2, 5, 9 and 12 kHz (the 14th, 13th, 15th and 12th, folded at
     // the 96 kHz the saturator runs at).
-    let sat = Saturator {
-        drive_db: 24.0,
-        ..Saturator::default()
-    };
+    let mut sat = Saturator::default();
+    sat.bands[0].drive_db = 24.0;
     let (out, _) = run(None, None, Some(&sat), 7_000.0, 0.9);
     let naive: Vec<f32> = sine(7_000.0, 48_000, 0.9)
         .iter()

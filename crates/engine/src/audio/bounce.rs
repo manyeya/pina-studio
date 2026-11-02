@@ -197,7 +197,7 @@ pub fn render(
     let p = arranged(p, job);
     let r = rate as f64;
     let (from, to) = job.range.unwrap_or((0, p.end()));
-    let lead = p.samples(from.min(p.bar()), r);
+    let lead = p.span(from - from.min(p.bar()), from, r);
     let start = p.samples(from, r).saturating_sub(lead);
     let body = p.samples(to, r).saturating_sub(start);
     let extra = if tail { (TAIL_MAX * r) as u64 } else { 0 };
@@ -554,31 +554,7 @@ fn halve(x: &[f32]) -> Vec<f32> {
 pub fn midi(p: &Project, range: Option<(u64, u64)>) -> Vec<u8> {
     let (from, to) = range.unwrap_or((0, p.end()));
     let ppq = crate::song::project::PPQ as u16;
-    let vlq = |mut v: u64, out: &mut Vec<u8>| {
-        let mut bytes = vec![(v & 0x7f) as u8];
-        v >>= 7;
-        while v > 0 {
-            bytes.push((v & 0x7f) as u8 | 0x80);
-            v >>= 7;
-        }
-        out.extend(bytes.iter().rev());
-    };
-    let chunk = |events: Vec<(u64, Vec<u8>)>| -> Vec<u8> {
-        let mut events = events;
-        events.sort_by_key(|e| e.0);
-        let mut body = Vec::new();
-        let mut now = 0u64;
-        for (at, bytes) in events {
-            vlq(at - now, &mut body);
-            body.extend(bytes);
-            now = at;
-        }
-        body.extend([0x00, 0xff, 0x2f, 0x00]);
-        let mut out = b"MTrk".to_vec();
-        out.extend((body.len() as u32).to_be_bytes());
-        out.extend(body);
-        out
-    };
+    use crate::song::midi_file::chunk;
     let name = |s: &str| {
         let mut e = vec![0xff, 0x03];
         let b = s.as_bytes();
@@ -586,14 +562,22 @@ pub fn midi(p: &Project, range: Option<(u64, u64)>) -> Vec<u8> {
         e.extend(&b[..b.len().min(127)]);
         e
     };
-    // The conductor: tempo and time signature.
-    let micros = (60_000_000.0 / p.tempo).round() as u32;
-    let [beats, unit] = p.time_signature;
-    let mut conductor = vec![(0u64, {
+    // The conductor: the tempo where the range starts and each change in it, and the time
+    // signature.
+    let tempo = |bpm: f64| {
+        let micros = (60_000_000.0 / bpm).round() as u32;
         let mut e = vec![0xff, 0x51, 0x03];
         e.extend(&micros.to_be_bytes()[1..]);
         e
-    })];
+    };
+    let [beats, unit] = p.time_signature;
+    let mut conductor = vec![(0u64, tempo(p.tempo_at(from)))];
+    conductor.extend(
+        p.tempos
+            .iter()
+            .filter(|c| c.tick > from && c.tick < to)
+            .map(|c| (c.tick - from, tempo(c.bpm))),
+    );
     conductor.push((
         0,
         vec![

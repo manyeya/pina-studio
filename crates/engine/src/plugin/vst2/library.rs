@@ -55,6 +55,7 @@ impl Library {
             playing: AtomicBool::new(false),
             position: AtomicU64::new(0),
             tempo: AtomicU64::new(120f64.to_bits()),
+            beats: AtomicU64::new(0),
             changed: AtomicBool::new(false),
             sent,
             window: AtomicPtr::new(ptr::null_mut()),
