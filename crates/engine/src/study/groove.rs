@@ -24,6 +24,26 @@ pub struct Groove {
     pub likeness: f32,
 }
 
+impl Groove {
+    /// No groove: what's said of a file with no drums in it.
+    pub fn none() -> Groove {
+        Groove {
+            kick: String::new(),
+            snare: String::new(),
+            hats: String::new(),
+            swing: 50.0,
+            swing_on: String::new(),
+            syncopation: 0.0,
+            nearest: String::new(),
+            likeness: 0.0,
+        }
+    }
+
+    pub fn is_none(&self) -> bool {
+        self.kick.is_empty() && self.snare.is_empty() && self.hats.is_empty()
+    }
+}
+
 /// Each drum's strength on each 16th of each bar: the strongest start near the step.
 fn grid(series: &[f32], f: &Frames, bars: &[f32], per_bar: usize, bar_len: f32) -> Vec<[f32; 16]> {
     let width = (f.onset_rate * bar_len / 16.0 * 0.4) as usize;

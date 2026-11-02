@@ -125,7 +125,27 @@ fn track(onset: &[f32], period: f32) -> Vec<usize> {
 pub fn beats(f: &Frames) -> Beats {
     let onset = peaks_of(&f.onset, (f.onset_rate * 0.4) as usize);
     let (p, confidence) = period(&onset, f.onset_rate);
-    let frames = track(&onset, p);
+    follow(f, &onset, p, confidence)
+}
+
+/// The beats of a loop whose tempo is known: it starts on its first beat and keeps exact time,
+/// so nothing's left to follow.
+pub fn grid(bpm: f32, seconds: f32) -> Beats {
+    let beat = 60.0 / bpm;
+    Beats {
+        bpm,
+        confidence: 1.0,
+        beats: (0..)
+            .map(|i| i as f32 * beat)
+            .take_while(|t| *t < seconds)
+            .collect(),
+        per_bar: 4,
+        first: 0,
+    }
+}
+
+fn follow(f: &Frames, onset: &[f32], p: f32, confidence: f32) -> Beats {
+    let frames = track(onset, p);
     let mut beats: Vec<f32> = frames.iter().map(|&t| t as f32 / f.onset_rate).collect();
     // Off-beat hats (house, disco) can pull the beat half a beat late: kicks land on the beat in
     // nearly every song, so if they're stronger between the beats found, the beats move there.

@@ -11,6 +11,10 @@ pub mod features;
 pub mod form;
 pub mod groove;
 pub mod harmony;
+pub mod nature;
+pub mod reference;
+pub mod spectrogram;
+pub mod timing;
 pub mod words;
 
 use std::path::{Path, PathBuf};
@@ -26,10 +30,11 @@ use crate::{
 
 pub use groove::Groove;
 pub use harmony::ChordAt;
+pub use nature::{Makeup, Nature, Sure};
 pub use words::Lyrics;
 
 /// Bumped when what a study holds changes, so older ones are made again.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Identity {
@@ -52,6 +57,11 @@ pub struct Tempo {
     /// Each beat's time and each bar's start, seconds.
     pub beats: Vec<f32>,
     pub bars: Vec<f32>,
+    #[serde(default)]
+    pub sure: Sure,
+    /// Where it comes from, a line each.
+    #[serde(default)]
+    pub why: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -64,6 +74,13 @@ pub struct KeyInfo {
     /// How far its notes sit off A440, in cents (a song tuned to 432 Hz is -32).
     #[serde(default)]
     pub tuning: f32,
+    #[serde(default)]
+    pub sure: Sure,
+    #[serde(default)]
+    pub why: Vec<String>,
+    /// What else it could be, when it's unsure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -117,6 +134,9 @@ pub struct Study {
     pub version: u32,
     pub file: PathBuf,
     pub identity: Identity,
+    /// What the file is: everything else says only what can be true of it.
+    #[serde(default)]
+    pub nature: Nature,
     pub tempo: Tempo,
     pub key: KeyInfo,
     pub sections: Vec<SectionInfo>,
@@ -247,24 +267,41 @@ pub fn study(path: &Path) -> Result<Study, String> {
     let (mut sides, rate) = crate::audio::engine::read_audio(path)?;
     let l = sides.remove(0);
     let r = sides.pop().unwrap_or_else(|| l.clone());
-    let mut s = study_audio(&l, &r, rate as f32)?;
+    let what = nature::of(&l, &r, rate, path);
+    let mut s = study_given(&l, &r, rate as f32, &nature::given(path, &what))?;
     s.identity = Identity {
         seconds: s.identity.seconds,
         ..identity(path)
     };
     s.file = path.to_path_buf();
+    nature::settle(&mut s, what);
     Ok(s)
 }
 
-/// Studies a song's audio.
+/// Studies a song's audio, nothing known of it.
 pub fn study_audio(l: &[f32], r: &[f32], rate: f32) -> Result<Study, String> {
-    if l.len() < (rate * 4.0) as usize {
-        return Err("too short to study: under four seconds".into());
+    study_given(l, r, rate, &nature::Given::default())
+}
+
+/// Studies audio, going by what's known of it.
+pub fn study_given(
+    l: &[f32],
+    r: &[f32],
+    rate: f32,
+    given: &nature::Given,
+) -> Result<Study, String> {
+    if l.len() < (rate * 2.0) as usize {
+        return Err("too short to study: under two seconds".into());
     }
     let seconds = l.len() as f32 / rate;
     let mono: Vec<f32> = l.iter().zip(r).map(|(a, b)| 0.5 * (a + b)).collect();
     let f = features::frames(&mono, rate);
     let b = beats::beats(&f);
+    let (settled, tempo_sure, tempo_why) = nature::tempo(given, b.bpm, b.confidence, seconds);
+    let b = match settled {
+        Some(bpm) => beats::grid(bpm, seconds),
+        None => b,
+    };
     let mut bars = b.bars();
     if bars.is_empty() {
         bars.push(0.0);
@@ -304,7 +341,20 @@ pub fn study_audio(l: &[f32], r: &[f32], rate: f32) -> Result<Study, String> {
     let phrases: Vec<usize> = (b.first..b.beats.len())
         .step_by(b.per_bar.max(1) * 4)
         .collect();
-    let (key, fit) = harmony::by_chords(&scored, &per_beat, &phrases);
+    let (heard, heard_fit) = harmony::by_chords(&scored, &per_beat, &phrases);
+    let (key_sure, key_why, key_other) = nature::key(given.key, heard, heard_fit);
+    let (key, fit) = match given.key {
+        Some(k) => (
+            k,
+            scored.iter().find(|x| x.0 == k).map_or(heard_fit, |x| x.2),
+        ),
+        None => (heard, heard_fit),
+    };
+    // Knowing the key, read them again.
+    let per_beat = match given.line {
+        true => harmony::notes(&beat_chroma, &beat_bass),
+        false => harmony::chords_in(&beat_chroma, &beat_bass, Some(&key)),
+    };
     let mut chords: Vec<ChordAt> = Vec::new();
     for (i, c) in per_beat.iter().enumerate() {
         let (a, z) = span(i, &b.beats);
@@ -442,6 +492,8 @@ pub fn study_audio(l: &[f32], r: &[f32], rate: f32) -> Result<Study, String> {
         time_signature: [b.per_bar as u32, 4],
         beats: b.beats.clone(),
         bars: bars.clone(),
+        sure: tempo_sure,
+        why: tempo_why,
     };
     let genres = genres(&tempo, &key, &groove, &overall);
     Ok(Study {
@@ -451,12 +503,16 @@ pub fn study_audio(l: &[f32], r: &[f32], rate: f32) -> Result<Study, String> {
             seconds,
             ..Default::default()
         },
+        nature: Nature::default(),
         tempo,
         key: KeyInfo {
             name: key.name(),
             fit,
             changes,
             tuning: f.tuning.round(),
+            sure: key_sure,
+            why: key_why,
+            other: key_other,
         },
         sections,
         chords,
@@ -710,6 +766,41 @@ pub fn attach_lyrics(s: &mut Study, lines: &[(Option<f32>, String)], source: &st
     s.lyrics = Some(lyrics);
 }
 
+/// The book a song has: a new one, or the one it already has brought up to date, keeping what
+/// the person made of it (its name, the notes they added, how they said to write its parts).
+pub fn song_book(s: &Study) -> Playbook {
+    let books = playbook::load().0;
+    let taken: Vec<String> = books.iter().map(|p| p.id.clone()).collect();
+    let made = to_playbook(s, &taken);
+    match books
+        .iter()
+        .find(|b| b.source.as_ref() == Some(&s.file) || b.name == made.name)
+    {
+        Some(had) => brought_up_to_date(made, had),
+        None => made,
+    }
+}
+
+fn brought_up_to_date(mut made: Playbook, had: &Playbook) -> Playbook {
+    let ours = ["Studied from", "Groove:", "Its chorus", "Its hook"];
+    let theirs = had
+        .notes
+        .iter()
+        .filter(|n| !ours.iter().any(|o| n.starts_with(o)))
+        .cloned();
+    made.notes.extend(theirs);
+    for part in &mut made.parts {
+        if let Some(old) = had.parts.iter().find(|p| p.role == part.role)
+            && part.write.is_empty()
+        {
+            part.write = old.write.clone();
+        }
+    }
+    made.id = had.id.clone();
+    made.name = had.name.clone();
+    made
+}
+
 /// A playbook made from the song: its tempo, swing, key, groove, sections (their bars, energy
 /// and who plays), its parts, mix and what stands out about it, to make songs like it.
 pub fn to_playbook(s: &Study, taken: &[String]) -> Playbook {
@@ -718,15 +809,20 @@ pub fn to_playbook(s: &Study, taken: &[String]) -> Playbook {
         (false, true) => format!("Like {}", s.identity.title),
         _ => "Like this song".to_string(),
     };
-    let nearest = s.genres.first().and_then(|g| playbook::find(&g.id));
     let minor = s.key.name.ends_with("minor");
     let mut parts: Vec<Part> = Vec::new();
     for e in &s.instruments {
         if !parts.iter().any(|p| p.role == e.role) {
-            let write = nearest
-                .as_ref()
-                .and_then(|b| b.parts.iter().find(|p| p.role == e.role))
-                .map_or(String::new(), |p| p.write.clone());
+            // What the song itself does, never another genre's recipe: the drums as heard, the
+            // rest the agent's to write.
+            let g = &s.groove;
+            let write = match e.role.as_str() {
+                "drums" => format!(
+                    "as the song: kick {}, snare {}, hats {}, swing {:.0} on the {}",
+                    g.kick, g.snare, g.hats, g.swing, g.swing_on
+                ),
+                _ => String::new(),
+            };
             parts.push(Part {
                 role: e.role.clone(),
                 sound: e.name.to_lowercase(),
@@ -734,13 +830,32 @@ pub fn to_playbook(s: &Study, taken: &[String]) -> Playbook {
             });
         }
     }
+    // How hard each section plays, from its loudness across the song: most of a mastered song
+    // is near its loudest, so against the rest of it, not against silence.
+    let heard = |x: &SectionInfo| x.lufs > -40.0;
+    let loudest = s
+        .sections
+        .iter()
+        .filter(|x| heard(x))
+        .map(|x| x.lufs)
+        .fold(f32::MIN, f32::max);
+    let quietest = s
+        .sections
+        .iter()
+        .filter(|x| heard(x))
+        .map(|x| x.lufs)
+        .fold(f32::MAX, f32::min);
+    let energy = |x: &SectionInfo| match heard(x) {
+        true => (1.0 + 4.0 * (x.lufs - quietest) / (loudest - quietest).max(0.5)).round() as u8,
+        false => 1,
+    };
     let sections = s
         .sections
         .iter()
         .enumerate()
         .map(|(i, x)| Section {
             name: x.name.clone(),
-            bars: (x.bars.div_ceil(4) * 4).max(4) as u64,
+            bars: x.bars.max(1) as u64,
             parts: s
                 .instruments
                 .iter()
@@ -752,21 +867,27 @@ pub fn to_playbook(s: &Study, taken: &[String]) -> Playbook {
                     }
                     v
                 }),
-            energy: (1.0 + (x.energy * 4.0).round()) as u8,
+            energy: energy(x),
+            lufs: Some((x.lufs * 10.0).round() / 10.0),
         })
         .collect();
     let sp = &s.mix.overall.spectrum_db;
     let chorus = s.sections.iter().find(|x| x.name.starts_with("Chorus"));
-    let mut notes = vec![
-        format!(
-            "Studied from {}: {:.0} BPM, {}, swing {:.0} on the {}.",
-            s.identity.file_name, s.tempo.bpm, s.key.name, s.groove.swing, s.groove.swing_on
-        ),
-        format!(
-            "Groove: kick {}, snare {}, hats {}.",
-            s.groove.kick, s.groove.snare, s.groove.hats
-        ),
-    ];
+    let mut notes = vec![format!(
+        "Studied from {}: {:.0} BPM{}.",
+        s.identity.file_name,
+        s.tempo.bpm,
+        match s.key.name.is_empty() {
+            true => String::new(),
+            false => format!(", {}", s.key.name),
+        },
+    )];
+    if !s.groove.is_none() {
+        notes.push(format!(
+            "Groove: kick {}, snare {}, hats {}, swing {:.0} on the {}.",
+            s.groove.kick, s.groove.snare, s.groove.hats, s.groove.swing, s.groove.swing_on
+        ));
+    }
     if let Some(c) = chorus {
         notes.push(format!(
             "Its chorus goes round {} ({}), {} bars.",
@@ -779,24 +900,48 @@ pub fn to_playbook(s: &Study, taken: &[String]) -> Playbook {
         notes.push(format!("Its hook: \"{h}\"."));
     }
     let bpm = s.tempo.bpm as f64;
+    // The eight bars that move the most.
+    let moving = s
+        .sections
+        .iter()
+        .filter(|x| !x.chords.is_empty())
+        .max_by_key(|x| {
+            let bars: Vec<&str> = x.chords.split(" | ").collect();
+            let mut heard = bars.clone();
+            heard.sort();
+            heard.dedup();
+            (heard.len(), bars.len())
+        });
+    let bars = |v: Option<&str>| -> Vec<String> {
+        v.map_or(Vec::new(), |t| {
+            t.split(" | ").take(8).map(str::to_string).collect()
+        })
+    };
     Playbook {
         id: playbook::new_id(&name, taken),
         name,
         tempo: ((bpm - 4.0).round(), (bpm + 4.0).round()),
         minor,
-        groove: s.groove.nearest.clone(),
+        groove: match s.groove.nearest.is_empty() {
+            true => crate::music::theory::GROOVES[0].id.to_string(),
+            false => s.groove.nearest.clone(),
+        },
         swing: s.groove.swing.round(),
-        harmony: nearest
-            .as_ref()
-            .map_or(if minor { "dark".into() } else { "warm".into() }, |b| {
-                b.harmony.clone()
-            }),
+        harmony: if minor { "dark".into() } else { "warm".into() },
         parts,
         sections,
         lufs: (s.mix.overall.lufs * 2.0).round() / 2.0,
         spectrum: [sp.sub, sp.bass, sp.low_mid, sp.mid, sp.presence, sp.air]
             .map(|v| (v * 2.0).round() / 2.0),
         notes,
+        chords: bars(moving.map(|x| x.chords.as_str())),
+        numerals: bars(moving.map(|x| x.numerals.as_str())),
+        beat: (!s.groove.is_none()).then(|| playbook::Beat {
+            kick: s.groove.kick.clone(),
+            snare: s.groove.snare.clone(),
+            hats: s.groove.hats.clone(),
+        }),
+        source: Some(s.file.clone()),
     }
 }
 

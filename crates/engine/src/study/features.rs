@@ -6,6 +6,8 @@ use crate::samples::dsp::Spectra;
 
 /// The rate frames are taken at, near 22 kHz (a song's top octave says little about its form).
 const WORK_RATE: f32 = 22_050.0;
+/// How far under a frame's loudest note, as a share of it, a note still counts as its bass.
+const LOWEST: f32 = 0.1;
 const SIZE: usize = 4096;
 const HOP: usize = 512;
 const BANDS: usize = 40;
@@ -108,7 +110,7 @@ fn onsets(x: &[f32], sr: f32) -> [Vec<f32>; 4] {
 }
 
 /// `x` (mono, at `rate`) taken down near 22 kHz by an integer step, averaging what's dropped.
-fn decimate(x: &[f32], rate: f32) -> (Vec<f32>, f32) {
+pub(crate) fn decimate(x: &[f32], rate: f32) -> (Vec<f32>, f32) {
     let step = ((rate / WORK_RATE).floor() as usize).max(1);
     if step == 1 {
         return (x.to_vec(), rate);
@@ -227,17 +229,36 @@ pub fn frames(mono: &[f32], rate: f32) -> Frames {
         // isn't.
         let mut chroma = [0f32; 12];
         let mut bass = [0f32; 12];
+        // A pitch counts once, however many peaks a held or wavering note makes round it.
+        let mut pitches = [0f32; 128];
         for k in 1..n_bins - 1 {
-            if let Some((pc, low)) = class_of[k]
-                && power[k] > power[k - 1]
-                && power[k] >= power[k + 1]
-            {
+            if class_of[k].is_some() && power[k] > power[k - 1] && power[k] >= power[k + 1] {
+                // Where the peak really is, between the bins: low notes are closer than a bin.
+                let (a, b, c) = (
+                    power[k - 1].max(1e-20).ln(),
+                    power[k].max(1e-20).ln(),
+                    power[k + 1].max(1e-20).ln(),
+                );
+                let bend = a - 2.0 * b + c;
+                let d = if bend < 0.0 {
+                    (0.5 * (a - c) / bend).clamp(-0.5, 0.5)
+                } else {
+                    0.0
+                };
+                let midi = 69.0 + 12.0 * ((k as f32 + d) * bin / 440.0).log2() - tune;
+                let note = (midi.round() as i32).clamp(0, 127) as usize;
                 let m = power[k].sqrt();
-                chroma[pc] += m;
-                if low {
-                    bass[pc] += m;
-                }
+                pitches[note] = pitches[note].max(m);
             }
+        }
+        for (note, m) in pitches.iter().enumerate() {
+            chroma[note % 12] += m;
+        }
+        // The bass is the lowest note really sounding, wherever that is: a piano's can be well
+        // above a bass guitar's.
+        let top = pitches.iter().copied().fold(0.0, f32::max);
+        if let Some(note) = (31..84).find(|&n| top > 0.0 && pitches[n] >= top * LOWEST) {
+            bass[note % 12] += pitches[note];
         }
         out.chroma.push(chroma);
         out.bass.push(bass);

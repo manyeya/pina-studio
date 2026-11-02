@@ -6,155 +6,109 @@ use std::path::Path;
 use super::*;
 use crate::{
     audio::engine::Engine,
-    music::arrange::{self, Arrangement, SectionIn},
-    music::compose::{self, BassPart, ChordPart, DrumPart, MelodyPart},
-    music::theory::{BassStyle, ChordRhythm, MelodyStyle},
-    song::project::{Instrument, Project, Track},
+    music::compose,
+    song::project::{Content, Instrument, Marker, Note, Project, Region, Track},
 };
 
 const RATE: f64 = 44_100.0;
 
-/// Pop at 124 in A minor: Am F C G, an intro of chords alone, verses with drums and bass,
-/// choruses (F G C Am) with a lead on top, an outro; rendered. (Pop's groove, not house's: the
-/// built-in kit's clap and open hat are the same white noise, so no ear could tell house's
-/// apart.)
+/// Pop at 124 in A minor, written by hand: Am F C G, an intro of chords alone, verses with drums
+/// and bass, choruses (F G C Am) with a lead on top, an outro; rendered. (Pop's groove, not
+/// house's: the built-in kit's clap and open hat are the same white noise, so no ear could tell
+/// house's apart.)
 fn song() -> (Vec<f32>, Vec<f32>, Project) {
     let mut p = Project::new(RATE as u32);
     p.set_tempo(124.0);
     p.key = Some("A minor".into());
-    for (name, i) in [
+    let bar = p.bar() as i64;
+    // Each section: its name, bars, chords, and which of drums, bass, keys, lead play.
+    let verse = ["Am", "F", "C", "G"];
+    let chorus = ["F", "G", "C", "Am"];
+    let sections = [
+        ("Intro", 8, verse, [false, false, true, false]),
+        ("Verse", 16, verse, [true, true, true, false]),
+        ("Chorus", 16, chorus, [true, true, true, true]),
+        ("Verse 2", 16, verse, [true, true, true, false]),
+        ("Chorus 2", 16, chorus, [true, true, true, true]),
+        ("Outro", 8, verse, [false, false, true, false]),
+    ];
+    let shape = |c: &str| -> (u8, [u8; 3]) {
+        match c {
+            "Am" => (45, [57, 60, 64]),
+            "F" => (41, [57, 60, 65]),
+            "C" => (48, [55, 60, 64]),
+            _ => (43, [55, 59, 62]),
+        }
+    };
+    let note = |start: i64, length: i64, pitch: u8, velocity: u8| Note {
+        start,
+        length: length as u64,
+        pitch,
+        velocity,
+    };
+    let mut parts: [Vec<Note>; 4] = Default::default();
+    let mut at = 0i64;
+    for (name, bars, chords, playing) in sections {
+        p.markers.push(Marker {
+            tick: at as u64,
+            name: name.into(),
+            ..Default::default()
+        });
+        for b in 0..bars {
+            let t = at + b * bar;
+            let c = chords[b as usize % 4];
+            compose::set_chords(&mut p, Some(c), Some(t as u64), Some(1)).unwrap();
+            let (root, triad) = shape(c);
+            if playing[0] {
+                for s in [0, 8, 10] {
+                    parts[0].push(note(t + s * 240, 120, 36, 110));
+                }
+                for s in [4, 12] {
+                    parts[0].push(note(t + s * 240, 120, 38, 104));
+                }
+                for e in 0..8 {
+                    parts[0].push(note(t + e * 480, 60, 42, if e % 2 == 0 { 84 } else { 62 }));
+                }
+            }
+            if playing[1] {
+                parts[1].push(note(t, bar - 40, root, 100));
+            }
+            if playing[2] {
+                for n in triad {
+                    parts[2].push(note(t, bar - 40, n, 88));
+                }
+            }
+            if playing[3] {
+                for (s, k) in [(0, 2), (3, 1), (6, 0), (8, 1), (10, 2), (12, 1), (14, 0)] {
+                    parts[3].push(note(t + s * 240, 200, triad[k] + 12, 100));
+                }
+            }
+        }
+        at += bars * bar;
+    }
+    for ((name, i), notes) in [
         ("Drums", Instrument::Drums),
         ("Bass", Instrument::Synth),
         ("Keys", Instrument::Synth),
         ("Lead", Instrument::Synth),
-    ] {
+    ]
+    .into_iter()
+    .zip(parts)
+    {
         p.tracks.push(Track {
             name: name.into(),
             instrument: Some(i),
+            regions: vec![Region {
+                start: 0,
+                length: at as u64,
+                content: Content::Midi {
+                    notes,
+                    controls: Vec::new(),
+                },
+                ..Default::default()
+            }],
             ..Default::default()
         });
-    }
-    compose::set_chords(&mut p, Some("Am | F | C | G"), None, Some(8)).unwrap();
-    compose::write_drums(
-        &mut p,
-        DrumPart {
-            track: 0,
-            start: None,
-            bars: None,
-            style: Some("pop".into()),
-            fill_every: Some(0),
-            seed: Some(1),
-        },
-    )
-    .unwrap();
-    compose::write_bass(
-        &mut p,
-        BassPart {
-            track: 1,
-            start: None,
-            bars: None,
-            style: Some(BassStyle::Roots),
-            register: None,
-            seed: None,
-            kick_track: None,
-        },
-    )
-    .unwrap();
-    compose::write_chords(
-        &mut p,
-        ChordPart {
-            track: 2,
-            start: None,
-            bars: None,
-            chords: None,
-            voicing: None,
-            rhythm: Some(ChordRhythm::Held),
-            register: None,
-            seed: None,
-        },
-    )
-    .unwrap();
-    compose::write_melody(
-        &mut p,
-        MelodyPart {
-            track: 3,
-            start: None,
-            bars: None,
-            style: Some(MelodyStyle::Hook),
-            register: None,
-            density: Some(0.8),
-            seed: Some(2),
-        },
-    )
-    .unwrap();
-    let section = |name: &str, bars: u64, parts: &[&str]| SectionIn {
-        name: name.into(),
-        bars,
-        parts: parts.iter().map(|s| s.to_string()).collect(),
-        energy: None,
-    };
-    arrange::arrange(
-        &mut p,
-        Arrangement {
-            from: None,
-            bars: Some(8),
-            sections: Some(vec![
-                section("Intro", 8, &["2"]),
-                section("Verse", 16, &["0", "1", "2"]),
-                section("Chorus", 16, &["0", "1", "2", "3"]),
-                section("Verse 2", 16, &["0", "1", "2"]),
-                section("Chorus 2", 16, &["0", "1", "2", "3"]),
-                section("Outro", 8, &["2"]),
-            ]),
-            roles: None,
-        },
-    )
-    .unwrap();
-    // The choruses go round chords of their own (as choruses do): F G C Am.
-    let bar = p.bar();
-    for chorus in [24u64, 56] {
-        let start = Some(chorus * bar);
-        compose::set_chords(&mut p, Some("F | G | C | Am"), start, Some(16)).unwrap();
-        compose::write_bass(
-            &mut p,
-            BassPart {
-                track: 1,
-                start,
-                bars: Some(16),
-                style: Some(BassStyle::Roots),
-                register: None,
-                seed: None,
-                kick_track: None,
-            },
-        )
-        .unwrap();
-        compose::write_chords(
-            &mut p,
-            ChordPart {
-                track: 2,
-                start,
-                bars: Some(16),
-                chords: None,
-                voicing: None,
-                rhythm: Some(ChordRhythm::Held),
-                register: None,
-                seed: None,
-            },
-        )
-        .unwrap();
-        compose::write_melody(
-            &mut p,
-            MelodyPart {
-                track: 3,
-                start,
-                bars: Some(16),
-                style: Some(MelodyStyle::Hook),
-                register: None,
-                density: Some(0.8),
-                seed: Some(2),
-            },
-        )
-        .unwrap();
     }
     // The lead louder, so the chorus is the loudest part.
     p.tracks[3].volume_db = 3.0;
@@ -241,6 +195,14 @@ fn lyrics_name_the_chorus_and_a_study_becomes_a_playbook() {
     assert_eq!(book.name, "Like Test Song");
     assert!(book.tempo.0 <= 124.0 && book.tempo.1 >= 124.0);
     assert!(book.sections.len() >= 4 && book.parts.iter().any(|p| p.role == "drums"));
+    // Its parts say what the song does, never a command or another genre's recipe.
+    let drums = book.parts.iter().find(|p| p.role == "drums").unwrap();
+    assert!(
+        drums.write.starts_with("as the song: kick "),
+        "{}",
+        drums.write
+    );
+    assert!(book.parts.iter().all(|p| !p.write.contains("write_")));
     assert!(
         book.notes
             .iter()
@@ -269,5 +231,96 @@ fn a_file_name_says_who_and_what() {
     assert_eq!(
         id("Just a title.flac"),
         (String::new(), "Just a title".into())
+    );
+}
+
+#[test]
+fn saving_a_songs_book_again_keeps_what_the_person_made_of_it() {
+    let book = |json: &str| serde_json::from_str::<Playbook>(json).unwrap();
+    let had = book(include_str!("../music/playbook/fixtures/house.json"));
+    let mut had = Playbook {
+        name: "My House".into(),
+        notes: vec![
+            "Studied from an old file.".into(),
+            "Keep the hats dry.".into(),
+        ],
+        ..had
+    };
+    had.parts[0].write = "my own words".into();
+    let mut made = had.clone();
+    made.id = "like_it".into();
+    made.name = "Like It".into();
+    made.notes = vec!["Studied from the file.".into()];
+    made.parts[0].write = String::new();
+    let up = brought_up_to_date(made, &had);
+    assert_eq!(
+        (up.id.as_str(), up.name.as_str()),
+        (had.id.as_str(), "My House")
+    );
+    assert_eq!(up.notes, ["Studied from the file.", "Keep the hats dry."]);
+    assert_eq!(up.parts[0].write, "my own words");
+}
+
+#[test]
+fn a_loud_held_note_doesnt_hide_the_chords_under_it() {
+    // A loud G5 wavering over four bars of Em and four of C, the way a piano loop can be: the
+    // top note is in both chords, and what changes is underneath it.
+    let rate = 44_100.0;
+    let tone = |f: f32, t: f32| (std::f32::consts::TAU * f * t).sin();
+    let x: Vec<f32> = (0..(rate * 16.0) as usize)
+        .map(|i| {
+            let t = i as f32 / rate;
+            let low: &[f32] = match (t / 8.0) as u32 {
+                0 => &[164.81, 246.94],
+                _ => &[130.81, 196.0],
+            };
+            let waver = 1.0 + 0.5 * tone(6.0, t);
+            0.5 * waver * tone(783.99, t) + low.iter().map(|f| 0.09 * tone(*f, t)).sum::<f32>()
+        })
+        .collect();
+    let given = nature::Given {
+        tempo: Some((120.0, false)),
+        key: crate::music::Key::parse("E minor"),
+        looped: true,
+        line: false,
+    };
+    let s = study_given(&x, &x, rate, &given).unwrap();
+    let at = |t: f32| {
+        s.chords
+            .iter()
+            .find(|c| c.start <= t && c.end > t)
+            .map(|c| c.chord.clone())
+            .unwrap_or_default()
+    };
+    assert!(at(4.0).starts_with('E'), "{:?}", s.chords);
+    assert!(at(12.0).starts_with('C'), "{:?}", s.chords);
+}
+
+#[test]
+fn a_bass_line_reads_as_its_notes() {
+    let rate = 44_100.0;
+    let x: Vec<f32> = (0..(rate * 8.0) as usize)
+        .map(|i| {
+            let t = i as f32 / rate;
+            let f = if t < 4.0 { 61.74 } else { 49.0 };
+            let mut v = 0.0;
+            for h in 1..5 {
+                v += (std::f32::consts::TAU * f * h as f32 * t).sin() / h as f32;
+            }
+            0.3 * v
+        })
+        .collect();
+    let given = nature::Given {
+        tempo: Some((120.0, false)),
+        key: crate::music::Key::parse("B minor"),
+        looped: true,
+        line: true,
+    };
+    let s = study_given(&x, &x, rate, &given).unwrap();
+    assert!(s.chords[0].chord.starts_with('B'), "{:?}", s.chords);
+    assert!(
+        s.chords.last().unwrap().chord.starts_with('G'),
+        "{:?}",
+        s.chords
     );
 }

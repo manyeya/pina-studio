@@ -9,7 +9,7 @@ use pina_engine::study::{self, Study};
 use serde_json::{Value, json};
 
 /// Where studies are kept (`PINA_STUDIES`, for tests).
-fn cache_dir() -> PathBuf {
+pub(crate) fn cache_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("PINA_STUDIES") {
         return PathBuf::from(d);
     }
@@ -43,6 +43,59 @@ pub fn studied() -> Vec<Study> {
     out.into_iter().map(|(_, s)| s).collect()
 }
 
+/// The picture of a song's spectrum, made once a file.
+pub fn spectrogram(path: &Path) -> Result<PathBuf, String> {
+    let hash = file_hash(path).ok_or("no such file")?;
+    // A test never writes to the person's studies.
+    let dir = match cfg!(test) && std::env::var_os("PINA_STUDIES").is_none() {
+        true => std::env::temp_dir().join("pina-test-spectrograms"),
+        false => cache_dir(),
+    };
+    let file = dir.join(format!("{hash:016x}.png"));
+    if !file.is_file() {
+        let (mut sides, rate) = pina_engine::audio::engine::read_audio(path)?;
+        let l = sides.remove(0);
+        let r = sides.pop().unwrap_or_else(|| l.clone());
+        let _ = std::fs::create_dir_all(&dir);
+        study::spectrogram::paint(&l, &r, rate as f32, &file)?;
+    }
+    Ok(file)
+}
+
+/// Songs studied before what a study holds changed, to study again.
+pub fn stale() -> Vec<PathBuf> {
+    // A test never writes to the person's studies.
+    if cfg!(test) && std::env::var_os("PINA_STUDIES").is_none() {
+        return Vec::new();
+    }
+    #[derive(serde::Deserialize)]
+    struct Kept {
+        version: u32,
+        file: PathBuf,
+    }
+    let Ok(entries) = std::fs::read_dir(cache_dir()) else {
+        return Vec::new();
+    };
+    let mut files: Vec<(PathBuf, u32)> = entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| {
+            let k: Kept = serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok()?;
+            k.file.is_file().then_some((k.file, k.version))
+        })
+        .collect();
+    let current: Vec<PathBuf> = files
+        .iter()
+        .filter(|f| f.1 == study::VERSION)
+        .map(|f| f.0.clone())
+        .collect();
+    files.retain(|f| !current.contains(&f.0));
+    let mut out: Vec<PathBuf> = files.into_iter().map(|f| f.0).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// A study forgotten: its kept files gone (the song's file stays).
 pub fn forget(path: &Path) {
     for online in [false, true] {
@@ -54,6 +107,12 @@ pub fn forget(path: &Path) {
 
 /// The file a study of `path` is kept in: by its path, size and when it last changed.
 fn cache_file(path: &Path, online: bool) -> Option<PathBuf> {
+    let tag = format!("{}{}", study::VERSION, if online { "-online" } else { "" });
+    Some(cache_dir().join(format!("{:016x}-{tag}.json", file_hash(path)?)))
+}
+
+/// A file's mark: its path, size and when it last changed, hashed.
+pub(crate) fn file_hash(path: &Path) -> Option<u64> {
     let meta = std::fs::metadata(path).ok()?;
     let modified = meta
         .modified()
@@ -72,11 +131,7 @@ fn cache_file(path: &Path, online: bool) -> Option<PathBuf> {
     {
         h = (h ^ *b as u64).wrapping_mul(0x100_0000_01b3);
     }
-    Some(cache_dir().join(format!(
-        "{h:016x}-{}{}.json",
-        study::VERSION,
-        if online { "-online" } else { "" }
-    )))
+    Some(h)
 }
 
 /// A study of the song in `path`, made or kept; `online` adds its lyrics, year and genre.
@@ -333,32 +388,42 @@ pub fn summary(s: &Study) -> String {
         .map(|x| format!("{} ({} bars)", x.name, x.bars))
         .collect();
     let chorus = s.sections.iter().find(|x| x.name.starts_with("Chorus"));
+    let key = match s.key.name.is_empty() {
+        true => "no key".to_string(),
+        false => format!("{} (fit {:.2})", s.key.name, s.key.fit),
+    };
     let mut out = format!(
-        "{who}{year}: {:.0} BPM in {}/{}, {} (fit {:.2}), {:.0}:{:02.0} long. Form: {}.",
+        "{who}{year}: {}. {:.0} BPM in {}/{}, {key}, {:.0}:{:02.0} long.",
+        s.nature.name,
         s.tempo.bpm,
         s.tempo.time_signature[0],
         s.tempo.time_signature[1],
-        s.key.name,
-        s.key.fit,
         (id.seconds / 60.0).floor(),
         id.seconds % 60.0,
-        form.join(", ")
     );
+    if id.seconds > 45.0 {
+        out.push_str(&format!(" Form: {}.", form.join(", ")));
+    }
+    if !s.nature.absent.is_empty() {
+        out.push_str(&format!(" Not in it: {}.", s.nature.absent.join(", ")));
+    }
     if let Some(c) = chorus {
         out.push_str(&format!(
             " Chorus goes round {} ({}).",
             c.chords, c.numerals
         ));
     }
-    out.push_str(&format!(
-        " Groove: kick {}, snare {}, hats {}, swing {:.0} on the {}, nearest Pina Studio groove {}.",
-        s.groove.kick,
-        s.groove.snare,
-        s.groove.hats,
-        s.groove.swing,
-        s.groove.swing_on,
-        s.groove.nearest
-    ));
+    if !s.groove.is_none() {
+        out.push_str(&format!(
+            " Groove: kick {}, snare {}, hats {}, swing {:.0} on the {}, nearest Pina Studio groove {}.",
+            s.groove.kick,
+            s.groove.snare,
+            s.groove.hats,
+            s.groove.swing,
+            s.groove.swing_on,
+            s.groove.nearest
+        ));
+    }
     if let Some(g) = s.genres.first() {
         out.push_str(&format!(" Nearest playbook: {}.", g.name));
     }
