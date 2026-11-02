@@ -4213,6 +4213,7 @@ dependencies = [
  "clap-sys",
  "cpal",
  "hound",
+ "image",
  "midir",
  "mp3lame-encoder",
  "objc2 0.6.5",

@@ -17,6 +17,8 @@ rubberband = "0.1.5"
 clap-sys = "0.5"
 symphonia = { version = "0.6.1", default-features = false, features = ["aiff", "flac", "mp3", "wav", "pcm", "adpcm", "opt-simd"] }
 rustfft = "6.4"
+# Spectrogram pictures, read for a reference (the app already builds it, through its UI).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # macOS: plugin bundles and editor windows, Audio Units.
 [target.'cfg(target_os = "macos")'.dependencies]
