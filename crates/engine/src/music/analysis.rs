@@ -89,6 +89,14 @@ pub(crate) struct Biquad {
 }
 
 impl Biquad {
+    /// One sample through it, `z` its memory (transposed direct form II).
+    pub(crate) fn step(&self, x: f64, z: &mut [f64; 2]) -> f64 {
+        let y = self.b[0] * x + z[0];
+        z[0] = self.b[1] * x - self.a[0] * y + z[1];
+        z[1] = self.b[2] * x - self.a[1] * y;
+        y
+    }
+
     pub(crate) fn run(&self, x: &[f64]) -> Vec<f64> {
         let (mut x1, mut x2, mut y1, mut y2) = (0.0, 0.0, 0.0, 0.0);
         x.iter()
@@ -148,7 +156,7 @@ pub(crate) fn k_weighting(rate: f64) -> [Biquad; 2] {
 
 /// Integrated loudness: K-weighted power in 400 ms blocks, 75% overlapped, gated at -70 LUFS and
 /// then 10 LU under the ungated loudness.
-fn loudness(l: &[f32], r: &[f32], rate: f64) -> f32 {
+pub(crate) fn loudness(l: &[f32], r: &[f32], rate: f64) -> f32 {
     let [shelf, highpass] = k_weighting(rate);
     let weigh = |x: &[f32]| highpass.run(&shelf.run(&wide(x)));
     let (wl, wr) = (weigh(l), weigh(r));

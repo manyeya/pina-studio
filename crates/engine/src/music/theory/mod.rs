@@ -1,28 +1,20 @@
-//! Writing music that's right, so an agent (which can't hear) picks and Pina Studio makes it correct:
-//! chords from symbols or roman numerals, progressions by genre and mood, voicings led smoothly
-//! from chord to chord, basslines and melodies that follow the harmony, and drum grooves by
-//! genre with their swing, ghosts, rolls, variations and fills. All of it the same every time
-//! for a seed.
+//! Music theory to read and check by: chords from symbols or roman numerals and laid out in
+//! time, a library of progressions to suggest, and the drum grooves the step sequencer's library
+//! offers. Nothing here writes a song's parts: the agent writes those itself.
 
-mod bass;
 mod chords;
-mod comping;
 mod drums;
-mod melody;
 mod progressions;
-mod voicing;
+mod spans;
 
-pub use bass::*;
 pub use chords::*;
-pub use comping::*;
 pub use drums::*;
-pub use melody::*;
 pub use progressions::*;
-pub use voicing::*;
+pub use spans::*;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{music::Key, song::project::Note};
+use crate::music::Key;
 
 /// A seeded random number, the same every time for a seed.
 #[derive(Clone)]

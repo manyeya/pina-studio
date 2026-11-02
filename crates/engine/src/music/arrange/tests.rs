@@ -1,50 +1,67 @@
 use super::*;
-use crate::music::compose::{self, ChordPart, DrumPart};
+use crate::{
+    music::compose,
+    song::project::{Pattern, PatternRow},
+};
 
+/// Four bars written by hand, as an agent would: a drum pattern, an 808 on the roots, bells and
+/// a pad on the chords.
 fn sketch() -> Project {
     let mut p = Project::new(48_000);
     p.key = Some("A minor".into());
-    p.genre = Some("trap".into());
-    for (name, instrument) in [
-        ("Drums", Instrument::Drums),
-        ("808", Instrument::Synth),
-        ("Bells", Instrument::Synth),
-        ("Pad", Instrument::Synth),
+    compose::set_chords(&mut p, Some("i | VI | III | VII"), None, None).unwrap();
+    let row = |pitch: u8, hits: &[usize]| PatternRow {
+        pitch,
+        cells: (0..16)
+            .map(|s| if hits.contains(&s) { 100 } else { 0 })
+            .collect(),
+        ..Default::default()
+    };
+    let drums = Content::Pattern(Pattern::new(
+        240,
+        vec![
+            row(36, &[0, 6, 10]),
+            row(38, &[4, 12]),
+            row(42, &[0, 2, 4, 6, 8, 10, 12, 14]),
+        ],
+        50.0,
+    ));
+    let roots = [45u8, 41, 48, 43];
+    let chords = [[57u8, 60, 64], [57, 60, 65], [55, 60, 64], [55, 59, 62]];
+    let notes = |f: &dyn Fn(usize) -> Vec<u8>| Content::Midi {
+        notes: (0..4)
+            .flat_map(|bar| {
+                f(bar).into_iter().map(move |pitch| Note {
+                    start: bar as i64 * 3840,
+                    length: 3600,
+                    pitch,
+                    velocity: 90,
+                })
+            })
+            .collect(),
+        controls: Vec::new(),
+    };
+    for (name, instrument, content) in [
+        ("Drums", Instrument::Drums, drums),
+        ("808", Instrument::Synth, notes(&|b| vec![roots[b]])),
+        (
+            "Bells",
+            Instrument::Synth,
+            notes(&|b| chords[b].map(|n| n + 12).to_vec()),
+        ),
+        ("Pad", Instrument::Synth, notes(&|b| chords[b].to_vec())),
     ] {
         p.tracks.push(Track {
             name: name.into(),
             instrument: Some(instrument),
+            regions: vec![Region {
+                start: 0,
+                length: 4 * 3840,
+                content,
+                ..Default::default()
+            }],
             ..Default::default()
         });
-    }
-    compose::set_chords(&mut p, Some("i | VI | III | VII"), None, None).unwrap();
-    compose::write_drums(
-        &mut p,
-        DrumPart {
-            track: 0,
-            start: None,
-            bars: None,
-            style: None,
-            fill_every: Some(0),
-            seed: Some(1),
-        },
-    )
-    .unwrap();
-    for t in 1..4 {
-        compose::write_chords(
-            &mut p,
-            ChordPart {
-                track: t,
-                start: None,
-                bars: None,
-                chords: None,
-                voicing: None,
-                rhythm: None,
-                register: None,
-                seed: None,
-            },
-        )
-        .unwrap();
     }
     p
 }
@@ -78,73 +95,22 @@ fn clipping_a_pattern_keeps_its_steps_in_place() {
 }
 
 #[test]
-fn a_loop_becomes_a_song() {
+fn bars_copied_bring_their_notes_and_chords() {
     let mut p = sketch();
-    let out = arrange(
-        &mut p,
-        Arrangement {
-            from: None,
-            bars: None,
-            sections: None,
-            roles: None,
-        },
-    )
-    .unwrap();
-    // Trap's playbook: 84 bars, its sections marked.
-    assert_eq!(out["bars"], 84);
-    assert_eq!(p.markers.len(), 7);
-    assert_eq!(p.markers[1].name, "Hook");
-    assert_eq!(p.markers[1].tick, 8 * 3840);
-    // The intro has no drums; the hook does, all 16 bars, and the chords run the whole song.
-    let drums_at = |p: &Project, bar: u64| {
-        p.tracks[0]
-            .regions
+    copy_bars(&mut p, 0, 2, 8 * 3840, Some(vec![1])).unwrap();
+    let bass: Vec<(i64, u8)> = compose::heard_notes(&p, 1)
+        .iter()
+        .filter(|n| n.start >= 8 * 3840)
+        .map(|n| (n.start, n.pitch))
+        .collect();
+    assert_eq!(bass, [(8 * 3840, 45), (9 * 3840, 41)]);
+    let at = |tick: u64| {
+        p.chords
             .iter()
-            .any(|r| r.start <= bar * 3840 && bar * 3840 < r.start + r.length)
+            .find(|c| c.start == tick)
+            .map(|c| c.chord.clone())
     };
-    assert!(!drums_at(&p, 2));
-    assert!(drums_at(&p, 8) && drums_at(&p, 23));
-    assert_eq!(p.chords.last().map(|c| c.start + c.length), Some(84 * 3840));
-    // The song's quiet parts play softer, and lower.
-    let intro = p.tracks[2].regions.iter().find(|r| r.start == 0).unwrap();
-    assert!(intro.velocity < 0);
-    let level = |t: usize, tick: u64| {
-        p.tracks[t]
-            .automation
-            .volume
-            .iter()
-            .rev()
-            .find(|x| x.tick <= tick)
-            .unwrap()
-            .value
-    };
-    assert!(level(2, 0) < level(2, 8 * 3840));
-    // Sections can be given, by role or track.
-    let out = arrange(
-        &mut p,
-        Arrangement {
-            from: Some(8 * 3840),
-            bars: Some(4),
-            sections: Some(vec![
-                SectionIn {
-                    name: "A".into(),
-                    bars: 4,
-                    parts: vec!["0".into()],
-                    energy: None,
-                },
-                SectionIn {
-                    name: "B".into(),
-                    bars: 8,
-                    parts: vec!["drums".into(), "lead".into()],
-                    energy: Some(5),
-                },
-            ]),
-            roles: None,
-        },
-    )
-    .unwrap();
-    assert_eq!(out["sections"][1]["playing"].as_array().unwrap().len(), 2);
-    assert_eq!(out["silent"].as_array().unwrap().len(), 2);
+    assert_eq!(at(8 * 3840).as_deref(), Some("Am"));
 }
 
 #[test]
@@ -162,7 +128,8 @@ fn transitions_lead_into_a_bar() {
         },
     )
     .unwrap();
-    assert_eq!(out["done"].as_array().unwrap().len(), 4);
+    // A riser, a gap and an impact: sounds, no notes written for the drums.
+    assert_eq!(out["done"].as_array().unwrap().len(), 3);
     let fx = p.tracks.iter().position(|t| t.name == "FX").unwrap();
     let riser = &p.tracks[fx].regions[0];
     assert_eq!((riser.start, riser.length), (0, 2 * 3840));
@@ -173,7 +140,7 @@ fn transitions_lead_into_a_bar() {
     // It rises: the last quarter is louder than the first.
     let energy = |s: &[f32]| s.iter().map(|v| v * v).sum::<f32>();
     assert!(energy(&l[l.len() * 3 / 4..]) > energy(&l[..l.len() / 4]) * 10.0);
-    // The beat before the bar is silent but for the FX, and the drums fill the bar before.
+    // The beat before the bar is silent but for the FX.
     let gap = 2 * 3840 - 960;
     for t in 0..4 {
         assert!(
@@ -183,11 +150,5 @@ fn transitions_lead_into_a_bar() {
             "{t}"
         );
     }
-    let fill = p.tracks[0]
-        .regions
-        .iter()
-        .find(|r| r.name == "Fill")
-        .unwrap();
-    assert_eq!(fill.start, 3840);
     std::fs::remove_dir_all(&dir).ok();
 }

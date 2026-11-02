@@ -4,7 +4,7 @@ use super::*;
 fn every_playbook_is_whole() {
     let (all, problems) = load();
     assert!(problems.is_empty());
-    assert_eq!(all.len(), BUILT_IN.len());
+    assert_eq!(all.len(), 3);
     for p in &all {
         check(p).unwrap();
         let roles: Vec<&str> = p.parts.iter().map(|x| x.role.as_str()).collect();
@@ -31,59 +31,41 @@ fn every_playbook_is_whole() {
             p.minor
         );
     }
-    assert_eq!(find("Lo-Fi").unwrap().id, "lofi");
-    assert_eq!(find("UK drill").unwrap().id, "drill");
+    assert_eq!(find("Lo-fi hip-hop").unwrap().id, "lofi");
     assert!(find("polka").is_none());
 }
 
 #[test]
-fn playbooks_know_where_they_come_from_and_save_whole() {
-    let trap = builtin("trap").unwrap();
-    assert_eq!(origin(&trap), Origin::Pina);
-    let mut edited = trap.clone();
-    edited.swing = 56.0;
-    assert_eq!(origin(&edited), Origin::Edited);
-    let mine = Playbook {
-        id: "gqom".into(),
-        ..trap.clone()
-    };
-    assert_eq!(origin(&mine), Origin::Yours);
+fn none_are_made_for_the_person_and_new_ones_save_whole() {
+    // An empty folder, or none: no playbooks, and nothing written there.
+    let dir = std::env::temp_dir().join(format!("pina-playbook-save-{}", std::process::id()));
+    assert!(load_from(Some(&dir)).0.is_empty() && !dir.exists());
+    let trap = find("trap").unwrap();
     let taken = vec!["trap".to_string(), "dark_trap".to_string()];
     assert_eq!(new_id("Dark Trap!", &taken), "dark_trap_2");
     assert_eq!(new_id("Gqom", &taken), "gqom");
-    let dir = std::env::temp_dir().join(format!("pina-playbook-save-{}", std::process::id()));
-    let file = save_in(&dir, &edited).unwrap();
+    let file = save_in(&dir, &trap).unwrap();
     let back: Playbook = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-    assert_eq!(back, edited);
+    assert_eq!(back, trap);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
-fn the_persons_playbooks_replace_and_add() {
+fn the_persons_playbooks_are_read_and_bad_ones_said() {
     let dir = std::env::temp_dir().join(format!("pina-playbooks-{}", std::process::id()));
-    let (all, _) = load_from(Some(&dir));
-    // The folder is made, with Pina Studio's in it to edit.
-    assert!(dir.join("trap.json").exists() && dir.join("README.txt").exists());
-    assert_eq!(all.len(), BUILT_IN.len());
-    let file = dir.join("trap.json");
-    let mut trap: Playbook =
-        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-    trap.tempo = (120.0, 130.0);
-    std::fs::write(&file, serde_json::to_string(&trap).unwrap()).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    let trap = find("trap").unwrap();
     let mut gqom = Playbook {
         id: "gqom".into(),
         name: "Gqom".into(),
-        ..trap.clone()
+        ..trap
     };
     std::fs::write(dir.join("gqom.json"), serde_json::to_string(&gqom).unwrap()).unwrap();
     std::fs::write(dir.join("broken.json"), "{ \"id\": ").unwrap();
     (gqom.id, gqom.groove) = ("bad".into(), "polka".into());
     std::fs::write(dir.join("bad.json"), serde_json::to_string(&gqom).unwrap()).unwrap();
     let (all, problems) = load_from(Some(&dir));
-    assert_eq!(
-        all.iter().find(|p| p.id == "trap").unwrap().tempo,
-        (120.0, 130.0)
-    );
+    assert_eq!(all.len(), 1);
     assert_eq!(find_in(all, "gqom").unwrap().name, "Gqom");
     assert_eq!(problems.len(), 2, "{problems:?}");
     assert!(problems.iter().any(|p| p.contains("polka")));

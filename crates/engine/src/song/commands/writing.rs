@@ -1,4 +1,5 @@
-//! Commands that write music: chords, bass, melody and drums, arranging, copying bars, transitions.
+//! Commands that write music the agent doesn't write note by note: the chord track, bars copied,
+//! and the sounds of transitions.
 
 use super::*;
 
@@ -10,11 +11,6 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             start,
             bars,
         } => compose::set_chords(p, chords.as_deref(), start, bars),
-        Command::WriteChords(w) => compose::write_chords(p, w),
-        Command::WriteBass(w) => compose::write_bass(p, w),
-        Command::WriteMelody(w) => compose::write_melody(p, w),
-        Command::WriteDrums(w) => compose::write_drums(p, w),
-        Command::Arrange(a) => arrange::arrange(p, a),
         Command::CopyBars {
             from,
             bars,

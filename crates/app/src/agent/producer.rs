@@ -81,7 +81,7 @@ impl Stage {
             Stage::Genre => "Pick a genre for this song",
             Stage::Chords => "Write the chords",
             Stage::Loop => "Make an 8-bar loop on real sounds",
-            Stage::Arrange => "Arrange the loop into a full song",
+            Stage::Arrange => "Write the full song from the loop",
             Stage::Mix => "Mix it, and fix what the critic hears",
             Stage::Master => "Master it to the genre's loudness",
         }
@@ -118,25 +118,31 @@ impl Stage {
 
     /// What to ask the agent for, for this song.
     pub fn ask(self, p: &Project) -> String {
-        let genre = p
-            .genre
-            .as_deref()
-            .and_then(playbook::find)
-            .map_or("its genre".to_string(), |b| b.name);
+        // A playbook only when the person picked one of theirs as the genre.
+        let book = p.genre.as_deref().and_then(playbook::find);
+        let genre = book
+            .as_ref()
+            .map(|b| b.name.clone())
+            .or(p.genre.clone())
+            .unwrap_or("its genre".into());
         let key = p.song_key().map_or("its key".into(), |k| k.name());
         match self {
             Stage::Genre => format!(
-                "Pick a genre for this song from Pina Studio's playbooks (it's {:.0} BPM in {key}) and set it, with a tempo and key that suit it. Say why you picked it.",
+                "Pick a genre for this song (it's {:.0} BPM in {key}) and set it, with a tempo and key that suit it. Say why you picked it.",
                 p.tempo
             ),
             Stage::Chords => format!(
-                "Write this song's chords: find a progression that suits {genre} with the theory tool, and set_chords for 8 bars. Say what you chose and why."
+                "Write this song's chords: choose a progression that suits {genre} (the theory tool can suggest some), and set_chords for 8 bars. Say what you chose and why."
             ),
             Stage::Loop => format!(
-                "Make an 8-bar loop for this {genre} song: drums, bass and chords, and a lead if the genre has one, on real sounds (the sounds tool, not the sine synth), written with the write commands. Then critique quick and fix what it says."
+                "Write an 8-bar loop for this {genre} song yourself, note by note: drums with a feel of their own, a bass that locks with the kick, chords, and a lead if it wants one, on real sounds (not the sine synth). Then critique quick and fix what it says."
             ),
             Stage::Arrange => format!(
-                "Arrange the loop into a full song with the {genre} playbook's sections, with transitions into each section, and vary the hook so it lifts. Then critique quick."
+                "Write the full song from the loop {}: write each section yourself, changing what plays, with fills and transitions landing on its downbeat, a breakdown and a build, and the hook varied so it lifts. Then critique quick.",
+                match &book {
+                    Some(b) => format!("with my {} playbook's sections", b.name),
+                    None => format!("with sections you plan for {genre}"),
+                }
             ),
             Stage::Mix => "Mix the song: the mix tool, then critique with a render, and fix every mix issue it finds.".into(),
             Stage::Master => format!(
@@ -225,10 +231,7 @@ impl Workspace {
         if let Some((t, r)) = self.region
             && let Some(region) = p.tracks.get(t).and_then(|tr| tr.regions.get(r))
         {
-            let (a, b) = (
-                region.start / bar + 1,
-                (region.start + region.length).div_ceil(bar),
-            );
+            let (a, b) = (region.start / bar + 1, p.plays_to((t, r)).div_ceil(bar));
             let name = &p.tracks[t].name;
             let bars = if a >= b {
                 format!("bar {a}")
@@ -294,14 +297,19 @@ impl Workspace {
     /// Under the panel's header: the song at a glance.
     pub fn agent_context(&mut self, cx: &mut Context<Self>) -> Div {
         let p = &self.session.project;
-        let genre = p.genre.as_deref().and_then(playbook::find);
-        let color = genre.as_ref().map_or(TEXT_3, |g| genre_color(&g.id));
+        // The genre: one of the person's playbooks, or just a word for it.
+        let genre = p
+            .genre
+            .as_deref()
+            .map(|g| playbook::find(g).map_or((g.to_string(), g.to_string()), |b| (b.id, b.name)));
+        let color = genre.as_ref().map_or(TEXT_3, |g| genre_color(&g.0));
         let bars = p.end().div_ceil(p.bar());
         let key = p.song_key().map_or("no key".to_string(), |k| k.short());
         // The genre, a chip that picks another; the rest of the song in a quiet line beside it.
         let chip = div()
             .id("agent-genre")
-            .flex_none()
+            .min_w(px(0.))
+            .max_w(gpui::relative(0.62))
             .h(px(26.))
             .pl(px(8.))
             .pr(px(6.))
@@ -313,19 +321,29 @@ impl Workspace {
             .border_color(alpha(color, if genre.is_some() { 0.45 } else { 0.25 }))
             .cursor_pointer()
             .hover(|d| d.bg(alpha(color, 0.1)))
-            .child(div().size(px(6.)).rounded(px(3.)).bg(rgb(color)))
             .child(
                 div()
+                    .size(px(6.))
+                    .flex_none()
+                    .rounded(px(3.))
+                    .bg(rgb(color)),
+            )
+            .child(
+                div()
+                    .min_w(px(0.))
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(if genre.is_some() { TEXT } else { TEXT_3 }))
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
                     .child(
                         genre
                             .as_ref()
-                            .map_or("Pick a genre".to_string(), |g| g.name.clone()),
+                            .map_or("Pick a genre".to_string(), |g| g.1.clone()),
                     ),
             )
-            .child(icon(Icon::Chevron, 10.).text_color(rgb(TEXT_3)))
+            .child(icon(Icon::Chevron, 10.).flex_none().text_color(rgb(TEXT_3)))
             .debug_selector(|| "agent-genre".into())
             .on_mouse_down(
                 MouseButton::Left,
@@ -337,12 +355,14 @@ impl Workspace {
         let facts = div()
             .flex_1()
             .min_w(px(0.))
-            .flex()
-            .justify_end()
+            .text_right()
             .font_family(MONO)
             .text_size(px(11.))
             .text_color(rgb(TEXT_3))
             .whitespace_nowrap()
+            .overflow_hidden()
+            .text_ellipsis()
+            .debug_selector(|| "agent-facts".into())
             .child(format!("{key} · {:.0} bpm · {bars} bars", p.tempo));
 
         div()

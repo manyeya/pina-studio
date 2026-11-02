@@ -1,21 +1,15 @@
-//! A loop made into a song: sections laid out from it with the parts each one has, bars copied,
-//! and the transitions between sections (risers, reverse cymbals, impacts, fills, gaps), their
-//! sounds made here so they don't need a sample library.
+//! Bars copied, and sounds for the moves between sections (risers, reverse cymbals, impacts,
+//! downlifters, gaps), made here so they don't need a sample library. The arrangement itself is
+//! the agent's to write.
 
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
     music::look::{self, Family},
-    music::playbook,
-    song::project::{
-        AUDIO_DIR, AutoPoint, ChordSpan, Content, Instrument, Marker, Note, Project, Region, Track,
-    },
+    song::project::{AUDIO_DIR, ChordSpan, Content, Instrument, Note, Project, Region, Track},
 };
 
 /// What part a track plays in a song: what it's called, else what's written on it, else what
@@ -151,12 +145,11 @@ pub fn clip(p: &Project, r: &Region, from: u64, to: u64) -> Option<Region> {
             }
             Content::Pattern(p)
         }
-        Content::Audio {
-            offset, stretch, ..
-        } => {
+        Content::Audio { .. } => {
             let mut c = r.content.clone();
+            let frame = p.frame_at(&r.content, r.start as f64, (r.start + skip) as f64);
             if let Content::Audio { offset: o, .. } = &mut c {
-                *o = offset + (p.samples(skip, p.sample_rate as f64) as f64 / stretch) as u64;
+                *o = frame.unwrap_or(*o);
             }
             c
         }
@@ -271,167 +264,6 @@ fn lay_chords(p: &mut Project, chords: &[ChordSpan], length: u64, at: u64, end: 
     p.chords.sort_by_key(|c| c.start);
 }
 
-/// A section asked for: its name, bars, and the parts in it, by role ("drums", "lead") or track
-/// number ("3").
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct SectionIn {
-    pub name: String,
-    pub bars: u64,
-    pub parts: Vec<String>,
-    /// 1 to 5: how hard it plays, which sets its parts' velocity (4 as written).
-    #[serde(default)]
-    pub energy: Option<u8>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct Arrangement {
-    /// Where the loop the song's made from starts (ticks): 0 by default.
-    #[serde(default)]
-    pub from: Option<u64>,
-    /// How many bars it is: what's there, up to 16, by default.
-    #[serde(default)]
-    pub bars: Option<u64>,
-    /// The sections, in order; the genre playbook's by default.
-    #[serde(default)]
-    pub sections: Option<Vec<SectionIn>>,
-    /// The part a track plays, where Pina Studio would guess wrong: {"3": "lead"}.
-    #[serde(default)]
-    pub roles: Option<BTreeMap<String, String>>,
-}
-
-pub fn arrange(p: &mut Project, a: Arrangement) -> Result<Value, String> {
-    let bar = p.bar();
-    let from = a.from.unwrap_or(0);
-    let loop_bars = match a.bars {
-        Some(b) if b > 0 => b,
-        Some(_) => return Err("bars must be at least 1".into()),
-        None => p.end().saturating_sub(from).div_ceil(bar).clamp(1, 16),
-    };
-    let length = loop_bars * bar;
-    if !p.tracks.iter().any(|t| {
-        t.regions
-            .iter()
-            .any(|r| r.start < from + length && r.start + r.length > from)
-    }) {
-        return Err("nothing's there to arrange: write a loop first".into());
-    }
-    // A track in no section's parts: with the genre's sections, it plays in the loud ones (its
-    // part's one the genre doesn't name); with sections given, it's silent.
-    let fallback = a.sections.is_none();
-    let sections: Vec<SectionIn> = match a.sections {
-        Some(s) if !s.is_empty() => s,
-        Some(_) => return Err("no sections".into()),
-        None => {
-            let genre = p
-                .genre
-                .as_deref()
-                .ok_or("give sections, or set_genre so the genre's are used")?;
-            let book =
-                playbook::find(genre).ok_or(format!("no playbook for {genre:?}: give sections"))?;
-            book.sections
-                .iter()
-                .map(|s| SectionIn {
-                    name: s.name.clone(),
-                    bars: s.bars,
-                    parts: s.parts.iter().map(|x| x.to_string()).collect(),
-                    energy: Some(s.energy),
-                })
-                .collect()
-        }
-    };
-    if sections.iter().any(|s| s.bars == 0) {
-        return Err("a section needs at least a bar".into());
-    }
-    let roles: Vec<String> = (0..p.tracks.len())
-        .map(|t| {
-            a.roles
-                .as_ref()
-                .and_then(|r| r.get(&t.to_string()))
-                .cloned()
-                .unwrap_or_else(|| role(&p.tracks[t]).to_string())
-        })
-        .collect();
-    let named: Vec<&str> = sections
-        .iter()
-        .flat_map(|s| s.parts.iter().map(String::as_str))
-        .collect();
-    let in_section = |s: &SectionIn, t: usize| -> bool {
-        let unnamed =
-            !named.contains(&roles[t].as_str()) && !named.contains(&t.to_string().as_str());
-        s.parts
-            .iter()
-            .any(|x| *x == roles[t] || *x == t.to_string())
-            || fallback && unnamed && s.energy.unwrap_or(4) >= 4
-    };
-    // The loop, then the room it goes in.
-    let pieces: Vec<Vec<Region>> = (0..p.tracks.len())
-        .map(|t| take(p, t, from, length))
-        .collect();
-    let chords = take_chords(p, from, length);
-    let total: u64 = sections.iter().map(|s| s.bars * bar).sum();
-    for t in 0..p.tracks.len() {
-        clear(p, t, from, from + total);
-    }
-    p.markers
-        .retain(|m| m.tick < from || m.tick >= from + total);
-    let mut at = from;
-    let mut laid = Vec::new();
-    // Each track's level, section by section, where its sections' energies differ: a synth
-    // that ignores velocity still plays a quiet intro quietly, and a limiter can't flatten it.
-    let mut levels: Vec<Vec<AutoPoint>> = vec![Vec::new(); p.tracks.len()];
-    for s in &sections {
-        let end = at + s.bars * bar;
-        let energy = s.energy.unwrap_or(4).clamp(1, 5);
-        let velocity = (energy as i8 - 4) * 4;
-        let db = [-8.0, -5.0, -3.0, -1.5, 0.0][energy as usize - 1];
-        for t in (0..p.tracks.len()).filter(|&t| in_section(s, t) && !pieces[t].is_empty()) {
-            let v = p.tracks[t].volume_db + db;
-            levels[t].push(AutoPoint::new(at, v));
-            levels[t].push(AutoPoint::new(end - 1, v));
-        }
-        let mut playing = Vec::new();
-        for t in 0..p.tracks.len() {
-            if in_section(s, t) && !pieces[t].is_empty() {
-                lay(p, t, &pieces[t], length, at, end, velocity);
-                playing.push(format!("{} ({})", p.tracks[t].name, roles[t]));
-            }
-        }
-        if !chords.is_empty() {
-            lay_chords(p, &chords, length, at, end);
-        }
-        p.markers.push(Marker {
-            tick: at,
-            name: s.name.clone(),
-        });
-        laid.push(
-            json!({ "name": s.name, "bar": at / bar + 1, "bars": s.bars, "playing": playing }),
-        );
-        at = end;
-    }
-    p.markers.sort_by_key(|m| m.tick);
-    for (t, points) in levels.into_iter().enumerate() {
-        let first = points.first().map(|x| x.value);
-        if points.iter().all(|x| Some(x.value) == first) {
-            continue;
-        }
-        let auto = &mut p.tracks[t].automation.volume;
-        auto.retain(|x| x.tick < from || x.tick >= from + total);
-        auto.extend(points);
-        auto.sort_by_key(|x| x.tick);
-    }
-    let unused: Vec<String> = (0..p.tracks.len())
-        .filter(|&t| !pieces[t].is_empty() && !sections.iter().any(|s| in_section(s, t)))
-        .map(|t| format!("{} ({})", p.tracks[t].name, roles[t]))
-        .collect();
-    let mut out = json!({ "sections": laid, "bars": total / bar });
-    if !unused.is_empty() {
-        out["silent"] = json!(unused);
-    }
-    Ok(out)
-}
-
 /// Copies bars `from..from+bars` of some tracks (all by default) to `to`, replacing what's there.
 pub fn copy_bars(
     p: &mut Project,
@@ -469,11 +301,9 @@ pub enum Move {
     Impact,
     /// A sweep falling away from the bar.
     Downlifter,
-    /// A drum fill in the bar before, a crash on the bar.
-    Fill,
     /// Everything but the FX stops for the beat before the bar.
     Gap,
-    /// A riser, a fill, a beat's gap and an impact: into a drop or chorus.
+    /// A riser, a beat's gap and an impact: into a drop or chorus.
     Build,
 }
 
@@ -488,7 +318,7 @@ pub struct Transition {
     /// (1).
     #[serde(default)]
     pub length: Option<u64>,
-    /// The track: the drums for a fill, else where the FX go ("FX", made if there's none).
+    /// Where the FX go ("FX", made if there's none).
     #[serde(default)]
     pub track: Option<usize>,
 }
@@ -519,13 +349,12 @@ pub fn transition(p: &mut Project, dir: &Path, tr: Transition) -> Result<Value, 
     let at = tr.at;
     let mut done = Vec::new();
     let kinds: &[Move] = match tr.kind {
-        Move::Build => &[Move::Riser, Move::Fill, Move::Gap, Move::Impact],
+        Move::Build => &[Move::Riser, Move::Gap, Move::Impact],
         k => std::slice::from_ref(match k {
             Move::Riser => &Move::Riser,
             Move::Reverse => &Move::Reverse,
             Move::Impact => &Move::Impact,
             Move::Downlifter => &Move::Downlifter,
-            Move::Fill => &Move::Fill,
             _ => &Move::Gap,
         }),
     };
@@ -536,18 +365,6 @@ pub fn transition(p: &mut Project, dir: &Path, tr: Transition) -> Result<Value, 
             tr.length
         };
         match kind {
-            Move::Fill => {
-                let t = match tr.track.filter(|_| tr.kind == Move::Fill) {
-                    Some(t) => t,
-                    None => (0..p.tracks.len())
-                        .find(|&t| {
-                            role(&p.tracks[t]) == "drums" && p.tracks[t].instrument.is_some()
-                        })
-                        .ok_or("no drum track for a fill: give track")?,
-                };
-                fill(p, t, at)?;
-                done.push(format!("fill on {}", p.tracks[t].name));
-            }
             Move::Gap => {
                 let beats = given.unwrap_or(1).max(1);
                 let from = at.saturating_sub(beats * beat);
@@ -587,8 +404,10 @@ pub fn transition(p: &mut Project, dir: &Path, tr: Transition) -> Result<Value, 
                         file,
                         offset: 0,
                         stretch: 1.0,
-                        flex: Default::default(),
-                        follow: false,
+                        stretch_mode: Default::default(),
+                        follow: crate::song::project::Follow::Off,
+                        tempo: None,
+                        grid: None,
                         formants: false,
                         warps: Vec::new(),
                     },
@@ -603,74 +422,6 @@ pub fn transition(p: &mut Project, dir: &Path, tr: Transition) -> Result<Value, 
         }
     }
     Ok(json!({ "done": done }))
-}
-
-/// A fill in the bar before `at` on a drum track: its back half a snare run rising (toms at the
-/// end, if the kit has them), then a crash and a kick on `at`.
-fn fill(p: &mut Project, t: usize, at: u64) -> Result<(), String> {
-    let (bar, beat) = (p.bar(), p.beat());
-    let from = at.checked_sub(bar).ok_or("a fill needs a bar before it")?;
-    let to = at + beat;
-    // What plays there now, as notes in a region of its own.
-    let mut notes: Vec<Note> = Vec::new();
-    for r in &p.tracks[t].regions {
-        if let Some(c) = clip(p, r, from, to)
-            && let Some(list) = c.content.notes(c.length)
-        {
-            notes.extend(list.iter().map(|n| c.played(n)).map(|n| Note {
-                start: n.start + (c.start - from) as i64,
-                ..n
-            }));
-        }
-    }
-    clear(p, t, from, to);
-    let half = (bar / 2) as i64;
-    notes.retain(|n| n.start < half || n.start >= bar as i64);
-    let has = |pitch: u8| match &p.tracks[t].instrument {
-        Some(Instrument::Sampler(s)) => s
-            .zones
-            .iter()
-            .any(|z| (z.note..=z.high.unwrap_or(z.note)).contains(&pitch)),
-        _ => true,
-    };
-    let snare = [38, 39, 40, 37].into_iter().find(|&n| has(n)).unwrap_or(38);
-    let toms: Vec<u8> = [48, 45, 41].into_iter().filter(|&n| has(n)).collect();
-    let sixteenth = (beat / 4) as i64;
-    let n = half / sixteenth;
-    for k in 0..n {
-        let pitch = match (toms.len(), k >= n - 4) {
-            (2.., true) => toms[((k - (n - 4)) as usize * toms.len() / 4).min(toms.len() - 1)],
-            _ => snare,
-        };
-        notes.push(Note {
-            start: half + k * sixteenth,
-            length: sixteenth as u64,
-            pitch,
-            velocity: (60 + k * 60 / n.max(1)) as u8,
-        });
-    }
-    for pitch in [36, 49] {
-        if has(pitch) {
-            notes.push(Note {
-                start: bar as i64,
-                length: beat,
-                pitch,
-                velocity: 116,
-            });
-        }
-    }
-    notes.sort_by_key(|n| (n.start, n.pitch));
-    p.tracks[t].regions.push(Region {
-        name: "Fill".into(),
-        start: from,
-        length: to - from,
-        content: Content::Midi {
-            notes,
-            controls: Vec::new(),
-        },
-        ..Default::default()
-    });
-    Ok(())
 }
 
 /// Makes a transition's sound, `ticks` long at the song's tempo, in the project's audio folder

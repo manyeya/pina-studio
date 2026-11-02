@@ -1,4 +1,4 @@
-//! A producer's tools for agents: the critic, genre playbooks, chord suggestions, a reference
+//! A producer's tools for agents: the critic, the person's playbooks, chord suggestions, a reference
 //! song to aim at, sounds for a part, a mix by role, and a master to a loudness. Edits go through
 //! `cli::edit_with`, so they land live in the app when it has the song open.
 
@@ -11,18 +11,359 @@ use pina_engine::{
     music::playbook,
     music::theory::{self, PROGRESSIONS},
     plugin::scan,
-    song::commands::{ChannelRef, Command, ParamRef},
-    song::project::{Format, Instrument, PluginRef, Preset, PresetSource, Reference, Which},
+    song::commands::{ChannelRef, Command},
+    song::project::{
+        Comp, Eq, Format, Fx, Instrument, Limiter, PluginRef, Preset, PresetSource, Project,
+        Reference, Saturator, chain,
+    },
 };
 use serde_json::{Value, json};
 
 use crate::cli;
 
+/// A channel to set a compressor for by listening: a track's, or the master's (None).
+pub fn comp_heard(p: &Project, track: Option<usize>) -> (Project, Option<(u64, u64)>) {
+    let mut q = p.clone();
+    // Past no master: the master's own chain is what's being set, or isn't the track's to hear.
+    q.master_inserts.clear();
+    q.master_more.clear();
+    (q.master_comp, q.master_sat, q.master_volume_db) = (None, None, 0.0);
+    match track {
+        Some(t) => {
+            // As its compressor hears it: after its plugins and EQ, before its compressor,
+            // saturator and fader.
+            let tr = &mut q.tracks[t];
+            (tr.comp, tr.sat, tr.volume_db, tr.pan) = (None, None, 0.0, 0.0);
+            tr.automation.volume.clear();
+            tr.sends.clear();
+            (cli::alone(&q, t), played(p, t))
+        }
+        None => (q, None),
+    }
+}
+
+/// A chain cut short at its limiter: what's after it (and it) taken out.
+#[allow(clippy::too_many_arguments)]
+fn before_limiter(
+    order: &mut Vec<Fx>,
+    inserts: &mut Vec<PluginRef>,
+    more: &mut Vec<pina_engine::song::project::Unit>,
+    eq: &mut Option<Eq>,
+    comp: &mut Option<Comp>,
+    sat: &mut Option<Saturator>,
+    limit: &mut Option<Limiter>,
+) {
+    let full = chain(order, inserts.len(), more.len());
+    let at = full
+        .iter()
+        .position(|f| *f == Fx::Limit)
+        .unwrap_or(full.len());
+    for fx in &full[at..] {
+        match fx {
+            Fx::Eq => *eq = None,
+            Fx::Comp => *comp = None,
+            Fx::Sat => *sat = None,
+            _ => {}
+        }
+    }
+    inserts.truncate(full[..at].iter().filter(|f| **f == Fx::Plugin).count());
+    more.truncate(full[..at].iter().filter(|f| **f == Fx::More).count());
+    *order = full[..at].to_vec();
+    *limit = None;
+}
+
+/// A channel to set a limiter for by listening, as it hears it, through its chain up to the
+/// limiter, the fader (which comes after) at 0 dB: a track's (alone, eight bars from where it
+/// first plays), an aux's (all that's sent or routed to it, the whole song) or the master's (the
+/// whole song). None for the range: all of it.
+pub fn limit_heard(p: &Project, ch: ChannelRef) -> (Project, Option<(u64, u64)>) {
+    let mut q = p.clone();
+    // Past anything but the master: the master's own chain isn't the channel's to hear.
+    if ch != ChannelRef::Master {
+        q.master_inserts.clear();
+        q.master_more.clear();
+        (q.master_eq, q.master_comp, q.master_sat, q.master_limit) = (None, None, None, None);
+    }
+    q.master_volume_db = 0.0;
+    match ch {
+        ChannelRef::Track(t) => {
+            let tr = &mut q.tracks[t];
+            before_limiter(
+                &mut tr.chain,
+                &mut tr.inserts,
+                &mut tr.more,
+                &mut tr.eq,
+                &mut tr.comp,
+                &mut tr.sat,
+                &mut tr.limit,
+            );
+            (tr.volume_db, tr.pan) = (0.0, 0.0);
+            tr.automation.volume.clear();
+            tr.sends.clear();
+            (cli::alone(&q, t), played(p, t))
+        }
+        ChannelRef::Aux(a) => {
+            let bus = q.auxes[a].bus;
+            // Every track's own output into a silent bus (its sends going on as they were),
+            // every other aux silent: what's heard is only what reaches this one.
+            let silent = q.add_aux();
+            for t in &mut q.tracks {
+                if t.output != Some(bus) {
+                    t.output = Some(silent);
+                }
+            }
+            for (i, x) in q.auxes.iter_mut().enumerate() {
+                x.mute = i != a;
+            }
+            let x = &mut q.auxes[a];
+            before_limiter(
+                &mut x.chain,
+                &mut x.inserts,
+                &mut x.more,
+                &mut x.eq,
+                &mut x.comp,
+                &mut x.sat,
+                &mut x.limit,
+            );
+            (x.volume_db, x.pan) = (0.0, 0.0);
+            (q, None)
+        }
+        ChannelRef::Master => {
+            before_limiter(
+                &mut q.master_chain,
+                &mut q.master_inserts,
+                &mut q.master_more,
+                &mut q.master_eq,
+                &mut q.master_comp,
+                &mut q.master_sat,
+                &mut q.master_limit,
+            );
+            (q, None)
+        }
+    }
+}
+
+/// A limiter set by listening to what reaches it, to come out at `target` LUFS (see
+/// `dsp::limit::learn`). None when nothing plays there.
+pub fn learn_limit(
+    p: &Project,
+    dir: &Path,
+    ch: ChannelRef,
+    target: f32,
+) -> Result<Option<pina_engine::dsp::limit::learn::Learned>, String> {
+    let (heard, range) = limit_heard(p, ch);
+    if matches!(ch, ChannelRef::Track(_)) && range.is_none() {
+        return Ok(None);
+    }
+    let render = cli::rendered(&heard, dir, range)?;
+    let current = match ch {
+        ChannelRef::Track(t) => p.tracks[t].limit,
+        ChannelRef::Aux(a) => p.auxes[a].limit,
+        ChannelRef::Master => p.master_limit,
+    }
+    .unwrap_or_default();
+    let at = range.map_or(0, |r| r.0);
+    let rate = p.sample_rate as f64;
+    Ok(pina_engine::dsp::limit::learn::learn(
+        &render,
+        rate,
+        p.tempo_at(at),
+        &current,
+        target,
+    ))
+}
+
+/// `pina learn --limit`: a channel's limiter as listening sets it for `target` LUFS, and the
+/// loudness it comes out at, as JSON (not set: whoever asked sets it).
+pub fn learn_limiter(dir: &Path, ch: ChannelRef, target: f32) -> Result<Value, String> {
+    let p = cli::project(dir)?;
+    match ch {
+        ChannelRef::Track(t) if t >= p.tracks.len() => return Err(format!("no track {t}")),
+        ChannelRef::Aux(a) if a >= p.auxes.len() => return Err(format!("no aux {a}")),
+        _ => {}
+    }
+    if !(-30.0..=-4.0).contains(&target) {
+        return Err("lufs is -30 to -4".into());
+    }
+    Ok(match learn_limit(&p, dir, ch, target)? {
+        Some(l) => json!({ "limit": l.limit, "lufs": l.lufs }),
+        None => Value::Null,
+    })
+}
+
+/// Eight bars of a track from where it first plays (its first note, or its first audio): what
+/// listening to it hears.
+fn played(p: &Project, t: usize) -> Option<(u64, u64)> {
+    use pina_engine::song::project::Content;
+    let notes = pina_engine::music::compose::heard_notes(p, t);
+    let note = notes.iter().map(|n| n.start.max(0) as u64).min();
+    let audio = p.tracks[t]
+        .regions
+        .iter()
+        .filter(|r| matches!(r.content, Content::Audio { .. } | Content::Takes { .. }))
+        .map(|r| r.start)
+        .min();
+    let first = note.into_iter().chain(audio).min()?;
+    let bar = p.bar();
+    let from = first / bar * bar;
+    Some((from, from + 8 * bar))
+}
+
+/// A compressor set by listening to a track (or the master, None): rendered as its compressor
+/// hears it, measured, and set for what it plays (see `dsp::comp::learn`). None when nothing
+/// plays there.
+pub fn learn_comp(
+    p: &Project,
+    dir: &Path,
+    track: Option<usize>,
+) -> Result<Option<pina_engine::song::project::Comp>, String> {
+    use pina_engine::dsp::comp::learn::{Material, learn};
+    let (heard, range) = comp_heard(p, track);
+    if track.is_some() && range.is_none() {
+        return Ok(None);
+    }
+    let render = cli::rendered(&heard, dir, range)?;
+    let material = match track {
+        Some(t) => Material::of_part(pina_engine::music::arrange::role(&p.tracks[t])),
+        None => Material::Bus,
+    };
+    let at = range.map_or(0, |r| r.0);
+    Ok(learn(
+        &render,
+        p.sample_rate as f64,
+        p.tempo_at(at),
+        material,
+    ))
+}
+
+/// A saturator set by listening to a track (or the master, None): rendered as it hears it
+/// (after its plugins, EQ and compressor), measured, and set for its part in the song's genre
+/// (see `dsp::sat::learn`). None when nothing plays there.
+pub fn learn_sat(
+    p: &Project,
+    dir: &Path,
+    track: Option<usize>,
+) -> Result<Option<(Saturator, Vec<String>)>, String> {
+    use pina_engine::dsp::sat::learn::{Ear, learn};
+    let mut q = p.clone();
+    q.master_inserts.clear();
+    q.master_more.clear();
+    (q.master_sat, q.master_limit, q.master_volume_db) = (None, None, 0.0);
+    let (heard, range) = match track {
+        Some(t) => {
+            (q.master_eq, q.master_comp) = (None, None);
+            let tr = &mut q.tracks[t];
+            (tr.sat, tr.volume_db, tr.pan) = (None, 0.0, 0.0);
+            tr.automation.volume.clear();
+            tr.sends.clear();
+            let Some(range) = played(p, t) else {
+                return Ok(None);
+            };
+            (cli::alone(&q, t), Some(range))
+        }
+        None => (q, None),
+    };
+    let render = cli::rendered(&heard, dir, range)?;
+    let genre = p.genre.clone().unwrap_or_default();
+    let ear = Ear {
+        part: track.map_or("bus", |t| pina_engine::music::arrange::role(&p.tracks[t])),
+        genre: &genre,
+        lowest_hz: track.and_then(|t| crate::agent::mixing::lowest_hz(p, t)),
+        key: p.song_key(),
+    };
+    Ok(learn(&render, p.sample_rate as f64, &ear))
+}
+
+/// One built-in effect on a track (or the master) set by listening, as the app's Learn sets it:
+/// `comp`, `sat` or `limit` (to `lufs`, -14 if not given). What it would set (and, for the
+/// saturator, why); set too with `apply`.
+pub fn learn_effect(
+    dir: &Path,
+    track: Option<usize>,
+    effect: &str,
+    lufs: Option<f32>,
+    apply: bool,
+) -> Result<Value, String> {
+    let p = cli::project(dir)?;
+    if let Some(t) = track.filter(|&t| t >= p.tracks.len()) {
+        return Err(format!("no track {t}"));
+    }
+    let channel = match track {
+        Some(t) => json!({ "track": t }),
+        None => json!("master"),
+    };
+    let (answer, set) = match effect {
+        "comp" => {
+            let c = learn_comp(&p, dir, track)?;
+            (
+                json!({ "comp": c }),
+                c.map(|c| json!({ "op": "set_comp", "comp": c })),
+            )
+        }
+        "sat" => match learn_sat(&p, dir, track)? {
+            Some((s, why)) => (
+                json!({ "sat": s, "why": why }),
+                Some(json!({ "op": "set_saturator", "sat": s })),
+            ),
+            None => (json!({ "sat": null }), None),
+        },
+        "limit" => {
+            let target = lufs.unwrap_or(-14.0);
+            if !(-30.0..=-4.0).contains(&target) {
+                return Err("lufs is -30 to -4".into());
+            }
+            let ch = track.map_or(ChannelRef::Master, ChannelRef::Track);
+            match learn_limit(&p, dir, ch, target)? {
+                Some(l) => (
+                    json!({ "limit": l.limit, "lufs": l.lufs }),
+                    Some(json!({ "op": "set_limiter", "limit": l.limit })),
+                ),
+                None => (json!({ "limit": null }), None),
+            }
+        }
+        _ => return Err("`effect` is comp, sat or limit".into()),
+    };
+    let mut answer = answer;
+    match (set, apply) {
+        (Some(mut c), true) => {
+            c["channel"] = channel;
+            cli::edit(dir, &c.to_string())?;
+            answer["set"] = json!(true);
+        }
+        (None, _) => answer["note"] = json!("nothing plays there to listen to"),
+        _ => answer["set"] = json!(false),
+    }
+    Ok(answer)
+}
+
+/// `pina learn --sat`: a channel's saturator as listening sets it, and why, as JSON.
+pub fn learn_saturator(dir: &Path, track: Option<usize>) -> Result<Value, String> {
+    let p = cli::project(dir)?;
+    if let Some(t) = track.filter(|&t| t >= p.tracks.len()) {
+        return Err(format!("no track {t}"));
+    }
+    Ok(match learn_sat(&p, dir, track)? {
+        Some((sat, why)) => json!({ "sat": sat, "why": why }),
+        None => Value::Null,
+    })
+}
+
+/// `pina learn`: a channel's compressor as listening sets it, as JSON (not set: the app, or
+/// whoever asked, sets it).
+pub fn learn(dir: &Path, track: Option<usize>) -> Result<Value, String> {
+    let p = cli::project(dir)?;
+    if let Some(t) = track.filter(|&t| t >= p.tracks.len()) {
+        return Err(format!("no track {t}"));
+    }
+    let comp = learn_comp(&p, dir, track)?;
+    serde_json::to_value(comp).map_err(|e| e.to_string())
+}
+
 /// What's wrong with a song and how to fix it: from its notes and layout, and (unless `quick`)
 /// a render of it, over bars `range` or all of it.
 pub fn critique(dir: &Path, quick: bool, range: Option<(u64, u64)>) -> Result<Value, String> {
     let p = cli::project(dir)?;
-    let issues = if quick {
+    let mut issues = if quick {
         critique::critique(&p, None)
     } else {
         let ticks = range.map(|(a, b)| cli::bars(&p, a, b)).transpose()?;
@@ -41,6 +382,49 @@ pub fn critique(dir: &Path, quick: bool, range: Option<(u64, u64)>) -> Result<Va
             }),
         )
     };
+    // A song written to be like a reference: its render against the reference's spectrum, the
+    // biggest differences as notes to fix, every time it's heard (not only when compared).
+    let mut likeness = Value::Null;
+    if !quick && range.is_none() && p.like.is_some() {
+        match cli::reference::report(&p, dir) {
+            Ok((report, reference, song)) => {
+                let d = cli::reference::describe(&report, &reference, &song, &p);
+                likeness = d["likeness"].clone();
+                for x in d["differences"].as_array().into_iter().flatten().take(5) {
+                    let tracks: Vec<String> = x["tracks"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|t| Some(format!("{} \"{}\"", t["track"], t["name"].as_str()?)))
+                        .collect();
+                    issues.push(critique::Issue {
+                        level: "improve",
+                        area: "reference",
+                        what: x["says"].as_str().unwrap_or_default().to_string(),
+                        at: Some(match x["bars"].as_str() {
+                            Some(b) => format!("{}, bars {b}", x["section"].as_str().unwrap_or("")),
+                            None => x["section"].as_str().unwrap_or("").to_string(),
+                        }),
+                        fix: match tracks.is_empty() {
+                            true => x["ask"].as_str().unwrap_or_default().to_string(),
+                            false => format!(
+                                "{} Tracks: {}.",
+                                x["ask"].as_str().unwrap_or_default(),
+                                tracks.join(", ")
+                            ),
+                        },
+                    });
+                }
+            }
+            Err(e) => issues.push(critique::Issue {
+                level: "note",
+                area: "reference",
+                what: format!("couldn't compare it with its reference: {e}"),
+                at: None,
+                fix: "reference_compare once the song plays".into(),
+            }),
+        }
+    }
     let count = |l: &str| issues.iter().filter(|i| i.level == l).count();
     let verdict = match (count("fix"), count("improve")) {
         (0, 0) => {
@@ -53,6 +437,7 @@ pub fn critique(dir: &Path, quick: bool, range: Option<(u64, u64)>) -> Result<Va
         "verdict": verdict,
         "genre": p.genre,
         "heard": !quick,
+        "like_reference": likeness,
         "issues": issues,
     }))
 }
@@ -73,10 +458,10 @@ pub fn playbook(genre: Option<&str>) -> Result<Value, String> {
             Ok(out)
         }
         Some(g) => {
-            let b = playbook::find(g).ok_or(format!(
-                "no playbook for {g:?}; there are {}",
-                playbook::ids().join(", ")
-            ))?;
+            let b = playbook::find(g).ok_or(match playbook::ids() {
+                ids if ids.is_empty() => format!("no playbook for {g:?}: the person has none"),
+                ids => format!("no playbook for {g:?}; theirs are {}", ids.join(", ")),
+            })?;
             let key = Key {
                 root: 9,
                 minor: b.minor,
@@ -92,10 +477,11 @@ pub fn playbook(genre: Option<&str>) -> Result<Value, String> {
     }
 }
 
-/// Opens the playbooks folder (made the first time, a copy of Pina Studio's), or one genre's file.
+/// Opens the person's playbooks folder (made if it isn't there), or one genre's file.
 pub fn edit_playbooks(genre: Option<&str>) -> Result<(), String> {
     let (_, problems) = playbook::load();
     let dir = playbook::dir().ok_or("no home folder")?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let target = match genre {
         None => dir,
         Some(g) => {
@@ -188,7 +574,7 @@ pub fn theory(key: &str, words: &str) -> Result<Value, String> {
         "scale": notes,
         "chords": own,
         "progressions": suggestions(&k, words, 6),
-        "write": "set_chords with the numerals or chords; then write_chords, write_bass and write_melody follow them",
+        "write": "set_chords with the numerals or chords; then write the parts on them yourself",
     }))
 }
 
@@ -568,6 +954,60 @@ pub fn sounds(
         ));
     }
     kept.save();
+    // Pina Studio's own synth: its patches made for the part (or named by the words), heard
+    // playing it as the presets are.
+    let suits: &[&str] = match role_name {
+        "bass" => &["bass"],
+        "lead" | "vocals" => &["lead"],
+        "pad" | "texture" => &["pad"],
+        "chords" => &["pad", "keys", "pluck"],
+        "keys" => &["keys", "pad"],
+        "arp" => &["pluck", "lead"],
+        "counter" => &["lead", "pluck"],
+        _ => &[],
+    };
+    let mut patches: Vec<(f32, Value)> = pina_engine::song::project::POLY_PATCHES
+        .iter()
+        .filter(|(name, part, about)| {
+            let said =
+                |w: &String| name.to_lowercase().contains(w.as_str()) || about.contains(w.as_str());
+            suits.contains(part) || naming.iter().any(said)
+        })
+        .take(8)
+        .filter_map(|&(name, _, about)| {
+            let patch = pina_engine::song::project::poly_patch(name)?;
+            let h = crate::sounds::audition::hear_synth(&patch, role_name)?;
+            let (score, why) = crate::sounds::audition::judge(role_name, &h, &asked, &asked_sounds);
+            let called = naming
+                .iter()
+                .any(|w| name.to_lowercase().contains(w.as_str()) || about.contains(w.as_str()));
+            let score = score * 0.85 + if called { 0.15 } else { 0.0 };
+            let load = json!({ "op": "set_synth", "track": t, "patch": name });
+            Some((
+                score,
+                json!({ "name": name, "about": about, "sounds": crate::sounds::audition::say(&h),
+                    "fit": (score as f64 * 100.0).round() / 100.0, "watch": why, "load": load }),
+            ))
+        })
+        .collect();
+    patches.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (score, v) in patches.iter().take(2) {
+        best.push((
+            *score,
+            json!({ "instrument": "Pina Studio's synth", "preset": v["name"], "sounds": v["sounds"],
+                "fit": v.get("fit"), "commands": [v["load"]] }),
+        ));
+    }
+    if let Some(top) = patches.first().map(|p| p.0) {
+        instruments.push((
+            top,
+            json!({
+                "name": "Pina Studio's synth",
+                "about": "built in: three wavetable oscillators with warps and unison, a sub and noise, two analog-modelled filters, four envelopes, eight LFOs and a matrix that can reach the track's effects; set_synth shapes any patch",
+                "presets": patches.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
+            }),
+        ));
+    }
     instruments.sort_by(|a, b| b.0.total_cmp(&a.0));
     best.sort_by(|a, b| b.0.total_cmp(&a.0));
     best.truncate(6);
@@ -598,27 +1038,6 @@ pub fn sounds(
     }))
 }
 
-const LIMITER: (&str, &str) = ("AUPeakLimiter", "aufx lmtr appl");
-
-fn au(class: &str, uid: &str) -> PluginRef {
-    PluginRef {
-        format: Format::Au,
-        class: class.into(),
-        uid: Some(uid.into()),
-        ..Default::default()
-    }
-}
-
-fn param(channel: ChannelRef, plugin: Which, name: &str, text: &str) -> Command {
-    Command::SetPluginParam {
-        channel,
-        plugin,
-        param: ParamRef::Name(name.into()),
-        value: None,
-        text: Some(text.into()),
-    }
-}
-
 /// Mixes tracks (all, or `only`) by measuring them: see `mixing`.
 pub fn mix_role(
     dir: &Path,
@@ -629,8 +1048,10 @@ pub fn mix_role(
     crate::agent::mixing::mix(dir, only, as_role, levels)
 }
 
-/// Masters the song: a limiter on the master and its gain set so the song's loudness is `lufs`
-/// (the reference's, else the genre's, else -10), measured again until it's there.
+/// Masters the song. Its tonal balance goes toward what it aims at, then the master's own limiter
+/// is set by listening (its style, its release to the tempo, its gain found with the limiter
+/// itself) so the song's loudness is `lufs`: the reference's, else that of the person's playbook
+/// the genre is, else -10. True peaks stay under -1 dBTP, and it's measured again as it plays.
 pub fn master(dir: &Path, lufs: Option<f32>) -> Result<Value, String> {
     let p = cli::project(dir)?;
     let target = lufs
@@ -640,129 +1061,62 @@ pub fn master(dir: &Path, lufs: Option<f32>) -> Result<Value, String> {
     if !(-30.0..=-4.0).contains(&target) {
         return Err("lufs is -30 to -4".into());
     }
-    // ponytail: the limiter is macOS's own; a built-in one would let Windows master too.
-    if !cfg!(target_os = "macos") {
-        return Err("mastering uses macOS's peak limiter, which isn't here".into());
-    }
     // Its tonal balance towards what it aims at, before the limiter hears it.
     let tonal = crate::agent::mixing::tonal_balance(dir)?;
-    let slot = match p.master_inserts.iter().position(|i| i.class == LIMITER.0) {
-        Some(i) => i,
-        None => {
-            cli::edit_with(
-                dir,
-                Command::SetInsert {
-                    channel: ChannelRef::Master,
-                    index: p.master_inserts.len(),
-                    plugin: Some(au(LIMITER.0, LIMITER.1)),
-                },
-            )?;
-            p.master_inserts.len()
-        }
-    };
-    let set_gain = |db: f32| {
+    // macOS's own limiter, which mastering used to put on, makes way for the built-in one; and
+    // the fader after it goes back to 0 dB, the limiter's ceiling being what nothing passes.
+    let mut replaced = 0;
+    while let Some(index) = cli::project(dir)?
+        .master_inserts
+        .iter()
+        .position(|r| r.class == "AUPeakLimiter")
+    {
         cli::edit_with(
             dir,
-            param(
-                ChannelRef::Master,
-                Which::Insert(slot),
-                "Pre-Gain",
-                &format!("{db:.1} dB"),
-            ),
-        )
-    };
-    // Unlimited first, so the gain is from where the mix is. The whole song is measured at the
-    // start and the end; between, its loudest section (up to 16 bars), its loudness offset from
-    // the whole's taken as staying put.
-    let mut gain = 0.0f32;
-    set_gain(gain)?;
-    // Loud genres clip softly before the limiter (the master's saturator runs before its
-    // inserts): the kick's and bass's peaks rounded off, so the limiter needn't crush them.
-    let mut clip = match target {
-        t if t > -9.5 => 6.0f32,
-        t if t > -11.0 => 3.0,
-        _ => 0.0,
-    };
-    let set_clip = |drive: f32| {
-        let sat = (drive > 0.0)
-            .then(|| json!({ "drive_db": drive, "tone": 0, "mix": 1, "output_db": 0 }));
-        cli::edit_with(
-            dir,
-            Command::SetSaturator {
+            Command::SetInsert {
                 channel: ChannelRef::Master,
-                sat,
+                index,
+                plugin: None,
             },
-        )
-    };
-    set_clip(clip)?;
-    // The fader comes after the limiter (which stops at 0 dBFS): it sets the ceiling, and the
-    // loudness is measured under it.
+        )?;
+        replaced += 1;
+    }
     cli::edit_with(
         dir,
         Command::SetMaster {
-            volume_db: Some(-0.5),
+            volume_db: Some(0.0),
             pan_law: None,
         },
     )?;
-    let p = cli::project(dir)?;
-    let whole = cli::report(&p, dir, None, false)?;
-    if whole.mix.lufs < -60.0 {
+    let mut p = cli::project(dir)?;
+    p.master_limit = Some(Limiter {
+        ceiling_db: -1.0,
+        true_peak: true,
+        ..p.master_limit.unwrap_or_default()
+    });
+    let Some(learned) = learn_limit(&p, dir, ChannelRef::Master, target)? else {
         return Err("the song is silent: nothing to master".into());
-    }
-    let loudest = whole
-        .sections
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.2.lufs.total_cmp(&b.1.2.lufs))
-        .map(|(i, (_, tick, a))| {
-            let end = p
-                .markers
-                .get(i + 1)
-                .map_or(p.end(), |n| n.tick)
-                .min(tick + 16 * p.bar());
-            ((*tick, end), a.lufs - whole.mix.lufs)
-        });
-    let measure = |_gain: f32| -> Result<f32, String> {
-        let p = cli::project(dir)?;
-        Ok(match loudest {
-            Some((range, offset)) => cli::report(&p, dir, Some(range), false)?.mix.lufs - offset,
-            None => cli::report(&p, dir, None, false)?.mix.lufs,
-        })
     };
-    let mut lufs = whole.mix.lufs;
-    let mut steps = vec![json!({ "gain_db": 0.0, "lufs": (lufs * 10.0).round() / 10.0 })];
-    // A limiter gives back less than it's pushed: push the rest a little harder.
-    let push = |gain: &mut f32, off: f32| -> Result<(), String> {
-        *gain = (*gain + off * if *gain > 0.0 { 1.2 } else { 1.0 }).clamp(-20.0, 24.0);
-        set_gain(*gain).map(drop)
+    let mut limit = learned.limit;
+    let set = |l: &Limiter| {
+        let limit = serde_json::to_value(l).map_err(|e| e.to_string())?;
+        cli::edit_with(
+            dir,
+            Command::SetLimiter {
+                channel: ChannelRef::Master,
+                limit: Some(limit),
+                which: 0,
+            },
+        )
     };
-    // Near it by the section (the offset drifts as the loud parts are limited harder), then
-    // exact by the whole.
-    for _ in 0..3 {
-        let off = target - lufs;
-        if off.abs() < 1.0 {
-            break;
-        }
-        push(&mut gain, off)?;
-        lufs = measure(gain)?;
-        steps.push(json!({ "gain_db": (gain * 10.0).round() / 10.0, "lufs": (lufs * 10.0).round() / 10.0 }));
-    }
+    set(&limit)?;
+    // Heard as it plays: what comes after the limiter, if anything, moves it a little.
     let mut end = cli::report(&cli::project(dir)?, dir, None, false)?.mix;
-    for _ in 0..3 {
-        let off = target - end.lufs;
-        if off.abs() < 0.4 {
-            break;
-        }
-        let before = end.lufs;
-        push(&mut gain, off)?;
+    let off = target - end.lufs;
+    if off.abs() > 0.3 && limit.gain_db + off > 0.0 && limit.gain_db + off < 30.0 {
+        limit.gain_db = ((limit.gain_db + off * 1.2) * 10.0).round() / 10.0;
+        set(&limit)?;
         end = cli::report(&cli::project(dir)?, dir, None, false)?.mix;
-        // Pushed and no louder: the limiter's at its end. Clip harder.
-        if off > 0.0 && end.lufs - before < 0.3 && clip < 9.0 {
-            clip += 3.0;
-            set_clip(clip)?;
-            end = cli::report(&cli::project(dir)?, dir, None, false)?.mix;
-        }
-        steps.push(json!({ "gain_db": (gain * 10.0).round() / 10.0, "clip_db": clip, "lufs": (end.lufs * 10.0).round() / 10.0, "whole": true }));
     }
     let peak = end.peak_db[0].max(end.peak_db[1]);
     let short = target - end.lufs;
@@ -773,25 +1127,51 @@ pub fn master(dir: &Path, lufs: Option<f32>) -> Result<Value, String> {
         "peak_db": (peak * 10.0).round() / 10.0,
         "crest_db": (end.crest_db * 10.0).round() / 10.0,
         "tonal_balance": tonal,
-        "limiter": format!("master insert {slot}, pre-gain {gain:.1} dB"),
-        "clipper": if clip > 0.0 { format!("the master's saturator, drive {clip} dB") } else { "none".into() },
-        "steps": steps,
+        "limiter": format!(
+            "the master's limiter: {}, +{:.1} dB into a {:.1} dBTP ceiling, release {} ms (auto)",
+            limit.style.name(),
+            limit.gain_db,
+            limit.ceiling_db,
+            limit.release_ms
+        ),
+        "replaced": if replaced > 0 { "macOS's peak limiter, which mastering used before" } else { "" },
     }))
 }
 
-/// How an agent makes a song that sounds finished, with these tools.
-pub const WORKFLOW: &str = "0. Asked for a song like an existing one: study <file> with playbook true, \
-and use the playbook it saves as the genre. \
-1. playbook <genre>, then set_genre, set_tempo and set_key from it. \
-2. Chords first: theory for progressions, set_chords. \
-3. A loop of 4-8 bars: tracks for its parts; the person's palette first (palette: the sounds, \
-instruments and effects they picked, each for its role), then sounds <role> for the rest (any installed \
-instrument's presets, or samples) instead of the sine synth or built-in kit; write_drums, write_bass \
-(style kick for an 808), write_chords, write_melody. \
-4. critique quick: fix every \"fix\"; render a bar range and listen-check with analyze. \
-5. arrange (the genre's sections), then transition into each section (build into choruses and \
-drops, fill or reverse into verses). Vary sections: write_melody with another seed or style in \
-the chorus, take parts out of verses. \
-6. mix_role, then critique (it renders): fix mix issues. \
+/// How an agent makes a song that sounds finished, in any style: by writing it, as a producer
+/// would. Nothing in Pina Studio writes parts for it.
+pub const WORKFLOW: &str = "Nothing is precoded: you write the song, every note, in whatever style \
+the person asks for. Playbooks are the person's own: follow one only when they ask for it \
+(playbook <name>). \
+0. Hear what they want: the style, mood and songs they name (study <file> takes one apart: take \
+its tempo, key, form and groove as ideas, not a template). \
+1. Plan the whole song before writing: tempo, key, chords, and a map of its sections (bars, \
+what plays, how much energy), where it builds and where it lets go. set_tempo, set_key, \
+set_chords, and markers for the sections. \
+2. Sounds: the person's palette first (palette), then samples_find, samples_kit and sounds for \
+the rest; real instruments and samples, or Pina Studio's own synth (set_synth: a patch, then its wavetables, warps, unison, filters, envelopes, LFOs and matrix shaped for the part), never the sine synth. Drums and percussion as sampler \
+zones, the pitched ones tuned to the key. \
+3. Write every part yourself, a section at a time, with add_midi_region (or add_pattern_region \
+for steps): drums with a feel (your own swing, accents, ghost notes, velocities that vary, \
+timing nudged a little), a bass that sits with the kick and leads into the next chord, chords \
+voiced to move little, a melody from a motif you repeat, vary and answer. Give each section its \
+own: what plays, how dense, fills and turnarounds into the next, call and response; copy_bars \
+only for bars you then change. Never one loop pasted through the song. \
+4. Transitions: write the fills, rolls and kick drops yourself; transition for riser, reverse, \
+impact and gap sounds, timed to land on the downbeat. \
+5. critique quick after each part and fix every \"fix\"; render a bar range and analyze it. \
+6. Mix: levels by part, EQ what clashes, space (reverb, delay) and movement (automation), with \
+mix as the start (it sets each channel by listening); then shape each part's built-in effects \
+for the song with all they have: the saturator's bands and styles (tape, tube, transformer, \
+crunch, heavy, rectify, foldback, lo-fi), drive, tone, dynamics and feedback on the key; the \
+compressor's style, parallel mix and spectral; the EQ's dynamic, spectral and mid/side bands, \
+sidechains, character and phase; stack them where a part wants it (\"which\": 1 adds a second: \
+an EQ after a saturator, a fast compressor then a slow one); set_fx stacks the tools: filter for \
+sweeps and wahs, motion for chorus, flanger, phaser, tremolo, shaper for a hit's punch or tail, \
+gate to close what rings, de_esser and tune on anything sung, stereo for each band's width, \
+multiband to glue a bus, pitch for harmonies, tape_stop to throw a transition; learn sets one \
+effect by listening. \
+Then critique (it renders) \
+and fix what it hears. \
 7. master. 8. critique once more; say what you made and what's left. \
 Asked for files (a master, stems, an MP3): bounce, with the formats, bits, rate and loudness asked.";
