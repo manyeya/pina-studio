@@ -280,6 +280,7 @@ fn playbook_parts_are_added_edited_and_removed(cx: &mut TestAppContext) {
     let before = parts(cx).len();
 
     // Add a percussion part: it shows, and it's saved.
+    click_on(cx, "genre-tab-parts", Modifiers::none(), MouseButton::Left);
     click_on(cx, "add-part-perc", Modifiers::none(), MouseButton::Left);
     assert_eq!(parts(cx).len(), before + 1);
     assert_eq!(saved().parts.last().unwrap().role, "perc");
@@ -295,14 +296,15 @@ fn playbook_parts_are_added_edited_and_removed(cx: &mut TestAppContext) {
     // And how to write it, kept when the click goes elsewhere.
     let field: &'static str = Box::leak(format!("part-write-{n}").into_boxed_str());
     click_on(cx, field, Modifiers::none(), MouseButton::Left);
-    cx.simulate_input("write_drums afrobeats on a percussion kit");
-    click_on(cx, "genre-harmony", Modifiers::none(), MouseButton::Left);
+    cx.simulate_input("congas and bongos on a percussion kit, written by hand");
+    click_on(cx, "genre-tab-feel", Modifiers::none(), MouseButton::Left);
     assert_eq!(
         saved().parts[n].write,
-        "write_drums afrobeats on a percussion kit"
+        "congas and bongos on a percussion kit, written by hand"
     );
 
     // Remove it: gone from the page, the file, and every section.
+    click_on(cx, "genre-tab-parts", Modifiers::none(), MouseButton::Left);
     let remove: &'static str = Box::leak(format!("part-remove-{n}").into_boxed_str());
     click_on(cx, remove, Modifiers::none(), MouseButton::Left);
     assert_eq!(parts(cx).len(), before);
@@ -313,32 +315,79 @@ fn playbook_parts_are_added_edited_and_removed(cx: &mut TestAppContext) {
             .iter()
             .all(|s| !s.parts.contains(&"perc".to_string()))
     );
-    // Pina Studio's again: the same as it ships.
-    assert_eq!(
-        pina_engine::music::playbook::origin(&book),
-        pina_engine::music::playbook::Origin::Pina
+    // As it was.
+    assert_eq!(book, playbook("lofi"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn a_book_shows_its_moves_on_its_lanes_and_finds_its_way_among_many(cx: &mut TestAppContext) {
+    use crate::pages::genres::{BookTab, Shelf};
+    let dir = demo_copy("playbook-lanes");
+    let (ws, cx) = open_at(cx, &dir);
+    ws.update(cx, |ws, cx| ws.open_genres(Some("house"), cx));
+    cx.run_until_parked();
+    // A move picked lights the bars it's about.
+    assert_eq!(ws.read_with(cx, |ws, _| ws.genres.tab), BookTab::Moves);
+    assert!(cx.debug_bounds("genre-lanes").is_some());
+    let chorus = ws.read_with(cx, |ws, _| {
+        let book = ws.genres.draft.as_ref().unwrap();
+        pina_engine::music::playbook::moves::moves(book)
+            .iter()
+            .position(|m| m.at.is_some())
+            .unwrap()
+    });
+    let sel: &'static str = Box::leak(format!("move-{chorus}").into_boxed_str());
+    click_on(cx, sel, Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.genres.picked), chorus);
+    assert!(cx.debug_bounds("genre-lit").is_some());
+    // Chords and groove, and hearing the book: rendered, then playing, then stopped.
+    click_on(cx, "genre-tab-chords", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.genres.tab), BookTab::Sound);
+    click_on(cx, "genre-play", Modifiers::none(), MouseButton::Left);
+    until(cx, &ws, |ws| ws.genres.heard.is_some());
+    click_on(cx, "genre-play", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.genres.heard.is_none()));
+    // The rail narrows to what's asked for, however many books there are.
+    click_on(
+        cx,
+        "genres-only-major",
+        Modifiers::none(),
+        MouseButton::Left,
     );
+    assert_eq!(ws.read_with(cx, |ws, _| ws.genres.shelf), Shelf::Major);
+    assert!(cx.debug_bounds("genre-house").is_none(), "house is minor");
+    click_on(cx, "genres-only-all", Modifiers::none(), MouseButton::Left);
+    assert!(cx.debug_bounds("genre-house").is_some());
+    ws.update(cx, |ws, cx| {
+        let search = ws.genres.search.clone().unwrap();
+        search.update(cx, |input, cx| input.set_text("lo-fi", cx));
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("genre-house").is_none());
+    assert!(cx.debug_bounds("genre-lofi").is_some());
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[gpui::test]
 fn a_song_studied_shows_its_form_and_becomes_the_mix_reference(cx: &mut TestAppContext) {
-    // Studies of the test's own, never the person's.
-    let dir = std::env::temp_dir().join(format!("pina-test-studies-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    unsafe { std::env::set_var("PINA_STUDIES", &dir) };
-    // Ten seconds at 120 BPM: a kick on every beat over an A minor chord.
+    // Studies of the tests' own, never the person's.
+    let dir = test_studies();
+    // A minute at 120 BPM: a kick on every beat, over A minor and then, louder, over F major.
     let rate = 44_100u32;
-    let l: Vec<f32> = (0..rate as usize * 10)
+    let l: Vec<f32> = (0..rate as usize * 60)
         .map(|i| {
             let t = i as f32 / rate as f32;
             let beat = t % 0.5;
-            let chord: f32 = [220.0f32, 261.63, 329.63]
+            let (notes, level) = match t < 30.0 {
+                true => ([220.0f32, 261.63, 329.63], 0.05),
+                false => ([174.61, 220.0, 261.63], 0.14),
+            };
+            let chord: f32 = notes
                 .iter()
                 .map(|f| (std::f32::consts::TAU * f * t).sin())
                 .sum();
-            0.12 * chord + 0.6 * (-beat * 30.0).exp() * (std::f32::consts::TAU * 55.0 * beat).sin()
+            level * chord + 0.5 * (-beat * 30.0).exp() * (std::f32::consts::TAU * 55.0 * beat).sin()
         })
         .collect();
     let song = dir.join("Someone - A Test.wav");
@@ -353,7 +402,10 @@ fn a_song_studied_shows_its_form_and_becomes_the_mix_reference(cx: &mut TestAppC
     assert!(cx.debug_bounds("study-title").is_some());
     // A section picked opens up.
     click_on(cx, "study-section-0", Modifiers::none(), MouseButton::Left);
-    assert_eq!(ws.read_with(cx, |ws, _| ws.studies.section), Some(0));
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.studies.pick),
+        crate::pages::study::Pick::Section(0)
+    );
     assert!(cx.debug_bounds("study-section-detail").is_some());
     // Its mix becomes this song's reference.
     click_on(cx, "study-reference", Modifiers::none(), MouseButton::Left);
@@ -362,5 +414,106 @@ fn a_song_studied_shows_its_form_and_becomes_the_mix_reference(cx: &mut TestAppC
         .unwrap();
     assert_eq!(reference.file, song);
     assert!((reference.lufs - studied.mix.overall.lufs).abs() < 0.01);
-    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[gpui::test]
+fn a_loop_shows_only_what_it_has_and_plays_from_where_its_clicked(cx: &mut TestAppContext) {
+    use crate::pages::study::{Dock, Only, Pick};
+    test_studies();
+    let dir = std::env::temp_dir().join(format!("pina-study-lanes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // Four bars of a chord at 120, named as packs name their loops.
+    let rate = 44_100u32;
+    let l: Vec<f32> = (0..rate as usize * 8)
+        .map(|i| {
+            let t = i as f32 / rate as f32;
+            let swell = (-(t % 2.0) * 1.5).exp();
+            let chord = match (t / 4.0) as u32 % 2 {
+                0 => [220.0f32, 261.63, 329.63],
+                _ => [174.61, 220.0, 261.63],
+            };
+            chord
+                .iter()
+                .map(|f| 0.12 * swell * (std::f32::consts::TAU * f * t).sin())
+                .sum()
+        })
+        .collect();
+    let song = dir.join("Test Piano Loop Amin (120 BPM).wav");
+    pina_engine::music::analysis::write_wav(&song, &l, &l, rate).unwrap();
+    let studied = crate::cli::study::study(&song, false).unwrap();
+    assert_eq!(studied.nature.name, "Piano loop");
+    assert_eq!(studied.tempo.bpm, 120.0);
+    assert_eq!(studied.key.name, "A minor");
+    assert!(studied.groove.is_none(), "no drums in a piano");
+    assert!(studied.genres.is_empty(), "a loop isn't near a song's book");
+    assert_eq!(studied.instruments.len(), 1);
+
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| {
+        ws.open_study(cx);
+        ws.studies.open = Some(song.clone());
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("study-absent").is_some());
+    assert!(cx.debug_bounds("study-tab-groove").is_none());
+    assert!(cx.debug_bounds("study-tab-playbooks").is_none());
+    assert!(cx.debug_bounds("study-spectrogram").is_some());
+
+    // A chord picked reads out at the side and moves the playhead.
+    click_on(cx, "study-chord-1", Modifiers::none(), MouseButton::Left);
+    let (pick, at) = ws.read_with(cx, |ws, _| (ws.studies.pick, ws.studies.at));
+    assert_eq!(pick, Pick::Chord(1));
+    assert!(at > 0.0);
+    // Play starts there, and stops where it got to.
+    click_on(cx, "study-play", Modifiers::none(), MouseButton::Left);
+    until(cx, &ws, |ws| ws.studies.playing.is_some());
+    click_on(cx, "study-play", Modifiers::none(), MouseButton::Left);
+    let (playing, stopped) = ws.read_with(cx, |ws, _| (ws.studies.playing, ws.studies.at));
+    assert!(playing.is_none() && stopped >= at);
+    // A fact says where it comes from.
+    click_on(cx, "study-fact-tempo", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.studies.pick), Pick::Tempo);
+    // The dock opens what's in it.
+    click_on(cx, "study-tab-mix", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.studies.dock), Dock::Mix);
+    // The rail narrows to what's asked for.
+    click_on(cx, "study-only-songs", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.studies.only), Only::Songs);
+    assert!(cx.debug_bounds("study-0").is_none(), "a loop isn't a song");
+}
+
+#[gpui::test]
+fn settings_choose_the_buffer_and_the_cpu_number_holds_still(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    click_on(cx, "settings-Audio", Modifiers::none(), MouseButton::Left);
+    cx.run_until_parked();
+    // Each size the output can do is a click away, and Auto hands it back to the system.
+    assert!(ws.read_with(cx, |ws, _| !ws.buffers.is_empty()));
+    let size = ws.read_with(cx, |ws, _| ws.buffers[0]);
+    let chip = format!("setting-buffer-{size}").leak();
+    click_on(cx, chip, Modifiers::none(), MouseButton::Left);
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.settings.audio.buffer),
+        Some(size)
+    );
+    click_on(
+        cx,
+        "setting-buffer-Auto",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert_eq!(ws.read_with(cx, |ws, _| ws.settings.audio.buffer), None);
+    // The system's output is always there to go back to.
+    assert!(cx.debug_bounds("setting-output-System output").is_some());
+    click_on(
+        cx,
+        "setting-output-System output",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.settings.audio.device.clone()),
+        None
+    );
 }

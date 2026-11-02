@@ -5,8 +5,8 @@
 
 mod editing;
 mod feel;
-mod hero;
 mod landscape_view;
+mod lanes;
 mod mix_view;
 mod page;
 mod sections;
@@ -15,15 +15,16 @@ mod widgets;
 pub(crate) use editing::*;
 pub(crate) use feel::*;
 pub(crate) use landscape_view::*;
+pub(crate) use lanes::{BookTab, Shelf};
 pub(crate) use widgets::*;
 
 use gpui::{
     Bounds, Context, Div, Entity, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
-    ScrollHandle, Stateful, Subscription, Window, canvas, div, point, prelude::*, px, rgb,
+    ScrollHandle, Subscription, canvas, div, point, prelude::*, px, rgb,
 };
 use pina_engine::{
     music::Key,
-    music::playbook::{self, Origin, Part, Playbook, Section},
+    music::playbook::{self, Part, Playbook, Section},
     music::theory,
 };
 
@@ -105,7 +106,20 @@ pub struct Genres {
     pub problems: Vec<String>,
     /// The genre being edited, as it's being changed.
     pub draft: Option<Playbook>,
-    /// The section picked in the song map.
+    /// The section picked on the lanes.
     pub section: Option<usize>,
+    /// What's open under the lanes, and the move picked in it.
+    pub tab: BookTab,
+    pub picked: usize,
+    /// The rail's search and what's typed in it, and which books it shows.
+    pub search: Option<Entity<TextInput>>,
+    typed: Option<Subscription>,
+    pub query: String,
+    pub shelf: Shelf,
+    /// What's being heard or wanted, and what's been rendered to hear, by book or chord.
+    pub heard: Option<lanes::Heard>,
+    wanted: Option<String>,
+    rendered:
+        std::collections::HashMap<String, std::sync::Arc<pina_engine::audio::engine::AudioData>>,
     fields: Option<Fields>,
 }

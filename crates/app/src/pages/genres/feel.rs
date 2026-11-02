@@ -247,7 +247,7 @@ impl Workspace {
                     .flex()
                     .gap(px(12.))
                     .child(
-                        tile("Groove", "The drums write_drums plays for it")
+                        tile("Groove", "Its drum groove")
                             .flex_1()
                             .child(groove_grid(&p.groove, color))
                             .child(div().flex().flex_wrap().gap(px(5.)).children(grooves)),

@@ -30,6 +30,17 @@ impl Workspace {
         let (list, problems) = playbook::load();
         self.genres.list = list;
         self.genres.problems = problems;
+        if self.genres.search.is_none() {
+            let input = cx.new(|cx| TextInput::search("Search playbooks", cx));
+            self.genres.typed = Some(cx.observe(&input, |ws, input, cx| {
+                let text = input.read(cx).text().trim().to_lowercase();
+                if text != ws.genres.query {
+                    ws.genres.query = text;
+                    cx.notify();
+                }
+            }));
+            self.genres.search = Some(input);
+        }
         self.view = View::Playbooks;
         let want = id
             .map(str::to_string)
@@ -48,6 +59,10 @@ impl Workspace {
         let other = self.genres.draft.as_ref().is_none_or(|d| d.id != id);
         self.genres.draft = self.genres.list.iter().find(|p| p.id == id).cloned();
         self.genres.section = None;
+        self.genres.picked = 0;
+        if self.genres.heard.is_some() {
+            self.stop_book(cx);
+        }
         if other {
             self.genres.scroll.set_offset(point(px(0.), px(0.)));
         }
@@ -64,7 +79,7 @@ impl Workspace {
         let mut subs = Vec::new();
         let mut field = |ws: &mut Self, text: &str, hint: &str, what: Text| {
             let f = cx.new(|cx| match what {
-                Text::Name => TextInput::form(text, hint, cx).typed(36., 44., FontWeight::BOLD),
+                Text::Name => TextInput::form(text, hint, cx).typed(15., 20., FontWeight::SEMIBOLD),
                 _ => TextInput::form(text, hint, cx),
             });
             subs.push(cx.subscribe(&f, move |ws, _, e: &TextEvent, cx| {
@@ -205,8 +220,55 @@ impl Workspace {
         self.select_genre(&copy.id.clone(), cx);
     }
 
-    /// Pina Studio's own back, for a genre the person changed; or the person's genre gone.
-    pub(crate) fn reset_genre(&mut self, cx: &mut Context<Self>) {
+    /// A new playbook, to fill in: a start, a body and an end for its drums.
+    pub(crate) fn new_genre(&mut self, cx: &mut Context<Self>) {
+        let taken: Vec<String> = self.genres.list.iter().map(|p| p.id.clone()).collect();
+        let name = "New playbook".to_string();
+        let section = |name: &str, bars, energy| Section {
+            name: name.into(),
+            bars,
+            parts: vec!["drums".into()],
+            energy,
+            lufs: None,
+        };
+        let book = Playbook {
+            id: playbook::new_id(&name, &taken),
+            name,
+            tempo: (118.0, 126.0),
+            minor: true,
+            groove: theory::GROOVES[0].id.to_string(),
+            swing: 50.0,
+            harmony: "warm".into(),
+            parts: vec![Part {
+                role: "drums".into(),
+                sound: "drums".into(),
+                write: String::new(),
+            }],
+            sections: vec![
+                section("Intro", 8, 2),
+                section("Verse", 16, 3),
+                section("Chorus", 16, 5),
+                section("Outro", 8, 2),
+            ],
+            lufs: -14.0,
+            spectrum: [-6.0, -4.0, -7.0, -12.0, -18.0, -20.0],
+            notes: Vec::new(),
+            chords: Vec::new(),
+            numerals: Vec::new(),
+            beat: None,
+            source: None,
+        };
+        match playbook::save(&book) {
+            Ok(_) => self.open_genres(Some(&book.id), cx),
+            Err(e) => {
+                self.status = Some(e);
+                cx.notify();
+            }
+        }
+    }
+
+    /// The person's playbook deleted.
+    pub(crate) fn delete_genre(&mut self, cx: &mut Context<Self>) {
         let Some(p) = self.genres.draft.clone() else {
             return;
         };
@@ -215,17 +277,9 @@ impl Workspace {
             cx.notify();
             return;
         }
-        let gone = playbook::origin(&p) == Origin::Yours;
-        self.status = Some(match gone {
-            true => format!("Deleted {}", p.name),
-            false => format!("{} is Pina Studio's again", p.name),
-        });
-        let next = match gone {
-            true => None,
-            false => Some(p.id.as_str()),
-        };
+        self.status = Some(format!("Deleted {}", p.name));
         self.genres.draft = None;
-        self.open_genres(next, cx);
+        self.open_genres(None, cx);
     }
 
     /// The song plays this genre: what its agents and critic aim at.

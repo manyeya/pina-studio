@@ -27,7 +27,7 @@ fn shots() {
     std::fs::create_dir_all(&out).unwrap();
     // Playbooks of its own, as every test's: opening the window makes the folder if it's missing.
     let books = std::env::temp_dir().join(format!("pina-shot-books-{}", std::process::id()));
-    unsafe { std::env::set_var("PINA_PLAYBOOKS", &books) };
+    test_playbooks(&books);
     let page = std::env::var("PINA_SHOT_PAGE").unwrap_or_else(|_| "study".into());
     let tall: f32 = std::env::var("PINA_SHOT_H")
         .ok()
@@ -94,6 +94,19 @@ fn shots() {
                         break;
                     }
                 }
+            })
+            .unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|cx| {
+        window
+            .update(cx, |ws, _, cx| {
+                let shot = Shot {
+                    page: &page,
+                    song: song.as_deref(),
+                    out: &out,
+                };
+                agent::after_drawn(&shot, ws, cx);
             })
             .unwrap()
     });

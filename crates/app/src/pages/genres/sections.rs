@@ -71,9 +71,10 @@ impl Workspace {
             .border_t_1()
             .border_color(rgb(LINE_SOFT))
             .flex()
+            .flex_wrap()
             .items_center()
-            .gap(px(14.))
-            .child(div().w(px(180.)).child(field_box(name, "section-name")))
+            .gap(px(10.))
+            .child(div().w_full().child(field_box(name, "section-name")))
             .child(
                 div()
                     .flex()

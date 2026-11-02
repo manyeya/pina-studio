@@ -3,8 +3,11 @@
 
 mod agent;
 mod automation;
+mod drums;
 mod editors;
 mod eq;
+mod like;
+mod midi_browser;
 mod mix;
 mod modulation;
 mod pages;
@@ -15,6 +18,8 @@ mod regions;
 mod shots;
 mod sounds;
 mod steps;
+mod studio_agent;
+mod tempo;
 mod timeline;
 mod tracks;
 
@@ -52,14 +57,73 @@ fn open(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) 
     open_at(cx, &demo())
 }
 
+/// A few playbooks for the tests to work on, as the person might have (Pina Studio ships none).
+const PLAYBOOKS: [(&str, &str); 3] = [
+    (
+        "lofi",
+        include_str!("../../../engine/src/music/playbook/fixtures/lofi.json"),
+    ),
+    (
+        "house",
+        include_str!("../../../engine/src/music/playbook/fixtures/house.json"),
+    ),
+    (
+        "trap",
+        include_str!("../../../engine/src/music/playbook/fixtures/trap.json"),
+    ),
+];
+
+/// The tests' playbook as it starts.
+fn playbook(id: &str) -> pina_engine::music::playbook::Playbook {
+    let json = PLAYBOOKS.iter().find(|p| p.0 == id).unwrap().1;
+    serde_json::from_str(json).unwrap()
+}
+
+/// Studies and blueprints of the tests' own, never the person's: one folder for the run, so
+/// tests side by side share it.
+fn test_studies() -> PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let d = std::env::temp_dir().join(format!("pina-test-studies-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        unsafe { std::env::set_var("PINA_STUDIES", &d) };
+        d
+    })
+    .clone()
+}
+
+/// Songs made by the tests, never in the person's songs folder: one folder for the run.
+fn test_songs() -> PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let d = std::env::temp_dir().join(format!("pina-test-songs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        unsafe { std::env::set_var("PINA_SONGS", &d) };
+        d
+    })
+    .clone()
+}
+
+/// A playbooks folder of the tests' own, never the person's, with `PLAYBOOKS` in it.
+fn test_playbooks(books: &Path) {
+    unsafe { std::env::set_var("PINA_PLAYBOOKS", books) };
+    std::fs::create_dir_all(books).unwrap();
+    for (id, json) in PLAYBOOKS {
+        let file = books.join(format!("{id}.json"));
+        if !file.exists() {
+            std::fs::write(file, json).unwrap();
+        }
+    }
+}
+
 fn open_at<'a>(
     cx: &'a mut TestAppContext,
     dir: &Path,
 ) -> (Entity<Workspace>, &'a mut VisualTestContext) {
     cx.update(bind_keys);
-    // Playbooks of the tests' own: never the person's.
-    let books = std::env::temp_dir().join(format!("pina-test-books-{}", std::process::id()));
-    unsafe { std::env::set_var("PINA_PLAYBOOKS", &books) };
+    test_playbooks(&std::env::temp_dir().join(format!("pina-test-books-{}", std::process::id())));
     let session = Session::open(dir).unwrap();
     let player = Player::silent(&session.project, &session.dir);
     let (ws, cx) = cx.add_window_view(|window, cx| Workspace::new(session, player, window, cx));
@@ -343,6 +407,7 @@ fn little_library(dir: &Path) -> pina_engine::samples::library::Library {
     Library {
         folders: vec![dir.to_path_buf()],
         samples,
+        midi: Vec::new(),
     }
 }
 

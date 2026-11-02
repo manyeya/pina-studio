@@ -1,6 +1,7 @@
 //! The page: its rail of genres and the sheet.
 
 use super::*;
+use crate::pages::study::act;
 
 impl Workspace {
     pub fn genres_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -13,7 +14,11 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .text_color(rgb(TEXT_3))
-                .child("No playbooks")
+                .debug_selector(|| "no-playbooks".into())
+                .child(
+                    "No playbooks. Make one from a song on the Song Study page, or as JSON in the \
+                     playbooks folder: the Studio Agent uses one only when you ask it to.",
+                )
                 .into_any_element(),
         };
         div()
@@ -30,19 +35,57 @@ impl Workspace {
     pub(crate) fn genre_rail(&mut self, cx: &mut Context<Self>) -> Div {
         let selected = self.genres.draft.as_ref().map(|p| p.id.clone());
         let song = self.session.project.genre.clone();
+        let (query, shelf) = (self.genres.query.clone(), self.genres.shelf);
+        let tempo = self.session.project.tempo;
+        let shown = |p: &&Playbook| {
+            let kept = match shelf {
+                Shelf::All => true,
+                Shelf::Fits => tempo >= p.tempo.0 && tempo <= p.tempo.1,
+                Shelf::Minor => p.minor,
+                Shelf::Major => !p.minor,
+            };
+            kept && (query.is_empty() || p.name.to_lowercase().contains(&query))
+        };
+        let total = self.genres.list.len();
+        let count = self.genres.list.iter().filter(shown).count();
+        let filters = [
+            (Shelf::All, "All".to_string(), "all"),
+            (Shelf::Fits, format!("Fits {tempo:.0} BPM"), "fits"),
+            (Shelf::Minor, "Minor".to_string(), "minor"),
+            (Shelf::Major, "Major".to_string(), "major"),
+        ]
+        .map(|(which, name, sel)| {
+            let on = which == shelf;
+            div()
+                .id(sel)
+                .debug_selector(move || format!("genres-only-{sel}"))
+                .px(px(9.))
+                .py(px(2.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(rgb(if on { LINE_STRONG } else { LINE }))
+                .when(on, |d| d.bg(rgb(FIELD)))
+                .text_size(px(11.))
+                .text_color(rgb(if on { TEXT } else { TEXT_3 }))
+                .cursor_pointer()
+                .child(name)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| {
+                        ws.genres.shelf = which;
+                        cx.notify();
+                    }),
+                )
+        });
         let rows: Vec<_> = self
             .genres
             .list
             .iter()
+            .filter(shown)
             .map(|p| {
                 let on = selected.as_deref() == Some(p.id.as_str());
                 let color = genre_color(&p.id);
                 let id = p.id.clone();
-                let mark = match playbook::origin(p) {
-                    Origin::Pina => None,
-                    Origin::Edited => Some("Edited"),
-                    Origin::Yours => Some("Yours"),
-                };
                 let here = song.as_deref() == Some(p.id.as_str());
                 div()
                     .id(gpui::SharedString::from(format!("genre-{}", p.id)))
@@ -100,21 +143,6 @@ impl Workspace {
                                     )),
                             ),
                     )
-                    .when_some(mark, |d, m| {
-                        d.child(
-                            div()
-                                .px(px(6.))
-                                .h(px(17.))
-                                .flex()
-                                .items_center()
-                                .rounded(px(5.))
-                                .text_size(px(10.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .bg(alpha(color, 0.14))
-                                .text_color(rgb(tint(color, 0.35)))
-                                .child(m),
-                        )
-                    })
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |ws, _, _, cx| ws.select_genre(&id, cx)),
@@ -175,9 +203,29 @@ impl Workspace {
                                 div()
                                     .text_size(px(11.))
                                     .text_color(rgb(TEXT_3))
-                                    .child(format!("{} genres", self.genres.list.len())),
+                                    .debug_selector(|| "genres-count".into())
+                                    .child(format!("{count} of {total}")),
                             ),
                     ),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .px(px(10.))
+                    .pb(px(8.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        act("New playbook", "genre-new", false)
+                            .justify_center()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|ws, _, _, cx| ws.new_genre(cx)),
+                            ),
+                    )
+                    .child(field_box(self.genres.search.clone(), "genres-search").flex_none())
+                    .child(div().flex().flex_wrap().gap(px(4.)).children(filters)),
             )
             .child(
                 div()
@@ -251,32 +299,6 @@ impl Workspace {
                             }
                         }),
                     ),
-            )
-    }
-
-    /// One genre, top to bottom.
-    pub(crate) fn genre_sheet(&mut self, p: &Playbook, cx: &mut Context<Self>) -> Stateful<Div> {
-        let color = genre_color(&p.id);
-        div()
-            .id("genre-sheet")
-            .flex_1()
-            .min_w(px(0.))
-            .h_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.genres.scroll)
-            .child(self.genre_hero(p, color, cx))
-            .child(
-                div()
-                    .px(px(36.))
-                    .pb(px(48.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(30.))
-                    .child(self.genre_feel(p, color, cx))
-                    .child(self.genre_map(p, color, cx))
-                    .child(self.genre_parts(p, cx))
-                    .child(self.genre_mix(p, color, cx))
-                    .child(self.genre_notes(p, cx)),
             )
     }
 }

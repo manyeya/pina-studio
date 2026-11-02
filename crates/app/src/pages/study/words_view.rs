@@ -23,14 +23,14 @@ impl Workspace {
             .hover(|d| d.bg(alpha(AGENT, 0.2)))
             .debug_selector(|| "study-ask".into())
             .child(icon(Icon::Agent, 13.).text_color(rgb(AGENT)))
-            .child("Ask the agent what it means")
+            .child("Ask the Studio Agent what it means")
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|ws, _, _, cx| ws.ask_about_study(cx)),
             );
         let meaning = tile(
             "Theme & meaning",
-            "Its core message, its metaphors and imagery, and why it works: read by the agent from the lyrics and this study",
+            "Its core message, its metaphors and imagery, and why it works: read by the Studio Agent from the lyrics and this study",
         )
         .child(div().flex().child(ask));
         let Some(l) = s.lyrics.as_ref() else {

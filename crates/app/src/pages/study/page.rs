@@ -5,9 +5,10 @@ use super::*;
 impl Workspace {
     pub fn study_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let rail = self.study_rail(cx);
-        let main = match self.opened_study() {
-            Some(s) => self.study_sheet(&s, cx).into_any_element(),
-            None => self.study_empty(cx).into_any_element(),
+        let main = match (self.opened_picture(), self.opened_study()) {
+            (Some(bp), _) => self.picture_sheet(&bp, cx).into_any_element(),
+            (None, Some(s)) => self.study_sheet(&s, cx).into_any_element(),
+            (None, None) => self.study_empty(cx).into_any_element(),
         };
         div()
             .flex_1()
@@ -32,13 +33,13 @@ impl Workspace {
                 }
             })
             .flex()
-            .flex_col()
+            .when(big, |d| d.flex_col())
             .items_center()
             .justify_center()
-            .gap(px(if big { 10. } else { 4. }))
+            .gap(px(if big { 10. } else { 8. }))
             .when(big, |d| d.w(px(460.)).h(px(200.)))
-            .when(!big, |d| d.h(px(78.)))
-            .rounded(px(14.))
+            .when(!big, |d| d.flex_none().h(px(36.)))
+            .rounded(px(if big { 14. } else { 8. }))
             .border_1()
             .border_dashed()
             .border_color(if dragging {
@@ -71,15 +72,17 @@ impl Workspace {
                     .child(if dragging {
                         "Drop to study it"
                     } else {
-                        "Study a song"
+                        "Study a song or picture"
                     }),
             )
-            .child(
-                div()
-                    .text_size(px(if big { 12.5 } else { 11. }))
-                    .text_color(rgb(TEXT_3))
-                    .child("Drop a WAV, AIFF, FLAC or MP3, or click"),
-            )
+            .when(big, |d| {
+                d.child(
+                    div()
+                        .text_size(px(12.5))
+                        .text_color(rgb(TEXT_3))
+                        .child("Drop a WAV, AIFF, FLAC or MP3, a spectrogram picture, or click"),
+                )
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|ws, _, _, cx| ws.pick_study(cx)),
@@ -89,6 +92,47 @@ impl Workspace {
     /// The songs studied, down the left.
     pub(crate) fn study_rail(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
         let open = self.studies.open.clone();
+        let (query, only) = (self.studies.query.clone(), self.studies.only);
+        let shown = |s: &Study| {
+            let kind = match only {
+                Only::All => true,
+                Only::Songs => s.nature.song,
+                Only::Loops => !s.nature.song,
+            };
+            kind && (query.is_empty()
+                || title_of(s).to_lowercase().contains(&query)
+                || s.nature.name.to_lowercase().contains(&query))
+        };
+        let total = self.studies.list.len();
+        let count = self.studies.list.iter().filter(|s| shown(s)).count();
+        let filters = [
+            (Only::All, "All"),
+            (Only::Songs, "Songs"),
+            (Only::Loops, "Loops"),
+        ]
+        .map(|(which, name)| {
+            let on = which == only;
+            div()
+                .id(name)
+                .debug_selector(move || format!("study-only-{}", name.to_lowercase()))
+                .px(px(9.))
+                .py(px(2.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(rgb(if on { LINE_STRONG } else { LINE }))
+                .when(on, |d| d.bg(rgb(FIELD)))
+                .text_size(px(11.))
+                .text_color(rgb(if on { TEXT } else { TEXT_3 }))
+                .cursor_pointer()
+                .child(name)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| {
+                        ws.studies.only = which;
+                        cx.notify();
+                    }),
+                )
+        });
         let busy: Vec<_> = self
             .studies
             .busy
@@ -132,12 +176,10 @@ impl Workspace {
             .list
             .iter()
             .enumerate()
+            .filter(|(_, s)| shown(s))
             .map(|(i, s)| {
                 let on = open.as_ref() == Some(&s.file);
-                let title = match s.identity.title.is_empty() {
-                    true => file_name(&s.file),
-                    false => s.identity.title.clone(),
-                };
+                let title = title_of(s);
                 let file = s.file.clone();
                 let gone = s.file.clone();
                 div()
@@ -179,7 +221,11 @@ impl Workspace {
                                     .whitespace_nowrap()
                                     .overflow_hidden()
                                     .text_ellipsis()
-                                    .child(format!("{:.0} BPM · {}", s.tempo.bpm, s.key.name)),
+                                    .child(format!(
+                                        "{} · {}",
+                                        s.nature.name,
+                                        clock(s.identity.seconds)
+                                    )),
                             ),
                     )
                     .child(
@@ -222,37 +268,121 @@ impl Workspace {
             .border_r_1()
             .border_color(rgb(LINE))
             .overflow_y_scroll()
+            .child(self.study_drop(false, cx))
+            .child(field_box(self.studies.search.clone(), "study-search").flex_none())
+            .child(div().flex().flex_none().gap(px(4.)).children(filters))
             .child(
                 div()
-                    .px(px(6.))
-                    .pt(px(6.))
-                    .pb(px(10.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .text_size(px(15.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Song Study"),
-                    )
-                    .child(div().text_size(px(11.5)).text_color(rgb(TEXT_3)).child(
-                        "Any song, taken apart: its form, harmony, groove, sound and words.",
-                    )),
+                    .px(px(2.))
+                    .pt(px(2.))
+                    .font_family(MONO)
+                    .text_size(px(11.))
+                    .text_color(rgb(TEXT_3))
+                    .debug_selector(|| "study-count".into())
+                    .child(format!("{count} of {total}")),
             )
-            .child(self.study_drop(false, cx))
-            .child(div().h(px(10.)))
+            .when(self.studies.stale.len() > 1, |d| {
+                d.child(
+                    div()
+                        .px(px(2.))
+                        .text_size(px(11.))
+                        .text_color(rgb(AGENT_TEXT))
+                        .child(format!(
+                            "Studying {} older files again",
+                            self.studies.stale.len()
+                        )),
+                )
+            })
             .children(busy)
-            .when(!self.studies.list.is_empty(), |d| {
+            .children(rows)
+            .when(!self.studies.like.pictures.is_empty(), |d| {
                 d.child(
                     div()
                         .px(px(6.))
-                        .pt(px(6.))
+                        .pt(px(12.))
                         .pb(px(4.))
-                        .child(label("Studied")),
+                        .child(label("Spectrogram pictures")),
                 )
             })
-            .children(rows)
+            .children(self.picture_rows(cx))
+    }
+
+    /// The pictures studied, in the rail: each with its spectrum's shape.
+    fn picture_rows(&mut self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+        let open = self.studies.open.clone();
+        self.studies
+            .like
+            .pictures
+            .iter()
+            .enumerate()
+            .map(|(i, bp)| {
+                let on = open.as_ref() == Some(&bp.file);
+                let file = bp.file.clone();
+                let levels: Vec<f32> = (0..20)
+                    .map(|k| {
+                        let n = bp.frames.max(1);
+                        let a = k * n / 20;
+                        let z = ((k + 1) * n / 20).max(a + 1);
+                        ((bp.level(a, z) + 40.0) / 40.0).clamp(0.05, 1.0)
+                    })
+                    .collect();
+                div()
+                    .id(("picture", i))
+                    .debug_selector(move || format!("picture-{i}"))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .px(px(10.))
+                    .py(px(7.))
+                    .rounded(px(9.))
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(rgb(RAISED)))
+                    .when(!on, |d| d.hover(|d| d.bg(rgb(OFF))))
+                    .child(
+                        div()
+                            .w(px(40.))
+                            .h(px(26.))
+                            .flex()
+                            .items_end()
+                            .gap(px(1.))
+                            .children(levels.into_iter().map(|v| {
+                                div()
+                                    .flex_1()
+                                    .h(gpui::relative(v))
+                                    .rounded(px(1.))
+                                    .bg(alpha(AMBER, 0.7))
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(if on { TEXT } else { TEXT_2 }))
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(file_name(&bp.file)),
+                            )
+                            .child(div().text_size(px(11.)).text_color(rgb(TEXT_4)).child(
+                                match bp.needs.is_empty() {
+                                    true => "Picture · read".to_string(),
+                                    false => format!("Picture · needs {}", bp.needs.len()),
+                                },
+                            )),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| ws.show_study(file.clone(), cx)),
+                    )
+            })
+            .collect()
     }
 
     /// Nothing studied yet: what a study finds, and where to drop a song.
@@ -329,38 +459,6 @@ impl Workspace {
                     .child(pillar("Form", "Intro, verses, choruses, bridge: where each starts, and how hard it hits", CORAL))
                     .child(pillar("Music", "Tempo, key, chords, groove, swing, instruments, mix and dynamics", MINT))
                     .child(pillar("Words", "Lyrics by section, rhyme schemes, syllables, hooks, and what they mean", VIOLET)),
-            )
-    }
-
-    pub(crate) fn study_sheet(&mut self, s: &Study, cx: &mut Context<Self>) -> Stateful<Div> {
-        let color = tint_of(s);
-        div()
-            .id("study-sheet")
-            .flex_1()
-            .min_w(px(0.))
-            .h_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.studies.scroll)
-            .child(self.study_hero(s, color, cx))
-            .child(
-                div()
-                    .px(px(36.))
-                    .pb(px(56.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(34.))
-                    .child(self.study_form(s, cx))
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(16.))
-                            .child(harmony(s, color))
-                            .child(rhythm(s, color)),
-                    )
-                    .child(instruments(s))
-                    .child(self.study_mix(s, color))
-                    .child(self.study_words(s, color, cx))
-                    .child(self.study_genres(s, cx)),
             )
     }
 }
