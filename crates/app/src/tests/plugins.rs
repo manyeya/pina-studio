@@ -112,7 +112,7 @@ fn the_browser_expands_into_the_plugins_page_and_back(cx: &mut TestAppContext) {
     field.update(cx, |i, cx| i.set_text("echo", cx));
     click_on(cx, "plugins-page", Modifiers::none(), MouseButton::Left);
     assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Plugins);
-    assert_eq!(cards(&ws, cx), ["AUDelay"]);
+    assert_eq!(cards(&ws, cx), ["AUDelay", "Delay"]);
     field.update(cx, |i, cx| i.set_text("", cx));
     // What each is, within its category.
     let kinds: Vec<_> = [DELAY, GRAPHIC, BELL]
@@ -129,10 +129,18 @@ fn the_browser_expands_into_the_plugins_page_and_back(cx: &mut TestAppContext) {
         Modifiers::none(),
         MouseButton::Left,
     );
-    assert_eq!(cards(&ws, cx), ["AUDelay"]);
+    assert_eq!(cards(&ws, cx), ["AUDelay", "Delay"]);
     click_on(
         cx,
         "plugins-format-AU",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    // Pina Studio's own has no format to filter out; the plugins alone, nothing's left.
+    assert_eq!(cards(&ws, cx), ["Delay"]);
+    click_on(
+        cx,
+        "plugins-source-Plugins",
         Modifiers::none(),
         MouseButton::Left,
     );
@@ -401,7 +409,7 @@ fn a_slot_opens_the_picker(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     // Typed into, the first found goes in with Enter.
-    cx.simulate_input("delay");
+    cx.simulate_input("audelay");
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -427,4 +435,116 @@ fn a_slot_opens_the_picker(cx: &mut TestAppContext) {
         inserts.get(1).map(|p| p.class.as_str()),
         Some("AUGraphicEQ")
     );
+}
+
+#[gpui::test]
+fn the_same_plugin_goes_on_twice(cx: &mut TestAppContext) {
+    let (ws, cx) = open_plugins(cx);
+    ws.update(cx, |ws, cx| {
+        ws.show_browser = true;
+        ws.catalog.scope = crate::sounds::catalog::Scope::Effects;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    press(cx, "device-plugin:apple/augraphiceq");
+    cx.run_until_parked();
+    press(cx, "device-plugin:apple/augraphiceq");
+    cx.run_until_parked();
+    let (inserts, loaded, status) = ws.read_with(cx, |ws, _| {
+        let t = &ws.session.project.tracks[1];
+        let loaded = (0..t.inserts.len())
+            .filter(|&i| {
+                ws.player
+                    .plugin(t.id, pina_engine::audio::player::Which::Insert(i))
+                    .is_some()
+            })
+            .count();
+        (t.inserts.len(), loaded, ws.status.clone())
+    });
+    eprintln!("TWICE inserts {inserts} loaded {loaded} status {status:?}");
+    assert_eq!((inserts, loaded), (2, 2), "{status:?}");
+}
+
+#[gpui::test]
+fn plugins_added_and_taken_out_leave_the_others_running_as_they_are(cx: &mut TestAppContext) {
+    use pina_engine::audio::player::Which;
+    let (ws, cx) = open_plugins(cx);
+    ws.update(cx, |ws, cx| {
+        ws.show_browser = true;
+        ws.catalog.scope = crate::sounds::catalog::Scope::Effects;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    press(cx, "device-plugin:apple/augraphiceq");
+    cx.run_until_parked();
+    // Turned in its own window (not in the song): a band down.
+    let (id, param) = ws.read_with(cx, |ws, _| {
+        let id = ws.session.project.tracks[1].id;
+        let p = ws.player.plugin(id, Which::Insert(0)).unwrap();
+        let param = p.params()[0].id;
+        p.set_param(param, 0.123);
+        (id, param)
+    });
+    let value = |cx: &VisualTestContext, at: usize| {
+        ws.read_with(cx, |ws, _| {
+            ws.player
+                .plugin(id, Which::Insert(at))
+                .map(|p| p.param_value(param))
+        })
+    };
+    // Another of it, then a different one before them both, then that one out again.
+    press(cx, "device-plugin:apple/augraphiceq");
+    cx.run_until_parked();
+    assert!(
+        (value(cx, 0).unwrap() - 0.123).abs() < 1e-3,
+        "{:?}",
+        value(cx, 0)
+    );
+    ws.update(cx, |ws, cx| {
+        let delay = pina_engine::song::project::PluginRef {
+            format: pina_engine::song::project::Format::Au,
+            class: "AUDelay".into(),
+            uid: Some("aufx dely appl".into()),
+            ..Default::default()
+        };
+        ws.edit(cx, |ws| {
+            let mut chain = ws.session.project.tracks[1].chain_mut();
+            chain.set_insert(2, Some(delay)).unwrap();
+            let n = chain.inserts.len();
+            let order = pina_engine::song::project::chain(chain.order, n, chain.more.len());
+            // The plugin just added: the last one, which goes in before the limiter's place.
+            let added = order
+                .iter()
+                .rposition(|f| *f == pina_engine::song::project::Fx::Plugin)
+                .unwrap();
+            chain.move_fx(added, 3).unwrap();
+        });
+    });
+    cx.run_until_parked();
+    assert!(
+        (value(cx, 1).unwrap() - 0.123).abs() < 1e-3,
+        "{:?}",
+        value(cx, 1)
+    );
+    ws.update(cx, |ws, cx| {
+        ws.edit(cx, |ws| {
+            ws.session.project.tracks[1].set_insert(0, None).unwrap()
+        })
+    });
+    cx.run_until_parked();
+    assert!(
+        (value(cx, 0).unwrap() - 0.123).abs() < 1e-3,
+        "{:?}",
+        value(cx, 0)
+    );
+    let names = ws.read_with(cx, |ws, _| {
+        (0..2)
+            .map(|i| {
+                ws.player
+                    .plugin(id, Which::Insert(i))
+                    .map(|p| p.name().to_string())
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(names.len(), 2);
 }

@@ -66,6 +66,11 @@ pub enum Own {
     Eq,
     Comp,
     Sat,
+    Limit,
+    /// One that only stacks, by what the chain calls it.
+    Tool(pina_engine::song::project::Fx),
+    /// The synth: a sampler of oscillators.
+    Poly,
 }
 
 /// Something that can go on a track.
@@ -84,6 +89,14 @@ pub struct Device {
 }
 
 impl Device {
+    /// Its icon: its own if it's a built-in with one, else its kind's.
+    pub fn glyph(&self, size: f32) -> gpui::Svg {
+        match own_icon(&self.key) {
+            Some(id) => drawn(id, size),
+            None => self.cat.glyph(size),
+        }
+    }
+
     pub fn instrument(&self) -> bool {
         self.cat.instrument()
     }

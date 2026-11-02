@@ -16,6 +16,11 @@ impl Workspace {
         let Some(device) = self.catalog.devices.get(d).cloned() else {
             return;
         };
+        // The Drum Kit is a kit of pads, each a track of its own: a new kit, fitted to the song.
+        if device.own == Some(Own::Drums) {
+            self.new_drum_kit(cx);
+            return;
+        }
         let tracks = self.session.project.tracks.len();
         let t = match target {
             Target::Track(t) if t < tracks => t,
@@ -59,6 +64,10 @@ impl Workspace {
                     if device.own.is_none() {
                         self.open_editor_when_loaded(Channel::Track(t), Which::Instrument, cx);
                     }
+                    // So does the synth.
+                    if device.own == Some(Own::Poly) {
+                        self.open_poly(t, cx);
+                    }
                     return;
                 }
                 // An effect: on the new audio track, as on any other.
@@ -79,6 +88,14 @@ impl Workspace {
             (Some(Own::Sat), _) => MenuAction::AddBuiltin {
                 channel,
                 builtin: Builtin::Sat,
+            },
+            (Some(Own::Limit), _) => MenuAction::AddBuiltin {
+                channel,
+                builtin: Builtin::Limit,
+            },
+            (Some(Own::Tool(kind)), _) => MenuAction::AddBuiltin {
+                channel,
+                builtin: Builtin::Tool(kind),
             },
             (_, true) => {
                 let track = &self.session.project.tracks[t];
@@ -263,7 +280,7 @@ impl Workspace {
                 .border_color(alpha(color, 0.5))
                 .shadow_lg()
                 .text_size(px(12.))
-                .child(d.cat.glyph(15.).text_color(rgb(color)))
+                .child(d.glyph(15.).text_color(rgb(color)))
                 .child(
                     div()
                         .font_weight(FontWeight::SEMIBOLD)

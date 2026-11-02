@@ -93,7 +93,8 @@ fn plugins_go_where_they_say_once_each() {
     };
     assert_eq!(found("echo")[0], "Tape Echo Thing");
     assert!(found("echo").contains(&"AUDelay"));
-    assert_eq!(found("space"), ["Dragonfly Hall Reverb"]);
+    // Pina Studio's own reverb first, then the plugin.
+    assert_eq!(found("space"), ["Reverb", "Dragonfly Hall Reverb"]);
     assert_eq!(found("surge")[0], "Surge XT");
     assert!(found("zzz").is_empty());
 }

@@ -1,5 +1,7 @@
 //! Every device that can go on a track: Pina Studio's own and every plugin installed, each categorized and ranked.
 
+use pina_engine::song::project::Fx;
+
 use super::*;
 
 /// The formats, best first: CLAP, then VST3, Audio Units, VST2.
@@ -101,7 +103,17 @@ pub fn devices(plugins: &[PluginInfo]) -> Vec<Device> {
         )
         .to_lowercase(),
     };
+    let tool = |key, name, cat, kind, about| own(key, name, cat, Own::Tool(kind), about);
     let mut out = vec![
+        own(
+            "poly",
+            "Synth",
+            Cat::Synth,
+            Own::Poly,
+            "wavetable subtractive analog oscillators warp saw square filter ladder diode unison \
+             supersaw bass lead pad pluck reese acid growl brass strings organ bell choir arp \
+             patches",
+        ),
         own("synth", "Sine Synth", Cat::Synth, Own::Synth, "sine simple"),
         own(
             "drums",
@@ -131,6 +143,97 @@ pub fn devices(plugins: &[PluginInfo]) -> Vec<Device> {
             Cat::Distortion,
             Own::Sat,
             "drive tone warmth tape",
+        ),
+        own(
+            "limit",
+            "Limiter",
+            Cat::Dynamics,
+            Own::Limit,
+            "loud loudness lufs true peak brickwall master ceiling",
+        ),
+        tool(
+            "reverb",
+            "Reverb",
+            Cat::Reverb,
+            Fx::Reverb,
+            "space room hall plate chamber cathedral shimmer ambience tail verb",
+        ),
+        tool(
+            "delay",
+            "Delay",
+            Cat::Delay,
+            Fx::Delay,
+            "echo tape analog ping pong dub slapback repeats",
+        ),
+        tool(
+            "filter",
+            "Filter",
+            Cat::Filter,
+            Fx::Filter,
+            "sweep wah auto ladder resonance lfo envelope follower cutoff formant comb",
+        ),
+        tool(
+            "motion",
+            "Motion",
+            Cat::Modulation,
+            Fx::Motion,
+            "chorus ensemble flanger phaser vibrato tremolo auto pan",
+        ),
+        tool(
+            "shaper",
+            "Transient Shaper",
+            Cat::Dynamics,
+            Fx::Shaper,
+            "attack sustain punch transient designer tighten drums",
+        ),
+        tool(
+            "gate",
+            "Gate",
+            Cat::Dynamics,
+            Fx::Gate,
+            "noise gate expander threshold bleed tighten",
+        ),
+        tool(
+            "de_esser",
+            "De-esser",
+            Cat::Dynamics,
+            Fx::DeEsser,
+            "sibilance esses vocal harsh",
+        ),
+        tool(
+            "stereo",
+            "Stereo",
+            Cat::Space,
+            Fx::Stereo,
+            "width imager mid side mono bass correlation vectorscope balance phase utility",
+        ),
+        tool(
+            "multiband",
+            "Multiband",
+            Cat::Dynamics,
+            Fx::Multiband,
+            "multiband compressor crossover bands upward lift hyper glue master",
+        ),
+        tool(
+            "pitch",
+            "Pitch Shifter",
+            Cat::Pitch,
+            Fx::Pitch,
+            "pitch shift transpose octave harmony fifth semitones detune",
+        ),
+        tool(
+            "tune",
+            "Pitch Correction",
+            Cat::Pitch,
+            Fx::Tune,
+            "vocal tune tuning correction autotune key scale voice robot hard retune",
+        ),
+        tool(
+            "tape_stop",
+            "Tape Stop",
+            Cat::Pitch,
+            Fx::TapeStop,
+            "tape stop slow down spin brake vinyl turntable transition",
         ),
     ];
     let mut groups: Vec<(String, Vec<PluginInfo>)> = Vec::new();
@@ -195,6 +298,9 @@ pub(crate) fn instrument_of(d: &Device) -> Option<Instrument> {
         Some(Own::Synth) => Some(Instrument::Synth),
         Some(Own::Drums) => Some(Instrument::Drums),
         Some(Own::Sampler) => Some(Instrument::Sampler(Default::default())),
+        Some(Own::Poly) => {
+            pina_engine::song::project::poly_patch("Init").map(|p| Instrument::Poly(Box::new(p)))
+        }
         Some(_) => None,
         None => d
             .formats

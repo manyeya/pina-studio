@@ -29,6 +29,8 @@ impl Workspace {
                 Some(Instrument::Synth) => keys.push("own:synth".into()),
                 Some(Instrument::Drums) => keys.push("own:drums".into()),
                 Some(Instrument::Sampler(_)) => keys.push("own:sampler".into()),
+                Some(Instrument::Poly(_)) => keys.push("own:poly".into()),
+                Some(Instrument::Kit) => {}
                 Some(Instrument::Plugin(r)) => keys.extend(plugin_key(&r.class, &r.path)),
                 None => {}
             }

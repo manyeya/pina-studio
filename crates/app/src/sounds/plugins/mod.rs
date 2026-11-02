@@ -615,9 +615,14 @@ impl Workspace {
                 Some(Own::Eq) => t.eq.is_some(),
                 Some(Own::Comp) => t.comp.is_some(),
                 Some(Own::Sat) => t.sat.is_some(),
+                Some(Own::Limit) => t.limit.is_some(),
+                Some(Own::Tool(kind)) => t.more.iter().any(|u| u.kind() == kind),
                 Some(Own::Synth) => matches!(t.instrument, Some(Instrument::Synth)),
                 Some(Own::Drums) => matches!(t.instrument, Some(Instrument::Drums)),
-                Some(Own::Sampler) => matches!(t.instrument, Some(Instrument::Sampler(_))),
+                Some(Own::Sampler) => {
+                    matches!(&t.instrument, Some(Instrument::Sampler(_)))
+                }
+                Some(Own::Poly) => matches!(&t.instrument, Some(Instrument::Poly(_))),
                 None => {
                     matches!(&t.instrument, Some(Instrument::Plugin(r)) if is(r))
                         || t.inserts.iter().any(is)

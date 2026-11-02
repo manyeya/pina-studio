@@ -149,7 +149,10 @@ impl Workspace {
             .as_ref()
             .map(|s| (s.used.get(&dev.key).copied().unwrap_or(0), s.songs));
         let track = self.add_target();
-        let builtin = matches!(dev.own, Some(Own::Eq | Own::Comp | Own::Sat));
+        let builtin = matches!(
+            dev.own,
+            Some(Own::Eq | Own::Comp | Own::Sat | Own::Limit | Own::Tool(_))
+        );
         let hint = match (&track, dev.instrument(), builtin) {
             (None, ..) => "On a track of its own".to_string(),
             (Some(t), _, true) => format!("On {t}'s channel strip"),

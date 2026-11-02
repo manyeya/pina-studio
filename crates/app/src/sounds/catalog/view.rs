@@ -209,7 +209,7 @@ impl Workspace {
                 .justify_center()
                 .rounded(px(6.))
                 .bg(alpha(color, 0.14))
-                .child(dev.cat.glyph(15.).text_color(rgb(color))),
+                .child(dev.glyph(15.).text_color(rgb(color))),
         };
         div()
             .group("device-row")

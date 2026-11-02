@@ -64,7 +64,7 @@ impl Workspace {
             .to_lowercase();
         // A channel's built-ins are only offered where it hasn't them yet.
         let (eq, comp) = self.strip_dsp(m.channel);
-        let sat = self.sat(m.channel);
+        let (sat, limit) = (self.sat(m.channel), self.limiter(m.channel));
         let mut rows: Vec<(u32, usize)> = self
             .catalog
             .devices
@@ -75,6 +75,7 @@ impl Workspace {
                 Some(Own::Eq) => eq.is_none(),
                 Some(Own::Comp) => comp.is_none(),
                 Some(Own::Sat) => sat.is_none(),
+                Some(Own::Limit) => limit.is_none(),
                 Some(_) => matches!(m.channel, Channel::Track(_)),
                 None => true,
             })
@@ -120,6 +121,14 @@ impl Workspace {
             (Some(Own::Sat), ch, _) => MenuAction::AddBuiltin {
                 channel: ch,
                 builtin: Builtin::Sat,
+            },
+            (Some(Own::Limit), ch, _) => MenuAction::AddBuiltin {
+                channel: ch,
+                builtin: Builtin::Limit,
+            },
+            (Some(Own::Tool(kind)), ch, _) => MenuAction::AddBuiltin {
+                channel: ch,
+                builtin: Builtin::Tool(kind),
             },
             (_, Channel::Track(track), Which::Instrument) => match instrument_of(&dev) {
                 Some(instrument) => MenuAction::Instrument { track, instrument },
@@ -245,7 +254,7 @@ impl Workspace {
                                 0.28,
                                 0.17,
                             )))
-                            .child(dev.cat.glyph(16.).text_color(rgb(dev.cat.color())))
+                            .child(dev.glyph(16.).text_color(rgb(dev.cat.color())))
                             .into_any_element(),
                     };
                     let on = i == picked;

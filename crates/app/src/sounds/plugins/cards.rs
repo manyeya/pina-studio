@@ -380,6 +380,6 @@ fn face(d: &Device, w: f32, h: f32) -> Div {
                 .items_end()
                 .justify_between()
                 .children(knobs)
-                .child(d.cat.glyph(16.).text_color(rgb(ink))),
+                .child(d.glyph(16.).text_color(rgb(ink))),
         )
 }
