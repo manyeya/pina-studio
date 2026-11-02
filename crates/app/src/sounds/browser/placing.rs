@@ -1,6 +1,7 @@
 //! Putting samples in the song: on new or existing tracks, dropped from the Finder, as sampler zones.
 
 use super::*;
+use crate::editors::drums::DrumOp;
 
 impl Workspace {
     /// Add to Song: a loop as audio on the selected audio track (or a new one) at the playhead;
@@ -84,6 +85,7 @@ impl Workspace {
         tick: u64,
     ) -> Result<At, String> {
         let dir = self.session.dir.clone();
+        let metronome = self.player.metronome();
         let p = &mut self.session.project;
         let t = match track {
             Some(t) => t,
@@ -109,20 +111,29 @@ impl Workspace {
         let Some(s) = s else {
             return Ok(at);
         };
-        if let Some(length) = loop_ticks(&s.analysis, p.tempo) {
-            let now = p.region(at).length;
-            if length.abs_diff(now) > now / 200 {
-                p.flex(at, length)?;
+        // A loop follows the song's tempo: its own is what makes it whole beats at the song's
+        // (half or double time, if that's nearer), and it loops on, as `pina samples put` leaves
+        // one, till the next region or the end.
+        let looped = s.analysis.kind == Kind::Loop;
+        if looped && let Some(length) = loop_ticks(&s.analysis, p.tempo_at(tick)) {
+            let beats = length as f64 / PPQ as f64;
+            let own = beats * 60.0 / s.analysis.seconds.max(0.01) as f64;
+            p.set_audio_tempo(at, own);
+            p.set_follow(at, Follow::On);
+            p.tracks[t].regions[at.1].length = length;
+            // Adapting (or Auto, with nothing else keeping time), the song takes its tempo.
+            let adapt = match p.tempo_mode {
+                TempoMode::Keep => false,
+                TempoMode::Adapt => true,
+                TempoMode::Auto => !metronome && !p.keeps_time(at, tick, tick + length),
+            };
+            if adapt && p.tempos.is_empty() {
+                p.set_tempo(own);
             }
         }
-        // Looping, as `pina samples put` leaves one, till the next region or the end; a
-        // loop following the song's tempo.
         let r = &mut p.tracks[t].regions[at.1];
         r.transpose = semis;
-        r.looped = s.analysis.kind == Kind::Loop;
-        if let Content::Audio { follow, .. } = &mut r.content {
-            *follow = s.analysis.kind == Kind::Loop;
-        }
+        r.looped = looped;
         Ok(at)
     }
 
@@ -132,6 +143,36 @@ impl Workspace {
     /// the browser: a loop fitted to the song's tempo and key. One undo takes it all back.
     pub fn drop_files(&mut self, paths: &[PathBuf], at: Point<f32>, cx: &mut Context<Self>) {
         self.file_drag = None;
+        // On the Song Study page, a picture of a spectrogram is studied as one.
+        if self.view == View::Study {
+            for file in paths
+                .iter()
+                .filter(|p| pina_engine::study::reference::image::is_picture(p))
+            {
+                self.study_picture(file.clone(), cx);
+            }
+        }
+        // MIDI files go on the tracks where they're dropped.
+        let midi: Vec<&PathBuf> = paths
+            .iter()
+            .filter(|p| pina_engine::song::midi_file::is_midi(p))
+            .collect();
+        // On the Agent panel they're for it, and a folder's are too.
+        if self.over_agent(at) {
+            let given: Vec<PathBuf> = paths
+                .iter()
+                .filter(|p| p.is_dir() || pina_engine::song::midi_file::is_midi(p))
+                .cloned()
+                .collect();
+            if !given.is_empty() {
+                self.attach_midi(&given, cx);
+                if midi.len() == paths.len() || paths.iter().all(|p| p.is_dir()) {
+                    return;
+                }
+            }
+        } else if !midi.is_empty() && self.view == View::Arrange {
+            self.drop_midi_files(&midi, at, cx);
+        }
         let audio: Vec<&PathBuf> = paths
             .iter()
             .filter(|p| {
@@ -142,7 +183,10 @@ impl Workspace {
             })
             .collect();
         if audio.is_empty() {
-            self.status = Some("Pina Studio takes WAV, AIFF, FLAC and MP3 files.".into());
+            if self.view == View::Study || !midi.is_empty() {
+                return;
+            }
+            self.status = Some("Pina Studio takes WAV, AIFF, FLAC, MP3 and MIDI files.".into());
             cx.notify();
             return;
         }
@@ -165,6 +209,18 @@ impl Workspace {
             self.add_samples(&files, cx);
             return;
         }
+        // On the Drum Machine, on the pad's sound: each layered on it; on a pad: the first on
+        // it, the rest on the empty pads after.
+        if let Some(note) = self.strip_under(at) {
+            let files: Vec<PathBuf> = audio.iter().map(|p| p.to_path_buf()).collect();
+            self.layer_files(&files, note, cx);
+            return;
+        }
+        if let Some(note) = self.pad_under(at) {
+            let files: Vec<PathBuf> = audio.iter().map(|p| p.to_path_buf()).collect();
+            self.drop_files_on_pads(&files, note, cx);
+            return;
+        }
         // On the Song Study page, a song dropped is studied.
         if self.view == View::Study {
             for file in audio {
@@ -175,12 +231,22 @@ impl Workspace {
         let n = self.session.project.tracks.len();
         let (mut track, tick, mut new) = match self.drop_target(at) {
             Some(Drop::Audio(t, tick)) => (Some(t), tick, t + 1),
+            Some(Drop::Pad(kit)) => {
+                let files: Vec<PathBuf> = audio.iter().map(|p| p.to_path_buf()).collect();
+                let note = self.free_pad_note(kit);
+                self.select_track(kit);
+                self.show_bottom(Bottom::Drums, cx);
+                self.drop_files_on_pads(&files, note, cx);
+                return;
+            }
             Some(Drop::Zone(t, tick) | Drop::Under(t, tick)) => (None, tick, t + 1),
             Some(Drop::New(tick)) => (None, tick, n),
             None => (None, 0, n),
         };
         self.session.checkpoint();
         let mut placed = Err("nothing dropped".to_string());
+        // Files the library doesn't know: listened to for their tempo once they're in.
+        let mut unknown = Vec::new();
         for file in audio.iter().copied() {
             let known = self
                 .browser
@@ -198,6 +264,9 @@ impl Workspace {
                 Ok((t, _)) => new = t + 1,
                 Err(_) => break,
             }
+            if let (Ok(at), None) = (&placed, &s) {
+                unknown.push(*at);
+            }
         }
         let what = match audio.as_slice() {
             [one] => one
@@ -206,6 +275,9 @@ impl Workspace {
             many => format!("{} files", many.len()),
         };
         self.placed(placed, &what, cx);
+        for at in unknown {
+            self.find_tempo(at, crate::arrange::tempo::After::Mode, cx);
+        }
     }
 
     /// A one-shot as a zone on `track`'s sampler, or on a new sampler track without one.
@@ -228,7 +300,16 @@ impl Workspace {
                 let Some(Instrument::Sampler(mut sampler)) = p.tracks[t].instrument.clone() else {
                     return Err("That track isn't a sampler.".to_string());
                 };
-                place_zone(&mut sampler, &s, None)?;
+                // A kit's pad: its sound swapped, its note and settings kept.
+                match (p.tracks[t].pad, sampler.zones.first_mut()) {
+                    (Some(_), Some(zone)) => {
+                        let mut fresh = Sampler::default();
+                        place_zone(&mut fresh, &s, None)?;
+                        let new = fresh.zones.remove(0);
+                        (zone.file, zone.name) = (new.file, new.name);
+                    }
+                    _ => place_zone(&mut sampler, &s, None)?,
+                }
                 let set = Command::SetInstrument {
                     track: t,
                     instrument: Instrument::Sampler(sampler),
@@ -295,6 +376,7 @@ impl Workspace {
             Some(t) => match &t.instrument {
                 None => Drop::Audio(row, tick),
                 Some(Instrument::Sampler(_)) => Drop::Zone(row, tick),
+                Some(Instrument::Kit) => Drop::Pad(row),
                 Some(_) => Drop::Under(row, tick),
             },
         })
@@ -333,10 +415,27 @@ impl Workspace {
                 moved: true,
                 ..
             }) => {
-                // On the timeline, a sample is audio there; on a sampler track, a pad.
+                // On the Drum Machine's pad sound, a layer on it; on a pad, that pad's sound.
+                if let Some(note) = self.strip_under(at) {
+                    self.drum_op(DrumOp::Layer { note, index }, cx);
+                    return;
+                }
+                if let (Some(note), Some(kit)) = (self.pad_under(at), self.drum_kit()) {
+                    self.set_pad_sample(kit, note, 0, index, cx);
+                    cx.notify();
+                    return;
+                }
+                // On the timeline, a sample is audio there; on a sampler track, a pad; on a
+                // kit's track, a new pad in the kit.
                 match self.drop_target(at) {
                     Some(Drop::Audio(t, tick)) => self.add_audio(index, Some(t), tick, false, cx),
                     Some(Drop::Zone(t, _)) => self.add_zone(index, Some(t), false, cx),
+                    Some(Drop::Pad(kit)) => {
+                        let note = self.free_pad_note_for(kit, index);
+                        self.select_track(kit);
+                        self.set_pad_sample(kit, note, 0, index, cx);
+                        self.show_bottom(Bottom::Drums, cx);
+                    }
                     Some(Drop::New(tick)) => self.add_audio_at(
                         index,
                         None,

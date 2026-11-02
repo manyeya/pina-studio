@@ -150,3 +150,152 @@ pub fn kit(samples: &[Sample], seed: &KitSeed) -> Kit {
         .collect();
     Kit { slots }
 }
+
+/// The order a folder's sounds take their pads in: the drums a beat leans on first.
+const PAD_ORDER: [Category; 14] = [
+    Category::Kick,
+    Category::Snare,
+    Category::Clap,
+    Category::HatClosed,
+    Category::HatOpen,
+    Category::Rim,
+    Category::Snap,
+    Category::Tom,
+    Category::Perc,
+    Category::Shaker,
+    Category::Tambourine,
+    Category::Ride,
+    Category::Crash,
+    Category::Bass808,
+];
+
+/// A bank of pads.
+pub const BANK: usize = 16;
+
+/// Whether a sample is in `folder` (a library folder, as `Sample::folder` has it), or under it.
+fn in_folder(s: &Sample, folder: &str) -> bool {
+    s.folder == folder
+        || s.folder
+            .strip_prefix(folder)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// A kit from one folder's one-shots: a bank's worth of pads at most. Sixteen or fewer, each its
+/// own pad; more, a pad a kind of sound (kicks, snares, hats…, a beat's drums first), then the
+/// kinds there are most of again, till the bank's full. Each pad's alternatives are the folder's
+/// other sounds of its kind, to step through.
+pub fn folder_kit(samples: &[Sample], folder: &str) -> Kit {
+    let mut by: Vec<(Category, Vec<usize>)> = Vec::new();
+    for (i, s) in samples.iter().enumerate() {
+        if s.analysis.kind != Kind::OneShot || !in_folder(s, folder) {
+            continue;
+        }
+        let role = s.analysis.category;
+        match by.iter_mut().find(|(r, _)| *r == role) {
+            Some((_, list)) => list.push(i),
+            None => by.push((role, vec![i])),
+        }
+    }
+    // A beat's drums first, the rest after in the library's order; each kind's sounds by name.
+    let rank = |r: &Category| {
+        PAD_ORDER
+            .iter()
+            .position(|o| o == r)
+            .unwrap_or(PAD_ORDER.len())
+    };
+    by.sort_by_key(|(r, _)| (rank(r), *r as usize));
+    for (_, list) in &mut by {
+        list.sort_by(|&a, &b| samples[a].name.cmp(&samples[b].name));
+    }
+    let hit = |index: usize| Hit {
+        index,
+        score: 1.0,
+        reasons: vec!["in the folder".into()],
+        transpose: None,
+    };
+    let slot = |role: Category, list: &[usize], k: usize| KitSlot {
+        role,
+        pick: Some(hit(list[k])),
+        alternatives: list
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| j != k)
+            .map(|(_, &i)| hit(i))
+            .collect(),
+    };
+    let total: usize = by.iter().map(|(_, l)| l.len()).sum();
+    let mut slots = Vec::new();
+    match total <= BANK {
+        true => {
+            for (role, list) in &by {
+                slots.extend((0..list.len()).map(|k| slot(*role, list, k)));
+            }
+        }
+        false => {
+            // A pad a kind, then round again for the kinds with more, most first.
+            let mut taken = vec![0usize; by.len()];
+            'fill: loop {
+                let before = slots.len();
+                for (n, (role, list)) in by.iter().enumerate() {
+                    if slots.len() == BANK {
+                        break 'fill;
+                    }
+                    if taken[n] < list.len() && (taken[n] == 0 || list.len() > taken[n] * 3) {
+                        slots.push(slot(*role, list, taken[n]));
+                        taken[n] += 1;
+                    }
+                }
+                if slots.len() == before {
+                    break;
+                }
+            }
+        }
+    }
+    // Pads of a kind together, as they'll sit on the grid.
+    slots.sort_by_key(|s| (rank(&s.role), s.role as usize));
+    Kit { slots }
+}
+
+/// The library's folders that make a kit: those with four drum hits or more, by name, each
+/// with how many one-shots it has.
+pub fn drum_folders(samples: &[Sample]) -> Vec<(String, usize)> {
+    let mut count: std::collections::BTreeMap<&str, (usize, usize)> = Default::default();
+    for s in samples.iter().filter(|s| s.analysis.kind == Kind::OneShot) {
+        let c = count.entry(s.folder.as_str()).or_default();
+        c.0 += 1;
+        c.1 += s.analysis.category.is_drum() as usize;
+    }
+    count
+        .into_iter()
+        .filter(|(_, (_, drums))| *drums >= 4)
+        .map(|(f, (all, _))| (f.to_string(), all))
+        .collect()
+}
+
+/// Other sounds a pad playing the library's `path` could play instead: its folder's others of its
+/// kind first, then the library's that sound most like it. At most `limit`.
+pub fn variations(samples: &[Sample], path: &std::path::Path, limit: usize) -> Vec<usize> {
+    let Some(of) = samples.iter().position(|s| s.path == path) else {
+        return Vec::new();
+    };
+    let me = &samples[of];
+    let mut out: Vec<usize> = samples
+        .iter()
+        .enumerate()
+        .filter(|&(i, s)| {
+            i != of
+                && s.folder == me.folder
+                && s.analysis.kind == Kind::OneShot
+                && s.analysis.category == me.analysis.category
+        })
+        .map(|(i, _)| i)
+        .collect();
+    out.sort_by(|&a, &b| samples[a].name.cmp(&samples[b].name));
+    for h in similar(samples, path, Aspects::default(), limit + 1) {
+        if h.index != of && !out.contains(&h.index) {
+            out.push(h.index);
+        }
+    }
+    out.truncate(limit);
+    out
+}

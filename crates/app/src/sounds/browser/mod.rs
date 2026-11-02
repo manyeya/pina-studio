@@ -18,6 +18,8 @@ mod filters;
 mod finding;
 mod kits;
 mod library;
+mod midi;
+mod midi_kit;
 mod page;
 mod panel;
 mod placing;
@@ -25,10 +27,14 @@ mod results;
 mod sound_map;
 mod widgets;
 
+pub(crate) use midi::{
+    capital, midi_ghost_at, midi_legend, midi_line, outline, piano_roll, role_hue,
+};
+use midi_kit::KIT_HEARD;
 pub use widgets::*;
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     ops::Range,
     path::{Path, PathBuf},
@@ -57,7 +63,7 @@ use pina_engine::{
         search::{self, Aspects, Hit, KitSeed, KitSlot, Query},
     },
     song::commands::{self, Command},
-    song::project::{At, Content, Instrument, PPQ, Sampler},
+    song::project::{At, Follow, Instrument, PPQ, Sampler, TempoMode},
 };
 
 use crate::{
@@ -134,6 +140,29 @@ impl KitPick {
     }
 }
 
+/// A part of a MIDI kit as the browser holds it: which of its files is chosen (0 its pick, then
+/// its alternatives), and whether it's locked against new picks.
+#[derive(Clone, Debug)]
+pub struct MidiPick {
+    pub slot: pina_engine::samples::midi::MidiKitSlot,
+    pub choice: usize,
+    pub locked: bool,
+}
+
+impl MidiPick {
+    pub fn options(&self) -> Vec<&pina_engine::samples::midi::MidiHit> {
+        self.slot
+            .pick
+            .iter()
+            .chain(&self.slot.alternatives)
+            .collect()
+    }
+
+    pub fn hit(&self) -> Option<&pina_engine::samples::midi::MidiHit> {
+        self.options().get(self.choice).copied()
+    }
+}
+
 /// Where a sample dragged over the tracks would go.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Drop {
@@ -145,6 +174,8 @@ pub enum Drop {
     New(u64),
     /// A track with an instrument of its own: a new audio track under it, a region at the tick.
     Under(usize, u64),
+    /// A kit's track: a new pad in the kit.
+    Pad(usize),
 }
 
 pub struct Browser {
@@ -190,21 +221,41 @@ pub struct Browser {
     /// The samples in a box drawn on the map: the results keep to them.
     pub area: Option<HashSet<usize>>,
     pub kit: Vec<KitPick>,
+    /// The library folder the kit's picks are from, if they're a folder's.
+    pub kit_folder: Option<String>,
     /// What's being heard: the sample, since when, and for how long.
     pub audition: Option<(usize, Instant, f32)>,
     /// Samples read for previews, by path, and as heard (at the song's tempo, in its key), by
     /// path, stretch and semitones, so going back to one is instant; and the one asked for last,
     /// so a slow read that's overtaken doesn't play.
-    heard: HashMap<(PathBuf, u64, u32), Arc<pina_engine::audio::engine::AudioData>>,
+    pub(crate) heard: HashMap<(PathBuf, u64, u32), Arc<pina_engine::audio::engine::AudioData>>,
     /// The preview is a loop playing in time with the song, over and over while it plays.
     pub looping: bool,
-    wanted: Option<usize>,
+    pub(crate) wanted: Option<usize>,
     pub list: UniformListScrollHandle,
     pub panel_list: UniformListScrollHandle,
     /// The compact list shows what sounds like this sample, not the results.
     pub like: Option<(usize, Vec<Hit>)>,
     /// The song's key and tempo when the results were last found.
     seen: (Option<Key>, f64),
+    /// MIDI files in the results instead of samples: those found, the part they keep to, the
+    /// one picked, the one heard (since when, for how long) and asked for last, and the files
+    /// read, by path.
+    pub midi: bool,
+    pub midi_hits: Vec<pina_engine::samples::midi::MidiHit>,
+    pub midi_role: Option<String>,
+    /// How many of those found (whatever part's picked) play each part.
+    pub midi_counts: HashMap<String, usize>,
+    pub midi_selected: Option<usize>,
+    pub midi_hovered: Option<usize>,
+    /// Every file's place on the map; the kit, the key it's all in, and how many New Picks ago.
+    pub midi_map: Vec<[f32; 2]>,
+    pub midi_kit: Vec<MidiPick>,
+    pub midi_kit_key: Option<String>,
+    pub midi_variation: u64,
+    pub midi_playing: Option<(usize, Instant, f32)>,
+    pub(crate) midi_wanted: Option<usize>,
+    midi_files: RefCell<HashMap<PathBuf, Option<Arc<pina_engine::song::midi_file::MidiFile>>>>,
     _subscriptions: [Subscription; 2],
 }
 
@@ -259,6 +310,7 @@ impl Browser {
             map_bounds: Rc::new(Cell::new(Bounds::default())),
             area: None,
             kit: Vec::new(),
+            kit_folder: None,
             audition: None,
             heard: HashMap::new(),
             looping: false,
@@ -267,13 +319,26 @@ impl Browser {
             panel_list: UniformListScrollHandle::new(),
             like: None,
             seen: (None, 0.0),
+            midi: false,
+            midi_hits: Vec::new(),
+            midi_role: None,
+            midi_counts: HashMap::new(),
+            midi_selected: None,
+            midi_hovered: None,
+            midi_map: Vec::new(),
+            midi_kit: Vec::new(),
+            midi_kit_key: None,
+            midi_variation: 0,
+            midi_playing: None,
+            midi_wanted: None,
+            midi_files: RefCell::new(HashMap::new()),
             _subscriptions: [typed, done],
         }
     }
 
     /// A preview is playing: the playhead over its waveform moves.
     pub fn auditioning(&self) -> bool {
-        self.audition.is_some()
+        self.audition.is_some() || self.midi_playing.is_some()
     }
 
     pub fn sample(&self, index: usize) -> Option<&Sample> {
@@ -284,8 +349,12 @@ impl Browser {
         self.hits.iter().find(|h| h.index == index)
     }
 
-    /// The map's places, once they're worked out for the library as it is.
+    /// The map's places, samples' or MIDI files', once they're worked out for the library as it
+    /// is.
     fn places(&self) -> Option<&[[f32; 2]]> {
-        (self.map.len() == self.library.samples.len()).then_some(&self.map[..])
+        match self.midi {
+            true => (self.midi_map.len() == self.library.midi.len()).then_some(&self.midi_map[..]),
+            false => (self.map.len() == self.library.samples.len()).then_some(&self.map[..]),
+        }
     }
 }

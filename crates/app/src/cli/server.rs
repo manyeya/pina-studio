@@ -35,7 +35,7 @@ use crate::{
 #[serde(tag = "request", rename_all = "snake_case")]
 pub enum Request {
     Edit {
-        command: Command,
+        command: Box<Command>,
     },
     Project,
     Play,
@@ -270,7 +270,7 @@ impl Workspace {
                     player: &self.player,
                     ids,
                 };
-                let command = commands::resolve(p, command, &mut running)?;
+                let command = commands::resolve(p, *command, &mut running)?;
                 self.session.checkpoint();
                 let dir = self.session.dir.clone();
                 let asked = serde_json::to_value(&command).unwrap_or_default();

@@ -48,6 +48,9 @@ impl Workspace {
 
     /// Finds what the filters ask for, and how many each category and trait would give.
     pub fn find_samples(&mut self) {
+        if self.browser.midi {
+            return self.find_midi();
+        }
         let q = self.sample_query();
         let pool = self.find_keyed(&Query {
             categories: Vec::new(),
@@ -119,6 +122,30 @@ impl Workspace {
         self.browser.key = if on { KeyFilter::Song } else { KeyFilter::Any };
         self.browser.song_tempo = on;
         self.refilter(cx);
+    }
+
+    /// Previews move into the key, or don't. What's found moves with it, and so does what's
+    /// playing, so the change is heard.
+    pub fn set_play_in_key(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.browser.play_in_key = on;
+        let key = self
+            .sample_key()
+            .or_else(|| self.session.project.song_key());
+        if on && key.is_none() {
+            self.status =
+                Some("This song has no key yet: choose one in the top bar, or write notes.".into());
+        }
+        if self.browser.midi {
+            self.refilter(cx);
+        }
+        let b = &self.browser;
+        match (b.midi_playing, b.audition) {
+            (Some((KIT_HEARD, ..)), _) => self.hear_midi_kit(cx),
+            (Some((i, ..)), _) if self.midi_heard(i) => self.audition_midi(i, cx),
+            (_, Some((i, ..))) if self.heard(i).is_some() => self.audition_sample(i, cx),
+            _ => {}
+        }
+        cx.notify();
     }
 
     pub fn toggle_category(&mut self, c: Category, cx: &mut Context<Self>) {

@@ -42,6 +42,7 @@ pub fn zone(s: &Sample, note: Option<u8>) -> Zone {
     let a = &s.analysis;
     let base = Zone {
         file: s.path.clone(),
+        from: Some(s.path.clone()),
         name: s.name.clone(),
         ..Zone::default()
     };

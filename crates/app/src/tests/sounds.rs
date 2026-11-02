@@ -143,14 +143,15 @@ fn add_to_song_puts_loops_on_audio_tracks_and_one_shots_on_samplers(cx: &mut Tes
     match region.content {
         Content::Audio {
             file,
-            stretch,
             follow,
+            tempo,
             ..
         } => {
             assert!(dir.join(&file).exists(), "{file:?}");
-            assert!((stretch - 0.9).abs() < 0.01, "{stretch}");
-            // A loop follows the song's tempo from here on.
-            assert!(follow);
+            // A loop follows the song's tempo from here on, its own known.
+            let tempo = tempo.unwrap();
+            assert!((tempo - 90.0).abs() < 1.0, "{tempo}");
+            assert_eq!(follow, pina_engine::song::project::Follow::On);
         }
         c => panic!("{c:?}"),
     }
@@ -200,7 +201,7 @@ fn add_to_song_puts_loops_on_audio_tracks_and_one_shots_on_samplers(cx: &mut Tes
 }
 
 #[gpui::test]
-fn a_kit_becomes_a_sampler_track_and_samples_drag_onto_tracks(cx: &mut TestAppContext) {
+fn a_kit_becomes_a_stack_of_pads_and_samples_drag_onto_tracks(cx: &mut TestAppContext) {
     use pina_engine::song::project::Instrument;
     let (ws, cx, dir) = open_browser(cx, "browser-kit");
     cx.simulate_keystrokes("escape");
@@ -219,23 +220,56 @@ fn a_kit_becomes_a_sampler_track_and_samples_drag_onto_tracks(cx: &mut TestAppCo
     );
     let tracks = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
     click_on(cx, "make-kit", Modifiers::none(), MouseButton::Left);
-    let (n, instrument) = ws.read_with(cx, |ws, _| {
+    // A stack: the kit track (selected) and a track a pad, each its own sampler.
+    let (n, kit, pads, stack) = ws.read_with(cx, |ws, _| {
         let p = &ws.session.project;
-        (p.tracks.len(), p.tracks[ws.track].instrument.clone())
+        let kit = p.tracks[ws.track].clone();
+        let stack = kit
+            .output
+            .and_then(|bus| p.auxes.iter().find(|a| a.bus == bus))
+            .map(|a| (a.stack, a.name.clone()));
+        (p.tracks.len(), kit, p.pads_of(ws.track), stack)
     });
-    assert_eq!(n, tracks + 1);
-    let Some(Instrument::Sampler(s)) = instrument else {
-        panic!("{instrument:?}")
+    assert_eq!(n, tracks + 1 + slots);
+    assert_eq!(kit.instrument, Some(Instrument::Kit));
+    assert_eq!(pads.len(), slots);
+    assert_eq!(stack, Some((true, kit.name.clone())));
+    let note = |name: &str| {
+        ws.read_with(cx, |ws, _| {
+            let p = &ws.session.project;
+            p.tracks
+                .iter()
+                .find(|t| t.name == name)
+                .and_then(|t| t.pad)
+                .map(|d| d.note)
+        })
     };
-    assert_eq!(s.zones.len(), slots);
-    let note = |name: &str| s.zones.iter().find(|z| z.name == name).map(|z| z.note);
     assert_eq!(
         (note("Kick"), note("Snare"), note("Closed Hat")),
         (Some(36), Some(38), Some(42))
     );
-    // The 808 across the notes under the drums, in tune.
-    let bass = s.zones.iter().find(|z| z.name == "808").unwrap();
-    assert_eq!((bass.note, bass.high, bass.root), (0, Some(35), Some(31)));
+    // The 808 plays in tune from its root.
+    assert_eq!(note("808"), Some(31));
+    // Its starter pattern: a row a pad, the kick on the downbeat.
+    let pattern = match &kit.regions[0].content {
+        pina_engine::song::project::Content::Pattern(p) => p.clone(),
+        c => panic!("{c:?}"),
+    };
+    assert_eq!(pattern.rows.len(), slots);
+    assert!(pattern.rows.iter().any(|r| r.pitch == 36 && r.on(0)));
+    // Split from its track menu: each pad's row on its own track.
+    ws.update(cx, |ws, cx| {
+        let t = ws.track;
+        ws.track_op(crate::workspace::context::TrackOp::SplitKit(t), cx)
+    });
+    let split = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.pads_of(ws.track)
+            .iter()
+            .filter(|&&t| !p.tracks[t].regions.is_empty())
+            .count()
+    });
+    assert!(split >= 4, "{split}");
 
     // Drag the snare out of the page's list: the tracks come back, the compact browser beside
     // them, to drop it on Drums (an audio track) at bar 2.
@@ -255,8 +289,18 @@ fn a_kit_becomes_a_sampler_track_and_samples_drag_onto_tracks(cx: &mut TestAppCo
     cx.run_until_parked();
     cx.simulate_mouse_move(row + point(px(0.), px(80.)), MouseButton::Left, none);
     cx.run_until_parked();
-    let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_browser));
-    assert_eq!(shown, (View::Arrange, true));
+    let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_browser, ws.bottom));
+    assert_eq!(
+        shown,
+        (View::Arrange, true, Some(Bottom::Drums)),
+        "the kit's open"
+    );
+    // The tracks scrolled to Drums, above the Drum Machine.
+    ws.update(cx, |ws, cx| {
+        ws.scroll_y = (ws.scroll_y + ws.row_top(drums)).min(ws.max_scroll_y());
+        cx.notify();
+    });
+    cx.run_until_parked();
     let to = spot(&ws, cx, BAR + 30, drums);
     cx.simulate_mouse_move(to, MouseButton::Left, none);
     cx.simulate_mouse_up(to, MouseButton::Left, none);
@@ -372,6 +416,7 @@ fn the_library_loads_and_scans_in_the_background(cx: &mut TestAppContext) {
     pina_engine::samples::library::Library {
         folders: vec![samples.canonicalize().unwrap()],
         samples: Vec::new(),
+        midi: Vec::new(),
     }
     .save()
     .unwrap();
@@ -528,5 +573,180 @@ fn the_browser_names_new_tracks_and_puts_effects_on_them(cx: &mut TestAppContext
         (tr.instrument.is_none(), tr.eq.is_some())
     });
     assert!(audio && has_eq);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// MIDI files for the library, as the browser has them: written as Pina Studio bounces notes,
+/// then studied. A lead in A minor, and chords in C minor with their bass.
+fn midi_files(dir: &Path) -> Vec<pina_engine::samples::midi::MidiSample> {
+    use pina_engine::song::project::{Instrument, Note, Project, Region, Track};
+    // Each note: start, length (ticks) and pitch.
+    type Notes = Vec<(u64, u64, u8)>;
+    let song = |parts: Vec<(&str, Notes)>| {
+        let mut p = Project::new(48_000);
+        p.tracks = parts
+            .into_iter()
+            .map(|(name, notes)| Track {
+                name: name.into(),
+                instrument: Some(Instrument::Synth),
+                regions: vec![Region {
+                    length: BAR * 2,
+                    content: Content::Midi {
+                        notes: notes
+                            .into_iter()
+                            .map(|(start, length, pitch)| Note {
+                                start: start as i64,
+                                length,
+                                pitch,
+                                velocity: 100,
+                            })
+                            .collect(),
+                        controls: Vec::new(),
+                    },
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .collect();
+        pina_engine::audio::bounce::midi(&p, None)
+    };
+    let eighth = PPQ / 2;
+    let lead = [69, 71, 72, 74, 76, 74, 72, 71, 69, 72, 76, 81]
+        .iter()
+        .enumerate()
+        .map(|(i, &n)| (i as u64 * eighth, eighth, n))
+        .collect();
+    let chords = [[60, 63, 67], [56, 60, 63], [63, 67, 70], [58, 62, 65]]
+        .iter()
+        .enumerate()
+        .flat_map(|(i, c)| c.iter().map(move |&n| (i as u64 * BAR / 2, BAR / 2, n)))
+        .collect();
+    let bass = [36, 32, 39, 34]
+        .iter()
+        .enumerate()
+        .map(|(i, &n)| (i as u64 * BAR / 2, BAR / 2 - eighth, n))
+        .collect();
+    std::fs::create_dir_all(dir).unwrap();
+    [
+        ("Run Lead - Am", song(vec![("Lead", lead)])),
+        (
+            "Dusk Chords - Cm",
+            song(vec![("Chords", chords), ("Bass", bass)]),
+        ),
+    ]
+    .into_iter()
+    .map(|(name, bytes)| {
+        let path = dir.join(format!("{name}.mid"));
+        std::fs::write(&path, bytes).unwrap();
+        pina_engine::samples::midi::study_file(&path, dir, 0, 0).unwrap()
+    })
+    .collect()
+}
+
+#[gpui::test]
+fn midi_files_are_found_heard_and_put_on_the_tracks(cx: &mut TestAppContext) {
+    use pina_engine::{music::Key, samples::midi::transpose_to};
+    let dir = demo_copy("browser-midi");
+    let mut library = little_library(&dir.join("Library"));
+    library.midi = midi_files(&dir.join("Library/MIDI"));
+    let (ws, cx) = open_at(cx, &dir);
+    ws.update(cx, |ws, cx| {
+        ws.session.project.key = Some("E minor".into());
+        ws.set_library(library, cx);
+    });
+    cx.simulate_keystrokes("f");
+    click_on(cx, "scope-Sounds", Modifiers::none(), MouseButton::Left);
+    cx.simulate_keystrokes("escape");
+    let names = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let b = &ws.browser;
+            b.midi_hits
+                .iter()
+                .map(|h| b.library.midi[h.index].name.clone())
+                .collect::<Vec<_>>()
+        })
+    };
+    // MIDI: the library's MIDI files in place of its samples, a chip for each part they play.
+    click_on(cx, "kind-midi", Modifiers::none(), MouseButton::Left);
+    assert_eq!(names(cx).len(), 2);
+    click_on(cx, "midi-role-lead", Modifiers::none(), MouseButton::Left);
+    assert_eq!(names(cx), ["Run Lead - Am"]);
+
+    // A click hears it, made in the background on the instruments it would come in on.
+    click_on(cx, "midi-row-0", Modifiers::none(), MouseButton::Left);
+    settle(cx, &ws, |ws| ws.browser.midi_playing.is_some());
+
+    // Dragged onto Lead (a synth) at bar 2, Play in Key on: a region there, its notes moved
+    // from A minor into the song's E minor.
+    ws.update(cx, |ws, _| ws.browser.play_in_key = true);
+    let lead = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Lead").unwrap()
+    });
+    let before = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    let row = cx.debug_bounds("midi-row-0").unwrap().center();
+    drag(cx, row, spot(&ws, cx, BAR + 30, lead));
+    let up = transpose_to(
+        &Key::parse("A minor").unwrap(),
+        &Key::parse("E minor").unwrap(),
+    );
+    assert_ne!(up, 0);
+    let (n, region) = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        (
+            p.tracks.len(),
+            p.tracks[lead].regions.last().unwrap().clone(),
+        )
+    });
+    assert_eq!(n, before, "onto the track, not a new one");
+    assert_eq!((region.start, region.name.as_str()), (BAR, "Run Lead - Am"));
+    let Content::Midi { notes, .. } = &region.content else {
+        panic!("{region:?}")
+    };
+    assert_eq!(notes[0].pitch as i32, 69 + up);
+
+    // The chords, added: a new track a part at the end, at the playhead's bar, in E minor.
+    click_on(cx, "midi-role-lead", Modifiers::none(), MouseButton::Left);
+    let chords = ws.read_with(cx, |ws, _| {
+        let b = &ws.browser;
+        b.library
+            .midi
+            .iter()
+            .position(|m| m.name == "Dusk Chords - Cm")
+            .unwrap()
+    });
+    ws.update(cx, |ws, cx| ws.select_midi(chords, false, cx));
+    click_on(cx, "midi-add", Modifiers::none(), MouseButton::Left);
+    let added = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks[before..]
+            .iter()
+            .map(|t| {
+                let Content::Midi { notes, .. } = &t.regions[0].content else {
+                    panic!()
+                };
+                (t.name.clone(), notes[0].pitch)
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        added,
+        [("Chords".to_string(), 60 + 4), ("Bass".to_string(), 36 + 4)]
+    );
+
+    // From the Finder, onto Drums (an audio track): on a new track under it.
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    let file = dir.join("Library/MIDI/Run Lead - Am.mid");
+    let at = spot(&ws, cx, 0, drums);
+    ws.update(cx, |ws, cx| {
+        ws.drop_files(&[file], point(f32::from(at.x), f32::from(at.y)), cx)
+    });
+    let under = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[drums + 1].name.clone()
+    });
+    assert_eq!(under, "Lead");
     std::fs::remove_dir_all(dir).unwrap();
 }

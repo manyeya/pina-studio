@@ -143,6 +143,7 @@ impl Workspace {
         match played {
             Ok(()) => {
                 self.browser.audition = Some((index, since, seconds));
+                self.browser.midi_playing = None;
                 self.browser.looping = looping;
             }
             Err(e) => self.status = Some(e),
@@ -152,8 +153,55 @@ impl Workspace {
 
     pub fn stop_audition(&mut self, cx: &mut Context<Self>) {
         self.player.stop_audition();
+        self.studies.playing = None;
+        self.genres.heard = None;
         self.browser.audition = None;
+        self.browser.midi_playing = None;
+        self.chat.hearing = None;
+        // One still being made doesn't start once it's ready.
+        self.browser.wanted = None;
+        self.browser.midi_wanted = None;
+        self.chat.wanted = None;
         cx.notify();
+    }
+
+    /// Whether anything's being previewed.
+    pub(crate) fn previewing(&self) -> bool {
+        let b = &self.browser;
+        let on = |p: Option<(usize, Instant, f32)>| {
+            p.is_some_and(|(_, since, seconds)| {
+                b.looping || since.elapsed().as_secs_f32() < seconds
+            })
+        };
+        on(b.audition) || on(b.midi_playing) || on(self.chat.hearing)
+    }
+
+    /// While a preview plays: a way to stop it.
+    pub(crate) fn preview_stop(&self, cx: &mut Context<Self>) -> Option<Div> {
+        self.previewing().then(|| {
+            div()
+                .h(px(22.))
+                .px(px(8.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .rounded(px(6.))
+                .bg(rgb(ACCENT))
+                .text_size(px(11.))
+                .text_color(rgb(0xffffff))
+                .cursor_pointer()
+                .debug_selector(|| "preview-stop".into())
+                .child(icon(Icon::Stop, 10.).text_color(rgb(0xffffff)))
+                .child("Stop preview")
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|ws, _, _, cx| {
+                        cx.stop_propagation();
+                        ws.stop_audition(cx);
+                    }),
+                )
+        })
     }
 
     /// Selects a sample (and hears it): its details and what sounds like it show.
@@ -168,6 +216,9 @@ impl Workspace {
 
     /// Up and down: the next sample in the results, heard as it's picked.
     pub fn step_sample(&mut self, by: i32, cx: &mut Context<Self>) {
+        if self.browser.midi {
+            return self.step_midi(by, cx);
+        }
         let b = &self.browser;
         let panel = self.view == View::Arrange;
         let order: Vec<usize> = match (&b.like, b.view) {

@@ -13,6 +13,7 @@ pub mod classify;
 pub mod dsp;
 pub mod features;
 pub mod library;
+pub mod midi;
 pub mod model;
 pub mod pitch;
 pub mod place;

@@ -44,22 +44,8 @@ impl Workspace {
                         },
                     )),
             )
-            .when_some(b.area.as_ref(), |d, area| {
-                d.child(
-                    chip(format!("In the box · {}", area.len()), ACCENT)
-                        .gap(px(4.))
-                        .cursor_pointer()
-                        .child(icon(Icon::Close, 10.).text_color(rgb(ACCENT)))
-                        .debug_selector(|| "clear-area".into())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|ws, _, _, cx| {
-                                ws.browser.area = None;
-                                ws.refilter(cx);
-                            }),
-                        ),
-                )
-            })
+            .children(self.preview_stop(cx))
+            .children(self.area_chip(cx))
             .child(div().flex_1())
             .children(self.scan_progress())
             .when(columns && b.scan.is_none(), |d| {
@@ -71,6 +57,24 @@ impl Workspace {
                     // Over the agent's buttons.
                     .child(col("", 22.))
             })
+    }
+
+    /// A box drawn on the map: how many it holds, and a way to let it go.
+    pub(crate) fn area_chip(&self, cx: &mut Context<Self>) -> Option<Div> {
+        self.browser.area.as_ref().map(|area| {
+            chip(format!("In the box · {}", area.len()), ACCENT)
+                .gap(px(4.))
+                .cursor_pointer()
+                .child(icon(Icon::Close, 10.).text_color(rgb(ACCENT)))
+                .debug_selector(|| "clear-area".into())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|ws, _, _, cx| {
+                        ws.browser.area = None;
+                        ws.refilter(cx);
+                    }),
+                )
+        })
     }
 
     /// Nothing to show: says why, and what to do.
@@ -338,24 +342,7 @@ impl Workspace {
                         .bg(rgb(ACCENT)),
                 )
             })
-            .child(
-                div()
-                    .size(px(22.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(11.))
-                    .bg(rgb(if playing { ACCENT } else { CARD }))
-                    .border_1()
-                    .border_color(rgb(if playing { ACCENT } else { LINE }))
-                    .group_hover("sample-row", |s| s.border_color(rgb(LINE_STRONG)))
-                    .child(icon(Icon::Play, 10.).text_color(rgb(if playing {
-                        0xffffff
-                    } else {
-                        TEXT_2
-                    }))),
-            )
+            .child(self.sample_play(index, playing, color, 22., format!("sample-play-{pos}"), cx))
             .child(div().w(px(WAVE_W)).h(px(26.)).flex_none().child(wave(
                 a.waveform.clone(),
                 color,
@@ -465,6 +452,30 @@ impl Workspace {
                         },
                         cx,
                     );
+                }),
+            )
+    }
+
+    /// A sample's play button: it's heard, or stopped, without touching the row under it.
+    pub(crate) fn sample_play(
+        &self,
+        index: usize,
+        playing: bool,
+        color: u32,
+        size: f32,
+        selector: String,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        play_dot(playing, color, size)
+            .debug_selector(move || selector)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |ws, _, _, cx| {
+                    cx.stop_propagation();
+                    match playing {
+                        true => ws.stop_audition(cx),
+                        false => ws.select_sample(index, true, cx),
+                    }
                 }),
             )
     }

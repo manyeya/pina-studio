@@ -23,8 +23,17 @@ impl Workspace {
         let path =
             |i: Option<usize>| i.and_then(|i| b.library.samples.get(i).map(|s| s.path.clone()));
         let (selected, auditioned) = (path(b.selected), path(b.audition.map(|a| a.0)));
+        let midi = b
+            .midi_selected
+            .and_then(|i| b.library.midi.get(i).map(|m| m.path.clone()));
         b.library = library;
         b.loaded = true;
+        // A rescan can change what each index is, and what's in a file.
+        b.midi_selected = midi.and_then(|p| b.library.midi.iter().position(|m| m.path == p));
+        b.midi_hovered = None;
+        b.midi_kit.clear();
+        b.midi_playing = None;
+        b.midi_files.borrow_mut().clear();
         let find =
             |p: Option<PathBuf>| p.and_then(|p| b.library.samples.iter().position(|s| s.path == p));
         b.selected = find(selected);
@@ -38,12 +47,18 @@ impl Workspace {
         b.area = None;
         b.like = None;
         // The map can take a while for a big library.
-        let samples = b.library.samples.clone();
-        let map = cx.background_spawn(async move { search::map(&samples) });
+        let (samples, midi) = (b.library.samples.clone(), b.library.midi.clone());
+        let map = cx.background_spawn(async move {
+            (
+                search::map(&samples),
+                pina_engine::samples::midi::places(&midi),
+            )
+        });
         cx.spawn(async move |this, cx| {
-            let map = map.await;
+            let (map, midi_map) = map.await;
             this.update(cx, |ws, cx| {
                 ws.browser.map = map;
+                ws.browser.midi_map = midi_map;
                 cx.notify();
             })
             .ok();

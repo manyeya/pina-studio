@@ -1,4 +1,5 @@
-//! The sound map: every sample laid out by how it sounds, to point at, box in and scroll.
+//! The sound map: every sample laid out by how it sounds, or MIDI file by how it plays, to point
+//! at, box in and scroll.
 
 use super::*;
 
@@ -90,6 +91,9 @@ impl Workspace {
             return;
         }
         let dot = self.map_dot_at(p);
+        if self.browser.midi {
+            return self.hover_midi(dot, cx);
+        }
         if dot != self.browser.hovered {
             self.browser.hovered = dot;
             // As XO does: what's under the pointer plays.
@@ -103,16 +107,21 @@ impl Workspace {
     pub(crate) fn results_map(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let b = &self.browser;
         let bounds = b.map_bounds.clone();
+        let midi = b.midi;
         let places: Vec<([f32; 2], u32, bool, usize)> = match b.places() {
             Some(places) => {
-                let shown: HashSet<usize> = b.hits.iter().map(|h| h.index).collect();
+                let shown: HashSet<usize> = match midi {
+                    true => b.midi_hits.iter().map(|h| h.index).collect(),
+                    false => b.hits.iter().map(|h| h.index).collect(),
+                };
+                let color = |i: usize| match midi {
+                    true => role_hue(&b.library.midi[i].study.role),
+                    false => category_color(b.library.samples[i].analysis.category),
+                };
                 places
                     .iter()
                     .enumerate()
-                    .map(|(i, &m)| {
-                        let c = category_color(b.library.samples[i].analysis.category);
-                        (m, c, shown.contains(&i), i)
-                    })
+                    .map(|(i, &m)| (m, color(i), shown.contains(&i), i))
                     .collect()
             }
             None => Vec::new(),
@@ -128,7 +137,10 @@ impl Workspace {
                 )
             }
         };
-        let (selected, hovered, playing) = (b.selected, b.hovered, b.audition.map(|a| a.0));
+        let (selected, hovered, playing) = match midi {
+            true => (b.midi_selected, b.midi_hovered, b.midi_playing.map(|a| a.0)),
+            false => (b.selected, b.hovered, b.audition.map(|a| a.0)),
+        };
         let rect = match self.drag {
             Some(Drag::MapBox { from, to }) => Some((from, to)),
             _ => None,
@@ -206,8 +218,20 @@ impl Workspace {
         // The hovered sound's name, by its dot.
         let label = hovered
             .or(selected)
-            .and_then(|i| Some((i, places.get(i)?.0, self.browser.sample(i)?)))
-            .map(|(_, m, s)| {
+            .and_then(|i| {
+                let (name, what) = match midi {
+                    true => {
+                        let m = self.browser.library.midi.get(i)?;
+                        (m.name.clone(), midi_line(m))
+                    }
+                    false => {
+                        let s = self.browser.sample(i)?;
+                        (s.name.clone(), s.analysis.category.name().to_string())
+                    }
+                };
+                Some((places.get(i)?.0, name, what))
+            })
+            .map(|(m, name, what)| {
                 let p = to_screen(mb, m);
                 div()
                     .absolute()
@@ -225,18 +249,18 @@ impl Workspace {
                     .shadow_md()
                     .text_size(px(11.))
                     .whitespace_nowrap()
-                    .child(s.name.clone())
-                    .child(
-                        div()
-                            .text_color(rgb(TEXT_3))
-                            .child(s.analysis.category.name()),
-                    )
+                    .child(name)
+                    .child(div().text_color(rgb(TEXT_3)).child(what))
             });
         let present: HashSet<u32> = places.iter().map(|p| p.1).collect();
-        let legend = LEGEND
-            .iter()
+        let legend = match midi {
+            true => midi_legend().to_vec(),
+            false => LEGEND.to_vec(),
+        };
+        let legend = legend
+            .into_iter()
             .filter(|(c, _)| present.contains(c))
-            .map(|&(c, name)| {
+            .map(|(c, name)| {
                 div()
                     .flex()
                     .items_center()
@@ -245,12 +269,20 @@ impl Workspace {
                     .child(name)
             });
         let empty = places.is_empty();
+        let none_yet = match midi {
+            true => self.browser.library.midi.is_empty(),
+            false => self.browser.library.samples.is_empty(),
+        };
+        let head = match midi {
+            true => self.midi_head(cx),
+            false => self.results_header(false, cx),
+        };
         div()
             .flex_1()
             .min_h(px(0.))
             .flex()
             .flex_col()
-            .child(self.results_header(false, cx))
+            .child(head)
             .child(
                 div()
                     .id("sample-map")
@@ -271,9 +303,14 @@ impl Workspace {
                                 .items_center()
                                 .justify_center()
                                 .text_color(rgb(TEXT_3))
-                                .child(match self.browser.library.samples.is_empty() {
-                                    true => "The map shows every sample once the library has some.",
-                                    false => "Placing sounds on the map…",
+                                .child(match (none_yet, midi) {
+                                    (true, false) => {
+                                        "The map shows every sample once the library has some."
+                                    }
+                                    (true, true) => {
+                                        "The map shows every MIDI file once the library has some."
+                                    }
+                                    _ => "Placing sounds on the map…",
                                 }),
                         )
                     })
@@ -288,6 +325,7 @@ impl Workspace {
                             let p = pt(e.position);
                             match ws.map_dot_at(p) {
                                 // A dot: select it, and drag it to the tracks if you like.
+                                Some(i) if ws.browser.midi => ws.pick_up_midi(i, p, cx),
                                 Some(i) => {
                                     ws.select_sample(i, true, cx);
                                     ws.begin_drag(
@@ -339,6 +377,9 @@ impl Workspace {
                             ),
                     ),
             )
-            .child(self.info_line())
+            .child(match midi {
+                true => self.midi_info_line(),
+                false => self.info_line(),
+            })
     }
 }

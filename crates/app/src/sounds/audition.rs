@@ -104,16 +104,47 @@ fn phrase(part: &str) -> Vec<(u64, u64, u8, u8)> {
     }
 }
 
-/// Plays and hears each preset of `plugin` for `part`, here (the process `audition` starts).
-pub fn hear_here(plugin: &PluginRef, presets: &[Preset], part: &str) -> Vec<Option<Heard>> {
-    let dir = std::env::temp_dir().join(format!("pina-audition-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
+/// `instrument` (as a song's JSON has it) playing a part's phrase, heard: two bars and one more
+/// for what rings on, in `dir`.
+fn hear_playing(instrument: Value, part: &str, dir: &std::path::Path) -> Option<Heard> {
     let notes: Vec<Value> = phrase(part)
         .into_iter()
         .map(|(start, length, pitch, velocity)| {
             json!({ "start": start, "length": length, "pitch": pitch, "velocity": velocity })
         })
         .collect();
+    let project: Project = serde_json::from_value(json!({
+        "tempo": 120.0,
+        "sample_rate": 48000,
+        "tracks": [{
+            "name": "Audition",
+            "instrument": instrument,
+            "regions": [{ "start": 0, "length": 2 * BAR, "midi": { "notes": notes } }],
+        }],
+    }))
+    .ok()?;
+    let [l, r] = cli::rendered(&project, dir, Some((0, 3 * BAR))).ok()?;
+    let level = analysis::analyze(&l, &r, 48_000.0);
+    let s = &level.spectrum_db;
+    let (heard, all) = analyze::hear(&[l, r], 48_000.0);
+    Some(Heard {
+        sounds_like: all.into_iter().take(4).collect(),
+        traits: heard.traits,
+        attack_ms: heard.envelope.attack_ms,
+        decay_ms: heard.envelope.decay_ms,
+        sustain: heard.envelope.sustain,
+        centroid_hz: heard.spectrum.centroid_hz,
+        bands_db: [s.sub, s.bass, s.low_mid, s.mid, s.presence, s.air],
+        lufs: level.lufs,
+        peak_db: level.peak_db[0].max(level.peak_db[1]),
+        width_db: level.stereo.width_db,
+    })
+}
+
+/// Plays and hears each preset of `plugin` for `part`, here (the process `audition` starts).
+pub fn hear_here(plugin: &PluginRef, presets: &[Preset], part: &str) -> Vec<Option<Heard>> {
+    let dir = std::env::temp_dir().join(format!("pina-audition-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
     let out = presets
         .iter()
         .map(|preset| {
@@ -121,37 +152,21 @@ pub fn hear_here(plugin: &PluginRef, presets: &[Preset], part: &str) -> Vec<Opti
             with.preset = Some(preset.clone());
             with.params = Default::default();
             with.state = None;
-            let project: Project = serde_json::from_value(json!({
-                "tempo": 120.0,
-                "sample_rate": 48000,
-                "tracks": [{
-                    "name": "Audition",
-                    "instrument": { "plugin": with },
-                    "regions": [{ "start": 0, "length": 2 * BAR, "midi": { "notes": notes } }],
-                }],
-            }))
-            .ok()?;
-            // Two bars and one more for what rings on.
-            let [l, r] = cli::rendered(&project, &dir, Some((0, 3 * BAR))).ok()?;
-            let level = analysis::analyze(&l, &r, 48_000.0);
-            let s = &level.spectrum_db;
-            let (heard, all) = analyze::hear(&[l, r], 48_000.0);
-            Some(Heard {
-                sounds_like: all.into_iter().take(4).collect(),
-                traits: heard.traits,
-                attack_ms: heard.envelope.attack_ms,
-                decay_ms: heard.envelope.decay_ms,
-                sustain: heard.envelope.sustain,
-                centroid_hz: heard.spectrum.centroid_hz,
-                bands_db: [s.sub, s.bass, s.low_mid, s.mid, s.presence, s.air],
-                lufs: level.lufs,
-                peak_db: level.peak_db[0].max(level.peak_db[1]),
-                width_db: level.stereo.width_db,
-            })
+            hear_playing(json!({ "plugin": with }), part, &dir)
         })
         .collect();
     let _ = std::fs::remove_dir_all(&dir);
     out
+}
+
+/// The built-in synth playing a part's phrase with `patch`, heard. Its own, so here (nothing
+/// in it can crash this process).
+pub fn hear_synth(patch: &pina_engine::song::project::Poly, part: &str) -> Option<Heard> {
+    let dir = std::env::temp_dir().join(format!("pina-audition-synth-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let heard = hear_playing(json!({ "poly": patch }), part, &dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    heard
 }
 
 /// Plays and hears each preset of `plugin` for `part` in a process of its own, giving up on one

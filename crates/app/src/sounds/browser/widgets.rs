@@ -12,6 +12,26 @@ pub fn aspect(a: &mut Aspects, i: usize) -> &mut f32 {
     }
 }
 
+/// A row's way to hear what it holds: play, or stop while it's heard.
+pub(crate) fn play_dot(playing: bool, color: u32, size: f32) -> Div {
+    div()
+        .size(px(size))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(size / 2.0))
+        .bg(rgb(if playing { ACCENT } else { CARD }))
+        .border_1()
+        .border_color(rgb(if playing { ACCENT } else { LINE }))
+        .cursor_pointer()
+        .hover(|s| s.border_color(rgb(LINE_STRONG)))
+        .child(
+            icon(if playing { Icon::Stop } else { Icon::Play }, size * 0.45)
+                .text_color(rgb(if playing { 0xffffff } else { color })),
+        )
+}
+
 /// A category's color: drums by what they are (kicks, snares, metals, percussion), the rest as
 /// tracks are colored (bass amber, keys mint, leads sky, pads violet).
 pub fn category_color(c: Category) -> u32 {

@@ -119,8 +119,25 @@ impl Workspace {
                 false => self.browser.audition = None,
             }
         }
+        if let Some((_, since, seconds)) = &mut self.browser.midi_playing
+            && since.elapsed().as_secs_f32() > *seconds
+        {
+            match self.browser.looping && self.player.playing() {
+                true => *since += Duration::from_secs_f32(*seconds),
+                false => self.browser.midi_playing = None,
+            }
+        }
+        if let Some((_, since, seconds)) = &mut self.chat.hearing
+            && since.elapsed().as_secs_f32() > *seconds
+        {
+            match self.browser.looping && self.player.playing() {
+                true => *since += Duration::from_secs_f32(*seconds),
+                false => self.chat.hearing = None,
+            }
+        }
         if open && self.browser.loaded {
-            let follows = self.browser.key == KeyFilter::Song || self.browser.song_tempo;
+            let b = &self.browser;
+            let follows = b.key == KeyFilter::Song || b.song_tempo || (b.midi && b.play_in_key);
             let now = (self.session.project.song_key(), self.session.project.tempo);
             if follows && now != self.browser.seen {
                 self.find_samples();
@@ -323,23 +340,24 @@ impl Workspace {
                     .debug_selector(|| "play-in-key".into())
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| {
-                            ws.browser.play_in_key = !ws.browser.play_in_key;
-                            cx.notify();
-                        }),
+                        cx.listener(move |ws, _, _, cx| ws.set_play_in_key(!in_key, cx)),
                     ),
             );
-        let chips: Vec<Div> = self
-            .category_chips(cx)
-            .into_iter()
-            .map(|c| c.flex_none())
-            .collect();
+        let midi = b.midi;
+        let chips: Vec<Div> = match midi {
+            true => self.role_chips(cx),
+            false => self.category_chips(cx),
+        }
+        .into_iter()
+        .map(|c| c.flex_none())
+        .collect();
         let like = b
             .like
             .as_ref()
             .and_then(|(i, _)| b.sample(*i))
             .map(|s| s.name.clone());
         let shown = self.panel_hits().len();
+        let stop = self.preview_stop(cx);
         let list_head = div()
             .h(px(28.))
             .flex_none()
@@ -377,7 +395,8 @@ impl Workspace {
                             }),
                         ),
                 )
-            });
+            })
+            .children(stop);
         let list = match shown {
             0 if like.is_none() => self.empty_results(cx).into_any_element(),
             n => uniform_list(
@@ -415,17 +434,25 @@ impl Workspace {
                         )
                     }),
             )
-            .child(list_head)
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .flex()
-                    .flex_col()
-                    .bg(rgb(LANE))
-                    .child(list),
-            )
-            .children(self.panel_footer(cx))
+            .when(midi, |d| {
+                d.border_t_1()
+                    .border_color(rgb(LINE_SOFT))
+                    .child(self.midi_list(true, cx))
+                    .children(self.midi_footer(cx))
+            })
+            .when(!midi, |d| {
+                d.child(list_head)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .flex()
+                            .flex_col()
+                            .bg(rgb(LANE))
+                            .child(list),
+                    )
+                    .children(self.panel_footer(cx))
+            })
     }
 
     /// Rows of the compact list, as the list draws them.
@@ -517,6 +544,14 @@ impl Workspace {
                         .bg(rgb(ACCENT)),
                 )
             })
+            .child(self.sample_play(
+                index,
+                heard.is_some(),
+                color,
+                20.,
+                format!("panel-play-{pos}"),
+                cx,
+            ))
             .child(
                 div()
                     .w(px(52.))

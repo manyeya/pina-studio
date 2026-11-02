@@ -24,14 +24,55 @@ fn a_scan_analyses_whats_new_and_forgets_whats_gone() {
     tone(&pack.join("Snare_01.wav"), 0.3);
     std::fs::write(pack.join("._Kick_01.wav"), b"resource fork").unwrap();
     std::fs::write(pack.join("notes.txt"), b"not audio").unwrap();
+    // A bass line as a MIDI file, beside them: a song's export.
+    let mut song = crate::song::project::Project::new(48_000);
+    song.add_track(
+        0,
+        crate::song::project::Track {
+            name: "Bass".into(),
+            instrument: Some(crate::song::project::Instrument::Synth),
+            regions: vec![crate::song::project::Region {
+                length: 3840,
+                content: crate::song::project::Content::Midi {
+                    notes: (0..4)
+                        .map(|i| crate::song::project::Note {
+                            start: i * 960,
+                            length: 480,
+                            pitch: 33,
+                            velocity: 100,
+                        })
+                        .collect(),
+                    controls: Vec::new(),
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    );
+    std::fs::write(
+        pack.join("BS Root - Am.mid"),
+        crate::audio::bounce::midi(&song, None),
+    )
+    .unwrap();
     let mut library = Library {
         folders: vec![base.clone()],
         samples: Vec::new(),
+        midi: Vec::new(),
     };
     // SAFETY: tests touching PINA_LIBRARY run in this one test.
     unsafe { std::env::set_var("PINA_LIBRARY", base.join("config")) };
     let report = library.scan(&|_, _| {});
     assert_eq!((report.samples, report.analysed, report.removed), (2, 2, 0));
+    assert_eq!(report.midi, 1);
+    let bass = library.get_midi(&pack.join("BS Root - Am.mid")).unwrap();
+    assert_eq!(
+        (
+            bass.study.role.as_str(),
+            bass.study.key.as_deref(),
+            bass.folder.as_str()
+        ),
+        ("bass", Some("A minor"), "Pack/Drums")
+    );
     let kick = library.get(&pack.join("Kick_01.wav")).unwrap();
     assert_eq!(
         (kick.name.as_str(), kick.folder.as_str()),
@@ -45,6 +86,7 @@ fn a_scan_analyses_whats_new_and_forgets_whats_gone() {
     // Saved, it loads back.
     let again = Library::load();
     assert_eq!(again.samples.len(), 1);
+    assert_eq!(again.midi.len(), 1, "its MIDI files too");
     assert_eq!(again.folders, std::slice::from_ref(&base));
     std::fs::remove_dir_all(base).unwrap();
 }

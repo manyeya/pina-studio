@@ -13,13 +13,17 @@ impl Workspace {
                     cx.listener(move |ws, _, _, cx| {
                         ws.browser.view = v;
                         if v == Results::Kit {
-                            ws.build_kit();
+                            match ws.browser.midi {
+                                true => ws.build_midi_kit(),
+                                false => ws.build_kit(),
+                            }
                         }
                         cx.notify();
                     }),
                 )
         };
         let b = &self.browser;
+        let in_key = b.play_in_key;
         let key = self
             .sample_key()
             .or_else(|| self.session.project.song_key());
@@ -47,10 +51,7 @@ impl Workspace {
                     )
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| {
-                            ws.browser.play_in_key = !ws.browser.play_in_key;
-                            cx.notify();
-                        }),
+                        cx.listener(move |ws, _, _, cx| ws.set_play_in_key(!in_key, cx)),
                     ),
             )
             .child(
@@ -115,7 +116,7 @@ impl Workspace {
             )
     }
 
-    /// All, one-shots or loops.
+    /// All, one-shots, loops or MIDI files.
     pub(crate) fn kind_tray(&self, cx: &mut Context<Self>) -> Div {
         let b = &self.browser;
         let kind = |label: &'static str, k: Option<Kind>, on: bool, cx: &mut Context<Self>| {
@@ -126,26 +127,35 @@ impl Workspace {
                     MouseButton::Left,
                     cx.listener(move |ws, _, _, cx| {
                         ws.browser.kind = k;
-                        ws.refilter(cx);
+                        ws.show_midi(false, cx);
                     }),
                 )
         };
         tray()
             .p(px(2.))
             .rounded(px(8.))
-            .child(kind("Any", None, b.kind.is_none(), cx))
+            .child(kind("Any", None, b.kind.is_none() && !b.midi, cx))
             .child(kind(
                 "One-shots",
                 Some(Kind::OneShot),
-                b.kind == Some(Kind::OneShot),
+                b.kind == Some(Kind::OneShot) && !b.midi,
                 cx,
             ))
             .child(kind(
                 "Loops",
                 Some(Kind::Loop),
-                b.kind == Some(Kind::Loop),
+                b.kind == Some(Kind::Loop) && !b.midi,
                 cx,
             ))
+            .child(
+                seg("MIDI", b.midi, 24.)
+                    .flex_1()
+                    .debug_selector(|| "kind-midi".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, _, _, cx| ws.show_midi(true, cx)),
+                    ),
+            )
     }
 
     /// A chip for each sound the library has, drums first, with how many it would find.
@@ -294,7 +304,10 @@ impl Workspace {
                 .child(tempo_seg("Any".into(), !b.song_tempo, false, cx))
                 .child(tempo_seg(format!("{tempo:.0} BPM"), b.song_tempo, true, cx)),
         );
-        let categories = self.category_chips(cx);
+        let categories = match b.midi {
+            true => self.role_chips(cx),
+            false => self.category_chips(cx),
+        };
         let said_traits = search::named(&b.text).1;
         let traits: Vec<Div> = TRAITS
             .iter()
@@ -316,9 +329,13 @@ impl Workspace {
                     )
             })
             .collect();
-        let any_sounds = !b.categories.is_empty();
+        let midi = b.midi;
+        let any_sounds = match midi {
+            true => b.midi_role.is_some(),
+            false => !b.categories.is_empty(),
+        };
         let any_traits = !b.traits.is_empty();
-        let has_traits = !traits.is_empty();
+        let has_traits = !traits.is_empty() && !midi;
         let folders: Vec<gpui::Stateful<Div>> = b
             .library
             .folders
@@ -402,25 +419,26 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap(px(6.))
-                            .child(heading("Sounds").when(any_sounds, |d| {
-                                d.child(link("Clear").on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|ws, _, _, cx| {
-                                        ws.browser.categories.clear();
-                                        ws.refilter(cx);
-                                    }),
-                                ))
-                            }))
+                            .child(heading(if midi { "Parts" } else { "Sounds" }).when(
+                                any_sounds,
+                                |d| {
+                                    d.child(link("Clear").on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|ws, _, _, cx| {
+                                            ws.browser.categories.clear();
+                                            ws.browser.midi_role = None;
+                                            ws.refilter(cx);
+                                        }),
+                                    ))
+                                },
+                            ))
                             .child(match categories.is_empty() {
-                                true => {
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(rgb(TEXT_4))
-                                        .child(match b.library.samples.is_empty() {
-                                            true => "What the library holds shows here.",
-                                            false => "None with these filters.",
-                                        })
-                                }
+                                true => div().text_size(px(11.)).text_color(rgb(TEXT_4)).child(
+                                    match b.library.samples.is_empty() && !midi {
+                                        true => "What the library holds shows here.",
+                                        false => "None with these filters.",
+                                    },
+                                ),
                                 false => div().flex().flex_wrap().gap(px(5.)).children(categories),
                             }),
                     )

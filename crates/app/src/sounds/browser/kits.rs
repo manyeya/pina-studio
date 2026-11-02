@@ -1,4 +1,5 @@
-//! Kits: drums picked to go together, reshuffled, made into a sampler track.
+//! Kits: drums picked to go together, reshuffled, added to the song as a stack: a kit track and
+//! a track a pad.
 
 use super::*;
 
@@ -23,6 +24,7 @@ impl Workspace {
             ..Default::default()
         };
         let kit = search::kit(&b.library.samples, &seed);
+        self.browser.kit_folder = None;
         let old = std::mem::take(&mut self.browser.kit);
         self.browser.kit = kit
             .slots
@@ -56,8 +58,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Makes the kit a sampler track: drums on their General MIDI notes (a closed hat choking an
-    /// open one), tonal sounds across free notes, in tune.
+    /// Adds the kit to the song as a stack: a kit track (its starter pattern at the playhead's
+    /// bar, a row a pad) whose notes play its pads, and a track a pad, its own sampler with its
+    /// sound, channel and effects. Drums go on their General MIDI notes, the hats choking each
+    /// other; tonal sounds play in tune from their root.
     pub fn make_kit(&mut self, cx: &mut Context<Self>) {
         let samples = &self.browser.library.samples;
         let picks: Vec<(Category, Sample)> = self
@@ -71,37 +75,45 @@ impl Workspace {
             cx.notify();
             return;
         }
-        let mut sampler = Sampler::default();
-        for (role, s) in &picks {
-            // A sound that won't fit is left out; the rest still make the kit.
-            let _ = place_zone(&mut sampler, s, Some(*role));
-        }
-        let n = sampler.zones.len();
-        let name = match self.sample_key() {
-            Some(k) => format!("Kit in {}", k.name()),
-            None => "Kit".to_string(),
+        let name = match (&self.browser.kit_folder, self.sample_key()) {
+            (Some(f), _) => f.rsplit('/').next().unwrap_or(f).to_string(),
+            (None, Some(k)) => format!("Kit in {}", k.name()),
+            (None, None) => "Kit".to_string(),
         };
-        let index = self.new_track_index(false);
-        self.session.checkpoint();
-        let dir = self.session.dir.clone();
-        let add = Command::AddTrack {
-            name: name.clone(),
-            instrument: Some(Instrument::Sampler(sampler)),
-            index: Some(index),
-        };
-        match commands::apply(&mut self.session.project, &dir, add) {
-            Ok(_) => {
-                self.select_track(index);
-                self.region = None;
-                self.changed(cx);
-                self.status = Some(format!("Made {name}: {n} sounds on a sampler"));
-            }
-            Err(e) => {
-                self.session.cancel();
-                self.status = Some(e);
-                cx.notify();
-            }
-        }
+        self.add_drum_kit(&name, crate::editors::drums::pads_for(&picks), cx);
+        cx.notify();
+    }
+
+    /// The kit's picks loaded into the kit track picked in the song: the pads on their notes
+    /// given these sounds, new pads for the rest.
+    pub fn load_kit(&mut self, kit: usize, cx: &mut Context<Self>) {
+        let samples = &self.browser.library.samples;
+        let picks: Vec<(Category, Sample)> = self
+            .browser
+            .kit
+            .iter()
+            .filter_map(|k| Some((k.slot.role, samples.get(k.hit()?.index)?.clone())))
+            .collect();
+        let pads = crate::editors::drums::pads_for(&picks);
+        self.load_into_kit(kit, pads, cx);
+        cx.notify();
+    }
+
+    /// The kit's picks from a library folder: its sounds, a pad each (or a pad a kind, for a
+    /// big folder), each with the folder's others of its kind to step through.
+    pub fn folder_picks(&mut self, folder: &str, cx: &mut Context<Self>) {
+        let kit = search::folder_kit(&self.browser.library.samples, folder);
+        self.browser.kit = kit
+            .slots
+            .into_iter()
+            .map(|slot| KitPick {
+                slot,
+                choice: 0,
+                locked: false,
+            })
+            .collect();
+        self.browser.kit_folder = Some(folder.to_string());
+        cx.notify();
     }
 
     pub(crate) fn kit_view(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -117,6 +129,14 @@ impl Workspace {
             seed.push(format!("“{}”", b.text));
         }
         seed.extend(b.traits.iter().cloned());
+        // A folder's kit says which folder.
+        if let Some(f) = &b.kit_folder {
+            seed = vec![f.rsplit('/').next().unwrap_or(f).to_string()];
+        }
+        // The kit picked in the song, to load these into.
+        let into = self
+            .drum_kit()
+            .map(|k| (k, self.session.project.tracks[k].name.clone()));
         let cards: Vec<Div> = b
             .kit
             .iter()
@@ -137,7 +157,10 @@ impl Workspace {
                     .text_size(px(12.5))
                     .font_weight(FontWeight::SEMIBOLD)
                     .whitespace_nowrap()
-                    .child("A kit that goes together"),
+                    .child(match b.kit_folder.is_some() {
+                        true => "A kit from a folder",
+                        false => "A kit that goes together",
+                    }),
             )
             .child(
                 div()
@@ -152,6 +175,19 @@ impl Workspace {
             )
             .child(div().flex_1())
             .child(
+                button("From a folder", false)
+                    .child(icon(Icon::Chevron, 11.).text_color(rgb(TEXT_3)))
+                    .debug_selector(|| "kit-folder".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                            ws.folders_menu(e.position, cx, |folder| {
+                                crate::editors::drums::DrumOp::Picks { folder }
+                            })
+                        }),
+                    ),
+            )
+            .child(
                 button("New picks", false)
                     .child(icon(Icon::Shuffle, 13.).text_color(rgb(TEXT_3)))
                     .flex_row_reverse()
@@ -161,8 +197,17 @@ impl Workspace {
                         cx.listener(|ws, _, _, cx| ws.shuffle_kit(cx)),
                     ),
             )
+            .children(into.map(|(kit, name)| {
+                button(format!("Load into {name}"), false)
+                    .flex_none()
+                    .debug_selector(|| "load-kit".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| ws.load_kit(kit, cx)),
+                    )
+            }))
             .child(
-                primary("Make kit")
+                primary("Add to song")
                     .h(px(28.))
                     .debug_selector(|| "make-kit".into())
                     .on_mouse_down(
@@ -346,25 +391,14 @@ impl Workspace {
                             .child(step(Icon::Forward, 1, cx))
                     })
                     .when_some(index, |d, i| {
-                        d.child(
-                            div()
-                                .size(px(22.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(11.))
-                                .bg(rgb(if playing { ACCENT } else { RAISED }))
-                                .cursor_pointer()
-                                .debug_selector(move || format!("kit-play-{n}"))
-                                .child(icon(Icon::Play, 11.).text_color(rgb(TEXT)))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |ws, _, _, cx| {
-                                        cx.stop_propagation();
-                                        ws.audition_sample(i, cx);
-                                    }),
-                                ),
-                        )
+                        d.child(self.sample_play(
+                            i,
+                            playing,
+                            color,
+                            22.,
+                            format!("kit-play-{n}"),
+                            cx,
+                        ))
                     }),
             )
             .when_some(index, |d, i| {

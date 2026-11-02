@@ -9,6 +9,7 @@ use pina_engine::samples::{
     note_name, place,
     search::{self, Aspects, Hit, KitSeed, Query},
 };
+use pina_engine::song::project::PPQ;
 use serde_json::{Value, json};
 
 /// The library, scanned first if it's never been (so a first search finds something).
@@ -270,31 +271,26 @@ pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Val
                 made["track"].as_u64().ok_or("no track made")? as usize
             }
         };
+        // In time: whole beats at the song's tempo, following it from here on.
+        let song = p.tempo_at(at);
+        let fitted = a.bpm.zip(place::loop_ticks(a, song));
         let r = edit(Command::AddAudioRegion {
             track: t,
             file: path.clone(),
             start: at,
             offset: 0,
-            length: None,
+            length: fitted.map(|(_, length)| length),
         })?;
         let region = r["region"][1].as_u64().ok_or("no region made")? as usize;
-        // In time: its beats at the song's tempo.
-        if let (Some(bpm), Some(length)) = (a.bpm, place::loop_ticks(a, p.tempo)) {
-            edit(Command::FlexRegion {
-                track: t,
-                region,
-                length,
-            })?;
-            let how = match place::feel(bpm as f64, p.tempo) / bpm as f64 {
+        let own = fitted.map(|(bpm, length)| {
+            let how = match place::feel(bpm as f64, song) / bpm as f64 {
                 f if f < 1.0 => " as half time",
                 f if f > 1.0 => " as double time",
                 _ => "",
             };
-            done.push(format!(
-                "stretched from {bpm:.0} to {:.0} BPM{how}",
-                p.tempo
-            ));
-        }
+            done.push(format!("follows the song's tempo, from {bpm:.0} BPM{how}"));
+            length as f64 / PPQ as f64 * 60.0 / a.seconds.max(0.01) as f64
+        });
         // In key: the small move that fits it, if there is one.
         let fit = p.song_key().and_then(|key| {
             let q = search::Query {
@@ -312,6 +308,9 @@ pub fn put(file: &Path, dir: &Path, track: Option<usize>, at: u64) -> Result<Val
         let mut set = serde_json::json!({
             "op": "set_region", "track": t, "region": region, "loop": true, "follow": true
         });
+        if let Some(own) = own {
+            set["tempo"] = json!(own);
+        }
         if let Some((semitones, key)) = fit {
             set["transpose"] = json!(semitones);
             done.push(format!("moved {semitones:+} semitones into {}", key.name()));

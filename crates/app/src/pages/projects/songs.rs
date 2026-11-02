@@ -103,7 +103,11 @@ impl Workspace {
         };
         let player = match cfg!(test) {
             true => pina_engine::audio::player::Player::silent(&session.project, &dir),
-            false => match pina_engine::audio::player::Player::start(&session.project, &dir) {
+            false => match pina_engine::audio::player::Player::start(
+                &session.project,
+                &dir,
+                &self.settings.audio,
+            ) {
                 Ok(p) => p,
                 Err(e) => {
                     self.status = Some(e);
@@ -112,6 +116,7 @@ impl Workspace {
                 }
             },
         };
+        self.keep_chat();
         let old = std::mem::replace(&mut self.session, session);
         let _ = std::fs::remove_file(crate::cli::server::socket_path(&old.dir));
         self.player = player;

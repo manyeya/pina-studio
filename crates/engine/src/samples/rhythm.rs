@@ -342,7 +342,15 @@ pub fn named_tempo(hint: &str) -> Option<(f32, bool)> {
             }
         }
     }
-    None
+    // A number on its own among the name's words, as packs write it: "Bass_Loop_Chaos_130_Fm".
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    stem.split(['_', ' ', '-'])
+        .filter(|w| !w.is_empty())
+        .skip(1)
+        .filter_map(|w| w.parse::<f32>().ok())
+        .filter(|v| (60.0..=200.0).contains(v))
+        .last()
+        .map(|v| (v, true))
 }
 
 #[cfg(test)]

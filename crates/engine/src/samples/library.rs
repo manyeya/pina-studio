@@ -14,13 +14,21 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::{ANALYSIS_VERSION, Sample, analyze};
+use super::{
+    ANALYSIS_VERSION, Sample, analyze,
+    midi::{self, MIDI_VERSION, MidiSample},
+};
 
-/// The index as saved: which analysis made it, and the samples.
+/// The index as saved: which analysis made it, and the samples; which study made the MIDI
+/// files', and theirs.
 #[derive(Serialize, Deserialize)]
 struct Index {
     version: u32,
     samples: Vec<Sample>,
+    #[serde(default)]
+    midi_version: u32,
+    #[serde(default)]
+    midi: Vec<MidiSample>,
 }
 
 /// The audio files the library reads.
@@ -32,12 +40,17 @@ pub struct Library {
     pub folders: Vec<PathBuf>,
     #[serde(skip)]
     pub samples: Vec<Sample>,
+    /// The MIDI files in its folders, studied.
+    #[serde(skip)]
+    pub midi: Vec<MidiSample>,
 }
 
 /// What a scan found.
 #[derive(Serialize, Debug, Clone, PartialEq, Default)]
 pub struct ScanReport {
     pub samples: usize,
+    /// MIDI files, and those that couldn't be read among `failed`.
+    pub midi: usize,
     /// Newly analysed (new or changed), and gone since last time.
     pub analysed: usize,
     pub removed: usize,
@@ -84,15 +97,21 @@ impl Library {
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_else(|| Library {
                 folders: vec![default_folder()],
-                samples: Vec::new(),
+                ..Default::default()
             });
-        // An index another analysis made is no use: everything's analysed again.
-        library.samples = std::fs::read(index_file())
+        // An index another analysis made is no use: everything's analysed again (and its MIDI
+        // files studied again, by another study).
+        let index = std::fs::read(index_file())
             .ok()
-            .and_then(|b| serde_json::from_slice::<Index>(&b).ok())
-            .filter(|i| i.version == ANALYSIS_VERSION)
-            .map(|i| i.samples)
-            .unwrap_or_default();
+            .and_then(|b| serde_json::from_slice::<Index>(&b).ok());
+        if let Some(i) = index {
+            if i.midi_version == MIDI_VERSION {
+                library.midi = i.midi;
+            }
+            if i.version == ANALYSIS_VERSION {
+                library.samples = i.samples;
+            }
+        }
         library
     }
 
@@ -102,6 +121,8 @@ impl Library {
         let index = Index {
             version: ANALYSIS_VERSION,
             samples: self.samples.clone(),
+            midi_version: MIDI_VERSION,
+            midi: self.midi.clone(),
         };
         write(&index_file(), &serde_json::to_vec(&index).unwrap())
     }
@@ -125,6 +146,12 @@ impl Library {
         let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         self.folders.retain(|f| *f != dir);
         self.samples.retain(|s| !s.path.starts_with(&dir));
+        self.midi.retain(|s| !s.path.starts_with(&dir));
+    }
+
+    /// The MIDI file at `path`, if the library has it.
+    pub fn get_midi(&self, path: &Path) -> Option<&MidiSample> {
+        self.midi.iter().find(|s| s.path == path)
     }
 
     /// The sample at `path`, if the library has it.
@@ -211,11 +238,33 @@ impl Library {
         kept.extend(results.into_inner().unwrap());
         kept.sort_by(|a, b| a.path.cmp(&b.path));
         self.samples = kept;
+        let mut failed = failed.into_inner().unwrap();
+        // The MIDI files: quick to read, studied again only when they've changed.
+        let known: HashMap<PathBuf, MidiSample> = std::mem::take(&mut self.midi)
+            .into_iter()
+            .map(|m| (m.path.clone(), m))
+            .collect();
+        for root in &self.folders {
+            for path in midi::midi_files(root) {
+                let (modified, size) = stamp(&path);
+                match known.get(&path) {
+                    Some(m) if m.modified == modified && m.size == size => {
+                        self.midi.push(m.clone())
+                    }
+                    _ => match midi::study_file(&path, root, modified, size) {
+                        Ok(m) => self.midi.push(m),
+                        Err(e) => failed.push((path, e)),
+                    },
+                }
+            }
+        }
+        self.midi.sort_by(|a, b| a.path.cmp(&b.path));
         let report = ScanReport {
             samples: self.samples.len(),
+            midi: self.midi.len(),
             analysed,
             removed,
-            failed: failed.into_inner().unwrap(),
+            failed,
         };
         if let Err(e) = self.save() {
             eprintln!("library: {e}");

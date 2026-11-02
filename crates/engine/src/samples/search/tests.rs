@@ -460,3 +460,72 @@ fn a_pitched_drum_is_tuned_onto_the_key_by_the_nearer_way() {
     let mut z = zone(&snare, None);
     assert!(tune_to(&mut z, &snare, key).is_none());
 }
+
+#[test]
+fn a_folder_makes_a_kit_a_pad_a_hit_or_a_pad_a_kind() {
+    // A small folder: every hit its own pad, a beat's drums first.
+    let small: Vec<Sample> = [
+        ("Tom", Category::Tom),
+        ("Kick", Category::Kick),
+        ("Hat", Category::HatClosed),
+        ("Snare", Category::Snare),
+    ]
+    .into_iter()
+    .map(|(n, c)| sample(n, "Kit/Hits", drum(c, &[], [0.5, 0.5])))
+    .chain([sample(
+        "Elsewhere",
+        "Other",
+        drum(Category::Kick, &[], [0.5, 0.5]),
+    )])
+    .collect();
+    let kit = folder_kit(&small, "Kit");
+    let roles: Vec<Category> = kit.slots.iter().map(|s| s.role).collect();
+    assert_eq!(
+        roles,
+        [
+            Category::Kick,
+            Category::Snare,
+            Category::HatClosed,
+            Category::Tom
+        ]
+    );
+    // A big one: a pad a kind, then the kinds with most again, sixteen in all; each pad's
+    // alternatives the folder's others of its kind.
+    let mut big = Vec::new();
+    for (role, n) in [
+        (Category::Kick, 12),
+        (Category::Snare, 12),
+        (Category::HatClosed, 10),
+        (Category::Clap, 5),
+        (Category::Perc, 2),
+        (Category::Crash, 1),
+    ] {
+        for k in 0..n {
+            big.push(sample(
+                &format!("{role:?} {k:02}"),
+                "Big",
+                drum(role, &[], [0.5, 0.5]),
+            ));
+        }
+    }
+    let kit = folder_kit(&big, "Big");
+    assert_eq!(kit.slots.len(), BANK);
+    let kicks: Vec<&KitSlot> = kit
+        .slots
+        .iter()
+        .filter(|s| s.role == Category::Kick)
+        .collect();
+    assert!(kicks.len() >= 3, "{}", kicks.len());
+    assert_eq!(kicks[0].alternatives.len(), 11);
+    assert_eq!(kit.slots[0].role, Category::Kick);
+    assert!(kit.slots.iter().any(|s| s.role == Category::Crash));
+    // Its folders that make kits; a pad's variations, its folder's first.
+    assert_eq!(drum_folders(&big), [("Big".to_string(), 42)]);
+    let of = big.iter().position(|s| s.name == "Kick 03").unwrap();
+    let v = variations(&big, &big[of].path, 5);
+    assert_eq!(v.len(), 5);
+    assert!(
+        v.iter()
+            .all(|&i| big[i].analysis.category == Category::Kick && i != of)
+    );
+}

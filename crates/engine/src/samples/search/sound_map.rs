@@ -28,19 +28,20 @@ pub fn map(samples: &[Sample]) -> Vec<[f32; 2]> {
             })
             .collect();
     }
+    let vectors: Vec<&[f32]> = samples.iter().map(|s| &s.analysis.embedding[..]).collect();
+    layout(&vectors)
+}
+
+/// Points of any number of dimensions on a map, -1 to 1 each way, near ones near. At least three.
+pub(crate) fn layout(vectors: &[&[f32]]) -> Vec<[f32; 2]> {
+    let n = vectors.len();
+    let dims = vectors[0].len();
     let mean: Vec<f32> = (0..dims)
-        .map(|d| samples.iter().map(|s| s.analysis.embedding[d]).sum::<f32>() / n as f32)
+        .map(|d| vectors.iter().map(|v| v[d]).sum::<f32>() / n as f32)
         .collect();
-    let centred: Vec<Vec<f32>> = samples
+    let centred: Vec<Vec<f32>> = vectors
         .iter()
-        .map(|s| {
-            s.analysis
-                .embedding
-                .iter()
-                .zip(&mean)
-                .map(|(v, m)| v - m)
-                .collect()
-        })
+        .map(|v| v.iter().zip(&mean).map(|(v, m)| v - m).collect())
         .collect();
     // The covariance's top two eigenvectors, by power iteration (the second with the first
     // taken out).
@@ -79,8 +80,7 @@ pub fn map(samples: &[Sample]) -> Vec<[f32; 2]> {
         .zip(project(&second))
         .map(|(x, y)| [x, y])
         .collect();
-    let vectors: Vec<&[f32]> = samples.iter().map(|s| &s.analysis.embedding[..]).collect();
-    let placed = tsne(&vectors, &start);
+    let placed = tsne(vectors, &start);
     // -1 to 1, by the 98th percentile out from the middle, so a stray sound doesn't squash
     // the rest.
     let mid = |k: usize| {

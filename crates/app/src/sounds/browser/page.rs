@@ -52,10 +52,13 @@ impl Workspace {
     }
 
     pub fn samples_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let middle = match self.browser.view {
-            Results::List => self.results_list(cx).into_any_element(),
-            Results::Map => self.results_map(cx).into_any_element(),
-            Results::Kit => self.kit_view(cx).into_any_element(),
+        let midi = self.browser.midi;
+        let middle = match (self.browser.view, midi) {
+            (Results::List, true) => self.midi_list(false, cx).into_any_element(),
+            (Results::List, false) => self.results_list(cx).into_any_element(),
+            (Results::Map, _) => self.results_map(cx).into_any_element(),
+            (Results::Kit, true) => self.midi_kit_view(cx).into_any_element(),
+            (Results::Kit, false) => self.kit_view(cx).into_any_element(),
         };
         div()
             .flex_1()
@@ -64,7 +67,10 @@ impl Workspace {
             .bg(rgb(LANE))
             .child(self.filters(cx))
             .child(div().flex_1().min_w(px(0.)).flex().flex_col().child(middle))
-            .child(self.details(cx))
+            .child(match midi {
+                true => self.midi_details(cx).into_any_element(),
+                false => self.details(cx).into_any_element(),
+            })
     }
 
     /// The sample being dragged, by the pointer, saying where it would go.
@@ -81,13 +87,31 @@ impl Workspace {
         let s = self.browser.sample(index)?;
         let color = category_color(s.analysis.category);
         let target = self.drop_target(at);
+        let pad = |note| {
+            let t = self.session.project.pad_on(self.drum_kit()?, note)?;
+            Some(self.session.project.tracks[t].name.clone())
+        };
         let (hint, ok) = match target {
+            _ if let Some(name) = self.strip_under(at).and_then(pad) => {
+                (format!("A layer on {name}"), true)
+            }
+            _ if let Some(name) = self.pad_under(at).and_then(pad) => {
+                (format!("The sound of {name}"), true)
+            }
+            _ if let Some(note) = self.pad_under(at) => (
+                format!("A new pad on {}", crate::editors::drums::note_name(note)),
+                true,
+            ),
             Some(Drop::Audio(t, _)) => (
                 format!("Audio on {}", self.session.project.tracks[t].name),
                 true,
             ),
             Some(Drop::Zone(t, _)) => (
                 format!("A pad on {}", self.session.project.tracks[t].name),
+                true,
+            ),
+            Some(Drop::Pad(t)) => (
+                format!("A new pad in {}", self.session.project.tracks[t].name),
                 true,
             ),
             Some(Drop::New(_)) => ("Audio on a new track".to_string(), true),
@@ -172,9 +196,12 @@ impl Workspace {
         let p = &self.session.project;
         // An audio region's outline, as long as it will be in the song.
         let region = |row: usize, tick: u64| {
-            let length = loop_ticks(&s.analysis, p.tempo).unwrap_or_else(|| {
-                p.ticks((s.analysis.seconds as f64 * p.sample_rate as f64) as u64)
-                    .max(1)
+            let length = loop_ticks(&s.analysis, p.tempo_at(tick)).unwrap_or_else(|| {
+                p.ticks_for(
+                    tick,
+                    (s.analysis.seconds as f64 * p.sample_rate as f64) as u64,
+                )
+                .max(1)
             });
             div()
                 .absolute()
@@ -192,7 +219,7 @@ impl Workspace {
             Drop::New(tick) => region(p.tracks.len(), tick),
             // A new track goes in under it: the region shows on the line between.
             Drop::Under(t, tick) => region(t, tick).top(px(self.row_top(t + 1) - 6.)).h(px(12.)),
-            Drop::Zone(t, _) => lane(t)
+            Drop::Zone(t, _) | Drop::Pad(t) => lane(t)
                 .bg(alpha(color, 0.1))
                 .border_1()
                 .border_color(alpha(color, 0.8)),
@@ -226,6 +253,7 @@ impl Workspace {
         Some(match self.drop_target(at)? {
             Drop::Audio(t, at) => lane(t).child(tick(at)),
             Drop::New(at) => lane(self.session.project.tracks.len()).child(tick(at)),
+            Drop::Pad(t) => lane(t),
             Drop::Zone(t, at) | Drop::Under(t, at) => lane(t + 1)
                 .h(px(4.))
                 .top(px(self.row_top(t + 1) - 2.))
