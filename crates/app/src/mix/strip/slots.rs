@@ -109,42 +109,111 @@ pub(crate) fn plugin_slot(
         )
 }
 
-/// A built-in processor's slot: click shows it in the mixer; right-click takes it out.
+/// A built-in processor's slot, the `row`th effect in its strip: click opens it, drag moves
+/// it; right-click to move it or take it out.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn builtin_slot(
-    label: &'static str,
+    label: impl Into<gpui::SharedString>,
     ch: Channel,
     b: Builtin,
+    stacked: Option<usize>,
+    row: usize,
     h: f32,
     color: u32,
     cx: &mut Context<Workspace>,
 ) -> Div {
     dotted(label, true, h, Some(color))
-        .debug_selector(move || format!("builtin-{ch:?}-{b:?}"))
+        .debug_selector(move || match stacked {
+            None => format!("builtin-{ch:?}-{b:?}"),
+            Some(k) => format!("builtin-{ch:?}-{b:?}-{k}"),
+        })
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |ws, _, _, cx| {
+            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
-                ws.show_channel(ch, cx);
+                ws.press_effect(ch, row, false, e, cx);
             }),
         )
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
+                let mut items = ws.move_items(ch, row);
+                items.push((
+                    "Remove".into(),
+                    MenuAction::RemoveBuiltin {
+                        channel: ch,
+                        builtin: b,
+                        stacked,
+                    },
+                ));
                 ws.menu = Some(Menu {
                     at: e.position,
-                    items: vec![(
-                        "Remove".into(),
-                        MenuAction::RemoveBuiltin {
-                            channel: ch,
-                            builtin: b,
-                        },
-                    )],
+                    items,
                     ..Default::default()
                 });
                 cx.notify();
             }),
         )
+}
+
+/// A plugin in a strip's chain, its `n`th insert and `row`th effect: click opens its editor,
+/// drag moves it; right-click to move it, take it out or pick a preset.
+pub(crate) fn insert_slot(
+    label: String,
+    ch: Channel,
+    n: usize,
+    row: usize,
+    h: f32,
+    cx: &mut Context<Workspace>,
+) -> Div {
+    let which = Which::Insert(n);
+    dotted(label, true, h, Some(TEXT_4))
+        .debug_selector(move || format!("slot-{ch:?}-{which:?}"))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                ws.press_effect(ch, row, false, e, cx);
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                let mut menu = ws.plugin_menu(ch, which, e.position);
+                menu.items.splice(0..0, ws.move_items(ch, row));
+                ws.menu = Some(menu);
+                cx.notify();
+            }),
+        )
+}
+
+/// An effect's slot (or card), with where one being dragged would land marked: the one dragged
+/// left as a dashed outline, a bright line over (or under) the slot it'd take the place of.
+pub(crate) fn dropping(slot: Div, row: usize, drop: Option<(usize, usize)>) -> Div {
+    let Some((from, to)) = drop else {
+        return slot;
+    };
+    let line = || {
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .h(px(3.))
+            .rounded(px(2.))
+            .bg(rgb(ACCENT))
+            .shadow_md()
+    };
+    slot.relative()
+        .when(row == from, |d| {
+            d.opacity(0.35)
+                .border_1()
+                .border_dashed()
+                .border_color(rgb(ACCENT))
+        })
+        .when(row == to && to < from, |d| d.child(line().top_0()))
+        .when(row == to && to > from, |d| d.child(line().bottom_0()))
 }
 
 /// A channel's EQ curve, small: the strip's thumbnail. Clicking it shows the channel's EQ.

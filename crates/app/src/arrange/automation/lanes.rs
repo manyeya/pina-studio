@@ -154,6 +154,49 @@ impl Workspace {
                 }
             }
         }
+        if t.limit.is_some() {
+            items.push(("Limiter".into(), MenuAction::Nothing));
+            for field in LimitParam::ALL {
+                let p = Param::Limit(field);
+                items.push(item(p, self.param_name(track, p)));
+            }
+        }
+        // Its own compressor and saturator, then every effect stacked on it: every knob.
+        let own = [
+            (t.comp.map(Unit::Comp), OWN_COMP, "Compressor".to_string()),
+            (t.sat.map(Unit::Sat), OWN_SAT, "Saturator".to_string()),
+        ];
+        let stacked = t.more.iter().enumerate().filter_map(|(place, u)| {
+            let (_, name) = self.stacked(strip::Channel::Track(track), place)?;
+            Some((Some(*u), place as u8, name))
+        });
+        for (u, place, name) in own.into_iter().chain(stacked) {
+            let Some(u) = u else { continue };
+            items.push((name, MenuAction::Nothing));
+            for (i, knob) in strip::knobs(u.kind()).iter().enumerate() {
+                if knob_shows(&u, i) {
+                    items.push(item(Param::Tool(place, i as u8), knob.name.to_string()));
+                }
+            }
+        }
+        // The synth: all of it, by the part it's in.
+        if matches!(t.instrument, Some(Instrument::Poly(_))) {
+            let mut group = "";
+            for (i, param) in POLY_PARAMS.iter().enumerate() {
+                if param.group != group {
+                    group = param.group;
+                    items.push((group.into(), MenuAction::Nothing));
+                }
+                items.push(item(Param::Poly(i as u16), param.name.clone()));
+            }
+        }
+        // The Sampler's voice: everything that moves smoothly.
+        if matches!(t.instrument, Some(Instrument::Sampler(_))) {
+            items.push(("Voice".into(), MenuAction::Nothing));
+            for (i, knob) in VOICE.iter().enumerate() {
+                items.push(item(Param::Voice(i as u8), knob.name.to_string()));
+            }
+        }
         items
     }
 

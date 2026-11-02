@@ -276,7 +276,7 @@ impl Workspace {
                 }
             }
             EqOp::Bypass => self.edit(cx, |ws| {
-                if let Some(eq) = ws.strip_dsp_mut(ch).0.as_mut() {
+                if let Some(eq) = ws.eq_mut() {
                     eq.bypass = !eq.bypass;
                 }
             }),
@@ -295,7 +295,11 @@ impl Workspace {
                     return;
                 };
                 let other = self.eq_view.as_ref().and_then(|v| v.other).unwrap_or(now);
-                self.edit(cx, |ws| *ws.strip_dsp_mut(ch).0 = Some(other));
+                self.edit(cx, |ws| {
+                    if let Some(e) = ws.eq_mut() {
+                        *e = other;
+                    }
+                });
                 if let Some(v) = self.eq_view.as_mut() {
                     v.other = Some(now);
                     v.on_b = !v.on_b;
@@ -328,7 +332,11 @@ impl Workspace {
             }
             EqOp::Factory(i) => {
                 if let Some((name, eq)) = factory().into_iter().nth(i) {
-                    self.edit(cx, |ws| *ws.strip_dsp_mut(ch).0 = Some(eq));
+                    self.edit(cx, |ws| {
+                        if let Some(e) = ws.eq_mut() {
+                            *e = eq;
+                        }
+                    });
                     self.status = Some(format!("Loaded {name}"));
                 }
             }
@@ -339,7 +347,11 @@ impl Workspace {
                         .and_then(|b| serde_json::from_slice::<Eq>(&b).map_err(|e| e.to_string()));
                     match read {
                         Ok(eq) => {
-                            self.edit(cx, |ws| *ws.strip_dsp_mut(ch).0 = Some(eq));
+                            self.edit(cx, |ws| {
+                                if let Some(e) = ws.eq_mut() {
+                                    *e = eq;
+                                }
+                            });
                             self.status = Some(format!("Loaded {name}"));
                         }
                         Err(e) => self.status = Some(format!("{name}: {e}")),

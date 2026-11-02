@@ -2,5 +2,6 @@
 
 pub mod eq;
 pub mod export;
+pub mod fx;
 pub mod mixer;
 pub mod strip;

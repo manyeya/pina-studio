@@ -5,17 +5,33 @@ use super::*;
 impl Workspace {
     /// A channel's EQ in its window (one added, if it had none).
     pub fn open_eq(&mut self, ch: Channel, cx: &mut Context<Self>) {
-        if self.strip_dsp(ch).0.is_none() {
-            self.edit(cx, |ws| *ws.strip_dsp_mut(ch).0 = Some(Eq::default()));
+        self.open_eq_at(ch, None, cx);
+    }
+
+    /// One of a channel's EQs in its window: its own (`stacked` None, one added if it had none),
+    /// or one stacked on it.
+    pub fn open_eq_at(&mut self, ch: Channel, stacked: Option<usize>, cx: &mut Context<Self>) {
+        match stacked {
+            None if self.strip_dsp(ch).0.is_none() => {
+                self.edit(cx, |ws| *ws.strip_dsp_mut(ch).0 = Some(Eq::default()));
+            }
+            Some(k)
+                if self.more(ch).get(k).map(|u| u.kind())
+                    != Some(pina_engine::song::project::Fx::Eq) =>
+            {
+                return;
+            }
+            _ => {}
         }
         self.channel = ch;
         if let Channel::Track(i) = ch {
             self.track = i;
         }
         match &mut self.eq_view {
-            Some(v) if v.ch == ch => v.focused = true,
+            Some(v) if v.ch == ch && v.stacked == stacked => v.focused = true,
             Some(v) => {
                 v.ch = ch;
+                v.stacked = stacked;
                 v.picked.clear();
                 (v.hover, v.solo, v.other, v.on_b) = (None, None, None, false);
                 v.focused = true;
@@ -27,7 +43,7 @@ impl Workspace {
                     ((self.viewport_w - w) / 2.0).max(0.0),
                     ((self.viewport_h - h) / 2.0).max(CONTROL_BAR_H),
                 );
-                self.eq_view = Some(EqView::new(ch, at, (w, h)));
+                self.eq_view = Some(EqView::new(ch, stacked, at, (w, h)));
             }
         }
         cx.notify();
@@ -43,13 +59,22 @@ impl Workspace {
 
     /// The EQ the window shows.
     pub(crate) fn shown_eq(&self) -> Option<(Channel, Eq)> {
-        let ch = self.eq_view.as_ref()?.ch;
-        Some((ch, self.strip_dsp(ch).0?))
+        let v = self.eq_view.as_ref()?;
+        Some((v.ch, self.built_in(v.ch, v.stacked)?))
+    }
+
+    /// Whether the window shows a stacked EQ: its bands aren't automated (the channel's own
+    /// EQ's are).
+    pub(crate) fn eq_stacked(&self) -> bool {
+        self.eq_view.as_ref().is_some_and(|v| v.stacked.is_some())
     }
 
     /// The shown EQ as it's heard now: its bands where their automation has them.
     pub(crate) fn eq_as_heard(&self, ch: Channel, mut eq: Eq) -> Eq {
         let Channel::Track(t) = ch else { return eq };
+        if self.eq_stacked() {
+            return eq;
+        }
         for (i, b) in eq.bands.iter_mut().enumerate() {
             for field in [EqField::Freq, EqField::Gain, EqField::Q] {
                 if let Some(v) = self.automated(t, Param::Eq(i as u8, field)) {
@@ -67,7 +92,7 @@ impl Workspace {
     /// The bands with `ids` moved by hand: what that does to their automation (recorded in
     /// Touch, Latch or Write; taken over from it in Read), as any track control.
     pub(crate) fn eq_moved(&mut self, ids: &[u16], fields: &[EqField]) {
-        let Some((Channel::Track(t), eq)) = self.shown_eq() else {
+        let Some((Channel::Track(t), eq)) = self.shown_eq().filter(|_| !self.eq_stacked()) else {
             return;
         };
         let mut moves = Vec::new();
@@ -126,8 +151,9 @@ impl Workspace {
 
     /// The shown EQ, to change (no edit of its own: inside one, or a drag's).
     pub(crate) fn eq_mut(&mut self) -> Option<&mut Eq> {
-        let ch = self.eq_view.as_ref()?.ch;
-        self.strip_dsp_mut(ch).0.as_mut()
+        let v = self.eq_view.as_ref()?;
+        let (ch, stacked) = (v.ch, v.stacked);
+        self.unit_mut(ch, stacked)
     }
 
     /// Changes the bands picked, as one edit.
@@ -162,6 +188,7 @@ impl Workspace {
             Channel::Master => Some(None),
         };
         self.player.watch_eq(id);
+        self.player.watch_eq_more(view.stacked);
         self.player.solo_band(view.solo.map(|s| (s.id, s.level)));
         let geo = view.geo(rate);
         let n = (geo.w / 3.0) as usize;

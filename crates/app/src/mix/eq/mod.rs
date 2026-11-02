@@ -38,6 +38,8 @@ mod list;
 mod panel;
 mod tools;
 
+pub(crate) use bars::{bar_button, icon_button};
+pub(crate) use panel::{dial, disc, value_line};
 pub use tools::Match;
 
 use std::{cell::Cell, rc::Rc};
@@ -200,6 +202,8 @@ pub struct Solo {
 /// The EQ window: whose EQ, where it is, what's picked, and what the analyzer's heard.
 pub struct EqView {
     pub ch: Channel,
+    /// Which of its EQs: its own (None), or one stacked, by its place among them.
+    pub stacked: Option<usize>,
     /// Its top left corner and size, in the app's window; and before full screen, those.
     pub at: (f32, f32),
     pub size: (f32, f32),
@@ -260,9 +264,10 @@ pub struct EqView {
 }
 
 impl EqView {
-    fn new(ch: Channel, at: (f32, f32), size: (f32, f32)) -> Self {
+    fn new(ch: Channel, stacked: Option<usize>, at: (f32, f32), size: (f32, f32)) -> Self {
         EqView {
             ch,
+            stacked,
             at,
             size,
             restore: None,

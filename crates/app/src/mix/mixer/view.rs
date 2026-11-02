@@ -110,14 +110,22 @@ impl Workspace {
                     .flex_col()
                     .bg(rgb(LANE))
                     .child(toolbar)
+                    // More strips than fit scroll sideways, by trackpad or by the wheel (scrolling
+                    // only sideways, a wheel's turn moves along them). The strips' row is as wide
+                    // as they are, so there's something to scroll.
+                    // shortcut: a window too short for the faders' least height cuts the strips'
+                    // feet off rather than scrolling down; scroll both ways if that bites.
                     .child(
                         div()
                             .id("mixer")
                             .flex_1()
                             .min_h(px(0.))
-                            .overflow_scroll()
+                            .flex()
+                            .overflow_x_scroll()
+                            .debug_selector(|| "mixer-strips".into())
                             .child(
                                 div()
+                                    .flex_none()
                                     .flex()
                                     .gap(px(6.))
                                     .p(px(12.))
@@ -130,41 +138,56 @@ impl Workspace {
             .child(self.channel_panel(cx))
     }
 
-    /// The faders take what height the window leaves the strips, and the rows it doesn't show.
-    pub(crate) fn mixer_fader(&self) -> f32 {
+    /// A mixer strip's rows, top to bottom, as `strip` lays them out (8 apart, in 8 of padding
+    /// and a border): what each is called down the left, and how tall it is. The fader takes
+    /// what height the window leaves, so the whole strip shows.
+    pub(crate) fn mixer_parts(&self) -> Vec<(&'static str, f32)> {
         let [eq, effects, sends] = self.mixer_rows;
-        // The rest of a strip, gaps and padding included, with every row showing.
-        let rest = 464.0;
-        let freed = (!eq as u8 as f32) * 52.0
-            + (!effects as u8 as f32) * (MIXER_INSERTS as f32 * 25.0 + 5.0)
-            + (!sends as u8 as f32) * (MIXER_SENDS as f32 * 25.0 + 5.0);
-        let room = self.viewport_h - CONTROL_BAR_H - STATUS_H - 40.0 - 24.0;
-        (room - rest + freed).max(120.0)
-    }
-
-    /// What each row of the strips is, down the left, lined up with them.
-    pub(crate) fn mixer_labels(&self) -> Div {
-        let [eq, effects, sends] = self.mixer_rows;
-        // Heights of the rows above each label, as the strips lay them out (8 between).
+        // A column of slots 22 tall, 3 apart.
+        let slots = |n: usize| n as f32 * 25.0 - 3.0;
         let mut rows: Vec<(&'static str, f32)> = vec![("", 28.0)];
         if eq {
             rows.push(("EQ", 44.0));
         }
         rows.push(("Input", 24.0));
         if effects {
-            rows.push(("Effects", MIXER_INSERTS as f32 * 25.0 - 3.0));
+            rows.push(("Effects", slots(MIXER_INSERTS)));
         }
         if sends {
-            rows.push(("Sends", MIXER_SENDS as f32 * 25.0 - 3.0));
+            rows.push(("Sends", slots(MIXER_SENDS)));
         }
         rows.extend([
             ("Output", 22.0),
+            ("Mode", 18.0),
             ("Pan", 36.0),
             ("Level", 18.0),
-            ("", self.mixer_fader()),
+            ("", 0.0),
             ("", 22.0),
             ("Name", 28.0),
         ]);
+        let fixed: f32 = rows.iter().map(|r| r.1).sum();
+        let gaps = 8.0 * (rows.len() - 1) as f32;
+        // The window under the toolbar, the strips' row padded 12 above and below.
+        let room = self.viewport_h - CONTROL_BAR_H - STATUS_H - 40.0 - 24.0;
+        let fader = (room - fixed - gaps - 18.0).max(120.0);
+        if let Some(r) = rows.iter_mut().find(|r| r.1 == 0.0) {
+            r.1 = fader;
+        }
+        rows
+    }
+
+    /// The faders' height: what the window leaves the strips.
+    pub(crate) fn mixer_fader(&self) -> f32 {
+        self.mixer_parts()
+            .iter()
+            .rev()
+            .nth(2)
+            .map_or(120.0, |r| r.1)
+    }
+
+    /// What each row of the strips is, down the left, lined up with them.
+    pub(crate) fn mixer_labels(&self) -> Div {
+        let rows = self.mixer_parts();
         div()
             .w(px(56.))
             .flex_none()

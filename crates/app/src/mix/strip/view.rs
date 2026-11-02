@@ -68,9 +68,14 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                 Some(Instrument::Sampler(_)) => {
                     plugin_slot("Sampler".into(), true, ch, Which::Instrument, 24., dot, cx)
                 }
+                Some(Instrument::Poly(_)) => {
+                    plugin_slot("Synth".into(), true, ch, Which::Instrument, 24., dot, cx)
+                }
                 Some(Instrument::Drums) => {
                     plugin_slot("Drum Kit".into(), true, ch, Which::Instrument, 24., dot, cx)
                 }
+                // Its pads play its notes: it has nothing of its own to open.
+                Some(Instrument::Kit) => info(format!("{} pads", project.pads_of(i).len()), 24.),
                 Some(Instrument::Plugin(r)) => {
                     plugin_slot(r.class.clone(), true, ch, Which::Instrument, 24., dot, cx)
                 }
@@ -80,59 +85,74 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
         Channel::Master => info("Output 1–2", 24.),
     };
 
-    // Effect slots: the built-ins it has, its plugins, and an empty one to add another.
+    // Effect slots: its effects in the order they run (drag one to move it), and an empty one to
+    // add another.
     let (eq, comp) = ws.strip_dsp(ch);
-    let mut effects = Vec::new();
-    if eq.is_some() {
-        effects.push(builtin_slot(
-            "Channel EQ",
-            ch,
-            Builtin::Eq,
-            slot_h,
-            if eq.is_some_and(|e| e.bypass) {
-                TEXT_4
-            } else {
-                color
-            },
-            cx,
-        ));
-    }
-    if comp.is_some() {
-        effects.push(builtin_slot(
-            "Compressor",
-            ch,
-            Builtin::Comp,
-            slot_h,
-            if comp.is_some_and(|c| c.bypass) {
-                TEXT_4
-            } else {
-                color
-            },
-            cx,
-        ));
-    }
-    if let Some(sat) = ws.sat(ch) {
-        let color = if sat.bypass { TEXT_4 } else { color };
-        effects.push(builtin_slot(
-            "Saturator",
-            ch,
-            Builtin::Sat,
-            slot_h,
-            color,
-            cx,
-        ));
-    }
     let inserts = ws.inserts(ch);
-    for (n, r) in inserts.iter().enumerate() {
-        effects.push(plugin_slot(
-            r.class.clone(),
-            true,
-            ch,
-            Which::Insert(n),
-            slot_h,
-            Some(TEXT_4),
-            cx,
-        ));
+    let drop = ws.effect_drop(ch, false);
+    let mut effects = Vec::new();
+    let (mut n, mut m) = (0, 0);
+    for (row, (_, fx)) in ws.shown_effects(ch).into_iter().enumerate() {
+        let off = |bypass: bool| if bypass { TEXT_4 } else { color };
+        let slot = match fx {
+            Fx::More => {
+                m += 1;
+                let k = m - 1;
+                let Some((b, name)) = ws.stacked(ch, k) else {
+                    continue;
+                };
+                let bypassed = ws.more(ch).get(k).is_some_and(|u| u.bypassed());
+                builtin_slot(name, ch, b, Some(k), row, slot_h, off(bypassed), cx)
+            }
+            Fx::Eq => builtin_slot(
+                "Channel EQ",
+                ch,
+                Builtin::Eq,
+                None,
+                row,
+                slot_h,
+                off(eq.is_some_and(|e| e.bypass)),
+                cx,
+            ),
+            Fx::Comp => builtin_slot(
+                "Compressor",
+                ch,
+                Builtin::Comp,
+                None,
+                row,
+                slot_h,
+                off(comp.is_some_and(|c| c.bypass)),
+                cx,
+            ),
+            Fx::Sat => builtin_slot(
+                "Saturator",
+                ch,
+                Builtin::Sat,
+                None,
+                row,
+                slot_h,
+                off(ws.sat(ch).is_some_and(|s| s.bypass)),
+                cx,
+            ),
+            Fx::Limit => builtin_slot(
+                "Limiter",
+                ch,
+                Builtin::Limit,
+                None,
+                row,
+                slot_h,
+                off(ws.limiter(ch).is_some_and(|l| l.bypass)),
+                cx,
+            ),
+            Fx::Plugin => {
+                n += 1;
+                insert_slot(inserts[n - 1].class.clone(), ch, n - 1, row, slot_h, cx)
+            }
+            // Never in a chain: stacked ones are `More`s.
+            _ => continue,
+        };
+        let slot = slot.relative().child(ws.effect_place(ch, false, row));
+        effects.push(dropping(slot, row, drop));
     }
     {
         effects.push(plugin_slot(
@@ -149,8 +169,21 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
         Layout::Mixer { .. } => (MIXER_INSERTS, MIXER_SENDS),
         Layout::Compact { effects, sends } => (effects, sends),
     };
-    if mixer {
-        effects.truncate(MIXER_INSERTS);
+    // In the mixer, room for so many: the slot to add another always last, saying how many more
+    // there are than show (the channel's panel lists them all).
+    if mixer && effects.len() > MIXER_INSERTS {
+        let add = effects.pop();
+        let more = effects.len() - (MIXER_INSERTS - 1);
+        effects.truncate(MIXER_INSERTS - 1);
+        effects.extend(add.map(|d| {
+            d.gap(px(4.)).child(
+                div()
+                    .text_size(px(9.5))
+                    .text_color(rgb(TEXT_4))
+                    .debug_selector(move || format!("strip-more-{ch:?}"))
+                    .child(format!("{more} more")),
+            )
+        }));
     }
     while effects.len() < fit_effects {
         effects.push(blank(slot_h));
@@ -358,7 +391,7 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
 
     let fader_h = layout.fader_h();
     let (track_x, cap_w, scale_x, meter_x) = if mixer {
-        (13.0, 30.0, 31.0, 54.0)
+        (24.0, 30.0, 46.0, 78.0)
     } else {
         (38.0, 26.0, 0.0, 66.0)
     };
@@ -663,7 +696,7 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
 
     div()
         .debug_selector(move || format!("strip-{ch:?}"))
-        .when(mixer, |d| d.w(px(90.)).flex_none())
+        .when(mixer, |d| d.w(px(MIXER_STRIP_W)).flex_none())
         .when(!mixer, |d| d.flex_1().min_w(px(0.)))
         .flex()
         .flex_col()

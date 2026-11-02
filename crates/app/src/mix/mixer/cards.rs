@@ -1,4 +1,4 @@
-//! The chain's cards: the EQ's curve, the compressor's and the saturator's.
+//! The chain's cards: the EQ's curve, the compressor's, the saturator's and the limiter's.
 
 use super::*;
 
@@ -224,6 +224,15 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(10.))
+                    .cursor_pointer()
+                    .debug_selector(|| "comp-card".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| {
+                            cx.stop_propagation();
+                            ws.open_fx(ch, Builtin::Comp, cx);
+                        }),
+                    )
                     .child(
                         div()
                             .text_size(px(11.))
@@ -397,7 +406,16 @@ impl Workspace {
                             .rounded(px(8.))
                             .bg(rgb(WELL))
                             .p(px(6.))
-                            .child(curve),
+                            .cursor_pointer()
+                            .debug_selector(|| "sat-card".into())
+                            .child(curve)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    cx.stop_propagation();
+                                    ws.open_fx(ch, Builtin::Sat, cx);
+                                }),
+                            ),
                     )
                     .child(
                         div()
@@ -418,6 +436,118 @@ impl Workspace {
                                 strip::sat_text(SatField::Mix, &sat)
                             )),
                     ),
+            )
+            .child(div().flex().justify_between().children(knobs))
+    }
+
+    pub(crate) fn limit_card(&self, ch: Channel, l: Limiter, cx: &mut Context<Self>) -> Div {
+        let color = self.limit_color(ch);
+        let on = !l.bypass;
+        let gr = self
+            .reductions
+            .get(&self.channel_id(ch))
+            .copied()
+            .unwrap_or(0.0);
+        let knobs = [
+            (LimitField::Gain, "Gain"),
+            (LimitField::Ceiling, "Ceiling"),
+            (LimitField::Release, "Release"),
+        ]
+        .map(|(field, label)| {
+            let target = Target::Limit(ch, field);
+            let value = strip::limit_pos(field, &l);
+            div()
+                .w(px(76.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(4.))
+                .cursor_ns_resize()
+                .debug_selector(move || format!("limit-{field:?}"))
+                .child(knob(value, 36., if on { color } else { TEXT_4 }, false))
+                .child(
+                    div()
+                        .font_family(MONO)
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .whitespace_nowrap()
+                        .child(strip::limit_text(field, &l)),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(rgb(TEXT_3))
+                        .child(label),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                        let y = pt(e.position).y;
+                        ws.begin_drag(Drag::Knob { target, y, value }, cx);
+                    }),
+                )
+        });
+        // How far it's turning down now, hanging from the top.
+        let meter = div()
+            .w(px(10.))
+            .h(px(64.))
+            .flex_none()
+            .rounded(px(3.))
+            .bg(rgb(WELL))
+            .overflow_hidden()
+            .child(
+                div()
+                    .w_full()
+                    .h(gpui::relative((gr / 12.0).clamp(0.0, 1.0)))
+                    .bg(rgb(METER_HIGH)),
+            );
+        card()
+            .gap(px(10.))
+            .child(self.card_header("Limiter", ch, Builtin::Limit, on, cx))
+            .child(
+                div().flex().gap(px(10.)).child(meter).child(
+                    div()
+                        .flex_1()
+                        .h(px(64.))
+                        .px(px(10.))
+                        .flex()
+                        .flex_col()
+                        .justify_center()
+                        .gap(px(3.))
+                        .rounded(px(8.))
+                        .bg(rgb(WELL))
+                        .cursor_pointer()
+                        .text_size(px(11.))
+                        .text_color(rgb(TEXT_3))
+                        .debug_selector(|| "limit-card".into())
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .child(chip(l.style.name(), if on { color } else { TEXT_3 }))
+                                .child(
+                                    div()
+                                        .font_family(MONO)
+                                        .text_color(rgb(TEXT_2))
+                                        .child(format!("{:.1} dB", -gr.max(0.0))),
+                                ),
+                        )
+                        .child(format!(
+                            "+{:.1} dB into {} dB{}",
+                            l.gain_db,
+                            db_text(l.ceiling_db),
+                            if l.true_peak { "TP" } else { "" }
+                        ))
+                        .children(l.target_lufs.map(|t| format!("Aimed at {t:.0} LUFS")))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| {
+                                cx.stop_propagation();
+                                ws.open_fx(ch, Builtin::Limit, cx);
+                            }),
+                        ),
+                ),
             )
             .child(div().flex().justify_between().children(knobs))
     }

@@ -99,10 +99,23 @@ impl Workspace {
                     Some(Instrument::Drums) => {
                         ("Drum Kit".into(), "Instrument · built in".into(), false)
                     }
+                    Some(Instrument::Kit) => (
+                        "Kit".into(),
+                        format!("Plays its {} pads", project.pads_of(i).len()),
+                        false,
+                    ),
                     Some(Instrument::Sampler(s)) => (
                         crate::arrange::tracks::sampler_name(s),
                         format!("Sampler · built in · {} samples", s.zones.len()),
                         false,
+                    ),
+                    Some(Instrument::Poly(p)) => (
+                        match p.patch.is_empty() {
+                            true => "Synth".to_string(),
+                            false => p.patch.clone(),
+                        },
+                        "Synth · built in".into(),
+                        true,
                     ),
                     Some(Instrument::Plugin(r)) => {
                         (r.class.clone(), "Instrument · VST3".into(), true)
@@ -167,29 +180,54 @@ impl Workspace {
         };
 
         let (eq, comp) = self.strip_dsp(ch);
-        let sat = self.sat(ch);
+        let (sat, limit) = (self.sat(ch), self.limiter_heard(ch));
         let inserts = self.inserts(ch).to_vec();
         let used = inserts.len()
+            + self.more(ch).len()
             + eq.is_some() as usize
             + comp.is_some() as usize
-            + sat.is_some() as usize;
+            + sat.is_some() as usize
+            + limit.is_some() as usize;
+        // Its effects in the order they run.
         let mut chain: Vec<Div> = Vec::new();
-        if let Some(eq) = eq {
-            chain.push(self.eq_card(ch, eq, cx));
-        }
-        if let Some(comp) = comp {
-            chain.push(self.comp_card(ch, comp, cx));
-        }
-        if let Some(sat) = sat {
-            chain.push(self.sat_card(ch, sat, cx));
-        }
-        for (n, r) in inserts.iter().enumerate() {
+        let (mut n, mut m) = (0, 0);
+        for (row, (_, fx)) in self.shown_effects(ch).into_iter().enumerate() {
+            let (n, r) = match fx {
+                Fx::Eq => {
+                    chain.extend(eq.map(|eq| self.eq_card(ch, eq, cx)));
+                    continue;
+                }
+                Fx::Comp => {
+                    chain.extend(comp.map(|c| self.comp_card(ch, c, cx)));
+                    continue;
+                }
+                Fx::Sat => {
+                    chain.extend(sat.map(|s| self.sat_card(ch, s, cx)));
+                    continue;
+                }
+                Fx::Limit => {
+                    chain.extend(limit.map(|l| self.limit_card(ch, l, cx)));
+                    continue;
+                }
+                Fx::More => {
+                    m += 1;
+                    chain.extend(self.stacked_card(ch, m - 1, row, cx));
+                    continue;
+                }
+                Fx::Plugin => {
+                    n += 1;
+                    (n - 1, &inserts[n - 1])
+                }
+                // Never in a chain: stacked ones are `More`s.
+                _ => continue,
+            };
             chain.push(
                 card()
                     .h(px(44.))
                     .flex_row()
                     .items_center()
                     .gap(px(8.))
+                    .child(self.effect_grip(ch, row, cx))
                     .child(icon(Icon::Plug, 15.).text_color(rgb(TEXT_3)))
                     .child(
                         div()
@@ -203,21 +241,41 @@ impl Workspace {
                         MouseButton::Left,
                         cx.listener(move |ws, _, _, cx| ws.open_editor(ch, Which::Insert(n), cx)),
                     ))
-                    .child(icon_seg(Icon::Close, false, 26.).on_mouse_down(
+                    .child(icon_seg(Icon::More, false, 26.).on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            ws.choose(
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            let mut items = ws.move_items(ch, row);
+                            items.push((
+                                "Remove".into(),
                                 MenuAction::Insert {
                                     channel: ch,
                                     index: n,
                                     plugin: None,
                                 },
-                                cx,
-                            )
+                            ));
+                            ws.menu = Some(Menu {
+                                at: e.position,
+                                items,
+                                ..Default::default()
+                            });
+                            cx.notify();
                         }),
                     )),
             );
         }
+        // Each card where it's drawn, for dragging to; where a dragged one would land, marked.
+        let drop = self.effect_drop(ch, true);
+        let chain: Vec<Div> = chain
+            .into_iter()
+            .enumerate()
+            .map(|(row, c)| {
+                strip::dropping(
+                    c.relative().child(self.effect_place(ch, true, row)),
+                    row,
+                    drop,
+                )
+            })
+            .collect();
         let add = Some({
             let index = inserts.len();
             div()
@@ -346,6 +404,78 @@ impl Workspace {
             )
     }
 
+    /// One of a channel's stacked built-ins, as a card: on/off, its name, Open (its window, as
+    /// the channel's own opens), and moving or taking it out.
+    fn stacked_card(
+        &self,
+        ch: Channel,
+        k: usize,
+        row: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        let (b, name) = self.stacked(ch, k)?;
+        let on = !self.more(ch).get(k)?.bypassed();
+        Some(
+            card()
+                .h(px(44.))
+                .flex_row()
+                .items_center()
+                .gap(px(8.))
+                .debug_selector(move || format!("stacked-card-{k}"))
+                .child(self.effect_grip(ch, row, cx))
+                .child(
+                    switch(on)
+                        .debug_selector(move || format!("stacked-bypass-{k}"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| {
+                                ws.edit(cx, |ws| {
+                                    if let Some(u) = ws.chain_mut(ch).more.get_mut(k) {
+                                        *u.bypass_mut() ^= true;
+                                    }
+                                })
+                            }),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .child(name),
+                )
+                .child(
+                    button("Open", false)
+                        .debug_selector(move || format!("stacked-open-{k}"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| ws.open_fx_at(ch, b, Some(k), cx)),
+                        ),
+                )
+                .child(icon_seg(Icon::More, false, 26.).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                        let mut items = ws.move_items(ch, row);
+                        items.push((
+                            "Remove".into(),
+                            MenuAction::RemoveBuiltin {
+                                channel: ch,
+                                builtin: b,
+                                stacked: Some(k),
+                            },
+                        ));
+                        ws.menu = Some(Menu {
+                            at: e.position,
+                            items,
+                            ..Default::default()
+                        });
+                        cx.notify();
+                    }),
+                )),
+        )
+    }
+
     /// A built-in's title row: on/off, name, and taking it out.
     pub(crate) fn card_header(
         &self,
@@ -355,11 +485,13 @@ impl Workspace {
         on: bool,
         cx: &mut Context<Self>,
     ) -> Div {
+        let row = self.shown_effects(ch).iter().position(|e| e.1 == b.fx());
         div()
             .h(px(26.))
             .flex()
             .items_center()
             .gap(px(8.))
+            .children(row.map(|row| self.effect_grip(ch, row, cx)))
             .child(
                 switch(on)
                     .debug_selector(move || format!("bypass-{b:?}"))
@@ -382,6 +514,12 @@ impl Workspace {
                                         s.bypass ^= true
                                     }
                                 }
+                                Builtin::Limit => {
+                                    if let Some(l) = ws.limiter_mut(ch) {
+                                        l.bypass ^= true
+                                    }
+                                }
+                                Builtin::Tool(_) => {}
                             })
                         }),
                     ),
@@ -391,15 +529,19 @@ impl Workspace {
             .child(icon_seg(Icon::More, false, 26.).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                    let row = ws.shown_effects(ch).iter().position(|e| e.1 == b.fx());
+                    let mut items = row.map_or(Vec::new(), |row| ws.move_items(ch, row));
+                    items.push((
+                        "Remove".into(),
+                        MenuAction::RemoveBuiltin {
+                            channel: ch,
+                            builtin: b,
+                            stacked: None,
+                        },
+                    ));
                     ws.menu = Some(Menu {
                         at: e.position,
-                        items: vec![(
-                            "Remove".into(),
-                            MenuAction::RemoveBuiltin {
-                                channel: ch,
-                                builtin: b,
-                            },
-                        )],
+                        items,
                         ..Default::default()
                     });
                     cx.notify();

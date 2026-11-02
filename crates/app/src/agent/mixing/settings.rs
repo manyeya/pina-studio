@@ -1,4 +1,5 @@
-//! A part's channel from what was measured: its low cut, compressor, saturator, level and sends.
+//! A part's channel from what was measured: its low cut, level and sends (its compressor and
+//! saturator are set by listening: `dsp::comp::learn`, `dsp::sat::learn`).
 
 /// A part's ear for mud (250 Hz-1 kHz) and bite (4-8 kHz): how much of its sound may be there
 /// before it's cut, dB of the whole.
@@ -26,36 +27,6 @@ pub(crate) fn low_cut(part: &str) -> f32 {
         "perc" | "chords" => 150.0,
         "lead" => 180.0,
         _ => 200.0,
-    }
-}
-
-/// A part's compressor: (dB over its own loudness, ratio, attack, release).
-pub(crate) fn comp(part: &str) -> Option<(f32, f32, f32, f32)> {
-    match part {
-        "drums" => Some((6.0, 4.0, 8.0, 90.0)),
-        "perc" => Some((6.0, 2.5, 10.0, 80.0)),
-        "bass" => Some((4.0, 4.0, 10.0, 120.0)),
-        "chords" => Some((6.0, 2.5, 20.0, 150.0)),
-        "pad" => Some((8.0, 2.0, 30.0, 200.0)),
-        "lead" => Some((5.0, 3.0, 5.0, 100.0)),
-        "arp" | "counter" => Some((6.0, 2.5, 10.0, 120.0)),
-        "vocals" => Some((4.0, 4.0, 3.0, 80.0)),
-        "fx" | "texture" => None,
-        _ => Some((6.0, 2.5, 15.0, 120.0)),
-    }
-}
-
-/// A part's saturation: (drive, tone, mix).
-pub(crate) fn sat(part: &str) -> Option<(f32, f32, f32)> {
-    match part {
-        // Soft-clips the hits a compressor lets through.
-        "drums" => Some((6.0, 0.0, 0.7)),
-        // Harmonics, so it's heard on small speakers and not only felt.
-        "bass" => Some((9.0, 0.15, 0.55)),
-        "chords" => Some((3.0, -0.1, 0.35)),
-        "lead" => Some((2.0, 0.1, 0.25)),
-        "vocals" => Some((2.0, 0.1, 0.2)),
-        _ => None,
     }
 }
 

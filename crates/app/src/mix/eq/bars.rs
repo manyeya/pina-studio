@@ -16,7 +16,7 @@ use crate::{
 };
 
 /// A button in the window's bars: a label (and icon), lit when on.
-fn bar_button(label: impl Into<gpui::SharedString>, on: bool, color: u32) -> Div {
+pub(crate) fn bar_button(label: impl Into<gpui::SharedString>, on: bool, color: u32) -> Div {
     div()
         .h(px(26.))
         .px(px(9.))
@@ -37,7 +37,7 @@ fn bar_button(label: impl Into<gpui::SharedString>, on: bool, color: u32) -> Div
         .child(label.into())
 }
 
-fn icon_button(glyph: Icon, sel: &'static str) -> Div {
+pub(crate) fn icon_button(glyph: Icon, sel: &'static str) -> Div {
     div()
         .size(px(26.))
         .flex()
@@ -129,7 +129,17 @@ impl Workspace {
                 div()
                     .text_size(px(13.))
                     .font_weight(FontWeight::BOLD)
-                    .child("Channel EQ"),
+                    .debug_selector(|| "eq-title".into())
+                    .child(
+                        match self
+                            .eq_view
+                            .as_ref()
+                            .and_then(|v| self.stacked(v.ch, v.stacked?))
+                        {
+                            Some((_, name)) => name,
+                            None => "Channel EQ".to_string(),
+                        },
+                    ),
             )
             .child(
                 div()

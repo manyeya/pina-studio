@@ -201,7 +201,8 @@ fn controls_show_their_automation_and_moved_while_stopped_move_its_line(cx: &mut
         ws.player.locate(0);
         ws.changed(cx);
     });
-    until(cx, &ws, |ws| ws.playhead() == 0);
+    // Stopped too: the engine hears of that at its next block, after the playhead has moved.
+    until(cx, &ws, |ws| ws.playhead() == 0 && !ws.player.playing());
     assert!(!ws.read_with(cx, |ws, _| ws.muted_now(2)));
     click_on(cx, "mute-2", Modifiers::none(), MouseButton::Left);
     assert!(ws.read_with(cx, |ws, _| ws.muted_now(2)));

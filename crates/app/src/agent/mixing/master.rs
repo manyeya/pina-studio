@@ -1,9 +1,9 @@
-//! The master's tonal balance against the genre's.
+//! The master's tonal balance against a reference song's, or the person's chosen playbook's.
 
 use super::*;
 
-/// The master's EQ set to bring the mix's tonal balance halfway to the reference's (else the
-/// genre's): a broad move in each of the six bands, sub to air, at most 2.5 dB, none under
+/// The master's EQ set to bring the mix's tonal balance halfway to the reference's (else that of
+/// the person's playbook the genre is): a broad move in each of the six bands, sub to air, at most 2.5 dB, none under
 /// half a dB. What it measured and did; nothing when there's nothing to aim at.
 pub fn tonal_balance(dir: &Path) -> Result<Value, String> {
     let p = cli::project(dir)?;
@@ -13,13 +13,14 @@ pub fn tonal_balance(dir: &Path) -> Result<Value, String> {
         .map(|r| (r.spectrum, "the reference"))
         .or_else(|| {
             let g = p.genre.as_deref()?;
-            pina_engine::music::playbook::find(g).map(|b| (b.spectrum, "the genre"))
+            pina_engine::music::playbook::find(g).map(|b| (b.spectrum, "your playbook"))
         });
     let Some((target, aim)) = target else {
         return Ok(Value::Null);
     };
     let mut unmastered = p.clone();
     unmastered.master_inserts.clear();
+    unmastered.master_more.clear();
     (
         unmastered.master_eq,
         unmastered.master_comp,
@@ -50,9 +51,16 @@ pub fn tonal_balance(dir: &Path) -> Result<Value, String> {
             "target_db": *want, "eq_db": gain }),
         );
     }
+    // Broad moves with an analog EQ's phase (no pre-ringing, a millisecond late), and its
+    // colour where the genre is warm.
+    let warm = matches!(
+        Flavour::of_genre(p.genre.as_deref().unwrap_or_default()),
+        Flavour::Warm | Flavour::Lofi
+    );
     let eq = match bands.is_empty() {
         true => Value::Null,
-        false => json!({ "bands": bands }),
+        false => json!({ "bands": bands, "processing": "natural",
+            "character": if warm { "subtle" } else { "clean" } }),
     };
     run(
         dir,

@@ -22,8 +22,8 @@ use gpui::{
     canvas, div, fill, linear_color_stop, linear_gradient, point, prelude::*, px, rgb, size,
 };
 use pina_engine::song::project::{
-    AutoClip, AutoMode, AutoPoint, AutoShape, EqField, PPQ, Param, Project, SILENT_DB, Which,
-    value_at,
+    AutoClip, AutoMode, AutoPoint, AutoShape, EqField, Instrument, LimitParam, OWN_COMP, OWN_SAT,
+    POLY_PARAMS, PPQ, Param, Project, SILENT_DB, Unit, VOICE, Which, knob_shows, value_at,
 };
 
 use crate::{

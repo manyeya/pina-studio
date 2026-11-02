@@ -16,7 +16,7 @@ impl Workspace {
             .map_or("Untitled".into(), |n| n.to_string_lossy().into_owned());
         let range = self.export_range();
         let (from, to) = range.unwrap_or((0, p.end()));
-        let seconds = p.samples(to.saturating_sub(from), 1.0) as f64;
+        let seconds = p.seconds_at(to as f64) - p.seconds_at(from.min(to) as f64);
         let bar = p.bar().max(1);
         let bars_label = format!(
             "bars {}–{} · {}",

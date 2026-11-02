@@ -44,7 +44,9 @@ impl Workspace {
                 }
                 Param::Pan => vec![(-1.0, "L"), (0.0, "C"), (1.0, "R")],
                 Param::Mute => vec![(0.0, "play"), (1.0, "mute")],
-                Param::Plugin(..) => vec![(1.0, "100"), (0.5, "50"), (0.0, "0")],
+                Param::Plugin(..) | Param::Tool(..) | Param::Voice(_) | Param::Poly(_) => {
+                    vec![(1.0, "100"), (0.5, "50"), (0.0, "0")]
+                }
                 Param::Eq(_, EqField::Freq) => {
                     vec![(10_000.0, "10k"), (1_000.0, "1k"), (100.0, "100")]
                 }
@@ -54,6 +56,14 @@ impl Workspace {
                     vec![(5_000.0, "5s"), (100.0, "100ms"), (2.0, "2ms")]
                 }
                 Param::Mod(..) => vec![(1.0, "100"), (0.5, "50"), (0.0, "0")],
+                Param::Limit(LimitParam::Gain) => vec![(30.0, "+30"), (15.0, "+15"), (0.0, "0")],
+                Param::Limit(LimitParam::Ceiling) => {
+                    vec![(0.0, "0"), (-15.0, "−15"), (-30.0, "−30")]
+                }
+                Param::Limit(LimitParam::Release) => {
+                    vec![(2_000.0, "2s"), (50.0, "50ms"), (1.0, "1ms")]
+                }
+                Param::Limit(LimitParam::Clip) => vec![(1.0, "100"), (0.5, "50"), (0.0, "0")],
             };
             let scale = marks.into_iter().map(|(v, s)| {
                 div()

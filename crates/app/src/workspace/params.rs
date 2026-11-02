@@ -64,6 +64,28 @@ impl Workspace {
             Param::Mod(k, setting) => {
                 format!("{}: {}", self.mod_name(track, k as usize), setting.name())
             }
+            Param::Limit(field) => format!("Limiter: {}", field.name()),
+            Param::Tool(k, i) => {
+                use pina_engine::song::project::{OWN_COMP, OWN_SAT};
+                let ch = crate::mix::strip::Channel::Track(track);
+                let name = match k {
+                    OWN_COMP => "Compressor".to_string(),
+                    OWN_SAT => "Saturator".to_string(),
+                    k => self
+                        .stacked(ch, k as usize)
+                        .map_or("Effect".into(), |s| s.1),
+                };
+                let knob = t
+                    .unit_at(k)
+                    .and_then(|u| crate::mix::strip::knobs(u.kind()).get(i as usize));
+                format!("{name}: {}", knob.map_or("Knob", |p| p.name))
+            }
+            Param::Poly(i) => pina_engine::song::project::POLY_PARAMS[i as usize]
+                .name
+                .clone(),
+            Param::Voice(i) => pina_engine::song::project::VOICE
+                .get(i as usize)
+                .map_or("Voice".into(), |k| k.name.to_string()),
             Param::Plugin(which, id) => t
                 .automation
                 .plugins

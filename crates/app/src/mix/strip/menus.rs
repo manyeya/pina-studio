@@ -5,6 +5,11 @@ use super::*;
 impl Workspace {
     /// Opens a plugin's editor, saying why not if it can't.
     pub fn open_editor(&mut self, ch: Channel, which: Which, cx: &mut Context<Self>) {
+        if let (Channel::Track(t), Which::Instrument) = (ch, which)
+            && self.poly(t).is_some()
+        {
+            return self.open_poly(t, cx);
+        }
         let id = self.owner_id(ch);
         match self.player.open_editor(id, which) {
             Ok(()) => self.picture_when_shown(ch, which, cx),
@@ -56,10 +61,12 @@ impl Workspace {
         let mut items = Vec::new();
         match (ch, which) {
             (Channel::Track(track), Which::Instrument) => {
-                for (name, instrument) in [
+                let synth = pina_engine::song::project::poly_patch("Init")
+                    .map(|p| ("Synth", Instrument::Poly(Box::new(p))));
+                for (name, instrument) in synth.into_iter().chain([
                     ("Sine Synth", Instrument::Synth),
                     ("Drum Kit", Instrument::Drums),
-                ] {
+                ]) {
                     items.push((
                         name.to_string(),
                         MenuAction::Instrument { track, instrument },

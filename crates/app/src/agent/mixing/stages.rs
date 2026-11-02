@@ -22,7 +22,7 @@ pub fn mix(
         return Err("no tracks with anything on them to mix".into());
     }
     let genre = p.genre.clone().unwrap_or_default();
-    let lofi = matches!(genre.as_str(), "lofi" | "boom_bap" | "neo_soul");
+    let flavour = Flavour::of_genre(&genre);
     let sub_led = matches!(genre.as_str(), "trap" | "drill" | "amapiano" | "reggaeton");
     let rate = p.sample_rate as f32;
     let beat = (rate as f64 * 60.0 / p.tempo) as usize;
@@ -96,15 +96,13 @@ pub fn mix(
             ))
         });
     let has_bass = all.iter().any(|&t| part_of(t) == "bass");
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let plugins = scan::scan(&exe, &scan::everything(), &scan::cache_file());
     let first = tracks[0];
-    let room = reverb(dir, first, &plugins, p.tempo, &genre)?;
+    let room = Some(reverb(dir, first, p.tempo, &genre)?);
     let wants_echo = tracks
         .iter()
         .any(|&t| sends(part_of(t), &genre).1.is_some());
     let echo = match wants_echo {
-        true => echo(dir, first, p.tempo)?,
+        true => Some(echo(dir, first, p.tempo, &genre)?),
         false => None,
     };
     let mut done = Vec::new();
@@ -271,7 +269,21 @@ pub fn mix(
             ));
             sidechain = Some(l);
         }
-        let mut eq = json!({ "bands": bands });
+        // An analog EQ's colour where the genre is warm, a hint of it in the club, none where
+        // it's hard; a lead's and a voice's top with an analog EQ's phase.
+        let character = match (flavour, part) {
+            (Flavour::Warm | Flavour::Lofi, _) => "warm",
+            (Flavour::Club | Flavour::Clean, "drums" | "perc") => "clean",
+            (Flavour::Club | Flavour::Clean, _) => "subtle",
+            (Flavour::Hard, _) => "clean",
+        };
+        let mut eq = json!({ "bands": bands, "character": character });
+        if matches!(part, "lead" | "vocals") {
+            eq["processing"] = json!("natural");
+        }
+        if character != "clean" {
+            why.push(format!("{character} analog colour"));
+        }
         if let Some(s) = sidechain {
             eq["sidechain"] = json!(s);
         }
@@ -279,21 +291,35 @@ pub fn mix(
             dir,
             json!({ "op": "set_eq", "channel": { "track": t }, "eq": eq }),
         )?;
-        // Compression from where it plays, so a quiet part is compressed as much as a loud one.
-        let comp = comp(part).map(|(over, ratio, attack, release)| {
-            json!({ "threshold_db": (src.lufs + over).clamp(-60.0, 0.0).round(), "ratio": ratio,
-                "attack_ms": attack, "release_ms": release, "makeup_db": 0, "rms": part == "pad" })
-        });
+        // Compression set by listening to it (`dsp::comp::learn`): its style, threshold, ratio,
+        // attack and release for what it plays; none on effects and textures.
+        let comp = (!matches!(part, "fx" | "texture"))
+            .then(|| {
+                use pina_engine::dsp::comp::learn::{Material, learn};
+                learn(&src.render, rate as f64, p.tempo, Material::of_part(part))
+            })
+            .flatten()
+            .map(|c| serde_json::to_value(c).unwrap_or_default());
         run(
             dir,
             json!({ "op": "set_comp", "channel": { "track": t }, "comp": comp }),
         )?;
-        let sat = sat(part).map(|(drive, tone, mix)| {
-            json!({ "drive_db": if lofi { drive + 3.0 } else { drive }, "tone": tone, "mix": mix })
-        });
+        // The saturator set by listening (`dsp::sat::learn`): where it splits, each band's style,
+        // drive, tone and dynamics for this part in this genre, and as loud as it went in.
+        let heard = learn_sat(
+            &src.render,
+            rate as f64,
+            &Ear {
+                part,
+                genre: &genre,
+                lowest_hz: src.lowest_hz,
+                key: p.song_key(),
+            },
+        );
+        let sat_why = heard.as_ref().map(|(_, w)| w.clone()).unwrap_or_default();
         run(
             dir,
-            json!({ "op": "set_saturator", "channel": { "track": t }, "sat": sat }),
+            json!({ "op": "set_saturator", "channel": { "track": t }, "sat": heard.map(|(s, _)| s) }),
         )?;
         // Side by side: the parts that aren't the middle's take turns left and right.
         let pan = match part {
@@ -316,7 +342,7 @@ pub fn mix(
             send(dir, t, *bus, db)?;
         }
         done.push(
-            json!({ "track": t, "name": p.tracks[t].name, "part": part, "eq": why,
+            json!({ "track": t, "name": p.tracks[t].name, "part": part, "eq": why, "saturator": sat_why,
             "verb_db": verb.filter(|_| room.is_some()), "echo_db": delay.filter(|_| echo.is_some()) }),
         );
     }
@@ -445,6 +471,10 @@ pub fn mix(
                         name: None,
                         modulator: None,
                         setting: None,
+                        fx: None,
+                        which: None,
+                        knob: None,
+                        own: false,
                         points,
                     },
                 )?;

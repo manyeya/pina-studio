@@ -37,7 +37,10 @@ pub(crate) struct Drawn {
     pub curve: Vec<f32>,
     /// Its curve at the end of its dynamic range, if it's dynamic.
     pub reach: Option<Vec<f32>>,
+    /// Where its dot sits: at the band as it's set, to grab even while playing moves it.
     pub dot: (f32, f32),
+    /// While a dynamic band moves, the height it's heard at.
+    pub heard: Option<f32>,
 }
 
 /// A line through points, dashed if asked.
@@ -64,8 +67,8 @@ fn line(
 }
 
 impl Workspace {
-    /// Each band as it's drawn, at `freqs`: its curve (with its dynamic move, while playing) and
-    /// where its dot sits.
+    /// Each band as it's drawn, at `freqs`: its curve (with its dynamic move, while playing),
+    /// where its dot sits and where it's heard.
     pub(super) fn eq_drawn(&self, eq: &Eq, geo: &Geo, freqs: &[f64]) -> Vec<Drawn> {
         let rate = self.session.project.sample_rate as f64;
         let playing = self.player.playing();
@@ -92,7 +95,7 @@ impl Workspace {
                     };
                     curve(&band_sections(&far, eq.scale, rate))
                 });
-                let db = super::dot_db(&heard, eq.scale).clamp(-geo.range, geo.range);
+                let y = |b: &EqBand| geo.y(super::dot_db(b, eq.scale).clamp(-geo.range, geo.range));
                 Drawn {
                     id: b.id,
                     index: i,
@@ -100,7 +103,8 @@ impl Workspace {
                     band: *b,
                     curve: curve(&band_sections(&heard, eq.scale, rate)),
                     reach,
-                    dot: (geo.x(b.freq as f64), geo.y(db)),
+                    dot: (geo.x(b.freq as f64), y(b)),
+                    heard: (moved != 0.0).then(|| y(&heard)),
                 }
             })
             .collect()

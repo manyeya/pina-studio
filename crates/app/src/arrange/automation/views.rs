@@ -93,9 +93,14 @@ impl Workspace {
                             let guide = match param {
                                 Param::Volume | Param::Send(_) => Some(0.0),
                                 Param::Pan => Some(0.0),
-                                Param::Plugin(..) => Some(0.5),
+                                Param::Plugin(..)
+                                | Param::Tool(..)
+                                | Param::Voice(_)
+                                | Param::Poly(_) => Some(0.5),
                                 Param::Eq(_, EqField::Gain) => Some(0.0),
-                                Param::Mute | Param::Eq(..) | Param::Mod(..) => None,
+                                Param::Mute | Param::Eq(..) | Param::Mod(..) | Param::Limit(_) => {
+                                    None
+                                }
                             };
                             if let Some(g) = guide {
                                 window.paint_quad(fill(

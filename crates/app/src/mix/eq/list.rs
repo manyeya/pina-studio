@@ -155,7 +155,7 @@ impl Workspace {
     /// Each frame the list's open: every row's channel heard, its spectrum moved on.
     pub(super) fn list_frame(&mut self) {
         let open = self.eq_view.as_ref().is_some_and(|v| v.list);
-        self.player.watch_lanes(open);
+        self.player.watch_lanes(open || self.fx_hears_lanes());
         if !open {
             return;
         }

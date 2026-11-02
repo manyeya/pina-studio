@@ -3,9 +3,12 @@
 //! note, mud and harshness cut only as far as it has them, air where it lacks it, its low end
 //! kept mono. Parts make room for each other: the bass ducks at the kick's own frequency as it
 //! hits, the chords and pads dip their presence while the lead plays (dynamic EQ bands hearing
-//! the other track), and in genres that pump, the music ducks under the kick. Compression is set
-//! from each part's level, not a fixed threshold. A reverb (Dragonfly's, if it's here) with its
-//! pre-delay and decay set from the tempo and genre, a delay in time with the song, the drums
+//! the other track), and in genres that pump, the music ducks under the kick. Compression and
+//! saturation are set by listening to each part: the compressor's style, threshold and (for
+//! drums far between soft and loud) a parallel mix; the saturator's bands, styles, drive, tone and
+//! level for the part and genre. Pina Studio's own reverb (its kind, pre-delay
+//! and decay from the genre and tempo, ducking where a voice must stay clear) and delay (in time
+//! with the song, its kind by genre), the drums
 //! glued on a bus of their own, then each part's level against the drums.
 
 mod master;
@@ -23,11 +26,11 @@ pub use stages::*;
 use std::path::Path;
 
 use pina_engine::{
+    dsp::sat::learn::{Ear, Flavour, learn as learn_sat},
     music::analysis,
     music::arrange::role,
-    plugin::scan,
     song::commands::{AutoParam, Command, PointIn},
-    song::project::{Content, Format, PluginRef, Project},
+    song::project::{Content, Project},
 };
 use serde_json::{Value, json};
 

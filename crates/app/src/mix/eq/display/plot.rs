@@ -398,6 +398,23 @@ impl Workspace {
             .iter()
             .map(|d| self.eq_dot(d, &picked, hover, cx))
             .collect();
+        // Where a dynamic band is heard as it moves: a ring under its dot, along its reach.
+        let heard: Vec<Div> = drawn
+            .iter()
+            .filter_map(|d| {
+                let y = d.heard?;
+                Some(
+                    div()
+                        .absolute()
+                        .left(px(d.dot.0 - 5.0))
+                        .top(px(y - 5.0))
+                        .size(px(10.))
+                        .rounded_full()
+                        .border_2()
+                        .border_color(alpha(d.color, 0.85)),
+                )
+            })
+            .collect();
         // Where a dynamic band's range reaches: a handle to drag.
         let reach: Vec<Div> = drawn
             .iter()
@@ -509,6 +526,7 @@ impl Workspace {
             .child(range)
             .children(empty)
             .children(reach)
+            .children(heard)
             .children(dots)
             .children(readout)
             .children(panel)

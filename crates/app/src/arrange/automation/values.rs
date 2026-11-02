@@ -9,8 +9,10 @@ pub fn to_y(param: Param, value: f32, h: f32) -> f32 {
         Param::Volume | Param::Send(_) => 1.0 - strip::fader_pos(value),
         Param::Pan => (value.clamp(-1.0, 1.0) + 1.0) / 2.0,
         Param::Mute => value.clamp(0.0, 1.0),
-        Param::Plugin(..) => 1.0 - value.clamp(0.0, 1.0),
-        Param::Eq(..) | Param::Mod(..) => 1.0 - param.to_unit(value),
+        Param::Plugin(..) | Param::Tool(..) | Param::Voice(_) | Param::Poly(_) => {
+            1.0 - value.clamp(0.0, 1.0)
+        }
+        Param::Eq(..) | Param::Mod(..) | Param::Limit(_) => 1.0 - param.to_unit(value),
     };
     PAD + t * (h - 2.0 * PAD)
 }
@@ -21,8 +23,8 @@ pub fn from_y(param: Param, y: f32, h: f32) -> f32 {
         Param::Volume | Param::Send(_) => strip::fader_db(1.0 - t),
         Param::Pan => t * 2.0 - 1.0,
         Param::Mute => (t > 0.5) as u8 as f32,
-        Param::Plugin(..) => 1.0 - t,
-        Param::Eq(..) | Param::Mod(..) => param.from_unit(1.0 - t),
+        Param::Plugin(..) | Param::Tool(..) | Param::Voice(_) | Param::Poly(_) => 1.0 - t,
+        Param::Eq(..) | Param::Mod(..) | Param::Limit(_) => param.from_unit(1.0 - t),
     }
 }
 
@@ -56,9 +58,10 @@ pub(crate) fn units(param: Param) -> u8 {
         Param::Volume | Param::Send(_) => 0,
         Param::Pan => 1,
         Param::Mute => 2,
-        Param::Plugin(..) => 3,
+        Param::Plugin(..) | Param::Tool(..) | Param::Voice(_) | Param::Poly(_) => 3,
         Param::Eq(_, field) => 4 + field as u8,
         Param::Mod(_, setting) => 7 + setting as u8,
+        Param::Limit(field) => 20 + field as u8,
     }
 }
 
@@ -71,10 +74,12 @@ pub(crate) fn shifted(param: Param, value: f32, by: f32) -> f32 {
         }
         Param::Pan => (value + by).clamp(-1.0, 1.0),
         Param::Mute => value,
-        Param::Plugin(..) => (value + by).clamp(0.0, 1.0),
+        Param::Plugin(..) | Param::Tool(..) | Param::Voice(_) | Param::Poly(_) => {
+            (value + by).clamp(0.0, 1.0)
+        }
         // An EQ band's on its own scale: octaves for its frequency and width; a modulator's
-        // times in octaves too.
-        Param::Eq(..) | Param::Mod(..) => {
+        // times (and the limiter's release) in octaves too.
+        Param::Eq(..) | Param::Mod(..) | Param::Limit(_) => {
             param.from_unit((param.to_unit(value) + by).clamp(0.0, 1.0))
         }
     }
@@ -84,7 +89,7 @@ pub(crate) fn shifted(param: Param, value: f32, by: f32) -> f32 {
 pub(crate) fn apart(param: Param, from: f32, to: f32) -> f32 {
     match param {
         Param::Volume | Param::Send(_) => strip::fader_pos(to) - strip::fader_pos(from),
-        Param::Eq(..) | Param::Mod(..) => param.to_unit(to) - param.to_unit(from),
+        Param::Eq(..) | Param::Mod(..) | Param::Limit(_) => param.to_unit(to) - param.to_unit(from),
         _ => to - from,
     }
 }
@@ -123,6 +128,22 @@ impl Workspace {
                 .mod_kind(track, k as usize)
                 .and_then(|kind| setting.get(kind))
                 .unwrap_or(0.0),
+            Param::Limit(field) => field.get(&t.limit.unwrap_or_default()),
+            Param::Tool(k, i) => t.unit_at(k).map_or(0.0, |u| {
+                strip::knobs(u.kind())
+                    .get(i as usize)
+                    .map_or(0.0, |p| (p.pos)(&u))
+            }),
+            Param::Voice(i) => match (&t.instrument, VOICE.get(i as usize)) {
+                (Some(Instrument::Sampler(s)), Some(k)) => (k.pos)(&s.voice),
+                _ => 0.0,
+            },
+            Param::Poly(i) => match &t.instrument {
+                Some(Instrument::Poly(p)) => {
+                    POLY_PARAMS[i as usize].scale.pos(p.params[i as usize])
+                }
+                _ => 0.0,
+            },
         }
     }
 
@@ -154,6 +175,31 @@ impl Workspace {
             Param::Mod(k, setting) => {
                 if let Some(kind) = self.session.project.mod_kind_mut(track, k as usize) {
                     setting.set(kind, value);
+                }
+            }
+            Param::Limit(field) => {
+                if let Some(l) = t.limit.as_mut() {
+                    field.set(l, value);
+                }
+            }
+            Param::Tool(k, i) => {
+                if let Some(mut u) = t.unit_at(k)
+                    && let Some(p) = strip::knobs(u.kind()).get(i as usize)
+                {
+                    (p.set)(&mut u, value);
+                    t.set_unit_at(k, u);
+                }
+            }
+            Param::Voice(i) => {
+                if let (Some(Instrument::Sampler(s)), Some(k)) =
+                    (&mut t.instrument, VOICE.get(i as usize))
+                {
+                    (k.set)(&mut s.voice, value);
+                }
+            }
+            Param::Poly(i) => {
+                if let Some(Instrument::Poly(p)) = &mut t.instrument {
+                    p.params[i as usize] = POLY_PARAMS[i as usize].scale.value(value);
                 }
             }
         }
@@ -216,6 +262,35 @@ impl Workspace {
                     true => format!("{:.0}%", value * 100.0),
                     false => text,
                 }
+            }
+            Param::Limit(LimitParam::Gain) => format!("+{value:.1} dB"),
+            Param::Limit(LimitParam::Ceiling) => format!("{} dB", db_text(value)),
+            Param::Limit(LimitParam::Release) => format!("{} ms", strip::trim(value)),
+            Param::Limit(LimitParam::Clip) => format!("{:.0}%", value * 100.0),
+            Param::Tool(k, i) => {
+                let t = &self.session.project.tracks[track];
+                t.unit_at(k).map_or_else(String::new, |mut u| {
+                    strip::knobs(u.kind())
+                        .get(i as usize)
+                        .map_or_else(String::new, |p| {
+                            (p.set)(&mut u, value);
+                            (p.say)(&u)
+                        })
+                })
+            }
+            Param::Voice(i) => match (&self.session.project.tracks[track].instrument, i) {
+                (Some(Instrument::Sampler(s)), i) => {
+                    VOICE.get(i as usize).map_or_else(String::new, |k| {
+                        let mut v = s.voice;
+                        (k.set)(&mut v, value);
+                        (k.say)(&v)
+                    })
+                }
+                _ => String::new(),
+            },
+            Param::Poly(i) => {
+                let p = &POLY_PARAMS[i as usize];
+                p.say(p.scale.value(value))
             }
         }
     }

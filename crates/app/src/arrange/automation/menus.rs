@@ -210,7 +210,7 @@ impl Workspace {
                 false => (-0.8, 0.8),
             },
             Param::Mute => (0.0, 1.0),
-            Param::Plugin(..) => match ramp {
+            Param::Plugin(..) | Param::Tool(..) | Param::Voice(_) | Param::Poly(_) => match ramp {
                 true => (0.0, 1.0),
                 false => (0.1, 0.9),
             },
@@ -225,6 +225,16 @@ impl Workspace {
                 true => (param.from_unit(0.0), param.from_unit(1.0)),
                 false => (param.from_unit(0.1), param.from_unit(0.9)),
             },
+            // The limiter pushed harder and back, from where it's set.
+            Param::Limit(field) => {
+                let now = self.own_value(track, param);
+                let (lo, hi) = field.range();
+                match field {
+                    LimitParam::Gain => (now, (now + 6.0).min(hi)),
+                    LimitParam::Ceiling => ((now - 3.0).max(lo), now),
+                    _ => (param.from_unit(0.1), param.from_unit(0.9)),
+                }
+            }
         }
     }
 
