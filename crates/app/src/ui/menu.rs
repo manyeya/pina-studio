@@ -7,7 +7,8 @@ use gpui::{
 use pina_engine::{
     song::commands::{self, ChannelRef, Command, PresetChoice},
     song::project::{
-        At, AuxSend, Comp, Content, Eq, Input, Instrument, PluginRef, Preset, Saturator, Which,
+        At, AuxSend, Comp, Content, Eq, Input, Instrument, Limiter, PluginRef, Preset, Saturator,
+        Unit, Which,
     },
 };
 
@@ -116,14 +117,27 @@ pub enum MenuAction {
         which: Which,
         preset: Preset,
     },
-    /// Adds a channel's built-in EQ or compressor, or takes it out.
+    /// Adds a channel's built-in EQ, compressor, saturator or limiter, or takes it out.
     AddBuiltin {
         channel: Channel,
         builtin: Builtin,
     },
+    /// Takes out a channel's own built-in (`stacked` None), or one stacked on it.
     RemoveBuiltin {
         channel: Channel,
         builtin: Builtin,
+        stacked: Option<usize>,
+    },
+    /// A channel's limiter set by listening, to come out at a loudness (LUFS).
+    LearnLimit {
+        channel: Channel,
+        lufs: f32,
+    },
+    /// An effect moved from one place in a channel's chain to another.
+    MoveEffect {
+        channel: Channel,
+        from: usize,
+        to: usize,
     },
     /// Sends a track to a bus, or to a new aux.
     Send {
@@ -141,18 +155,27 @@ pub enum MenuAction {
     /// Whether choosing a key moves the music into it, or only names it. Reopens the key menu.
     KeyMovesNotes(Point<Pixels>),
     Snap(Snap),
+    DragMode(crate::workspace::DragMode),
     /// The track whose notes the piano roll shows faintly, by id.
     Ghost(Option<u64>),
     /// Something done to the piano roll's notes.
     Roll(crate::editors::pianoroll::RollOp),
     /// What a click in the piano roll writes: a note or a chord.
     Stamp(crate::editors::pianoroll::Stamp),
+    /// Something done to a conversation.
+    Chat(crate::agent::chat::ChatOp),
+    /// An item of the editor bar's More.
+    More(crate::editors::pianoroll::More),
     /// Something the step sequencer does.
     Steps(crate::editors::steps::StepsOp),
     /// Something the Plugins page does.
     Plugins(crate::sounds::plugins::PluginOp),
     /// The Sampler's picked zone cut into slices across the keys.
     Slice(crate::editors::sampler::Slicing),
+    Sampler(crate::editors::sampler::SamplerOp),
+    Drums(crate::editors::drums::DrumOp),
+    /// A choice in a synth's window, on a track by place.
+    Poly(usize, crate::editors::poly::PolyOp),
     /// An automation lane's or point's item, on a track by id.
     Auto(u64, crate::arrange::automation::AutoOp),
     /// A sound picked for the agent: its part, out, or all of them.
@@ -210,7 +233,11 @@ pub enum MenuAction {
     /// A region's playback quantize, in ticks, or none.
     RegionQuantize(At, Option<u64>),
     /// How an audio region is stretched.
-    RegionFlex(At, pina_engine::audio::stretch::Flex),
+    RegionStretchMode(At, pina_engine::audio::stretch::StretchMode),
+    /// The tempo: its mode, its lane, a region keeping time with the song.
+    Tempo(crate::arrange::tempo::TempoOp),
+    /// A section of the song: deleted, cleared, copied, cycled; one added.
+    Section(crate::arrange::sections::SectionOp),
     /// Names a marker, or adds one at a tick.
     NameMarker(usize, String),
     AddMarker(u64, String),
@@ -283,9 +310,13 @@ impl Workspace {
                         t.name
                     ));
                 } else {
+                    let synth = matches!(instrument, Instrument::Poly(_));
                     self.edit(cx, |ws| {
                         ws.session.project.tracks[track].set_instrument(instrument);
                     });
+                    if synth {
+                        self.open_poly(track, cx);
+                    }
                 }
             }
             MenuAction::Insert {
@@ -293,20 +324,8 @@ impl Workspace {
                 index,
                 plugin,
             } => self.edit(cx, |ws| {
-                // A track's automation follows its plugins.
-                if let Channel::Track(t) = channel {
-                    let _ = ws.session.project.tracks[t].set_insert(index, plugin);
-                    return;
-                }
-                let Some(list) = ws.inserts_mut(channel) else {
-                    return;
-                };
-                match plugin {
-                    Some(p) if index < list.len() => list[index] = p,
-                    Some(p) => list.push(p),
-                    None if index < list.len() => drop(list.remove(index)),
-                    None => {}
-                }
+                // A track's automation follows its plugins; the chain keeps its order.
+                let _ = ws.chain_mut(channel).set_insert(index, plugin);
             }),
             MenuAction::Preset {
                 channel,
@@ -328,7 +347,7 @@ impl Workspace {
                     ws.status = Some(e);
                 }
             }),
-            // One it has already, it shows; one it hasn't, it gets.
+            // One it hasn't, it gets; another of one it has stacks after the rest. Either opens.
             MenuAction::AddBuiltin { channel, builtin } => {
                 self.channel = channel;
                 let (eq, comp) = self.strip_dsp(channel);
@@ -336,25 +355,92 @@ impl Workspace {
                     Builtin::Eq => eq.is_some(),
                     Builtin::Comp => comp.is_some(),
                     Builtin::Sat => self.sat(channel).is_some(),
+                    Builtin::Limit => self.limiter(channel).is_some(),
+                    Builtin::Tool(_) => true,
                 };
-                if builtin == Builtin::Eq {
-                    // The EQ shows its window, added or not, as a plugin does.
-                    self.open_eq(channel, cx);
-                } else if has {
-                    self.show_channel(channel, cx);
-                } else {
-                    self.edit(cx, |ws| match builtin {
-                        Builtin::Eq => drop(ws.strip_dsp_mut(channel).0.insert(Eq::default())),
-                        Builtin::Comp => drop(ws.strip_dsp_mut(channel).1.insert(Comp::default())),
-                        Builtin::Sat => drop(ws.sat_mut(channel).insert(Saturator::default())),
-                    })
+                // On an aux (tracks send to it) a reverb or delay is all reverb or echoes.
+                let wet = !matches!(channel, Channel::Track(_));
+                // A compressor comes set by listening: a bus one's settings while it does.
+                let comp = match channel {
+                    Channel::Track(_) => Comp::default(),
+                    _ => crate::mix::strip::bus_comp(),
+                };
+                let mut stacked = None;
+                self.edit(cx, |ws| match (builtin, has) {
+                    (Builtin::Eq, false) => *ws.strip_dsp_mut(channel).0 = Some(Eq::default()),
+                    (Builtin::Comp, false) => *ws.strip_dsp_mut(channel).1 = Some(comp),
+                    (Builtin::Sat, false) => *ws.sat_mut(channel) = Some(Saturator::default()),
+                    (Builtin::Limit, false) => *ws.limiter_mut(channel) = Some(Limiter::default()),
+                    (Builtin::Eq, true) => {
+                        stacked = Some(ws.stack_built_in(channel, Eq::default()))
+                    }
+                    (Builtin::Comp, true) => stacked = Some(ws.stack_built_in(channel, comp)),
+                    (Builtin::Sat, true) => {
+                        stacked = Some(ws.stack_built_in(channel, Saturator::default()))
+                    }
+                    (Builtin::Limit, true) => {
+                        stacked = Some(ws.stack_built_in(channel, Limiter::default()))
+                    }
+                    (Builtin::Tool(kind), _) => {
+                        let notes = ws.song_notes();
+                        stacked = crate::mix::strip::fresh_tool(kind, wet).map(|mut u| {
+                            // Correction starts on the song's key, as anyone would set it.
+                            if let (Unit::Tune(t), Some(notes)) = (&mut u, notes) {
+                                t.notes = notes;
+                            }
+                            ws.chain_mut(channel).add_more(u)
+                        });
+                    }
+                });
+                self.open_fx_at(channel, builtin, stacked, cx);
+                if builtin == Builtin::Comp && !cfg!(test) {
+                    self.learn_comp_at(channel, stacked, cx);
+                }
+                if builtin == Builtin::Sat && !cfg!(test) {
+                    self.learn_sat_at(channel, stacked, cx);
                 }
             }
-            MenuAction::RemoveBuiltin { channel, builtin } => self.edit(cx, |ws| match builtin {
-                Builtin::Eq => *ws.strip_dsp_mut(channel).0 = None,
-                Builtin::Comp => *ws.strip_dsp_mut(channel).1 = None,
-                Builtin::Sat => *ws.sat_mut(channel) = None,
-            }),
+            MenuAction::MoveEffect { channel, from, to } => self.move_effect(channel, from, to, cx),
+            MenuAction::LearnLimit { channel, lufs } => {
+                if self.learning.is_none() {
+                    self.learn_limit(channel, lufs, cx);
+                }
+            }
+            MenuAction::RemoveBuiltin {
+                channel,
+                builtin,
+                stacked,
+            } => {
+                self.edit(cx, |ws| match builtin {
+                    Builtin::Eq => ws.set_built_in::<Eq>(channel, stacked, None),
+                    Builtin::Comp => ws.set_built_in::<Comp>(channel, stacked, None),
+                    Builtin::Sat => ws.set_built_in::<Saturator>(channel, stacked, None),
+                    Builtin::Limit => ws.set_built_in::<Limiter>(channel, stacked, None),
+                    Builtin::Tool(_) => {
+                        if let Some(k) = stacked {
+                            let _ = ws.chain_mut(channel).remove_more(k);
+                        }
+                    }
+                });
+                // The stacked ones after it move up a place: their windows close.
+                if let Some(k) = stacked {
+                    let after = |c: Channel, s: Option<usize>| c == channel && s >= Some(k);
+                    if self
+                        .fx_view
+                        .as_ref()
+                        .is_some_and(|v| after(v.ch, v.stacked))
+                    {
+                        self.close_fx(cx);
+                    }
+                    if self
+                        .eq_view
+                        .as_ref()
+                        .is_some_and(|v| after(v.ch, v.stacked))
+                    {
+                        self.close_eq(cx);
+                    }
+                }
+            }
             MenuAction::Input { track, input } => self.edit(cx, |ws| {
                 ws.session.project.tracks[track].input = input;
             }),
@@ -387,11 +473,13 @@ impl Workspace {
             MenuAction::RegionQuantize(at, q) => self.edit(cx, |ws| {
                 ws.session.project.tracks[at.0].regions[at.1].quantize = q;
             }),
-            MenuAction::RegionFlex(at, f) => self.edit(cx, |ws| {
-                if let Content::Audio { flex, .. } =
+            MenuAction::Tempo(op) => self.tempo_op(op, cx),
+            MenuAction::Section(op) => self.section_op(op, cx),
+            MenuAction::RegionStretchMode(at, f) => self.edit(cx, |ws| {
+                if let Content::Audio { stretch_mode, .. } =
                     &mut ws.session.project.tracks[at.0].regions[at.1].content
                 {
-                    *flex = f;
+                    *stretch_mode = f;
                 }
             }),
             MenuAction::Send { track, bus } => self.edit(cx, |ws| {
@@ -416,12 +504,18 @@ impl Workspace {
                 self.menu = Some(self.key_menu(at));
             }
             MenuAction::Snap(snap) => self.snap = snap,
+            MenuAction::DragMode(mode) => self.drag_mode = mode,
             MenuAction::Ghost(id) => self.roll.ghost = id,
             MenuAction::Roll(op) => self.roll_op(op, cx),
             MenuAction::Stamp(stamp) => self.roll.stamp = stamp,
+            MenuAction::More(item) => self.pick_more(item, cx),
+            MenuAction::Chat(op) => self.chat_op(op, cx),
             MenuAction::Slice(how) => self.slice_zone(how, cx),
+            MenuAction::Sampler(op) => self.sampler_op(op, cx),
+            MenuAction::Drums(op) => self.drum_op(op, cx),
             MenuAction::Steps(op) => self.steps_op(op, cx),
             MenuAction::Plugins(op) => self.plugin_op(op, cx),
+            MenuAction::Poly(track, op) => self.poly_op(track, op, cx),
             MenuAction::Auto(track, op) => self.auto_op(track, op, cx),
             MenuAction::Palette(op) => self.palette_op(op, cx),
             MenuAction::Eq(op) => self.eq_op(op, cx),
@@ -434,7 +528,14 @@ impl Workspace {
             MenuAction::AddMarker(tick, name) => self.edit(cx, |ws| {
                 let markers = &mut ws.session.project.markers;
                 let at = markers.partition_point(|m| m.tick <= tick);
-                markers.insert(at, pina_engine::song::project::Marker { tick, name });
+                markers.insert(
+                    at,
+                    pina_engine::song::project::Marker {
+                        tick,
+                        name,
+                        ..Default::default()
+                    },
+                );
             }),
             MenuAction::DeleteMarker(i) => self.edit(cx, |ws| {
                 if i < ws.session.project.markers.len() {

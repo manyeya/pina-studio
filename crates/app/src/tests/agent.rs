@@ -415,7 +415,6 @@ fn the_agent_panel_knows_the_song_and_its_critic(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_song_map_toggles_parts_and_genres_duplicate_and_go(cx: &mut TestAppContext) {
-    use pina_engine::music::playbook::{self, Origin};
     let dir = demo_copy("playbook-map");
     let (ws, cx) = open_at(cx, &dir);
     cx.simulate_resize(gpui::size(px(1600.), px(3400.)));
@@ -426,10 +425,13 @@ fn the_song_map_toggles_parts_and_genres_duplicate_and_go(cx: &mut TestAppContex
     assert!(!draft(cx).sections[0].parts.contains(&"bass".to_string()));
     click_on(cx, "cell-bass-0", Modifiers::none(), MouseButton::Left);
     assert!(draft(cx).sections[0].parts.contains(&"bass".to_string()));
-    assert_eq!(playbook::origin(&draft(cx)), Origin::Edited);
     click_on(cx, "cell-bass-0", Modifiers::none(), MouseButton::Left);
-    assert_eq!(playbook::origin(&draft(cx)), Origin::Pina);
+    assert_eq!(draft(cx), playbook("house"));
 
+    // Duplicate: another genre of the person's own, to change.
+    click_on(cx, "genre-duplicate", Modifiers::none(), MouseButton::Left);
+    let copy = draft(cx);
+    assert_eq!(copy.name, "House 2");
     // A section picked: its energy and length change; a new one comes and goes.
     click_on(cx, "section-0", Modifiers::none(), MouseButton::Left);
     click_on(cx, "energy-5", Modifiers::none(), MouseButton::Left);
@@ -441,21 +443,10 @@ fn the_song_map_toggles_parts_and_genres_duplicate_and_go(cx: &mut TestAppContex
     assert_eq!(draft(cx).sections.len(), n + 1);
     click_on(cx, "section-remove", Modifiers::none(), MouseButton::Left);
     assert_eq!(draft(cx).sections.len(), n);
-
-    // Duplicate: a genre of the person's own; Delete takes it away again.
-    click_on(cx, "genre-duplicate", Modifiers::none(), MouseButton::Left);
-    let copy = draft(cx);
-    assert_eq!(
-        (copy.name.as_str(), playbook::origin(&copy)),
-        ("House 2", Origin::Yours)
-    );
-    click_on(cx, "genre-reset", Modifiers::none(), MouseButton::Left);
+    // Delete takes it away again.
+    click_on(cx, "genre-delete", Modifiers::none(), MouseButton::Left);
     let gone = ws.read_with(cx, |ws, _| !ws.genres.list.iter().any(|p| p.id == copy.id));
     assert!(gone);
-    // Reset to Pina Studio's: house as it ships.
-    ws.update(cx, |ws, cx| ws.open_genres(Some("house"), cx));
-    click_on(cx, "genre-reset", Modifiers::none(), MouseButton::Left);
-    assert_eq!(playbook::origin(&draft(cx)), Origin::Pina);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -496,4 +487,247 @@ fn the_composer_wraps_and_grows_as_its_written_in(cx: &mut TestAppContext) {
     let most = tall(cx);
     assert!(most <= empty + 19.0 * 8.0, "{most}");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
+fn an_answer_that_went_wrong_says_why_and_offers_to_ask_again(cx: &mut TestAppContext) {
+    use crate::{
+        agent::chat::Item,
+        agent::{Kind, Readiness},
+    };
+    let (ws, cx) = open(cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    // Neither agent signed in, so asking again ends at once, starting nothing.
+    ws.update(cx, |ws, cx| {
+        ws.show_agent = true;
+        ws.chat.kind = Kind::Codex;
+        ws.chat.ready = vec![
+            (Kind::ClaudeCode, Readiness::SignIn),
+            (Kind::Codex, Readiness::SignIn),
+        ];
+        ws.chat.items = vec![
+            Item::You("Make a hip hop song".into()),
+            Item::End {
+                seconds: 12.0,
+                steps: 0,
+                stopped: false,
+                error: Some("workspace routing discovery failed".into()),
+            },
+        ];
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("agent-error-1").is_some());
+    assert!(cx.debug_bounds("agent-other").is_some());
+    // Try again: the same question, asked again.
+    click_on(cx, "agent-retry", Modifiers::none(), MouseButton::Left);
+    cx.run_until_parked();
+    let asked = |ws: &Entity<Workspace>, cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            ws.chat
+                .items
+                .iter()
+                .filter(|i| **i == Item::You("Make a hip hop song".into()))
+                .count()
+        })
+    };
+    assert_eq!(asked(&ws, cx), 2);
+    // Ask the other agent: Claude Code, in a conversation of its own, the same question.
+    click_on(cx, "agent-other", Modifiers::none(), MouseButton::Left);
+    cx.run_until_parked();
+    ws.read_with(cx, |ws, _| {
+        assert_eq!(ws.chat.kind, Kind::ClaudeCode);
+        assert_eq!(ws.chat.items[0], Item::You("Make a hip hop song".into()));
+    });
+}
+
+/// A little MIDI file for the panel, in a folder of its own.
+fn midi_at(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    use pina_engine::song::{
+        midi_file::{MidiFile, Part},
+        project::Note,
+    };
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join(name);
+    let notes = [0, 240, 480, 720].map(|start| Note {
+        start,
+        length: 200,
+        pitch: 60,
+        velocity: 100,
+    });
+    let file = MidiFile {
+        parts: vec![Part {
+            name: "Keys".into(),
+            channel: 0,
+            program: None,
+            notes: notes.to_vec(),
+            controls: Vec::new(),
+        }],
+        tempo: Some(120.0),
+        time_signature: Some([4, 4]),
+        ..MidiFile::default()
+    };
+    std::fs::write(&path, file.to_bytes()).unwrap();
+    path
+}
+
+#[gpui::test]
+fn midi_goes_to_the_agent_and_what_it_writes_comes_back_to_hear_and_drag(cx: &mut TestAppContext) {
+    use crate::agent::{
+        Event,
+        chat::{ChatPage, Item},
+    };
+    use gpui::{Modifiers, MouseButton, point, px};
+    let dir = std::env::temp_dir().join(format!("pina-chat-midi-{}", std::process::id()));
+    let (a, b) = (midi_at(&dir, "One.mid"), midi_at(&dir, "Two.mid"));
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| {
+        ws.show_agent = true;
+        ws.show_browser = false;
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    // Dropped on the panel from the Finder, a folder's worth.
+    let over = ws.read_with(cx, |ws, _| {
+        gpui::point(ws.viewport_w - 40.0, ws.viewport_h / 2.0)
+    });
+    ws.update(cx, |ws, cx| {
+        ws.drop_files(std::slice::from_ref(&dir), over, cx)
+    });
+    cx.run_until_parked();
+    let attached = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.chat.attached.len());
+    assert_eq!(attached(cx), 2);
+    assert!(cx.debug_bounds("agent-midi-similar").is_some());
+    // One taken off, by its chip; put back.
+    click_on(
+        cx,
+        "agent-given-off-1",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert_eq!(attached(cx), 1);
+    ws.update(cx, |ws, cx| ws.attach_midi(std::slice::from_ref(&b), cx));
+
+    // They go with the message: the agent gets the paths, the page keeps cards.
+    let (note, sent) = ws.update(cx, |ws, _| ws.midi_note().unwrap());
+    assert!(
+        note.contains(a.to_str().unwrap()) && note.contains("midi_group"),
+        "{note}"
+    );
+    assert_eq!(sent, [a.clone(), b.clone()]);
+    assert_eq!(attached(cx), 0);
+    ws.update(cx, |ws, _| ws.chat.attached = sent);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.chat.shelf.len()), 2);
+
+    // A midi_write it made: its card lands in the conversation.
+    let made = midi_at(&dir, "Made.mid");
+    ws.update(cx, |ws, cx| {
+        ws.chat.attached.clear();
+        ws.chat.items.push(Item::You("write one".into()));
+        ws.heard_claude(
+            Event::Tool {
+                id: "t1".into(),
+                name: "mcp__pina__midi_write".into(),
+                input: serde_json::json!({"name": "Made"}),
+            },
+            cx,
+        );
+        ws.heard_claude(
+            Event::ToolDone {
+                id: "t1".into(),
+                ok: true,
+                output: serde_json::json!({"file": made}).to_string(),
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let card = ws.read_with(cx, |ws, _| {
+        assert!(
+            ws.chat
+                .items
+                .iter()
+                .any(|i| matches!(i, Item::Midi { path, given: false } if *path == made))
+        );
+        ws.chat.shelf.iter().position(|c| c.path == made).unwrap()
+    });
+    assert_eq!(card, 2);
+
+    // Dragged from the conversation onto the tracks: a region, its notes.
+    let tracks = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    let from = cx.debug_bounds("chat-midi-2").expect("its card").center();
+    let lane = cx.debug_bounds("lanes").map(|b| b.center());
+    let to = lane.unwrap_or(point(px(700.), px(200.)));
+    drag(cx, from, to);
+    ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        let notes: usize = p
+            .tracks
+            .iter()
+            .flat_map(|t| &t.regions)
+            .filter(|r| r.name == "Made")
+            .filter_map(|r| r.content.notes(r.length))
+            .map(|n| n.len())
+            .sum();
+        assert_eq!(notes, 4, "{} tracks, were {tracks}", p.tracks.len());
+    });
+
+    // Add puts it at the playhead as well; the shelf shows all of it.
+    let regions = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let tracks = &ws.session.project.tracks;
+            tracks.iter().map(|t| t.regions.len()).sum::<usize>()
+        })
+    };
+    let before = regions(cx);
+    click_on(cx, "chat-midi-add-2", Modifiers::none(), MouseButton::Left);
+    assert_eq!(regions(cx), before + 1);
+    click_on(cx, "agent-tab-midi", Modifiers::none(), MouseButton::Left);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.chat.page), ChatPage::Midi);
+    assert!(cx.debug_bounds("chat-midi-0").is_some());
+    assert!(cx.debug_bounds("chat-midi-2").is_some());
+    // Giving a card from the shelf queues it for the next message.
+    click_on(cx, "chat-midi-give-2", Modifiers::none(), MouseButton::Left);
+    assert_eq!(attached(cx), 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+fn a_preview_can_be_stopped_from_the_list_and_from_its_card(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton};
+    use std::time::Instant;
+    let dir = std::env::temp_dir().join(format!("pina-stop-midi-{}", std::process::id()));
+    let path = midi_at(&dir, "Heard.mid");
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, cx| {
+        ws.show_agent = true;
+        ws.show_browser = false;
+        ws.attach_midi(std::slice::from_ref(&path), cx);
+        ws.chat.page = crate::agent::chat::ChatPage::Midi;
+        ws.chat.hearing = Some((0, Instant::now(), 30.0));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    // A card that's playing stops itself.
+    click_on(cx, "chat-midi-play-0", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.chat.hearing.is_none()));
+    // The Browser's list has its Stop while anything's heard.
+    ws.update(cx, |ws, cx| {
+        ws.show_agent = false;
+        ws.show_browser = true;
+        ws.browser.midi_playing = Some((0, Instant::now(), 30.0));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(ws.read_with(cx, |ws, _| ws.previewing()));
+    if cx.debug_bounds("preview-stop").is_some() {
+        click_on(cx, "preview-stop", Modifiers::none(), MouseButton::Left);
+    } else {
+        ws.update(cx, |ws, cx| ws.stop_audition(cx));
+    }
+    ws.read_with(cx, |ws, _| {
+        assert!(ws.browser.midi_playing.is_none() && !ws.previewing());
+    });
+    std::fs::remove_dir_all(&dir).ok();
 }

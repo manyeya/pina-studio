@@ -230,7 +230,7 @@ fn tool_calls_read_as_what_they_do() {
     assert_eq!(
         label("mcp__pina__edit", &edit, 3840),
         (
-            "Add midi region".into(),
+            "Add MIDI region".into(),
             "track 2 · bar 9 · 4 bars · 3 notes".into()
         )
     );
@@ -244,4 +244,82 @@ fn tool_calls_read_as_what_they_do() {
         label("mcp__pina__samples_put", &put, 3840),
         ("Putting in".into(), "Kick 01".into())
     );
+}
+
+#[test]
+fn an_agents_usual_errors_say_what_happened_and_what_to_do() {
+    let codex = |e: &str| Kind::Codex.explain(e).unwrap_or_default();
+    // What Codex says when it can't reach OpenAI.
+    assert!(codex("workspace routing discovery failed").contains("couldn't reach OpenAI"));
+    assert!(codex("Connection failed: error sending request").contains("couldn't reach OpenAI"));
+    assert!(codex("unexpected status 401 Unauthorized").contains("codex login"));
+    assert!(codex("You've hit your usage limit").contains("usage limit"));
+    let claude = Kind::ClaudeCode
+        .explain("API Error: 529 Overloaded")
+        .unwrap();
+    assert!(claude.contains("couldn't reach Anthropic"), "{claude}");
+    // Anything else is shown as it was said.
+    assert_eq!(Kind::Codex.explain("the song folder is read-only"), None);
+}
+
+#[test]
+fn an_auxs_limiter_hears_only_what_reaches_it() {
+    use pina_engine::song::{
+        commands::ChannelRef,
+        project::{AuxSend, Content, Instrument, Note, PPQ, Project, Region, Track},
+    };
+    let synth = |name: &str| Track {
+        name: name.into(),
+        instrument: Some(Instrument::Synth),
+        regions: vec![Region {
+            start: 0,
+            length: PPQ * 4,
+            content: Content::Midi {
+                notes: vec![Note {
+                    start: 0,
+                    length: PPQ * 2,
+                    pitch: 69,
+                    velocity: 100,
+                }],
+                controls: Vec::new(),
+            },
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut p = Project::new(48_000);
+    let bus = p.add_aux();
+    let mut sending = synth("sends");
+    sending.sends = vec![AuxSend {
+        bus,
+        level_db: -6.0,
+        pre: false,
+    }];
+    p.tracks = vec![sending, synth("doesn't")];
+    p.assign_ids();
+    let dir = std::env::temp_dir().join(format!("pina-test-aux-limit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let peak = |p: &Project| {
+        let (heard, range) = produce::limit_heard(p, ChannelRef::Aux(0));
+        let [l, _] = crate::cli::rendered(&heard, &dir, range).unwrap();
+        l.iter().fold(0f32, |m, x| m.max(x.abs()))
+    };
+    // The send, 6 dB down, and nothing of either track's own output: with no send, silence.
+    let sent = peak(&p);
+    let mut none = p.clone();
+    none.tracks[0].sends.clear();
+    assert!(peak(&none) < 1e-6, "a track that doesn't send isn't heard");
+    // Against one track's own level: the two of them, alike, through the master, halved.
+    let [both, _] = crate::cli::rendered(
+        &produce::limit_heard(&none, ChannelRef::Master).0,
+        &dir,
+        None,
+    )
+    .unwrap();
+    let own = both.iter().fold(0f32, |m, x| m.max(x.abs())) / 2.0;
+    assert!(
+        (sent / own - 0.5).abs() < 0.05,
+        "sent {sent}, a track's own {own}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,112 +1,84 @@
-//! The Agent panel, and what it offers before the first question.
+//! The Studio Agent panel, and what it offers before the first question.
 
 use super::*;
+use crate::workspace::Help;
 
 impl Workspace {
     pub fn agent_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        self.shelf_sync();
+        self.past_sync(cx);
+        let page = self.chat.page;
+        let items = match page == ChatPage::Chat && !self.chat.items.is_empty() {
+            true => self.transcript(cx),
+            false => Vec::new(),
+        };
         let tuning = self.tuning_label();
         let c = &self.chat;
         let def = c.kind.def();
         let status = match (c.busy, c.since, c.remote) {
             (true, Some(t), true) => format!("From the terminal · {}s", t.elapsed().as_secs()),
             (true, Some(t), false) => format!("Working · {}s", t.elapsed().as_secs()),
-            _ => c
-                .model
-                .as_deref()
-                .filter(|m| !m.is_empty())
-                .map(model_name)
-                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        let asked = c.has_questions();
+        let subtitle = match (asked, c.title.is_empty()) {
+            (false, _) => "New conversation".to_string(),
+            (_, true) => title_of(&c.items),
+            _ => c.title.clone(),
         };
         let header = div()
             .h(px(TOP_H))
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(8.))
+            .gap(px(9.))
             .pl(px(12.))
             .pr(px(7.))
             .border_b_1()
             .border_color(rgb(LINE))
-            .child(badge(c.kind, 20., c.busy))
-            // Its name picks another.
+            .child(badge(c.kind, 24., c.busy))
             .child(
                 div()
-                    .id("agent-pick")
+                    .flex_1()
+                    .min_w(px(0.))
                     .flex()
-                    .items_center()
-                    .gap(px(3.))
-                    .px(px(4.))
-                    .py(px(2.))
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .hover(|d| d.bg(rgb(RAISED)))
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(def.name)
-                    .child(icon(Icon::Chevron, 12.).text_color(rgb(TEXT_3)))
-                    .debug_selector(|| "agent-pick".into())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, e: &gpui::MouseDownEvent, _, cx| {
-                            check_agents(None, cx);
-                            ws.menu = Some(ws.agent_menu(e.position));
-                            cx.notify();
-                        }),
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .line_height(px(17.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Studio Agent"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .line_height(px(14.))
+                            .text_color(rgb(TEXT_3))
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .debug_selector(|| "agent-title".into())
+                            .child(subtitle),
                     ),
             )
-            // Working: for how long; else its model and effort, to pick another.
-            .when(c.busy, |d| {
+            .when(asked, |d| {
                 d.child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .font_family(MONO)
-                        .text_size(px(11.))
-                        .text_color(rgb(AGENT_TEXT))
-                        .whitespace_nowrap()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .child(status),
-                )
-            })
-            .when(!c.busy, |d| {
-                d.child(
-                    div().flex_1().min_w(px(0.)).flex().child(
-                        div()
-                            .min_w(px(0.))
-                            .h(px(24.))
-                            .px(px(6.))
-                            .flex()
-                            .items_center()
-                            .gap(px(3.))
-                            .rounded(px(6.))
-                            .cursor_pointer()
-                            .text_size(px(11.5))
-                            .text_color(rgb(TEXT_3))
-                            .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT_2)))
-                            .debug_selector(|| "agent-tuning".into())
-                            .child(
-                                div()
-                                    .min_w(px(0.))
-                                    .whitespace_nowrap()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(tuning),
-                            )
-                            .child(icon(Icon::Chevron, 11.).text_color(rgb(TEXT_4)))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|ws, e: &gpui::MouseDownEvent, _, cx| {
-                                    ws.menu = Some(ws.tuning_menu(e.position));
-                                    cx.notify();
-                                }),
-                            ),
-                    ),
+                    icon_seg(Icon::More, false, 26.)
+                        .debug_selector(|| "agent-more".into())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, e: &gpui::MouseDownEvent, _, cx| {
+                                ws.menu = Some(ws.this_chat_menu(e.position));
+                                cx.notify();
+                            }),
+                        ),
                 )
             })
             .child(
                 icon_seg(Icon::Plus, false, 26.)
                     .debug_selector(|| "new-chat".into())
+                    .help("New conversation: this one stays in History", cx)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, _, _, cx| ws.new_chat(cx)),
@@ -123,25 +95,172 @@ impl Workspace {
                         }),
                     ),
             );
-        let bar = self.session.project.bar();
-        let body = match c.items.is_empty() {
-            true => self.agent_welcome(cx).into_any_element(),
-            false => div()
+        // Under what's typed: who answers and how, or how long it's been at it.
+        let engine = div()
+            .flex_none()
+            .h(px(22.))
+            .px(px(5.))
+            .flex()
+            .items_center()
+            .gap(px(5.))
+            .rounded(px(6.))
+            .cursor_pointer()
+            .hover(|d| d.bg(rgb(RAISED)))
+            .text_size(px(11.))
+            .text_color(rgb(TEXT_3))
+            .debug_selector(|| "agent-pick".into())
+            .child(logo(c.kind, 11.))
+            .child(def.name)
+            .child(icon(Icon::Chevron, 10.).text_color(rgb(TEXT_4)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|ws, e: &gpui::MouseDownEvent, _, cx| {
+                    check_agents(None, cx);
+                    ws.menu = Some(ws.agent_menu(e.position));
+                    cx.notify();
+                }),
+            );
+        let how = div()
+            .flex_1()
+            .min_w(px(0.))
+            .flex()
+            .justify_end()
+            .when(c.busy, |d| {
+                d.child(
+                    div()
+                        .min_w(px(0.))
+                        .pr(px(5.))
+                        .font_family(MONO)
+                        .text_size(px(10.5))
+                        .text_color(rgb(AGENT_TEXT))
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(status),
+                )
+            })
+            .when(!c.busy, |d| {
+                d.child(
+                    div()
+                        .min_w(px(0.))
+                        .h(px(22.))
+                        .px(px(5.))
+                        .flex()
+                        .items_center()
+                        .gap(px(3.))
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .text_size(px(11.))
+                        .text_color(rgb(TEXT_3))
+                        .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT_2)))
+                        .debug_selector(|| "agent-tuning".into())
+                        .child(
+                            div()
+                                .min_w(px(0.))
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(tuning),
+                        )
+                        .child(icon(Icon::Chevron, 10.).flex_none().text_color(rgb(TEXT_4)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, e: &gpui::MouseDownEvent, _, cx| {
+                                ws.menu = Some(ws.tuning_menu(e.position));
+                                cx.notify();
+                            }),
+                        ),
+                )
+            });
+        let tabs = self.agent_tabs(cx);
+        let body = match (page, c.items.is_empty()) {
+            (ChatPage::Midi, _) => self.agent_midi_page(cx).into_any_element(),
+            (ChatPage::History, _) => self.agent_history(cx).into_any_element(),
+            (_, true) => self.agent_welcome(cx).into_any_element(),
+            _ => div()
                 .id("agent-transcript")
                 .flex_1()
                 .min_h(px(0.))
                 .overflow_y_scroll()
                 .track_scroll(&c.scroll)
+                .debug_selector(|| "agent-transcript".into())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|ws, e: &gpui::MouseDownEvent, _, cx| ws.chat_press(e, cx)),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|ws, e: &gpui::MouseDownEvent, _, cx| {
+                        if ws.chat.picked_text().is_some() {
+                            cx.stop_propagation();
+                            let items =
+                                vec![("Copy".to_string(), MenuAction::Chat(ChatOp::Picked))];
+                            ws.menu = Some(Menu {
+                                at: e.position,
+                                items,
+                                ..Default::default()
+                            });
+                            cx.notify();
+                        }
+                    }),
+                )
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .gap(px(10.))
+                        .gap(px(12.))
                         .p(px(12.))
-                        .children(transcript(&c.items, bar))
+                        .children(items)
+                        // It went wrong: ask again, or ask the other agent.
+                        .when(c.failed(), |d| {
+                            let other = c.other_kind();
+                            let button = |id: &'static str, label: String| {
+                                div()
+                                    .id(id)
+                                    .h(px(26.))
+                                    .px(px(10.))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(7.))
+                                    .border_1()
+                                    .border_color(rgb(LINE_STRONG))
+                                    .text_size(px(11.5))
+                                    .text_color(rgb(TEXT_2))
+                                    .cursor_pointer()
+                                    .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+                                    .child(label)
+                                    .debug_selector(move || id.into())
+                            };
+                            d.child(
+                                div()
+                                    .flex()
+                                    .gap(px(6.))
+                                    .child(button("agent-retry", "Try again".into()).on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|ws, _, _, cx| ws.retry_agent(cx)),
+                                    ))
+                                    .when_some(other, |d, k| {
+                                        d.child(
+                                            button("agent-other", format!("Ask {}", k.def().name))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|ws, _, _, cx| {
+                                                        ws.ask_other_agent(cx)
+                                                    }),
+                                                ),
+                                        )
+                                    }),
+                            )
+                        })
                         .when(
                             !c.busy
                                 && matches!(c.items.last(), Some(Item::End { .. }))
+                                && !c
+                                    .items
+                                    .iter()
+                                    .rev()
+                                    .take_while(|i| !matches!(i, Item::You(_)))
+                                    .any(|i| matches!(i, Item::Changes { .. }))
                                 && c.before
                                     .as_ref()
                                     .is_some_and(|b| *b != self.session.project),
@@ -176,8 +295,9 @@ impl Workspace {
                 )
                 .into_any_element(),
         };
+        let c = &self.chat;
         let (busy, remote) = (c.busy, c.remote);
-        let empty = c.input.read(cx).text().trim().is_empty();
+        let empty = c.input.read(cx).text().trim().is_empty() && c.attached.is_empty();
         // Send, a solid circle when there's something to send; Stop, the same circle, while it
         // works.
         let send = div()
@@ -217,6 +337,10 @@ impl Workspace {
             .when(busy && remote, |d| d.opacity(0.4));
         // What's selected, as context that goes along: a chip to take out, or (taken out) a
         // dashed one to put back.
+        let attached = self.midi_attached(cx);
+        let attach = self.midi_attach_button(cx);
+        let drop_hint = self.midi_drop_hint();
+        let c = &self.chat;
         let selection =
             self.selection_note().map(|(label, _)| {
                 let on = c.use_selection;
@@ -296,6 +420,7 @@ impl Workspace {
                 .shadow_lg()
                 .children(palette)
                 .children(start)
+                .children(attached)
                 .child(
                     div()
                         .px(px(13.))
@@ -313,10 +438,23 @@ impl Workspace {
                         .pr(px(7.))
                         .pt(px(4.))
                         .pb(px(7.))
+                        .child(attach)
                         .children(selection)
                         .child(critic)
                         .child(div().flex_1())
                         .child(send),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .px(px(5.))
+                        .py(px(3.))
+                        .border_t_1()
+                        .border_color(rgb(LINE_SOFT))
+                        .child(engine)
+                        .child(how),
                 ),
         );
         div()
@@ -331,9 +469,11 @@ impl Workspace {
             .border_color(rgb(LINE))
             .child(header)
             .child(self.agent_context(cx))
+            .child(tabs)
             .child(body)
             .children(self.critic_sheet(cx))
             .child(composer)
+            .children(drop_hint)
             .child(self.panel_edge(cx))
     }
 
@@ -360,10 +500,9 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap(px(14.))
-            .px(px(18.))
-            .pt(px(22.))
+            .px(px(14.))
+            .pt(px(14.))
             .pb(px(12.))
-            .child(badge(self.chat.kind, 36., false))
             .child(
                 div()
                     .flex()
@@ -373,19 +512,17 @@ impl Workspace {
                         div()
                             .text_size(px(17.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(format!("Make music with {}", def.name)),
+                            .child("What are we making?"),
                     )
                     .child(
                         div()
                             .text_size(px(12.5))
                             .line_height(px(18.))
                             .text_color(rgb(TEXT_3))
-                            .child(format!(
-                                "Ask for anything. {} edits this song while you watch: every \
-                                     step shows here, and every edit lands in the tracks as it's \
-                                     made.",
-                                def.name
-                            )),
+                            .child(
+                                "The Studio Agent works in this song while you watch: every edit \
+                                 lands in the tracks as it's made, and you can undo a whole turn.",
+                            ),
                     ),
             )
             .when_some(problem, |d, problem| {
@@ -433,15 +570,6 @@ impl Workspace {
                         }),
                 ),
             )
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .line_height(px(16.))
-                    .text_color(rgb(TEXT_4))
-                    .child(
-                        "Or from a terminal: pina ask <song> \"…\" shows here too. Any agent \
-                         can drive Pina Studio with pina mcp.",
-                    ),
-            )
+            .children(self.recent_chats(cx))
     }
 }

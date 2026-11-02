@@ -163,10 +163,17 @@ pub fn label(name: &str, input: &Value, bar: u64) -> (String, String) {
     };
     let (what, detail) = match tool {
         "describe" => ("Reading the manual", String::new()),
+        "present" => ("Showing", s("title")),
         "show" => ("Reading the song", String::new()),
         "edit" => return edit_label(&input["command"], bar),
         "analyze" => ("Listening", file("path")),
         "render" => ("Bouncing", file("out")),
+        "midi_study" => ("Reading MIDI", file("file")),
+        "midi_group" => (
+            "Comparing MIDI",
+            format!("{} files", input["files"].as_array().map_or(0, Vec::len)),
+        ),
+        "midi_write" => ("Writing MIDI", s("name")),
         "samples_find" => ("Finding samples", words(&input["query"])),
         "samples_similar" => ("Finding sounds like", file("path")),
         "samples_kit" => ("Building a kit", words(&input["seed"])),
@@ -219,10 +226,10 @@ pub(crate) fn words(q: &Value) -> String {
     }
 }
 
-/// An edit in words: "Set tempo", "bpm 101"; "Add midi region", "track 3 · bar 9 · 24 notes".
+/// An edit in words: "Set tempo", "bpm 101"; "Add MIDI region", "track 3 · bar 9 · 24 notes".
 pub(crate) fn edit_label(c: &Value, bar: u64) -> (String, String) {
     let op = c["op"].as_str().unwrap_or("edit").replace('_', " ");
-    let mut what = op.clone();
+    let mut what = op.replace("midi", "MIDI");
     if let Some(first) = what.get_mut(0..1) {
         first.make_ascii_uppercase();
     }

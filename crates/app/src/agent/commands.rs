@@ -7,8 +7,8 @@ pub(crate) fn instructions(project: &Path) -> String {
     format!(
         "You're working inside Pina Studio, a DAW, on the song open at {p}. The person is watching: \
 every edit you make appears in their window as you make it, so work in small steps, and keep \
-your words short: a sentence before a group of steps saying what you're doing, and a few lines \
-at the end saying what changed. Use Pina Studio's tools, passing \"{p}\" as the project: `describe` \
+your words short: a sentence before a group of steps saying what you're doing, and a line or two \
+at the end saying what it does for the song. Use Pina Studio's tools, passing \"{p}\" as the project: `describe` \
 before your first edit (the commands, and how ticks, levels and notes work), `show` to read the \
 song, `edit` to change it, `samples_find`, `samples_kit` and `samples_put` for sounds that fit, \
 `analyze` to check levels. The person can pick sounds, instruments and effects for the song \
@@ -16,9 +16,13 @@ themselves (`palette`, and \
 listed in their message when they change): build with those before choosing your own, each for \
 the part they gave it, and with no others when they ask for only these. You can't hear the song: `critique` is your ears (quick after each \
 edit, with a render after mixing), trust it and the samples' analysis, and say what you couldn't \
-check.\n\nWrite music with Pina Studio's write commands, not note by note: set_chords, then \
-write_chords, write_bass, write_melody and write_drums put parts on the chords that are in key, \
-voice-led and played like a player would. To make a song that sounds finished: {}",
+check.\n\nShow rather than tell, with `present`: its cards are what the person looks at. For anything \
+of more than a few steps, a `plan` first, sent again as each step finishes. When a real choice is \
+theirs, `choices`, then stop and wait; don't ask in words. Levels and loudness as `metrics`, a \
+progression as `chords`, a song's form as `sections`, and `next` at the end with what you'd do \
+next. Don't repeat a card in words, and don't list what you changed: the panel shows that itself.\n\nWrite the music yourself, note by note, as a producer and a player would: Pina Studio \
+has no templates, grooves or styles to write it for you, and the song should sound like no \
+template. To make a song that sounds finished: {}",
         crate::agent::produce::WORKFLOW
     )
 }
@@ -33,6 +37,10 @@ pub(crate) fn workdir(project: &Path) -> PathBuf {
         .to_path_buf()
 }
 
+/// What Pina Studio's MCP server is called to the agents: its tools are `mcp__pina__…`, which is
+/// what's allowed and what the panel reads.
+const SERVER: &str = "pina";
+
 /// Claude Code with Pina Studio's tools and nothing else: no shell, no files, no one else's MCP servers
 /// or hooks; anything else asked for is refused, not asked about.
 pub(crate) fn claude_command(
@@ -42,7 +50,7 @@ pub(crate) fn claude_command(
     resume: Option<&str>,
 ) -> Result<Child, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mcp = json!({ "mcpServers": { "tempo": { "command": exe, "args": ["mcp"] } } });
+    let mcp = json!({ "mcpServers": { SERVER: { "command": exe, "args": ["mcp"] } } });
     Command::new(cmd)
         .args(tuning_args(Kind::ClaudeCode, tuning, resume))
         .args(["-p", "--verbose", "--include-partial-messages"])
@@ -53,7 +61,7 @@ pub(crate) fn claude_command(
             "stream-json",
         ])
         .args(["--strict-mcp-config", "--mcp-config", &mcp.to_string()])
-        .args(["--tools", "", "--allowedTools", "mcp__pina"])
+        .args(["--tools", "", "--allowedTools", &format!("mcp__{SERVER}")])
         .args(["--permission-prompts", "none", "--setting-sources", ""])
         .args(["--append-system-prompt", &instructions(project)])
         .current_dir(workdir(project))
@@ -160,7 +168,7 @@ pub(crate) fn codex_isolation(exe: &Path, servers: &[String]) -> Vec<String> {
     let mut a = vec![
         "-c".into(),
         format!(
-            "mcp_servers.pina={{command={:?},args=[\"mcp\"],default_tools_approval_mode=\"approve\"}}",
+            "mcp_servers.{SERVER}={{command={:?},args=[\"mcp\"],default_tools_approval_mode=\"approve\"}}",
             exe.display().to_string()
         ),
     ];

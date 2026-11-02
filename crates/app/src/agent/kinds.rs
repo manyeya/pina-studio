@@ -103,4 +103,59 @@ impl Kind {
             },
         }
     }
+
+    /// What one of its errors means and what to do, in plain words, when it's one of the usual
+    /// ones ("workspace routing discovery failed" is Codex not reaching OpenAI); else none.
+    pub fn explain(self, error: &str) -> Option<String> {
+        let def = self.def();
+        let maker = match self {
+            Kind::ClaudeCode => "Anthropic",
+            Kind::Codex => "OpenAI",
+        };
+        let e = error.to_lowercase();
+        let has = |words: &[&str]| words.iter().any(|w| e.contains(w));
+        if has(&[
+            "usage limit",
+            "rate limit",
+            "429",
+            "quota",
+            "too many requests",
+        ]) {
+            Some(format!(
+                "{} has hit its usage limit. Try again later, or ask the other agent.",
+                def.name
+            ))
+        } else if has(&[
+            "401",
+            "unauthorized",
+            "not logged in",
+            "log in again",
+            "login",
+            "token expired",
+        ]) {
+            Some(format!(
+                "{} isn't signed in any more. Run {} in a terminal, then try again.",
+                def.name, def.sign_in
+            ))
+        } else if has(&[
+            "routing discovery",
+            "error sending request",
+            "connection",
+            "timed out",
+            "stream disconnected",
+            "network",
+            "dns",
+            "overloaded",
+            "503",
+            "502",
+        ]) {
+            Some(format!(
+                "{} couldn't reach {maker}. Check your internet or VPN and try again; if it keeps \
+                 happening, ask the other agent.",
+                def.name
+            ))
+        } else {
+            None
+        }
+    }
 }

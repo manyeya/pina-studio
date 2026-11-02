@@ -35,6 +35,7 @@ fn speaks_mcp() {
             "reference",
             "sounds",
             "mix",
+            "learn",
             "master",
             "transport",
             "plugins",
@@ -45,7 +46,15 @@ fn speaks_mcp() {
             "samples_kit",
             "samples_put",
             "palette",
-            "samples_library"
+            "samples_library",
+            "midi_find",
+            "midi_group",
+            "present",
+            "midi_write",
+            "midi_study",
+            "reference_study",
+            "reference_create",
+            "reference_compare"
         ]
     );
 
@@ -77,6 +86,52 @@ fn speaks_mcp() {
         "notes": [{"start": 0, "length": 960, "pitch": 69, "velocity": 100}]}}),
     );
     assert!(!err);
+    // MIDI written like a group, heard against it, and the song left alone.
+    let write = |id, name: &str, notes: &str, like: Value| {
+        tool(
+            id,
+            "midi_write",
+            json!({"project": project, "name": name, "tempo": 120, "key": "A minor",
+                "parts": [{"name": "Stabs", "notes": notes}], "like": like}),
+        )
+    };
+    let stabs = "1.3 A3 1 100\n1.7 C4 1 90\n1.11 E4 1 100\n1.15 A3 1 90";
+    let (text, err) = write(30, "One", stabs, json!([]));
+    assert!(!err, "{text}");
+    let one: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(one["bars"], 1);
+    let first = one["file"].as_str().unwrap().to_string();
+    assert!(first.ends_with("MIDI/One.mid"), "{first}");
+    // The same name doesn't write over it.
+    let (text, _) = write(31, "One", stabs, json!([first]));
+    let two: Value = serde_json::from_str(&text).unwrap();
+    assert!(
+        two["file"].as_str().unwrap().ends_with("MIDI/One 2.mid"),
+        "{two}"
+    );
+    assert!(two["likeness"]["score"].as_f64().unwrap() > 0.95, "{two}");
+    let (text, err) = tool(
+        32,
+        "midi_group",
+        json!({"files": [first, two["file"]], "candidate": two["file"]}),
+    );
+    assert!(!err, "{text}");
+    let heard: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(heard["shared"]["files"], 2);
+    assert_eq!(heard["shared"]["steps"][2], 1.0);
+    assert!(
+        heard["likeness"]["rhythm"].as_f64().unwrap() > 0.99,
+        "{heard}"
+    );
+    // Its name doesn't make it drums.
+    let (text, _) = write(34, "Off Beat Stabs", stabs, json!([]));
+    let named: Value = serde_json::from_str(&text).unwrap();
+    assert!(
+        !named["summary"].as_str().unwrap().contains("drums"),
+        "{named}"
+    );
+    let (text, err) = write(33, "Bad", "not a note", json!([]));
+    assert!(err && text.contains("line 1"), "{text}");
     let (text, err) = tool(5, "analyze", json!({"path": project}));
     assert!(!err, "{text}");
     let measured: Value = serde_json::from_str(&text).unwrap();
@@ -98,4 +153,39 @@ fn speaks_mcp() {
     );
     assert!(err && text.contains("doesn't have"));
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn playbooks_are_used_only_when_the_person_asks() {
+    // Nothing tells an agent to start from one: only to use one when asked.
+    for text in [INSTRUCTIONS, produce::WORKFLOW] {
+        assert!(text.contains("only when"), "{text}");
+        assert!(!text.contains("playbook <genre>") && !text.contains("`playbook` for"));
+    }
+    let list = answer(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).unwrap();
+    let tool = list["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "playbook")
+        .unwrap()
+        .clone();
+    assert!(
+        tool["description"]
+            .as_str()
+            .unwrap()
+            .contains("only when the person asks")
+    );
+}
+
+#[test]
+fn agents_are_told_to_write_the_music_themselves() {
+    let prompt = crate::agent::commands::instructions(std::path::Path::new("/song"));
+    for text in [INSTRUCTIONS, produce::WORKFLOW, prompt.as_str()] {
+        assert!(text.contains("yourself"), "{text}");
+        assert!(
+            !text.contains("write_") && !text.contains("arrange"),
+            "{text}"
+        );
+    }
 }

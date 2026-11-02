@@ -126,6 +126,10 @@ pub fn chosen() -> Kind {
 }
 
 pub fn choose(kind: Kind) {
+    // Tests never change which agent the person chose.
+    if cfg!(test) {
+        return;
+    }
     let file = choice_file();
     let _ = std::fs::create_dir_all(file.parent().unwrap());
     let _ = std::fs::write(file, kind.def().id);

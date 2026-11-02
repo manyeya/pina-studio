@@ -76,6 +76,7 @@ impl Workspace {
         if let Some(problem) = problem {
             self.chat.asked(text);
             self.chat.end(0.0, false, Some(problem));
+            self.agent_unavailable(cx);
             cx.notify();
             return;
         }
@@ -93,12 +94,26 @@ impl Workspace {
                 _ => a.tuning = self.chat.tuning.clone(),
             }
         }
+        // Carrying one on from before: as the agent knows it, or else it's told what was said.
+        let mut told = None;
         if self.chat.agent.is_none() {
+            if resume.is_none() {
+                resume = self.chat.session.clone();
+                self.chat.carrying = resume.is_some().then(|| text.clone());
+            }
+            if resume.is_none() && self.chat.has_questions() {
+                told = Some(self.chat.recap());
+            }
             // A new conversation hears the palette afresh.
             if resume.is_none() {
                 self.chat.palette_heard = None;
             }
             let tuning = self.chat.tuning.clone();
+            #[cfg(test)]
+            if let Some(c) = &self.chat.command {
+                // SAFETY: only the test with the stand-in asks an agent while it's set.
+                unsafe { std::env::set_var("PINA_CLAUDE", c) };
+            }
             match Agent::start(self.chat.kind, &self.session.dir, tuning, resume) {
                 Ok((agent, mut events)) => {
                     self.chat.run += 1;
@@ -133,6 +148,7 @@ impl Workspace {
                 Err(e) => {
                     self.chat.asked(text);
                     self.chat.end(0.0, false, Some(e));
+                    self.agent_unavailable(cx);
                     cx.notify();
                     return;
                 }
@@ -147,15 +163,31 @@ impl Workspace {
         if let Some(sounds) = self.palette_note() {
             full = format!("{sounds}\n\n{full}");
         }
+        let given = self.midi_note();
+        if let Some((note, _)) = &given {
+            full = format!("{note}\n\n{full}");
+        }
+        if let Some(said) = told {
+            full = format!(
+                "(You and the person have talked about this song before. What was said:\n\n{said}\n\nCarry on from there.)\n\n{full}"
+            );
+        }
         if !self.chat.busy {
             self.chat.before = Some(self.session.project.clone());
         }
         let sent = self.chat.agent.as_mut().map(|a| a.ask(&full));
         self.chat.asked(text);
+        for path in given.into_iter().flat_map(|g| g.1) {
+            self.chat.items.push(Item::Midi { path, given: true });
+        }
         if let Some(Err(e)) = sent {
             self.chat.agent = None;
+            if self.carry_on_without_it(cx) {
+                return;
+            }
             self.chat.end(0.0, false, Some(e));
         }
+        self.keep_chat();
         if keep {
             self.chat.scroll.scroll_to_bottom();
         }
@@ -165,11 +197,52 @@ impl Workspace {
     /// Takes in an event from Claude, keeping the end of the transcript in view.
     pub(crate) fn heard_claude(&mut self, e: Event, cx: &mut Context<Self>) {
         let keep = self.chat.at_end();
+        let over = matches!(e, Event::Done { .. });
+        match &e {
+            Event::Done { error: Some(_), .. } if self.carry_on_without_it(cx) => return,
+            Event::Text { .. } | Event::ToolStart { .. } | Event::Tool { .. } => {
+                self.chat.carrying = None;
+            }
+            _ => {}
+        }
+        let wrote = self.heard_midi(&e);
+        if over {
+            self.note_changes();
+        }
         self.chat.apply(e);
+        if let Some(path) = wrote {
+            self.chat.items.push(Item::Midi { path, given: false });
+        }
+        if over {
+            self.agent_turn_over(cx);
+            self.keep_chat();
+        }
         if keep {
             self.chat.scroll.scroll_to_bottom();
         }
         cx.notify();
+    }
+
+    /// Carrying a conversation on, the agent turned out not to remember it (the song's moved, or
+    /// it's too old): the question goes again to one told what was said. Whether that's how it
+    /// was. The agent says so only by failing, and any other failure comes round again and
+    /// is shown then.
+    fn carry_on_without_it(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(text) = self.chat.carrying.take() else {
+            return false;
+        };
+        let asked = self
+            .chat
+            .items
+            .iter()
+            .rposition(|i| matches!(i, Item::You(_)));
+        self.chat.items.truncate(asked.unwrap_or(0));
+        self.chat.run += 1;
+        self.chat.agent = None;
+        self.chat.session = None;
+        self.chat.busy = false;
+        self.ask_agent(text, cx);
+        true
     }
 
     /// An event from a `pina ask` in a terminal: the panel opens to show it.
@@ -182,6 +255,37 @@ impl Workspace {
         self.heard_claude(e, cx);
     }
 
+    /// The last question, asked again after it went wrong.
+    pub(crate) fn retry_agent(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = self.chat.last_question() else {
+            return;
+        };
+        // A conversation that never got going starts again, so it hears Pina Studio's
+        // instructions with the question.
+        if self
+            .chat
+            .agent
+            .as_ref()
+            .is_some_and(|a| a.session().is_none())
+        {
+            self.chat.agent = None;
+        }
+        // What went with it goes with it again.
+        self.chat.attached = self.chat.last_given();
+        self.ask_agent(text, cx);
+    }
+
+    /// The last question asked of the other agent instead, in a new conversation with it.
+    pub(crate) fn ask_other_agent(&mut self, cx: &mut Context<Self>) {
+        let (Some(text), Some(other)) = (self.chat.last_question(), self.chat.other_kind()) else {
+            return;
+        };
+        let given = self.chat.last_given();
+        self.pick_agent(other, cx);
+        self.chat.attached = given;
+        self.ask_agent(text, cx);
+    }
+
     pub(crate) fn stop_agent(&mut self, cx: &mut Context<Self>) {
         if let Some(a) = self.chat.agent.as_mut() {
             a.interrupt();
@@ -189,15 +293,16 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A new conversation: the one running ends.
+    /// A new conversation: the one showing is kept, to come back to, and ends if it's running.
     pub(crate) fn new_chat(&mut self, cx: &mut Context<Self>) {
-        self.chat.run += 1;
-        self.chat.agent = None;
-        self.chat.palette_heard = None;
-        self.chat.items.clear();
-        self.chat.busy = false;
-        self.chat.remote = false;
-        self.chat.since = None;
+        self.keep_chat();
+        self.clear_chat();
+        self.chat.page = ChatPage::Chat;
         cx.notify();
+    }
+
+    /// Leaves a new conversation showing.
+    pub(crate) fn clear_chat(&mut self) {
+        self.chat.forget();
     }
 }

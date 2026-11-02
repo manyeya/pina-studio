@@ -69,7 +69,8 @@ pub const LANE_H: f32 = 76.0;
 pub const MIN_LANE_H: f32 = 40.0;
 pub const MAX_LANE_H: f32 = 240.0;
 /// A stack's own row, above its tracks.
-pub const STACK_H: f32 = 36.0;
+pub const STACK_H: f32 = 48.0;
+pub const MIN_STACK_H: f32 = 36.0;
 pub const EDITOR_H: f32 = 296.0;
 /// The shortest the editor can be dragged.
 pub const EDITOR_MIN_H: f32 = 160.0;
@@ -139,7 +140,6 @@ pub enum Icon {
     Output,
     More,
     Scale,
-    Ghost,
     Export,
     Plug,
     Search,
@@ -157,6 +157,7 @@ pub enum Icon {
     PanelRight,
     Send,
     Check,
+    Copy,
     Settings,
     Text,
     Glue,
@@ -164,7 +165,7 @@ pub enum Icon {
     Mute,
     Zoom,
     Fade,
-    Flex,
+    Stretch,
     Power,
     Trash,
     Pulse,
@@ -271,7 +272,7 @@ impl Icon {
                 r##"<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/>"##
             }
             Icon::Fade => r##"<path d="M3 20C10 20 14 13 21 4"/><path d="M3 20h18"/>"##,
-            Icon::Flex => r##"<path d="m18 8 4 4-4 4M6 8l-4 4 4 4M2 12h20"/>"##,
+            Icon::Stretch => r##"<path d="m18 8 4 4-4 4M6 8l-4 4 4 4M2 12h20"/>"##,
             Icon::Power => r##"<path d="M12 3v8M6.3 7.3a8 8 0 1 0 11.4 0"/>"##,
             Icon::Trash => r##"<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>"##,
             Icon::Pulse => r##"<path d="M3 12h3l3-7 4 14 3-7h5"/>"##,
@@ -296,9 +297,6 @@ impl Icon {
                 r##"<circle fill="#000" stroke="none" cx="6" cy="12" r="1.6"/><circle fill="#000" stroke="none" cx="12" cy="12" r="1.6"/><circle fill="#000" stroke="none" cx="18" cy="12" r="1.6"/>"##
             }
             Icon::Scale => r##"<path d="M4 7h16M4 12h16M4 17h10"/>"##,
-            Icon::Ghost => {
-                r##"<rect stroke-dasharray="3 2.5" x="3.5" y="7" width="17" height="10" rx="2.5"/>"##
-            }
             Icon::Export => r##"<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/>"##,
             Icon::Plug => {
                 r##"<path d="M9 3.5v4M15 3.5v4M6.5 7.5h11v3a5.5 5.5 0 0 1-11 0zM12 16v4.5"/>"##
@@ -326,6 +324,9 @@ impl Icon {
             Icon::Back => r##"<path d="M14.5 6l-6 6 6 6"/>"##,
             Icon::Forward => r##"<path d="M9.5 6l6 6-6 6"/>"##,
             Icon::Send => r##"<path stroke-width="2.25" d="M12 19V5.5M6.5 11L12 5.5 17.5 11"/>"##,
+            Icon::Copy => {
+                r##"<rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5.5 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v.5"/>"##
+            }
             Icon::Check => r##"<path stroke-width="2.25" d="M5 12.5l4.5 4.5L19 7.5"/>"##,
             Icon::Expand => {
                 r##"<path d="M14 4.5h5.5V10M10 19.5H4.5V14M19.5 4.5l-6 6M4.5 19.5l6-6"/>"##

@@ -1,4 +1,4 @@
-use super::*;
+use super::tuning::model_name;
 
 #[test]
 fn model_ids_read_as_names() {

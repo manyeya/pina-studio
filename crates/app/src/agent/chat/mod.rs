@@ -1,17 +1,33 @@
-//! The Agent panel, beside the tracks: a conversation with Claude about the song. What it's
-//! thinking, saying and doing shows as it happens and its edits land in the song as it makes
-//! them; a `pina ask` from a terminal shows here too, and so does any other agent's editing.
+//! The Studio Agent panel, beside the tracks: a conversation about the song, with Claude Code or
+//! Codex doing the work. What it's thinking, saying and doing shows as it happens, as words or as
+//! cards it chooses, and its edits land in the song as it makes them; a `pina ask` from a terminal
+//! shows here too, and so does any other agent's editing. Conversations are kept with the song.
 
 mod asking;
+mod cards;
+mod changes;
+mod history;
+mod midi;
 mod panel;
+mod rich;
 mod transcript;
 mod tuning;
 
 pub use asking::*;
+pub(crate) use cards::*;
+pub use changes::*;
+pub use history::*;
+pub use midi::*;
+pub use rich::Spot;
+pub(crate) use rich::*;
 pub use transcript::*;
-pub(crate) use tuning::*;
 
-use std::time::{Duration, Instant};
+use std::{
+    cell::RefCell,
+    collections::HashSet,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use futures::StreamExt;
 use gpui::{
@@ -28,8 +44,11 @@ use crate::{
     workspace::Workspace,
 };
 
+/// How long a copy button stays ticked.
+const COPIED_FOR: Duration = Duration::from_millis(1400);
+
 /// How a tool call went.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Step {
     Running,
     Done,
@@ -37,7 +56,7 @@ pub enum Step {
 }
 
 /// A line of the conversation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Item {
     /// What was asked.
     You(String),
@@ -53,6 +72,18 @@ pub enum Item {
     },
     /// An edit by an agent outside the conversation.
     Outside(String),
+    /// The song compared with its reference: by what, and what it found.
+    Compared {
+        reference: String,
+        lines: Vec<String>,
+    },
+    /// A MIDI file: given with the question, or written by the agent.
+    Midi {
+        path: std::path::PathBuf,
+        given: bool,
+    },
+    /// What the turn did to the song.
+    Changes { lines: Vec<Change> },
     /// The end of an answer: how long it took, how many steps, whether it was stopped, or what
     /// went wrong.
     End {
@@ -89,22 +120,63 @@ pub struct Chat {
     pub tuning: agent::Tuning,
     /// The palette as the agent was last told it, so it's told again only when it changes.
     pub palette_heard: Option<pina_engine::song::project::Palette>,
+    /// The page showing.
+    pub page: ChatPage,
+    /// The MIDI in reach, and the song it's for.
+    pub shelf: Vec<MidiCard>,
+    pub shelf_of: std::path::PathBuf,
+    /// What goes with the next message.
+    pub attached: Vec<std::path::PathBuf>,
+    /// The card on its way to being heard, and the one that is: since when, how long it lasts.
+    pub wanted: Option<usize>,
+    pub hearing: Option<(usize, Instant, f32)>,
+    /// The conversation showing: its file, title (named by hand or not), when it began, and what
+    /// the agent calls it, for carrying it on when it next starts.
+    pub id: Option<String>,
+    pub title: String,
+    pub named: bool,
+    pub started: Option<u64>,
+    pub session: Option<String>,
+    /// What was asked of a conversation being carried on, until the agent shows it remembers.
+    pub carrying: Option<String>,
+    /// The song's other conversations, the song they're of, and the search through them.
+    pub past: Vec<Past>,
+    pub past_of: std::path::PathBuf,
+    pub find: Entity<TextInput>,
+    /// What's selected in the conversation, from where it began to where it's got to, and its
+    /// text as last drawn.
+    pub pick: Option<(Spot, Spot)>,
+    pub shown: Rc<RefCell<Vec<Marked>>>,
+    /// Runs of steps and lists opened, by where they are in the conversation.
+    pub opened: HashSet<usize>,
+    /// What was last copied, for its button's tick.
+    pub copied: Option<(String, Instant)>,
+    /// The program to run instead of the agent's own: a stand-in, for tests.
+    #[cfg(test)]
+    pub command: Option<std::path::PathBuf>,
     _sent: Subscription,
+    _found: Subscription,
 }
 
 impl Chat {
     pub fn new(cx: &mut Context<Workspace>) -> Self {
         // It wraps and grows as it's written in, up to 8 lines; ⇧Enter starts a new line.
         let input = cx.new(|cx| {
-            TextInput::writing("Ask Claude to make, change or mix…", 8, cx).typed(
+            TextInput::writing("Ask for anything: make, change, mix…", 8, cx).typed(
                 13.,
                 19.,
                 FontWeight::NORMAL,
             )
         });
         let sent = cx.subscribe(&input, |ws, input, e: &TextEvent, cx| match e {
-            TextEvent::Confirm(text) if !text.is_empty() && !ws.chat.busy => {
-                let text = text.clone();
+            TextEvent::Confirm(text)
+                if !ws.chat.busy && (!text.is_empty() || !ws.chat.attached.is_empty()) =>
+            {
+                // MIDI on its own: what's it for is to be read.
+                let text = match text.is_empty() {
+                    true => "Study what I've given you and tell me what you hear.".to_string(),
+                    false => text.clone(),
+                };
                 input.update(cx, |i, cx| i.set_text("", cx));
                 ws.ask_agent(text, cx);
             }
@@ -112,6 +184,8 @@ impl Chat {
             _ => {}
         });
         check_agents(None, cx);
+        let find = find_field(cx);
+        let found = cx.observe(&find, |_, _, cx| cx.notify());
         Chat {
             items: Vec::new(),
             kind: if cfg!(test) {
@@ -132,8 +206,30 @@ impl Chat {
             before: None,
             use_selection: true,
             palette_heard: None,
+            page: ChatPage::Chat,
+            shelf: Vec::new(),
+            shelf_of: std::path::PathBuf::new(),
+            attached: Vec::new(),
+            wanted: None,
+            hearing: None,
             tuning: agent::tuning(agent::chosen()),
+            id: None,
+            title: String::new(),
+            named: false,
+            started: None,
+            session: None,
+            carrying: None,
+            past: Vec::new(),
+            past_of: std::path::PathBuf::new(),
+            find,
+            pick: None,
+            shown: Rc::default(),
+            opened: HashSet::new(),
+            copied: None,
+            #[cfg(test)]
+            command: None,
             _sent: sent,
+            _found: found,
         }
     }
 
@@ -158,15 +254,18 @@ impl Chat {
                 input: Value::Null,
                 step: Step::Running,
             }),
-            Event::Tool { id, name, input } => match self.tool(&id) {
-                Some(Item::Tool { input: i, .. }) => *i = input,
-                _ => self.items.push(Item::Tool {
-                    id,
-                    name,
-                    input,
-                    step: Step::Running,
-                }),
-            },
+            Event::Tool { id, name, input } => {
+                match self.tool(&id) {
+                    Some(Item::Tool { input: i, .. }) => *i = input,
+                    _ => self.items.push(Item::Tool {
+                        id: id.clone(),
+                        name,
+                        input,
+                        step: Step::Running,
+                    }),
+                }
+                self.update_card(&id);
+            }
             Event::ToolDone { id, ok, output } => {
                 if let Some(Item::Tool { step, .. }) = self.tool(&id) {
                     *step = match ok {
@@ -227,12 +326,34 @@ impl Chat {
             .find(|i| matches!(i, Item::Tool { id: x, .. } if x == id))
     }
 
+    /// What was asked last.
+    pub(crate) fn last_question(&self) -> Option<String> {
+        self.items.iter().rev().find_map(|i| match i {
+            Item::You(t) => Some(t.clone()),
+            _ => None,
+        })
+    }
+
+    /// The agent besides this one, unless it's known not to be installed.
+    pub(crate) fn other_kind(&self) -> Option<Kind> {
+        agent::AGENTS
+            .iter()
+            .map(|d| d.kind)
+            .find(|&k| k != self.kind)
+            .filter(|&k| !matches!(self.readiness(k), Some(Readiness::Missing)))
+    }
+
+    /// Whether the last answer went wrong (and nothing's running now).
+    pub(crate) fn failed(&self) -> bool {
+        !self.busy && matches!(self.items.last(), Some(Item::End { error: Some(_), .. }))
+    }
+
     /// Whether `kind` can work here; None until asked.
     pub fn readiness(&self, kind: Kind) -> Option<&Readiness> {
         self.ready.iter().find(|(k, _)| *k == kind).map(|(_, r)| r)
     }
 
-    /// Ends the conversation, for another song.
+    /// Puts the conversation down, leaving a new one: nothing kept is touched.
     pub fn forget(&mut self) {
         self.run += 1;
         self.agent = None;
@@ -240,6 +361,23 @@ impl Chat {
         self.busy = false;
         self.remote = false;
         self.since = None;
+        self.id = None;
+        self.title.clear();
+        self.named = false;
+        self.started = None;
+        self.session = None;
+        self.carrying = None;
+        self.palette_heard = None;
+        self.before = None;
+        self.pick = None;
+        self.opened.clear();
+    }
+
+    /// The agent let go, keeping what's said.
+    #[cfg(test)]
+    pub(crate) fn agent_gone(&mut self) {
+        self.run += 1;
+        self.agent = None;
     }
 
     /// Notes an edit by an agent outside the conversation.
@@ -248,6 +386,14 @@ impl Chat {
         if self.items.len() > 400 {
             self.items.remove(0);
         }
+    }
+
+    /// Notes the song compared with its reference: its likeness and biggest differences.
+    pub fn compared(&mut self, reference: &str, lines: Vec<String>) {
+        self.items.push(Item::Compared {
+            reference: reference.to_string(),
+            lines,
+        });
     }
 
     /// Whether the transcript is scrolled to (nearly) its end, so new lines should keep it there.

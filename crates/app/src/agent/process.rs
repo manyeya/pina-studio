@@ -258,7 +258,10 @@ pub fn ask(kind: Kind, dir: &Path, words: &str) -> Result<(), String> {
             } => {
                 let s = if steps == 1 { "" } else { "s" };
                 line(match (error, stopped) {
-                    (Some(e), _) => format!("{red}{e}{off}"),
+                    (Some(e), _) => match kind.explain(&e) {
+                        Some(plain) => format!("{red}{plain}{off}\n  {dim}{e}{off}"),
+                        None => format!("{red}{e}{off}"),
+                    },
                     (None, true) => {
                         format!("{dim}stopped after {seconds:.0}s · {steps} step{s}{off}")
                     }
