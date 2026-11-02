@@ -61,8 +61,22 @@ impl Workspace {
             let mono: Vec<f32> = (0..n)
                 .map(|i| sides.iter().map(|s| s[i]).sum::<f32>() / sides.len() as f32)
                 .collect();
+            // Its loudness in steps: each one's RMS.
+            let step = n.div_ceil(LOUD).max(1);
+            let loud = (0..LOUD)
+                .map(|k| {
+                    let part = &mono[(k * step).min(n)..((k + 1) * step).min(n)];
+                    match part.is_empty() {
+                        true => 0.0,
+                        false => {
+                            (part.iter().map(|x| x * x).sum::<f32>() / part.len() as f32).sqrt()
+                        }
+                    }
+                })
+                .collect();
             Some(Wave {
                 peaks: Peaks::from_samples(&mono),
+                loud,
                 len: n,
                 seconds: n as f32 / rate as f32,
                 onsets: onsets(&mono, rate as f32),
@@ -133,7 +147,12 @@ impl Workspace {
         ) {
             Ok(_) => {
                 self.sampler_ui.zone = count.saturating_sub(1);
+                self.sampler_ui.view = None;
                 self.changed(cx);
+                // One sound across the keys: its root as heard.
+                if across {
+                    self.detect_root(t, 0, cx);
+                }
             }
             Err(e) => {
                 self.session.cancel();
@@ -236,7 +255,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A mark on the waveform dragged: the zone's start, end or loop points.
+    /// A mark on the waveform dragged: the zone's start, end or loop points, or where grains
+    /// read.
     pub(crate) fn drag_mark(&mut self, p: Point<f32>) {
         let Some(Drag::Mark {
             track,
@@ -248,7 +268,8 @@ impl Workspace {
         else {
             return;
         };
-        let at = ((p.x - left) / width.max(1.0)).clamp(0.0, 1.0);
+        let (a, b) = self.sampler_ui.view.unwrap_or((0.0, 1.0));
+        let at = (a + (p.x - left) / width.max(1.0) * (b - a)).clamp(0.0, 1.0);
         if let Some(Some(Instrument::Sampler(s))) = self
             .session
             .project
@@ -259,6 +280,11 @@ impl Workspace {
         {
             let end = z.end.unwrap_or(1.0);
             match mark {
+                Mark::Position => {
+                    let span = (end - z.start).max(1e-6);
+                    s.voice.position =
+                        (((at - z.start) / span).clamp(0.0, 1.0) * 1000.0).round() / 1000.0;
+                }
                 Mark::Start => z.start = at.min(end - 0.001),
                 Mark::End => z.end = Some(at.max(z.start + 0.001)).filter(|&e| e < 0.9995),
                 Mark::LoopStart => {
@@ -269,5 +295,110 @@ impl Workspace {
                 }
             }
         }
+    }
+}
+
+impl Workspace {
+    /// A choice from one of the sampler's menus.
+    pub(crate) fn sampler_op(&mut self, op: SamplerOp, cx: &mut Context<Self>) {
+        match op {
+            SamplerOp::Route {
+                track,
+                slot,
+                source,
+                dest,
+            } => self.edit_sampler(track, cx, |s| {
+                let r = &mut s.voice.matrix.slots_mut()[slot.min(7)];
+                if let Some(source) = source {
+                    r.source = source;
+                }
+                if let Some(dest) = dest {
+                    r.dest = dest;
+                }
+            }),
+            SamplerOp::Filter { track, mode } => {
+                self.edit_sampler(track, cx, |s| s.voice.filter = mode)
+            }
+            SamplerOp::Vintage {
+                track,
+                khz,
+                bits,
+                filter,
+            } => self.edit_sampler(track, cx, |s| {
+                s.voice.character = SampleCharacter::Vintage;
+                (s.voice.crush_khz, s.voice.bits, s.voice.crush_filter) = (khz, bits, filter);
+            }),
+        }
+    }
+
+    /// A zone's root and tuning as its sample is heard (what it plays of it), worked out in the
+    /// background; said in the status bar.
+    pub(crate) fn detect_root(&mut self, t: usize, zone: usize, cx: &mut Context<Self>) {
+        let Some(z) = self.sampler_of(t).and_then(|s| s.zones.get(zone)).cloned() else {
+            return;
+        };
+        self.sampler_ui.hearing = Some(zone);
+        cx.notify();
+        let full = self.session.dir.join(&z.file);
+        let (start, end) = (z.start, z.end.unwrap_or(1.0));
+        let job = cx.background_spawn(async move {
+            let (sides, rate) = read_audio(&full).ok()?;
+            let n = sides.first()?.len();
+            let (a, b) = (
+                (start * n as f32) as usize,
+                ((end * n as f32) as usize).min(n),
+            );
+            let mono: Vec<f32> = (a..b)
+                .map(|i| sides.iter().map(|s| s[i]).sum::<f32>() / sides.len() as f32)
+                .collect();
+            pitch(&mono, rate as f32)
+        });
+        cx.spawn(async move |this, cx| {
+            let heard = job.await;
+            this.update(cx, |ws, cx| {
+                ws.sampler_ui.hearing = None;
+                let Some(hz) = heard else {
+                    ws.status =
+                        Some("No steady pitch to hear in that sample: its root stays.".into());
+                    cx.notify();
+                    return;
+                };
+                let (note, cents) = note_of(hz);
+                ws.edit_sampler(t, cx, |s| {
+                    if let Some(z) = s.zones.get_mut(zone) {
+                        z.root = Some(note);
+                        z.tune_cents = -cents.round();
+                    }
+                });
+                ws.status = Some(format!(
+                    "Heard {} ({:.1} Hz, {:+.0} cents): its root",
+                    name_in(None, note),
+                    hz,
+                    cents
+                ));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Each frame the sampler's open: where its voices are playing. Whether anything is.
+    pub fn sampler_frame(&mut self) -> bool {
+        let id = match self.bottom {
+            Some(crate::workspace::Bottom::Sampler) => self
+                .sampler_track()
+                .map(|t| self.session.project.tracks[t].id),
+            _ => None,
+        };
+        #[allow(unused_mut)]
+        let mut now = id
+            .and_then(|id| self.player.sampler_tap(id))
+            .map_or_else(Vec::new, |tap| tap.read());
+        #[cfg(test)]
+        now.extend(self.sampler_ui.pretend.iter().copied());
+        let moving = !now.is_empty() || !self.sampler_ui.playing.is_empty();
+        self.sampler_ui.playing = now;
+        moving
     }
 }

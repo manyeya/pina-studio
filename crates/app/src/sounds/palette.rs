@@ -112,9 +112,22 @@ pub fn how_to_use(d: &PaletteDevice) -> String {
         Some("synth") => "Pina Studio's own: \"instrument\": \"synth\"",
         Some("drums") => "Pina Studio's own: \"instrument\": \"drums\"",
         Some("sampler") => "Pina Studio's own: samples_put puts sounds on it",
+        Some("poly") => "Pina Studio's own synth: set_synth (a patch, its oscillators, its voice)",
         Some("eq") => "Pina Studio's own: set_eq",
         Some("comp") => "Pina Studio's own: set_comp",
         Some("sat") => "Pina Studio's own: set_saturator",
+        Some("reverb") => "Pina Studio's own: set_reverb (on an aux tracks send to, mix 1)",
+        Some("delay") => "Pina Studio's own: set_delay (on an aux tracks send to, mix 1)",
+        Some("filter") => "Pina Studio's own: set_fx, \"fx\": \"filter\"",
+        Some("motion") => "Pina Studio's own: set_fx, \"fx\": \"motion\"",
+        Some("shaper") => "Pina Studio's own: set_fx, \"fx\": \"shaper\"",
+        Some("gate") => "Pina Studio's own: set_fx, \"fx\": \"gate\"",
+        Some("de_esser") => "Pina Studio's own: set_fx, \"fx\": \"de_esser\"",
+        Some("stereo") => "Pina Studio's own: set_fx, \"fx\": \"stereo\"",
+        Some("multiband") => "Pina Studio's own: set_fx, \"fx\": \"multiband\"",
+        Some("pitch") => "Pina Studio's own: set_fx, \"fx\": \"pitch\"",
+        Some("tape_stop") => "Pina Studio's own: set_fx, \"fx\": \"tape_stop\"",
+        Some("tune") => "Pina Studio's own: set_fx, \"fx\": \"tune\" (its notes the song's key)",
         _ => "",
     }
     .into()
@@ -210,8 +223,8 @@ impl Workspace {
             }
         });
         self.status = Some(match had {
-            true => format!("{name} taken out of what the agent uses"),
-            false => format!("{name} is for the agent · {} picked", self.picked()),
+            true => format!("{name} taken out of what the Studio Agent uses"),
+            false => format!("{name} is for the Studio Agent · {} picked", self.picked()),
         });
         cx.notify();
     }
@@ -235,8 +248,8 @@ impl Workspace {
             }
         });
         self.status = Some(match had {
-            true => format!("{name} taken out of the agent's sounds"),
-            false => format!("{name} is for the agent · {} picked", self.picked()),
+            true => format!("{name} taken out of the Studio Agent's sounds"),
+            false => format!("{name} is for the Studio Agent · {} picked", self.picked()),
         });
         cx.notify();
     }
@@ -257,7 +270,7 @@ impl Workspace {
         let n = new.len();
         self.edit(cx, |ws| ws.session.project.palette.sounds.extend(new));
         self.status = Some(format!(
-            "{n} sound{} for the agent",
+            "{n} sound{} for the Studio Agent",
             if n == 1 { "" } else { "s" }
         ));
         cx.notify();
@@ -400,7 +413,7 @@ impl Workspace {
         };
         let tick = |on: bool| if on { "✓ " } else { "" };
         let mut items = vec![(
-            format!("{}Any part (the agent decides)", tick(now.is_none())),
+            format!("{}Any part (the Studio Agent decides)", tick(now.is_none())),
             MenuAction::Palette(PaletteOp::Role(i, None)),
         )];
         items.push((String::new(), MenuAction::Nothing));
@@ -596,7 +609,7 @@ impl Workspace {
                                 .text_size(px(11.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(TEXT_2))
-                                .child(format!("For the agent · {n}")),
+                                .child(format!("For the Studio Agent · {n}")),
                         )
                         .child(
                             div()
@@ -753,7 +766,7 @@ impl Workspace {
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(AGENT_TEXT))
-                                .child("Picking for the agent"),
+                                .child("Picking for the Studio Agent"),
                         )
                         .child(
                             div()
@@ -761,7 +774,7 @@ impl Workspace {
                                 .text_color(rgb(TEXT_3))
                                 .child(match n {
                                     0 => {
-                                        "＋ on a sound, instrument or effect gives it to the agent"
+                                        "＋ on a sound, instrument or effect gives it to the Studio Agent"
                                             .to_string()
                                     }
                                     1 => "1 picked".to_string(),
@@ -807,6 +820,23 @@ impl Workspace {
             group,
             cx,
             move |ws, cx| ws.give_agent(path.clone(), cx),
+        )
+    }
+
+    /// The same on a MIDI file: it goes with the next message, to study.
+    pub fn midi_give_button(&self, path: &Path, cx: &mut Context<Self>) -> Div {
+        let on = self.chat.attached.iter().any(|p| p == path);
+        let path = path.to_path_buf();
+        let name = path
+            .file_stem()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.give_toggle(
+            on,
+            format!("give-midi-{name}"),
+            "midi-row",
+            cx,
+            move |ws, cx| ws.give_midi(path.clone(), cx),
         )
     }
 
@@ -906,7 +936,7 @@ impl Workspace {
                     TEXT_3
                 })),
             )
-            .child("Agent")
+            .child("Studio Agent")
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |ws, _, _, cx| ws.give_agent(path.clone(), cx)),

@@ -1,9 +1,10 @@
-//! The zone switches and the keys under the zones.
+//! The zone's switches, and the keys under the zones.
 
 use super::*;
 
 impl Workspace {
-    /// The zone's switches: how it ends, loops and which way it plays.
+    /// The zone's switches: how it ends, loops, which way it plays, its choke group, and when
+    /// it plays (as its note starts, or as it's let go).
     pub(crate) fn zone_switches(
         &mut self,
         t: usize,
@@ -11,6 +12,28 @@ impl Workspace {
         z: &Zone,
         cx: &mut Context<Self>,
     ) -> Div {
+        let set = move |ws: &mut Workspace, cx: &mut Context<Workspace>, f: fn(&mut Zone)| {
+            ws.edit_sampler(t, cx, |s| {
+                if let Some(z) = s.zones.get_mut(i) {
+                    f(z);
+                }
+            });
+        };
+        let switch = |label: &'static str,
+                      on: bool,
+                      sel: &'static str,
+                      f: fn(&mut Zone),
+                      cx: &mut Context<Self>| {
+            pill(label, on, TEXT)
+                .debug_selector(move || sel.into())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, _, _, cx| {
+                        cx.stop_propagation();
+                        set(ws, cx, f);
+                    }),
+                )
+        };
         let looping = z.loop_mode;
         let loops = [
             (LoopMode::Off, "No loop"),
@@ -18,13 +41,12 @@ impl Workspace {
             (LoopMode::PingPong, "Ping-pong"),
         ]
         .map(|(m, label)| {
-            seg(label, looping == m, 22.)
-                .px(px(8.))
-                .text_size(px(11.))
+            pill(label, looping == m, AMBER)
                 .debug_selector(move || format!("loop-{label}"))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |ws, _, _, cx| {
+                        cx.stop_propagation();
                         ws.edit_sampler(t, cx, |s| {
                             if let Some(z) = s.zones.get_mut(i) {
                                 z.loop_mode = m;
@@ -33,88 +55,69 @@ impl Workspace {
                     }),
                 )
         });
-        let switch =
-            |label: &'static str, on: bool| seg(label, on, 22.).px(px(8.)).text_size(px(11.));
+        let choke = match z.choke {
+            Some(g) => {
+                ["Choke 1", "Choke 2", "Choke 3", "Choke 4"][(g as usize).saturating_sub(1).min(3)]
+            }
+            None => "No choke",
+        };
         div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(6.))
             .child(
                 tray()
                     .p(px(2.))
-                    .rounded(px(7.))
-                    .child(
-                        switch("One-shot", !z.gate)
-                            .debug_selector(|| "zone-oneshot".into())
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |ws, _, _, cx| {
-                                    ws.edit_sampler(t, cx, |s| {
-                                        if let Some(z) = s.zones.get_mut(i) {
-                                            z.gate = false
-                                        }
-                                    })
-                                }),
-                            ),
-                    )
-                    .child(
-                        switch("Gate", z.gate)
-                            .debug_selector(|| "zone-gate".into())
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |ws, _, _, cx| {
-                                    ws.edit_sampler(t, cx, |s| {
-                                        if let Some(z) = s.zones.get_mut(i) {
-                                            z.gate = true
-                                        }
-                                    })
-                                }),
-                            ),
-                    ),
+                    .gap(px(1.))
+                    .rounded(px(8.))
+                    .child(switch(
+                        "One-shot",
+                        !z.gate,
+                        "zone-oneshot",
+                        |z| z.gate = false,
+                        cx,
+                    ))
+                    .child(switch("Gate", z.gate, "zone-gate", |z| z.gate = true, cx)),
             )
-            .child(tray().p(px(2.)).rounded(px(7.)).children(loops))
+            .child(tray().p(px(2.)).gap(px(1.)).rounded(px(8.)).children(loops))
             .child(
-                tray().p(px(2.)).rounded(px(7.)).child(
-                    switch("Reverse", z.reverse)
-                        .debug_selector(|| "zone-reverse".into())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |ws, _, _, cx| {
-                                ws.edit_sampler(t, cx, |s| {
-                                    if let Some(z) = s.zones.get_mut(i) {
-                                        z.reverse ^= true
-                                    }
-                                })
-                            }),
-                        ),
-                ),
-            )
-            .child(
-                tray().p(px(2.)).rounded(px(7.)).child(
-                    switch(
-                        match z.choke {
-                            Some(g) => ["Choke 1", "Choke 2", "Choke 3", "Choke 4"]
-                                [(g as usize).saturating_sub(1).min(3)],
-                            None => "No choke",
+                tray()
+                    .p(px(2.))
+                    .gap(px(1.))
+                    .rounded(px(8.))
+                    .child(switch(
+                        "Reverse",
+                        z.reverse,
+                        "zone-reverse",
+                        |z| z.reverse ^= true,
+                        cx,
+                    ))
+                    .child(switch(
+                        "On release",
+                        z.trigger == Trigger::Release,
+                        "zone-release",
+                        |z| {
+                            z.trigger = match z.trigger {
+                                Trigger::Attack => Trigger::Release,
+                                Trigger::Release => Trigger::Attack,
+                            }
                         },
+                        cx,
+                    ))
+                    .child(switch(
+                        choke,
                         z.choke.is_some(),
-                    )
-                    .debug_selector(|| "zone-choke".into())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            ws.edit_sampler(t, cx, |s| {
-                                if let Some(z) = s.zones.get_mut(i) {
-                                    z.choke = match z.choke {
-                                        None => Some(1),
-                                        Some(g) if g < 4 => Some(g + 1),
-                                        _ => None,
-                                    };
-                                }
-                            })
-                        }),
-                    ),
-                ),
+                        "zone-choke",
+                        |z| {
+                            z.choke = match z.choke {
+                                None => Some(1),
+                                Some(g) if g < 4 => Some(g + 1),
+                                _ => None,
+                            };
+                        },
+                        cx,
+                    )),
             )
     }
 
@@ -157,13 +160,13 @@ impl Workspace {
                 .gap(px(2.))
                 .child(
                     div()
-                        .h(px(8.))
+                        .h(px(6.))
                         .rounded(px(2.))
                         .when_some(c, |d, c| d.bg(alpha(c, if mine { 0.95 } else { 0.4 }))),
                 )
                 .child(
                     div()
-                        .when(black, |d| d.h(px(20.)))
+                        .when(black, |d| d.h(px(14.)))
                         .when(!black, |d| d.flex_1())
                         .rounded_b(px(3.))
                         .bg(rgb(if black { 0x1c1c22 } else { 0xd9d9df }))
@@ -172,10 +175,10 @@ impl Workspace {
                         .when(p % 12 == 0 && !black, |d| {
                             d.child(
                                 div()
-                                    .pt(px(10.))
+                                    .pt(px(6.))
                                     .flex()
                                     .justify_center()
-                                    .text_size(px(8.5))
+                                    .text_size(px(8.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(rgb(0x6a6a74))
                                     .child(name_in(None, p)),
@@ -197,7 +200,7 @@ impl Workspace {
                 )
         });
         div()
-            .h(px(44.))
+            .h(px(32.))
             .flex_none()
             .flex()
             .gap(px(1.))
