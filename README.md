@@ -15,12 +15,17 @@ of it.
     (`session.rs`), and edits as data (`commands.rs`, described for agents in `commands.md`).
   - `audio/`: the engine that plays a song (`engine.rs`), the live player that keeps it in step
     with edits (`player.rs`), recording, MIDI input, bouncing, waveform peaks and time-stretching.
+    Tracks that don't hear each other run at once across the fast cores (`engine/crew.rs`): each
+    makes its sound on any thread, and only their mixing together stays on the audio thread, in
+    order, so the mix is the same to the bit. To see how much fits, run
+    `cargo test --release -p pina-engine real_device -- --ignored --nocapture`.
   - `dsp/`: the built-in synth, drum kit and sampler, the channel EQ (with its linear-phase and
-    spectral modes), modulation, and the compressor and saturator (written in Faust, in
-    `crates/engine/faust/*.dsp`, compiled to Rust in `dsp/faust/`).
-  - `music/`: keys, scales and note edits (`mod.rs`), theory (chords, progressions,
-    voice-leading, basslines, melodies, grooves), writing parts (`compose.rs`) and songs
-    (`arrange.rs`), genre playbooks, the critic, track looks and audio analysis.
+    spectral modes), modulation, the compressor (`comp.rs`), the multiband saturator
+    (`sat.rs`, its curves and filters under `sat/`) and the limiter (`limit.rs`, its loudness
+    meter and Learn under `limit/`).
+  - `music/`: keys, scales and note edits (`mod.rs`), theory (chords, progressions, the step
+    sequencer's grooves), the chord track (`compose.rs`), copied bars and transition sounds
+    (`arrange.rs`), playbooks, the critic, track looks and audio analysis.
   - `plugin/`: hosting VST3, CLAP, VST2 and Audio Units behind one interface, and the scan.
   - `samples/`: the sample library: analysis, the index, search, kits and the sound map.
   - `study/`: finished songs taken apart: beats, harmony, form, groove and words.
@@ -37,7 +42,7 @@ of it.
   - `sounds/`: the sample browser, the Browser's catalog of instruments and effects, the palette
     picked for the agent, and preset auditions.
   - `pages/`: the Songs, Playbooks, Song Study and Settings pages.
-  - `agent/`: the agents (`mod.rs`, run headless for the Agent panel and `pina ask`), the Agent
+  - `agent/`: the agents (`mod.rs`, run headless for the Studio Agent panel and `pina ask`), the Agent
     panel (`chat.rs`, `producer.rs`), the MCP server, producer tools, mixing by measurement and
     listening.
   - `cli/`: the `pina` commands for agents and scripts, the socket a running app serves its song
@@ -120,7 +125,7 @@ Dragonfly Room Reverb installed:
     cargo build -p pina && PINA=target/debug/pina python3 examples/corner-store-blues/build.py
 
 It goes in `~/Music/Pina Studio/Corner Store Blues`: sampler kits on swung step patterns with aliases,
-a multisample bass and an 808 on the keys loop's roots, the loop flexed to half time in the
+a multisample bass and an 808 on the keys loop's roots, the loop stretched to half time in the
 break, a synth pad whose filter opens through each hook and a gliding sine whistle, drums
 glued in a stack, two reverb sends, Live Loops scenes, and the master clipped by the saturator
 to about -13.5 LUFS.
@@ -142,7 +147,20 @@ In the app:
   makes one round the note, and a note past a region's end grows it. A new instrument track says
   so in its lane. An instrument or effect added from the Browser opens its window, a new track
   named for it.
-- The display shows the position, the time, the tempo (drag it), the time signature (pick one:
+- The tempo can change as the song goes: G shows the tempo lane under the ruler, the tempo as
+  steps (double-click to add a change, drag a point in time and tempo or a step up and down,
+  double-click a point out). The display shows the tempo where the playhead is (drag it; click it
+  for its menu: Keep, Adapt or Auto, which say what audio recorded or brought in does to the
+  tempo, the lane, and one tempo throughout).
+- Audio keeps time with the song as its Time says (the inspector, or its menu): played as
+  recorded, or following the song's tempo, its beats on the song's through every change (a badge
+  on it says so), maybe locked to its bars or its beats as listening found them, for a take that
+  drifts. Its own tempo is found by listening (halved, doubled or typed when that's wrong).
+  Its region's length follows, so it holds the same audio. Back to As recorded, it plays as it
+  did before it followed; As recorded again, as it was recorded, not stretched at all. Keep time has the song take its tempo, bar by bar or steady; Fit cycle sets the tempo so it
+  fills the cycle. Audio dropped in or recorded is listened to: in Adapt (or Auto, with nothing
+  else keeping time and the metronome off) the song takes its tempo, and a loop follows it.
+- The display shows the position, the time, the tempo, the time signature (pick one:
   4/4, 3/4, 6/8, 7/8…) and the key: worked out from the notes, or chosen from its menu. Choosing
   one moves the music into it (each step of the scale onto the new scale's, so major to minor
   changes the mode; drums and audio stay), unless the menu's last row is turned off. The piano
@@ -150,8 +168,14 @@ In the app:
   spells them, and the score shows its signature. The window narrows to 1120 points with all of
   it showing.
 - In Pattern mode, selecting another region plays it at once, from the same place in its loop.
-- Markers sit over the ruler: double-click to add one (and type its name), drag to move it, click
-  to go there, double-click to rename it, right-click for a quick name or to delete it.
+- Markers sit over the ruler, each the start of a section that runs to the next (the last to the
+  song's end): double-click to add one (and type its name), or + after the last for an 8-bar
+  section. Drag one and its section moves with everything in it (every track's regions, cut at
+  its edges, their automation, the markers and chords in it, its tempo), the rest of the song
+  moving up and making room; drop it on another's middle and the two swap; ⌥-drag for a copy;
+  ⌘-drag to move the marker alone. Click to go there, double-click to rename it, right-click for
+  a quick name, to cycle it, copy it to the end, put a bar before it, clear it or delete it (the
+  gap closed), or to delete the marker only.
 - Double-click a track's name, or a strip's name plate in the mixer, to rename it; a region's name
   is in the inspector. Enter keeps it, escape doesn't, clicking elsewhere keeps it too.
 - Over the track headers: the tools (pointer; pencil, which draws a region in an empty lane and a
@@ -161,8 +185,31 @@ In the app:
   take); Solo plays a region alone while held, from where it's held; Mute mutes or unmutes one;
   Zoom zooms in where clicked, out with ⌥, or fills the window with the bars dragged across;
   Fade drags an audio region's fade in from its start or fade out from its end (equal-power
-  curves, drawn on it); Flex makes dragging a region's end stretch it, as ⌥ does. The status bar
+  curves, drawn on it); Stretch makes dragging a region's end time-stretch it, as ⌥ does. The status bar
   says what the tool in hand does.
+- The snap menu also says what a region let go on others does: overlaps them (as it always has),
+  No Overlap (what's under it is cut back, or taken out if it covers it) or Shuffle (the regions
+  on the track close up end to end, and a region deleted leaves no gap). The button shows the
+  mode when it isn't Overlap. While a region is dragged, a line down the lanes marks where its
+  start or end meets another region's.
+- Q on an audio region (or Quantize Hits in its menu) moves its hits onto the grid with warp
+  markers; a hit on its first line, and where it starts, stay put.
+- Hover over a control in the top bar or over the tracks and the status bar says what it does
+  and its key.
+- ⇧-click regions to pick several, or drag a box from an empty lane across them. Dragged, they all
+  move; delete, ⌃M, copy, cut and paste (at the playhead, as they lay), ⌥←→ (nudge), ⌥↑↓
+  (transpose), L (loop) and Q (quantize) act on them all.
+- The arrangement's keys: ←→ the previous or next region, ↑↓ track; ⌥←→ nudges a region a grid
+  step, ⌥↑↓ transposes it (⇧ an octave); L loops it, Q quantizes it, ⌘J joins it to the next,
+  ; moves it to the playhead, ⌘[ and ⌘] trim its start or end to the playhead, ⌃B bounces it in
+  place, ⌥⌘L stretches it to the cycle and ⌥⌘B to the nearest bar, ⇧T time-stretches the audio
+  picked to the song's tempo (its tempo found first if need be; again, back as it was). ⌘G
+  turns snap off and back;
+  U cycles what's picked (or the section, or the bar); ⌥' adds a marker, ⌥, and ⌥. go to the
+  previous or next; , and . move the playhead a bar (⇧ eight), ⌥↩ to the end, ⇧Space plays from
+  what's picked; Z fits it (or the song) to the window, ⌘↓ and ⌘↑ make the lanes taller or
+  shorter. M, S and ⌃R mute, solo and arm the track, ⇧↩ renames it, ⌘D duplicates it; E shows
+  or hides the editor.
 - A track's header is a console strip: its colour down its edge, its icon (click for its colour
   and icon), number, name and what it plays; then a raised strip with lit M S R buttons, an LED
   meter (left over right, its peak held), a fader with a scale and a cap like the mixer's, an LCD readout
@@ -202,8 +249,8 @@ In the app:
   and envelope, else the channel's EQ and compressor; turning them is an undoable edit) and the
   channel strips.
 - The Browser, right of the tracks (F): one panel and one search for everything that goes in a
-  song, its tabs All, Instruments, Effects, Sounds (the sample library: one-shots and loops, what
-  fits the song, its categories); what's typed follows from tab to tab. Pina Studio's own
+  song, its tabs All, Instruments, Effects, Sounds (the sample library: one-shots, loops and MIDI
+  files, what fits the song, its categories); what's typed follows from tab to tab. Pina Studio's own
   instruments and effects and every plugin installed, each once however many formats it comes in
   (CLAP, VST3, AU, VST2 shown as badges, the best used), in the categories the plugin says it
   belongs to (VST3 subcategories, CLAP features, an Audio Unit's type, VST2's category; its name
@@ -214,6 +261,100 @@ In the app:
   plugin's arrow shows its preset files. Click puts it on the selected track (an instrument in
   place of its own, an effect after its others), double-click or ⇧↵ on a new track, or drag it
   onto any track; ↑ ↓ and ↵ work from the search.
+- MIDI files in the sample library are studied as they're scanned: key, tempo, meter, chords
+  and progression, how many bars they loop, and each part's role and how it plays. Sounds' MIDI
+  tab lists them, best fit first, a chip for each part and a piano roll for each file. A click
+  plays one at the song's tempo, moved into its key with Play in Key on. The sample page shows a
+  picked file's whole study (each part's step pattern, drum rows and melody shape). Add to song,
+  a double-click or a drag puts it in the song. A one-part file dropped on an instrument track
+  becomes a region there. Otherwise each part gets a new track with an instrument that plays it.
+  `.mid` files dragged in from the Finder land the same way.
+  On the sample page Map places files by how they play, whatever key they're in, and Kit picks a
+  file for each part that go together in one key: hear them as one, swap a part as it plays, lock
+  what you like, and add them all to the song, going round together.
+- The Studio Agent works in the song while you watch, with Claude Code or Codex as its engine. It
+  shows its work as components it picks with `present`: a plan that ticks along, choices to click,
+  measurements, chords to hear, the song's shape, what to do next. Each turn ends with What
+  Changed, worked out from the song itself, to go to, hear or undo. Conversations are kept in the
+  song's `Conversations` folder: History finds them, and any can be opened and carried on. Drag
+  across its words and ⌘C to copy, or use the copy buttons and the header's menu.
+- MIDI with the agent: drop files or folders on its panel, or use the + there or on a Browser
+  row, and it studies them. Ask for one like them and it writes its own, checks how close it came,
+  and leaves it as a card to hear and drag onto the tracks. It doesn't touch the song until you
+  do. Everything it writes stays on the panel's MIDI page, in the song's MIDI folder.
+- Pina Studio's own Synth, in the Browser, with its own window: three wavetable oscillators (24
+  tables, two warps each, up to sixteen voices of unison), a sub and noise; two filters of twenty
+  kinds, the ladder, cascade, diode and snarl solved as circuits; four envelopes, eight LFOs, eight
+  macros and a 64-line matrix; an arpeggiator; thirty patches. Drag any source's ↗ onto any knob,
+  including the knobs of the track's effects, which its Effects page shows. Every parameter can be
+  automated. Agents use `set_synth`, and its patches come up in `sounds`.
+- Pina Studio's own Reverb and Delay, in the Browser.
+  - **Reverb:** Room, Chamber, Hall, Plate, Ambience, Cathedral and Shimmer; pre-delay in ms or
+    in time with the song, size, decay, early reflections, diffusion, damping, bass, modulation,
+    cuts, width, ducking, shimmer and freeze. Its window draws its answer to a click.
+  - **Delay:** Digital, Tape, Analog, Ping-Pong, Dub and Slapback; times in note values or ms,
+    feedback, crossing sides, cuts on every repeat, drive, wow, flutter, diffusion, ducking and
+    freeze. Its window draws every echo over the beats.
+  - **Adding:** on a bus they're all wet. The agent's `mix` puts them on its Verb and Echo
+    buses, the kind chosen by genre.
+- Pina Studio's own tools, in the Browser, each with a window you can drag on:
+  - **Filter:** Low pass, High pass, Band pass, Notch, Ladder, Comb and Formant, with drive, an
+    LFO free or in time, and an envelope that follows the sound (a wah). Its curve shows where the
+    LFO and envelope can take it; drag the point for cutoff and resonance.
+  - **Motion:** Chorus, Ensemble, Flanger, Phaser, Vibrato and Tremolo, free or in time, with each
+    side's LFO drawn and a vectorscope of what it plays.
+  - **Transient Shaper:** attack and sustain up to 18 dB either way, whatever the level. Its picture
+    is a real hit run through it, so every knob shows as it sounds.
+  - **Gate:** threshold, range, ratio, hold and an ear that can be filtered, with what it hears
+    scrolling by and its curve, a dot on it where the sound is now.
+  - **De-esser:** frequency, width, threshold and range over the live spectrum, on the band or the
+    whole sound, with Listen and a history of how much it took off.
+  - **Stereo:** three bands' widths, their splits and mono under a frequency drawn over the
+    spectrum, mid, side, balance, swapped or flipped sides, a vectorscope and how alike the sides are.
+  - **Multiband:** three bands split with their phase intact, each with its own threshold, ratio,
+    lift for its quiet parts and gain, what each is taking off drawn live.
+  - **Pitch Shifter:** up to two octaves either way, a chord staying a chord, with feedback.
+  - **Tape Stop:** slows to nothing and spins back up, in beats, thrown by automation.
+  - **Pitch Correction:** a voice brought to the notes you pick (it starts on the song's key), from
+    natural to the hard, snapped sound, its character kept, with what's sung and what comes out
+    drawn over the notes.
+  Every knob of these, and of a stacked Reverb or Delay, can be automated and modulated, and its
+  window's picture moves as the song plays.
+- Built-in effects stack: any number of Channel EQs, compressors, saturators and limiters on a
+  channel, anywhere in its chain (adding one it has puts another after its plugins). Each copy
+  ("Compressor 2") has its own full window, analyzer and meters, and moves and comes out like
+  any effect. Commands reach them with `"which"`.
+- The sample library's Kit view picks a kit that goes together; Add to song makes it a stack: a
+  kit track whose notes play its pads, and a track a pad, its own sampler with its sound, channel
+  and effects (open the stack to mix them). Drums go on their General MIDI notes, the hats choking
+  each other across their tracks; tonal sounds play in tune from their root. The kit track gets a
+  starter pattern at the playhead's bar, a row a pad, its rows named for them; played live, a
+  note plays its pad. A sound dropped on a pad's track swaps its sample, keeping its note and
+  settings; the kit track's menu splits its notes onto the pads' own tracks. From a folder fills
+  the Kit view with a library folder's sounds (a pad a hit; a big folder a pad a kind, sixteen in
+  all), each card stepping through the folder's others of its kind; Load into puts the picks into
+  the kit picked in the song, its pads keeping their shaping, channels and patterns.
+- The Drum Machine (under the tracks, for a kit or any of its pads) plays and shapes a kit. Its
+  pads, four by four from C1 at the bottom left, with a map of all 128 notes beside them: click a
+  pad to hear it (higher on it, harder) and pick it, drag it onto another to trade places (the
+  kit's patterns follow, so the beat sounds as it did), drop a sample on it from the browser or
+  the Finder to give it that sound (on an empty pad, a new pad; several files fill the pads
+  after it). Each pad shows its sound's outline and lights as it plays. The pad picked: its kind,
+  note and choke group (off, 1 to 4), mute and solo, its full Sampler; its sound, stepped through
+  with ◀ ▶ (its folder's others of its kind first, then the library's that sound most like it) or
+  picked from their menu; its layers, up to eight sounds on the pad (+ Layer offers what goes
+  with it: a clap or a rim on a snare, a sub under a kick; or drop a sample on its sound), played
+  stacked, in turn as a round robin, or split by velocity (switched at a hardness, or blended),
+  each a tab by name, picked to step, trim and set its own level, pan and tuning; its waveform, its start and end dragged; and its shaping: tune,
+  fine, level and pan; attack, length (a hit shortened) and velocity; a pitch drop and its time;
+  the filter (eight kinds), cutoff, resonance and drive; punch, sub, noise and colour. Pads off
+  the sixteen shown (an 808 on its own note) are counted above the grid, the nearest a click
+  away. Along the bar:
+  the whole kit's sounds stepped at once, a kit from a library folder, a new kit picked to fit the
+  song (made from the Samples page, it's there when the tracks are next shown). The Drum Kit (and
+  Beat in the new-track palette) makes a kit of the library's drums fitted
+  to the song, a pack in the palette a kit of the pack; with no drums in the library, the
+  synthesized kit. A sample dropped on a kit's track becomes a new pad in it.
 - The Plugins page (the Browser's Expand, or ⌃⌥D): its instruments and effects as a page, laid
   out as the sample library's. Filters on the left (search, kind, starred, source, formats,
   order; chips for categories and the kinds in them, makers, collections and what Health found;
@@ -241,7 +382,7 @@ In the app:
   try it on the track; ⌥-click, or "Shade all", colours its whole family in shades of it), and
   its icon from 54 instruments and marks drawn for Pina Studio, searchable, those its sound suggests
   first. Auto goes back to what it plays saying. Regions and channel strips follow.
-- ⌘L, or the agent's mark in the top bar, opens the Agent panel beside the tracks: ask for
+- ⌘L, or the agent's mark in the top bar, opens the Studio Agent panel beside the tracks: ask for
   anything and watch it work. Its thinking, each step (reading the song, finding samples, every
   edit, listening) and what it says show as they happen, and each edit lands in the tracks as
   it's made, outlined, undoable on its own. The agent's name at the top picks another (Claude
@@ -252,9 +393,9 @@ In the app:
   conversation carries on with them from the next question. Edits by any other agent show there
   too.
 - Sounds, instruments and effects for the agent: "Pick sounds · instruments · effects" atop the
-  Agent panel's message box (the + by "Only these" once there are some) opens the Browser there
+  Studio Agent panel's message box (the + by "Only these" once there are some) opens the Browser there
   to pick from (＋ on each sound, plugin or Pina Studio device, or "Agent" under the sound picked; on
-  the sample page too), and audio files dropped on the Agent panel from the Finder are picked as
+  the sample page too), and audio files dropped on the Studio Agent panel from the Finder are picked as
   well. They show in the message box: click a sound to hear it, a tag to give it a part (kick,
   snare, hats, 808, bass, chords, pad, lead… or any; an effect's is what it goes on), × to take
   it out; "Only these" asks the agent to use these and no others of each kind picked. They're
@@ -265,16 +406,18 @@ In the app:
   they land on the timeline where they're let go: on the audio track there, or on a new audio
   track (under an instrument track, or under the tracks); several files, a track each. A sound
   dropped on a sampler track becomes a pad. A file the library knows is fitted to the song's tempo
-  and key, as from the browser.
+  and key, as from the browser; any other is listened to for its tempo.
 - Drag regions to move them (across tracks too) and their edges to trim; option-drag one to copy
   it, option-shift-drag for an alias: a linked copy, its name in italics with a link, that plays
   the same notes, so editing either edits both (its place, length and playback settings are its
   own; "Make unique" in the inspector, splitting it or trimming its start unlinks it).
 - A region's end: its bottom half trims; its top half (a loop sign shows on
   hover) loops it out to wherever it's dragged, and the last repeat's drags the loops back; and
-  option-dragging it time-stretches the region: audio flexes (slower or faster, same pitch, by
-  Signalsmith Stretch), a MIDI region's notes and controllers spread out or close up, and a step
-  pattern's steps get longer or shorter.
+  option-dragging it time-stretches the region: audio stretches (slower or faster, same pitch, by
+  Rubber Band; following, its own tempo changes), a MIDI region's notes and controllers spread out or close up, and a step
+  pattern's steps get longer or shorter. Holding option (Alt on Windows) puts a stretch grip on
+  every region's end, and all of the end stretches then. A region says so while its audio is
+  being stretched, or listened to for its tempo.
 - Bounce (⌘B, or Export in the control bar) opens the Bounce sheet: the mix, each track as a stem (through the master or not), or each marked
   section as its own file; over the song, the cycle or any bars; as WAV, AIFF, FLAC, MP3 (LAME,
   built in), AAC or ALAC (macOS's encoder), and the notes as a MIDI file, several formats at once;
@@ -299,21 +442,35 @@ In the app:
   (drag a dot, the picked notes move with it, or draw across) or a controller: the mod wheel,
   pitch bend, expression or the sustain pedal, drawn freehand, ⌥ to erase. Its tools work on the
   picked notes (or all): quantize (grid, strength, swing), humanize, legato, chop, arpeggiate,
-  strum, glue, reverse, flip, softer and harder. Ghost shows another track's notes behind; Fit
+  strum, glue, reverse, flip, softer and harder. More (in the bar, with chords, velocity colours and Fit) has Ghost, which shows another track's notes behind; Fit
   fits the notes' range; ⌥-scroll makes rows taller or shorter.
 - Recording over a region of the same kind makes a take folder. Double-click it to
   see its takes; swipe across a take to comp that stretch from it, click one to use all of it,
   and Flatten to turn the comp back into plain regions.
-- The Sampler tab (in the editor under the tracks, on a sampler track) is Pina Studio's sampler: its zones down the left (drop samples
-  on it, or click; right-click removes one), the picked zone's waveform with its start, end and
-  loop points dragged in place and its sample's other slices marked, the keys with each zone over
-  its notes (click to hear), and knobs for the zone (notes, root, fine tune, level, pan,
-  velocities) and the instrument: amp envelope, filter (low-, high- or band-pass, with its own
-  envelope and key tracking), transpose, glide, LFO (vibrato, wah, tremolo) and volume. A zone
-  plays one-shot or gated, loops (forward or ping-pong) and reverses; zones split by velocity are
-  layers, and zones on the same notes take turns (round robins). Mono and Legato play one note at
-  a time, gliding. Slice… cuts a loop across the keys from C1 at its hits, or into equal parts.
-  Turning a knob while it plays changes what's playing, without a reload.
+- The Sampler tab (in the editor under the tracks, on a sampler track) is Pina Studio's sampler.
+  Down the left, its zones (drop samples on it, or + Add; right-click removes one) and the
+  picked zone's notes, root, fine tune, level, pan, velocities, velocity fade and loop fade, with
+  Hear its root (a sample played across the keys is heard for its root as it goes in). Along the
+  top, how it reads its samples: Repitch (faster is higher; read with Hermite interpolation from
+  copies halved in rate, so it doesn't alias played high), Stretch (grains keep each note's
+  pitch while Speed sets how fast it goes through, 0 holding still) or Grains (a cloud: position,
+  size, density, spray, scan, detune, reverse, width, shape, Freeze); its character: Clean, Tape
+  (warmth, saturation, wow) or Vintage (the old samplers' rate and bits, unsmoothed, with Classics
+  to pick from); and the zone's switches: one-shot or gate, loop (its seam crossfaded) or
+  ping-pong, reverse, On release (it plays as the note is let go), choke. The zone's sample is
+  drawn big, each slice of it in its colour: the wheel zooms, double-click shows it all; drag its
+  start, end, loop and (Grains, Stretch) where it reads; every voice playing is a glowing
+  playhead, every grain a spark. Under it, the keys with each zone over its notes (click to
+  hear). Along the bottom: Play (the mode's own controls, unison voices, detune, width); Filter
+  (low, high, band pass, notch, a 24 dB ladder, comb or formant, with drive; its response drawn,
+  drag its point for cutoff and resonance); Amp (its envelope drawn: drag its points); and
+  Modulation: two LFOs (seven waves, in time with the song or free, retriggered or not), the
+  filter and modulation envelopes, an 8-route matrix (LFOs, envelopes, velocity, key, the wheel,
+  pressure, a random value per note, the bend, to pitch, cutoff, resonance, level, pan, start,
+  grain position, size, density, spray, speed, drive, FM, sub, noise) and Layers (a pitch drop,
+  sub, noise, punch, FM and ring). Mono and Legato (in the bar's More) play one note at a time, gliding. Slice… cuts
+  a loop across the keys from C1 at its hits, or into equal parts. Turning a knob while it plays
+  changes what's playing, without a reload.
 - Automation (A shows it): each track has lanes under it, a parameter each: volume, pan, mute,
   its sends, or any parameter of its plugins (type to search; those with automation are marked).
   + adds a lane, × takes one away; each shows its value at the playhead and a scale. Click for a
@@ -382,8 +539,8 @@ In the app:
   a Macro to turn by hand. Drag a card's ↗ Map onto any knob or fader of its track to have it
   move it: the header's volume and pan, the strip's pan and sends, Smart Controls, the EQ's low
   cut and each band's gain and frequency (from the card's menu), the compressor's threshold and makeup, the saturator's drive, tone and mix, the
-  Sampler's cutoff, resonance, filter envelope, transpose, level, vibrato, LFO filter and
-  tremolo, and a plugin's parameters. A modulated knob wears a ring in the modulator's colour,
+  Sampler's cutoff, resonance, filter envelope, transpose, level, vibrato, LFO filter, tremolo,
+  drive, grain position, speed, grain size, spray, FM and sub, and a plugin's parameters. A modulated knob wears a ring in the modulator's colour,
   its range, and a dot where it has it now. Each card lists where it goes: drag a route sideways
   for how far (⇧ finer), ✕ to take it off; click a card to pick it, and dragging any knob it moves
   sets its depth instead. Modulation plays in bounces too, and agents use it as well
@@ -398,7 +555,7 @@ In the app:
   `~/Library/Application Support/Pina Studio/settings.json`.
 - N shows the score: the selected MIDI region as notation on a grand staff, in time with the
   tracks; click a note to select and hear it, delete to delete it.
-- L shows Live Loops: a grid of loop cells, a row per track and a column per scene. Click an
+- ⌥L shows Live Loops: a grid of loop cells, a row per track and a column per scene. Click an
   empty cell to copy the track's selected region into it; click a cell to launch it (on the next
   bar, or at once, starting playback) and again to stop it; right-click to empty it; the buttons
   under the grid launch a scene. A launched cell plays instead of the track's regions.
@@ -406,10 +563,20 @@ In the app:
   into, its name shown on the track. A strip's "→" row routes a track into any stack or aux, or
   back to Stereo Out.
 - On a channel strip, click a plugin to open its editor; click an empty slot for a picker of
-  every plugin and the built-in Channel EQ, Compressor and Saturator (drive, tone, mix, output),
-  or right-click any. The master takes plugins too, after its built-ins. In the mixer the selected channel's
+  every plugin and the built-in Channel EQ, Compressor, Saturator (drive, tone, mix, output) and
+  Limiter, or right-click any. The master takes plugins too, after its built-ins. In the mixer the selected channel's
   chain shows on the right: the EQ's curve, the compressor's knobs and gain reduction, the
-  saturator's drive and curve.
+  saturator's drive and curve, the limiter's style, gain, ceiling and reduction.
+- The Limiter goes last in a chain (drag it elsewhere if you like). Its window shows what goes
+  in and comes out, what it takes off and the short-term loudness scrolling by, the ceiling and
+  the loudness aimed at; meters for each, and the integrated loudness, short-term, momentary,
+  true peak and peak-to-loudness ratio (Reset starts them over). Ten styles: Transparent, Punchy,
+  Dynamic, Allround, Aggressive, Modern, Bus, Safe, Classic and Multiband. Gain, Ceiling,
+  Lookahead, Attack, Release (set, or Auto), Link and Clip; true peak, 1 to 8 times oversampling
+  and a DC filter. Unity hears it at the level it came in, Delta only what it takes away (never in
+  a bounce). Learn listens to what reaches it and sets its style, a release in time with the song
+  and the gain that comes out at the loudness picked (Streaming −14, Quieter −16, Broadcast −23,
+  Club −9, Loud −7). On an aux it listens to everything sent or routed to it.
 - The Channel EQ is a full EQ in a window of its own (click a strip's EQ curve, or the
   mixer's; the channel name at its top switches to another's): up to 24 bands, each a bell, low or
   high shelf, low or high cut (to 96 dB an octave, or a brickwall), notch, band pass, tilt shelf,
@@ -420,7 +587,8 @@ In the app:
   up to its range, listening to what it covers, between two frequencies, or another track (the
   EQ's sidechain), its attack and release its own unless turned; or spectral, where only what
   stands out in the band moves, frequency by frequency (its density how wide a stretch moves
-  together, its tilt hearing the highs as a mix has them). A live analyzer shows what goes in and
+  together, its tilt hearing the highs as a mix has them); as it plays, its curve moves and a ring
+  rides its range line where it's heard, its dot staying where it's set to grab. A live analyzer shows what goes in and
   comes out, an output meter beside it, and can show another track's spectrum to compare with,
   lit where the two collide; Spectrum Grab lets you rest on a peak and pull it into a band. Hover the display for the band a click would make
   there (a cut at either end, a notch low down, a bell between), click to make it (double-click
@@ -469,10 +637,11 @@ in it. Saving writes each plugin's settings to `Plugin States/` in the project. 
 compensated. If the output device can't run at the project's sample rate (a
 Bluetooth speaker at 44.1 kHz), playback runs at the device's.
 
-Audio is stretched (Flex, for a tempo or a region's length) three ways, per region.
+Audio is time-stretched (for a tempo or a region's length) three ways, per region.
 Polyphonic, the default, is Rubber Band's finer engine (R3, from Rubber Band 4, built in), run
-offline over the whole file with its hits pinned to their times, and the recording itself kept
-around every hit (the 25 ms before, where a phase vocoder smears a hit ahead of itself, and its
+offline over the part of the file each region plays (a second or two either side, so a
+song-long take is fitted in moments) with its hits pinned to their times, and the recording
+itself kept around every hit (the 25 ms before, where a phase vocoder smears a hit ahead of itself, and its
 first 20 ms), so drums stay as sharp as recorded with no pre-echo, and chords and voices are
 R3's; transposed, the recording around each hit moves in pitch as a sampler would, unless a
 region keeps its formants (for a voice). Slicing cuts at the hits and plays each as recorded at
@@ -482,23 +651,55 @@ hits either side pinned, so that beat moves and the audio around it stretches to
 double-click a marker to take it out.
 Stretches are made off the main thread, something standing in until they're done; loops from
 the sample browser follow the tempo, and their previews play at it, in time with the song while
-it plays. `cargo run --release -p pina-engine --example stretch_ab -- <out dir> <loop.wav>
+it plays. Audio that follows the tempo is fitted through the tempo map: its own tempo (and the
+beats it's locked to) pinned to the song's beats, a corner wherever the tempo changes while it
+plays, so it bends with a song that speeds up or slows down. `cargo run --release -p pina-engine --example stretch_ab -- <out dir> <loop.wav>
 <bpm>` renders a loop each way (and with Signalsmith Stretch) to compare, and measures how sharp
 and how on time its hits come out.
 
 Builds need only the Command Line Tools: gpui compiles its Metal shaders at launch.
 
-The compressor and saturator are Faust (`crates/engine/faust/*.dsp`), using its libraries: its
-soft-knee compressor gain computer, and antiderivative antialiasing for the saturator, which also runs at twice the sample rate (a
-half-band filter designed by `scripts/halfband.py`). The Rust Faust makes of them is checked in
-under `crates/engine/src/dsp/faust/`, so building Pina Studio doesn't need Faust; after changing a .dsp, run
-`scripts/faust.sh` (with `faust` on the path, or in `~/.local/faust/bin`).
+The compressor and saturator are plain Rust. The compressor is feed-forward, its gain smoothed
+in dB; its style sets its detector, knee, release and colour (the Bus style steps its controls
+as a console bus compressor's do), and its spectral stage splits the sound with the saturator's
+crossovers and gives each band the turning down by how much of the sound it makes. A new one
+sets itself by listening (`dsp::comp::learn`), and drums that swing far between soft and loud
+hits are compressed in parallel. A new saturator sets itself by listening too
+(`dsp::sat::learn`). It measures where the sound's energy sits, how bright it is, how many
+harmonics it has and how its peaks stand out, then chooses the bands, each band's style, drive,
+tone and dynamics, and any ringing tuned to the key, for the part in the song's genre. Its level
+is found by running the saturator itself. The saturator splits the sound into up to six bands
+(Linkwitz-Riley crossovers, 12, 24 or 48 dB an octave, the bands adding back flat), and drives
+each through one of ten styles (warm and clean tape, warm and clean tube, transformer, crunch
+and heavy amp, rectify, foldback, lo-fi) at 2, 4 or 8 times the sample rate (cascaded half-band
+filters designed by `scripts/halfband.py`), with antiderivative antialiasing on the curves that
+allow it; each band has its own tone, dynamics, feedback, mix and level. Both were written to
+sound as the Faust versions they replaced did, and checked against them sample by sample.
+
+The limiter is a lookahead brickwall. Each sample's need is worked out from its true peak, read
+off a 4x windowed-sinc interpolation, or from the sample alone, through the style's knee. That
+need is held as long as the limiter reads ahead (a running maximum), let go by one release or
+by a fast stage and a slow one together, and eased in through two moving averages that finish
+before the peak arrives. No sample can pass the ceiling: a hard stop catches the averages'
+rounding, and the tests check it never has to, in any style or oversampling. Before it come the
+drive, a DC filter, the multiband style's three bands (each held under the ceiling on its own)
+and a soft clipper. Oversampled (2, 4 or 8 times), the clipper and the gain both run at that
+rate through linear-phase half-band filters (so a waveform's peaks come back where the limiter
+saw them; what the gain makes above the band is filtered away rather than folded back, 11 dB
+less at 4x), and a 12-sample catch after eases off the few tenths of a dB that taking the top
+off the band leaves. It holds the sound back by its lookahead plus 6 samples (and,
+oversampled, the filters' delay and the catch), bypassed or not, and delay compensation waits
+for it. Starting play, the engine reads that lookahead first, so nothing at the start is
+skipped. Its gain, ceiling, release and clip have automation lanes on a track, and its gain and
+ceiling are modulation targets. Its meter is BS.1770's (K-weighted 100 ms blocks, gated integration kept in a
+0.1 LU histogram) and agrees with the analysis's loudness to within 0.2 LU. Learn
+(`dsp::limit::learn`) finds the gain by running the limiter itself until the loudness is right.
 
 ## Agents
 
 Pina Studio is made to be driven by agents as well as people. The quickest are built in, as modisa
 knows them (ids, logos from modisa's logo font, brand colours): Claude Code and Codex, in the
-Agent panel (⌘L) in the app, or from a terminal
+Studio Agent panel (⌘L) in the app, or from a terminal
 
     pina ask [--agent codex] <project> "make the hook hit harder"
 
@@ -507,7 +708,7 @@ default). Each runs headless, installed and signed in on its own account (Claude
 Claude plan), with Pina Studio's MCP server as its only tools: Claude Code with no built-in tools, other
 MCP servers, settings or hooks; Codex with Pina Studio's server in place of yours and its sandbox
 read-only. One that isn't signed in says how to sign in rather than starting. When the app has
-the project open, `pina ask`'s edits land there live and its Agent panel opens to show the
+the project open, `pina ask`'s edits land there live and its Studio Agent panel opens to show the
 conversation. (opencode isn't one yet: version 2 hands MCP tools to its model inside a single
 code-running tool, so its steps can't show as Pina Studio's.)
 
@@ -527,6 +728,11 @@ agent can send, with examples. An agent can:
   one-shot, the sampler zone that plays it in tune. `pina samples put <file> <project>` puts one
   in the song made to fit: a loop stretched to its tempo and moved into its key, a one-shot as a
   sampler zone in tune.
+- Read the person's MIDI for ideas: `pina midi find "dark bass" --role bass --for <project>`
+  (the library's MIDI files that fit, each with the semitones that move it into the song's key)
+  and `pina midi <file> --notes` (its whole study, and every note as text). `import_midi` brings
+  a file into the song when the person asks for it. The MCP tools are `midi_find` and
+  `midi_study`.
 - Play any plugin as a person would: find it with `pina plugins`, set its parameters by name and
   as it shows them (`"param": "Filter Cutoff", "text": "850 Hz"`), list and load its presets and
   save new ones (`pina presets`, `set_preset`), automate any parameter, send it controllers,
@@ -535,24 +741,25 @@ agent can send, with examples. An agent can:
 
 - Make songs that sound finished, as a producer would. An agent can't hear, and isn't a
   musician, so Pina Studio does the parts it would get wrong:
-  - `pina playbook <genre>`: what a genre is (17 of them, lofi to amapiano): its tempo, swing and
-    keys, its parts with the sounds they take and how to write them, its sections, progressions,
-    and where its mixes sit (loudness and six-band balance, measured from released songs).
-    The Playbooks page (File ▸ Genre Playbooks…, or a genre's Edit playbooks… in the Agent
+  - `pina playbook <genre>`: one of your own genre playbooks (Pina Studio ships none, and an
+    agent follows one only when you ask it to, or pick it as the song's genre): its tempo, swing
+    and keys, its parts with the sounds they take and how to write them, its sections,
+    progressions, and where its mixes sit (loudness and six-band balance). Make one from a song
+    you love on the Song Study page, or write the JSON. The Playbooks page (File ▸ Genre Playbooks…, or a genre's Edit playbooks… in the Agent
     panel) shows each genre as its song's shape, and changes it in place: tempo range, swing,
     key, groove (its kick, snare and hats shown), harmony words (and the progression they find),
     the song map (sections as blocks as long as they are and as tall as they're loud, and a grid
     of which part plays in which, clicked on and off), the parts (sounds to look for, how to
     write them), the mix target (six bands dragged, and loudness) and notes for the agent.
-    Duplicate makes a genre of your own; Reset puts Pina Studio's back. Each change is saved as it's
-    made, to JSON files, one a genre, in `~/Library/Application Support/Pina Studio/playbooks/`
-    (`pina playbook --edit [genre]` opens them too); Pina Studio's own are in
-    `crates/engine/playbooks/`.
+    Duplicate makes another; Delete takes one away. Each change is saved as it's made, to JSON
+    files, one a genre, in `~/Library/Application Support/Pina Studio/playbooks/`
+    (`pina playbook --edit [genre]` opens them too).
   - `pina theory "A minor" dark trap`: the key's chords and progressions that suit the words.
     `set_chords` takes them as symbols (`Am9 | Fmaj9`) or numerals (`i9 | VImaj9`) and makes them
-    the song's chord track; `write_chords`, `write_bass`, `write_melody` and `write_drums` write
-    parts on it that are in key and on the chords, voice-led, with a player's rhythm and a
-    genre's groove (swing, ghosts, rolls, fills); an 808 can follow the kick.
+    the song's chord track. The parts on it are the agent's to write, every note, in any style:
+    Pina Studio has no templates, grooves or bass and melody styles that write them, so an
+    agent plans the song, writes each section its own way and gives it a feel, as a producer
+    would.
   - `pina sounds <role> --genre trap`: real sounds for a part instead of the built-in sine:
     every installed instrument's presets that suit it (each instrument asked for its own, a few
     from each, with the commands that load them), and samples.
@@ -561,11 +768,14 @@ agent can send, with examples. An agent can:
     flamming, robotic velocities, missing swing, placeholder sounds, a song that never changes or
     a hook weaker than its verse; and from a render, clipping, loudness, tonal balance against the
     genre (or a reference), low end in the wrong parts, parts too loud for their role, stereo.
-  - `arrange` lays a loop out as a song (the genre's sections, or given ones: parts by role or
-    track, marked, quieter sections lower), `copy_bars` copies, and `transition` puts a riser,
-    reversed cymbal, impact, downlifter, drum fill, gap or a whole build into a section.
+  - `copy_bars` copies bars to change where they land, and `transition` puts a riser, reversed
+    cymbal, impact, downlifter, gap or a whole build into a section (fills and rolls are notes,
+    written like any).
   - `pina mix <project>` sets each part's channel EQ, compression, saturation, pan, reverb send
-    (a shared reverb aux, made once) and level, measured alone; `pina master <project>` soft-clips
+    (a shared reverb aux, made once) and level, measured alone: the compressor and saturator by
+    listening, the EQ with an analog colour where the genre is warm. `pina learn <project>
+    --track N --sat` (or `--master --sat`) prints the saturator listening would set, and why;
+    the `learn` tool sets one effect (`comp`, `sat`, `limit`) by listening; `pina master <project>` soft-clips
     and limits the master to the genre's loudness (or a reference's: `pina reference <file>
     <project>`), measuring until it's there.
   - `pina analyze` and `pina render` take `--bars 9-16` to hear part of a song.
@@ -574,8 +784,11 @@ agent can send, with examples. An agent can:
     wav,mp3,flac,aiff,aac,alac,midi`, `--bits`, `--rate`, `--lufs -14` (`--ceiling -1`) or
     `--peak -1`, `--kbps`, `--no-tail`, `--bars`, `--out`, `--name`; it answers with each file
     and its loudness and peak.
-  - `pina study <file> [--summary] [--playbook] [--offline]`: a finished song taken apart from
-    its audio. Its identity (tags, else its file name; online, its year and genre from
+  - `pina study <file> [--summary] [--playbook] [--offline]`: a song, loop or stem taken apart
+    from its audio. First what the file is (a full song, or one instrument, drums or a voice, and
+    what's not in it), from its sound and its name; the rest says only what can be true of it, a
+    drum loop has no key and a bass line has notes, and each tempo and key says where it came from
+    and how sure it is. Its identity (tags, else its file name; online, its year and genre from
     MusicBrainz), tempo, meter, key (and tuning, and sections in another key), chords beat by
     beat with numerals, its form (intro, verses, pre-chorus, choruses, bridge, outro, found from
     what repeats and named by it, with bars, energy, loudness and the chord loop each goes round;
@@ -586,21 +799,56 @@ agent can send, with examples. An agent can:
     line's rhyme and syllables, the rhyme schemes, the hooks, who sings to whom and the words it
     keeps coming back to. Only its title, artist and length are sent anywhere; never its audio.
     Studies are kept in `~/Library/Caches/Pina Studio/studies/`. `--playbook` saves a playbook made from
-    it, to write songs like it; agents have it as the `study` tool, and read its theme, story and
+    it (saved again, the song's book is brought up to date, keeping what you added), to write songs like it; agents have it as the `study` tool, and read its theme, story and
     imagery from the lyrics themselves.
+  - `pina like <audio or picture> [--seconds N] [--hz LOW-HIGH] [--scale linear|log|mel]
+    [--colors viridis|magma|inferno|plasma|jet|gray|gray_inverted] [--crop x,y,w,h] [--db N]`: a
+    reference's blueprint, for writing a song like it, from its audio or (with no audio) a
+    picture of its spectrogram (PNG or JPEG). Its brief: each section's time (or, a picture of no
+    known length, its place through it), bars, energy, starts low, mid and high (and, from audio,
+    on a bar's sixteen steps), balance, held pitched lines, chords (from audio), and every finding
+    marked measured, estimated or unknown, and from what. A picture's plot (inside its margins and
+    frame) and colour scale are found; its axes can't be read from pixels, so the flags give what
+    its labels say, and `needs` lists what's still missing. A picture never claims chords,
+    instruments, loudness, stereo width or lyrics, and its levels are relative unless `--db` gives
+    its colour bar's span. Blueprints are kept beside the studies.
+  - `pina like create <audio or picture> [--style '…'] [--rhythm|--form|--sound loose|close|tight]
+    [--title '…'] [--folder DIR]`: a new song set up to be like it (its tempo, key and meter where
+    the reference says them, the reference and the choices kept with it). It writes no notes:
+    it answers with the project, the brief and what to ask an agent, which writes every note.
+  - `pina like compare <project> [--request 'closer drums']`: the song rendered and compared with
+    its reference, section by section, as music: groove (where its starts land), notes and held
+    lines, balance (low, mid, high) and energy (each section against the whole), each 0 to 1, with
+    the biggest differences, the bars and tracks they're in and what to change. With
+    `--request`, what the words aim at and how the song moved since the last comparison: reached,
+    better (another pass may help) or stalled (stop). Agents have these as `reference_study`,
+    `reference_create` and `reference_compare`.
 
 The Song Study page (File ▸ Study a Song…, or the song menu) shows a study: the song's name and
 vitals over its shape (a stroke a bar, as loud as it is, coloured by section), its form (a block a
 section, the same colour for the same music, each opened up to its chords, numerals, parts and
 lines), its harmony on the circle of fifths, its groove as steps, its parts and where they play,
 its loudness, spectrum (against its nearest genre's target) and dynamics, its lyrics with their
-rhymes and hooks, and its nearest playbooks. Drop a song on the page, or click, to study one. From
-a study: Start a song like this (a new song at its tempo, key and meter, its playbook as the genre
-and its mix as the reference), Save as playbook, Mix reference (this song's), and Ask the agent
-what it means (its theme and message, metaphors and imagery, and why it works).
+rhymes and hooks, its nearest playbooks, and its blueprint (its spectrum over time with its held
+lines, its sections, where things start low, mid and high, and every finding in three columns:
+measured, estimated, unknown). Drop a song on the page, or click, to study one. A picture of a
+spectrogram studies too, when there's no audio: its plot is framed (drag over the picture to set
+its edges) and its colours matched, and its reading takes what its axes' labels say (how long it
+runs, its lowest and highest frequency and whether they run linear, log or mel, its colours, its
+levels' span); until then it says what it needs and claims nothing about time or pitch. From a
+study: Create a song like this (a style in your words, and how closely to follow its rhythm, form
+and sound, loose, close or tight; a new song at its tempo, key and meter where the reference says
+them, its mix as the mix reference, and the agent asked to write it, every note its own), Save as
+playbook, Mix reference (this song's), and Ask the agent what it means (its theme and message,
+metaphors and imagery, and why it works). A song made like a reference opens Song Study on it,
+with the song against it: rendered and compared, each section's groove, notes, balance and energy,
+its biggest differences (each with Revise), and a change asked for in words ("closer drums",
+"brighter chorus"). The agent changes only what that aims at, Pina compares again, and it stops
+once it's reached or a pass stops helping, three at most; each pass is one turn undo takes back,
+and the comparison is noted in the Studio Agent panel too.
 
-The Agent panel is a producer's desk as well as a conversation: under its header the song at a
-glance (its genre, picked from the playbooks, its key, tempo and length); a new conversation
+The Studio Agent panel is a producer's desk as well as a conversation: under its header the song at a
+glance (its genre, which can be one of your playbooks, its key, tempo and length); a new conversation
 offers the stages the song hasn't had yet (genre, chords, a loop, arrangement, mix, master), a
 click each, or for a finished song what it wants next; in the composer the critic, Pina Studio's notes on the song kept
 up to date as it changes, each with a Fix to ask for (or Fix all), and Listen to the mix for the
@@ -611,7 +859,7 @@ track) goes along with what's asked, unless its chip is turned off.
 When the project is open in the app, commands go to the app over a socket. Each lands on screen as
 one undoable edit, and `pina save` saves it. The agent shows up like a collaborator in a shared
 file: its avatar in the top bar, an outline and cursor on what it just changed, a line in the
-status bar, and each edit in the Agent panel. Otherwise the folder is edited directly.
+status bar, and each edit in the Studio Agent panel. Otherwise the folder is edited directly.
 
 `pina params <project> <track>` (or `--aux N`, `--master`, with `--insert N`) lists a plugin's
 parameters (value and display, default, unit, steps, and a choice's options), for
@@ -631,9 +879,10 @@ pack's names (held out from the fit) and, with `--fit`, fits the models again.
 `pina mcp` is the same as an MCP server on stdio, for agents without a shell (Claude Desktop,
 claude.ai and the like): its tools list themselves with typed inputs, and a user can allow them
 without allowing a shell. Its tools are `describe`, `show`, `edit`, `analyze`, `render`,
-`critique`, `playbook`, `theory`, `reference`, `sounds`, `mix`, `master`, `transport`,
+`critique`, `playbook`, `theory`, `reference`, `sounds`, `mix`, `learn`, `master`, `transport`,
 `plugins`, `params`, `presets`, `samples_find`, `samples_similar`, `samples_kit`, `samples_put`,
-`palette` and `samples_library`. For Claude Code:
+`palette`, `samples_library`, `midi_find`, `midi_study`, `reference_study`, `reference_create`
+and `reference_compare`. For Claude Code:
 
     claude mcp add pina -- /path/to/pina mcp
 
@@ -672,7 +921,7 @@ An instrument is `"synth"` (built in) or `{ "plugin": { "format": …, "path": �
 `"preset"` Pina Studio loaded, `"params"` Pina Studio sets on it (by id, in the order set) and, as an insert,
 the track it hears as a `"sidechain"`. A track without one is an audio track, with an `"input"`.
 Audio files are WAV, AIFF, FLAC or MP3, at any sample rate. An audio region can have a
-`"stretch"` (2 is half speed), a `"flex"` (`"polyphonic"`, `"slicing"` or `"speed"`) and
+`"stretch"` (2 is half speed), a `"stretch_mode"` (`"polyphonic"`, `"slicing"` or `"speed"`) and
 `"follow": true` to follow the song's tempo. A MIDI region can have `"controls"` beside its notes. Tracks can have
 `"sends": [{ "bus": 1, "level_db": -6, "pre": false }]`, played by an aux in `"auxes": [{ "bus":
 1, "name": "Reverb", "inserts": […] }]`. Tracks, auxes and the master (`master_eq`,
