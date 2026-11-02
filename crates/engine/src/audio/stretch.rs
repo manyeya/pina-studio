@@ -1,9 +1,10 @@
 //! Fitting audio to a new length, three ways:
 //!
 //! - Polyphonic, the default: Rubber Band's finer engine (R3), the best open stretcher, run
-//!   offline over the whole file so it hears all of it first, its hits' times pinned. Around
-//!   each hit, the recording itself: the 25 ms before (where a phase vocoder smears the hit
-//!   ahead of itself, a pre-echo) and its first 20 ms, blended into the stretch either side. On
+//!   offline over the part of the file that plays so it hears all of it first, its hits' times
+//!   pinned. Around each hit, the recording itself: the 25 ms before (where a phase vocoder
+//!   smears the hit ahead of itself, a pre-echo) and its first 20 ms, blended into the stretch
+//!   either side. On
 //!   real drum loops at 80 and 120 BPM from 95 that leaves the attacks as recorded, the hits
 //!   within a millisecond or two of their times, and as quiet before them as the recording is,
 //!   where Signalsmith Stretch had 2 to 3 times its level there. Chords, voices and mixes are
@@ -13,8 +14,10 @@
 //! - Speed: as a turntable or a sampler, faster is higher; nothing is stretched.
 //!
 //! Each can be warped: beats pinned where warp markers move them, the audio between stretched to
-//! fit, as flex markers do. Moved in pitch, the recording
+//! fit. Moved in pitch, the recording
 //! around the hits is moved as a sampler would (unless the formants are kept, for a voice).
+
+use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
@@ -23,26 +26,30 @@ use crate::audio::engine::{AudioData, resample};
 /// How an audio region is fitted to its length.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum Flex {
+pub enum StretchMode {
     #[default]
     Polyphonic,
     Slicing,
     Speed,
 }
 
-impl Flex {
-    pub const ALL: [Flex; 3] = [Flex::Polyphonic, Flex::Slicing, Flex::Speed];
+impl StretchMode {
+    pub const ALL: [StretchMode; 3] = [
+        StretchMode::Polyphonic,
+        StretchMode::Slicing,
+        StretchMode::Speed,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
-            Flex::Polyphonic => "Polyphonic",
-            Flex::Slicing => "Slicing",
-            Flex::Speed => "Speed",
+            StretchMode::Polyphonic => "Polyphonic",
+            StretchMode::Slicing => "Slicing",
+            StretchMode::Speed => "Speed",
         }
     }
 
     pub fn is_default(&self) -> bool {
-        *self == Flex::Polyphonic
+        *self == StretchMode::Polyphonic
     }
 }
 
@@ -55,14 +62,14 @@ const INTO_STRETCH: f64 = 0.004;
 const FROM_STRETCH: f64 = 0.002;
 
 /// How audio is fitted: `ratio` times as long (2 is half speed), moved `semitones` (its length
-/// kept; Speed ignores it, its pitch going with its speed), stretched as `flex` says, its formants
+/// kept; Speed ignores it, its pitch going with its speed), stretched as `mode` says, its formants
 /// kept (for a voice) or moved with it, and `warps` (input frame, output frame) pinned: beats
 /// moved by warp markers, the audio between stretched to fit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fit {
     pub ratio: f64,
     pub semitones: f64,
-    pub flex: Flex,
+    pub mode: StretchMode,
     pub formants: bool,
     pub warps: Vec<(usize, usize)>,
 }
@@ -73,10 +80,40 @@ impl Fit {
         Fit {
             ratio,
             semitones: 0.0,
-            flex: Flex::Polyphonic,
+            mode: StretchMode::Polyphonic,
             formants: false,
             warps: Vec::new(),
         }
+    }
+
+    /// For a file `n` frames long: the part of it that plays from output frame `from` to `to`,
+    /// out to whole multiples of `margin` frames with at least one more either side (so the
+    /// stretcher hears around it, and a loop's passes or a small trim ask for the same part); the
+    /// fit for that part alone; and where `from` is in what it makes. Stretching just the part
+    /// that plays is what keeps a song-long take quick to fit.
+    pub fn part(
+        &self,
+        n: usize,
+        from: usize,
+        to: usize,
+        margin: usize,
+    ) -> (Range<usize>, Fit, usize) {
+        let map = Map::new(n, out_len(n, self.ratio), &self.warps);
+        let q = margin.max(1);
+        let a = (map.back(from) / q).saturating_sub(1) * q;
+        let b = ((map.back(to) / q + 2) * q).min(n).max(a.min(n));
+        let (oa, ob) = (map.at(a), map.at(b));
+        let fit = Fit {
+            ratio: (ob - oa) as f64 / (b - a).max(1) as f64,
+            warps: map
+                .warps()
+                .iter()
+                .filter(|w| w.0 > a && w.0 < b)
+                .map(|&(i, o)| (i - a, o - oa))
+                .collect(),
+            ..self.clone()
+        };
+        (a..b, fit, from.saturating_sub(oa))
     }
 }
 
@@ -90,10 +127,10 @@ pub fn render(data: &AudioData, fit: &Fit, rate: f64) -> AudioData {
     }
     let n = input[0].len();
     let map = Map::new(n, out_len(n, fit.ratio), &fit.warps);
-    let channels = match fit.flex {
-        Flex::Speed => input.iter().map(|c| speed(c, &map, rate)).collect(),
-        Flex::Slicing => slicing(input, &map, fit.semitones, rate),
-        Flex::Polyphonic => polyphonic(input, &map, fit, rate),
+    let channels = match fit.mode {
+        StretchMode::Speed => input.iter().map(|c| speed(c, &map, rate)).collect(),
+        StretchMode::Slicing => slicing(input, &map, fit.semitones, rate),
+        StretchMode::Polyphonic => polyphonic(input, &map, fit, rate),
     };
     AudioData { channels }
 }
@@ -134,6 +171,17 @@ impl Map {
         let (a, b) = (self.points[k], self.points[k + 1]);
         let t = (i as f64 - a.0 as f64) / (b.0 - a.0).max(1) as f64;
         (a.1 as f64 + t * (b.1 - a.1) as f64).round() as usize
+    }
+
+    /// The input frame that lands on output frame `o` (the last, past the end).
+    pub fn back(&self, o: usize) -> usize {
+        let p = &self.points;
+        let Some(k) = p.windows(2).position(|w| o < w[1].1) else {
+            return p[p.len() - 1].0;
+        };
+        let (a, b) = (p[k], p[k + 1]);
+        let t = (o as f64 - a.1 as f64) / (b.1 - a.1).max(1) as f64;
+        (a.0 as f64 + t * (b.0 - a.0) as f64).round() as usize
     }
 
     /// The points warps pin, inside the ends.

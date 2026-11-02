@@ -140,7 +140,7 @@ fn slicing_plays_each_hit_as_recorded_at_its_new_time() {
     let out = render(
         &input,
         &Fit {
-            flex: Flex::Slicing,
+            mode: StretchMode::Slicing,
             ..Fit::ratio(1.5)
         },
         RATE,
@@ -196,20 +196,20 @@ fn warp_markers_move_a_hit_and_fit_the_rest_every_way() {
     let hits = onsets(&input.channels, RATE);
     // The third hit 60 ms late, the hits either side pinned where they are: the audio between them stretches and squeezes to fit.
     let moved = hits[2] + (0.06 * RATE) as usize;
-    for flex in Flex::ALL {
+    for mode in StretchMode::ALL {
         let fit = Fit {
-            flex,
+            mode,
             warps: vec![(hits[1], hits[1]), (hits[2], moved), (hits[3], hits[3])],
             ..Fit::ratio(1.0)
         };
         let out = render(&input, &fit, RATE);
-        assert_eq!(out.channels[0].len(), 44_100, "{flex:?}");
+        assert_eq!(out.channels[0].len(), 44_100, "{mode:?}");
         let found = onsets(&out.channels, RATE);
         let near = |at: usize| found.iter().any(|&f| (f as i64 - at as i64).abs() < 90);
-        assert!(near(moved), "{flex:?}: {found:?}, wanted {moved}");
+        assert!(near(moved), "{mode:?}: {found:?}, wanted {moved}");
         assert!(
             near(hits[0]) && near(hits[1]) && near(hits[3]),
-            "{flex:?}: {found:?}"
+            "{mode:?}: {found:?}"
         );
     }
 }
@@ -237,7 +237,7 @@ fn speed_is_a_turntable() {
         &input,
         &Fit {
             semitones: 7.0,
-            flex: Flex::Speed,
+            mode: StretchMode::Speed,
             ..Fit::ratio(1.25)
         },
         RATE,
@@ -245,4 +245,44 @@ fn speed_is_a_turntable() {
     assert_eq!(out.channels[0].len(), out_len(44_100, 1.25));
     // A quarter slower: lower by that, the transposition ignored.
     assert!((peak_hz(&out.channels[0]) - 261.63 / 1.25).abs() < 3.0);
+}
+
+#[test]
+fn stretching_only_the_part_that_plays_puts_every_hit_where_the_whole_file_would() {
+    // Sixteen seconds of hits, a warp marker in the middle, and a region playing seconds 3 to 5 of
+    // what comes out.
+    let times: Vec<f64> = (0..64).map(|k| 0.1 + k as f64 * 0.25).collect();
+    let input = AudioData {
+        channels: drums(&times, 16.0),
+    };
+    let n = input.channels[0].len();
+    let (from, to) = ((3.0 * RATE) as usize, (5.0 * RATE) as usize);
+    for mode in StretchMode::ALL {
+        let whole = Fit {
+            mode,
+            warps: vec![((4.0 * RATE) as usize, (5.2 * RATE) as usize)],
+            ..Fit::ratio(1.25)
+        };
+        let (part, fit, at) = whole.part(n, from, to, RATE as usize);
+        assert!(part.end - part.start < n / 2, "{mode:?}: {part:?}");
+        let piece = AudioData {
+            channels: input
+                .channels
+                .iter()
+                .map(|c| c[part.clone()].to_vec())
+                .collect(),
+        };
+        let all = onsets(&render(&input, &whole, RATE).channels, RATE);
+        let some = onsets(&render(&piece, &fit, RATE).channels, RATE);
+        let want: Vec<usize> = all.into_iter().filter(|&h| h >= from && h < to).collect();
+        let got: Vec<usize> = some
+            .into_iter()
+            .filter(|&h| h >= at && h < at + to - from)
+            .map(|h| h - at + from)
+            .collect();
+        assert_eq!(want.len(), got.len(), "{mode:?}: {want:?} {got:?}");
+        for (w, g) in want.iter().zip(&got) {
+            assert!((*w as i64 - *g as i64).abs() <= 44, "{mode:?}: {w} {g}");
+        }
+    }
 }

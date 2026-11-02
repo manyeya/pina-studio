@@ -44,6 +44,9 @@ pub(crate) fn import(dir: &Path, file: &Path) -> Result<PathBuf, String> {
 pub(crate) fn import_instrument(dir: &Path, instrument: &mut Instrument) -> Result<(), String> {
     if let Instrument::Sampler(s) = instrument {
         for z in &mut s.zones {
+            if z.file.is_absolute() {
+                z.from.get_or_insert_with(|| z.file.clone());
+            }
             z.file = import(dir, &z.file)?;
         }
     }

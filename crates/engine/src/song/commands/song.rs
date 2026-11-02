@@ -11,6 +11,19 @@ pub(super) fn run(p: &mut Project, _dir: &Path, cmd: Command) -> Result<Value, S
             }
             p.set_tempo(bpm);
         }
+        Command::SetTempoAt { tick, bpm } => {
+            if !(bpm.is_finite() && (MIN_BPM..=MAX_BPM).contains(&bpm)) {
+                return Err("bpm must be between 20 and 999".into());
+            }
+            p.set_tempo_at(tick, bpm);
+        }
+        Command::SetTempoMode { mode } => p.tempo_mode = mode,
+        Command::DeleteTempo { tick } => {
+            if !p.tempos.iter().any(|c| c.tick == tick) {
+                return Err(format!("no tempo change at tick {tick}"));
+            }
+            p.delete_tempo(tick);
+        }
         Command::SetMaster { volume_db, pan_law } => {
             if let Some(v) = volume_db {
                 p.master_volume_db = finite("volume_db", v)?;
@@ -53,7 +66,14 @@ pub(super) fn run(p: &mut Project, _dir: &Path, cmd: Command) -> Result<Value, S
         }
         Command::AddMarker { tick, name } => {
             let at = p.markers.partition_point(|m| m.tick <= tick);
-            p.markers.insert(at, Marker { tick, name });
+            p.markers.insert(
+                at,
+                Marker {
+                    tick,
+                    name,
+                    ..Default::default()
+                },
+            );
             return Ok(json!({ "marker": at }));
         }
         Command::SetMarker { marker, tick, name } => {
@@ -76,6 +96,29 @@ pub(super) fn run(p: &mut Project, _dir: &Path, cmd: Command) -> Result<Value, S
             }
             p.markers.remove(marker);
         }
+        Command::MoveSection { section, before } => p.move_section(section, before)?,
+        Command::CopySection { section, before } => p.copy_section(section, before)?,
+        Command::SwapSections { a, b } => {
+            let n = p.sections().len();
+            if a >= n || b >= n {
+                return Err(format!("there are {n} sections"));
+            }
+            p.swap_sections(a, b)?
+        }
+        Command::DeleteSection { section } => p.delete_section(section)?,
+        Command::ClearSection { section } => p.clear_section(section)?,
+        Command::AddSection { name, bars } => {
+            let tick = p.add_section(&name, bars.unwrap_or(8).clamp(1, 512));
+            let section = p.markers.iter().position(|m| m.tick == tick).unwrap_or(0);
+            return Ok(json!({ "section": section, "tick": tick }));
+        }
+        Command::InsertTime { tick, length } => p.insert_time(tick, length),
+        Command::RemoveTime { from, to } => {
+            if to <= from {
+                return Err("to must be after from".into());
+            }
+            p.remove_time(from, to)
+        }
         Command::SetKey { key, move_notes } => {
             let parsed = match key {
                 None => None,
@@ -97,18 +140,10 @@ pub(super) fn run(p: &mut Project, _dir: &Path, cmd: Command) -> Result<Value, S
         }
         Command::SetReference { reference } => p.reference = reference,
         Command::SetGenre { genre } => {
-            p.genre = match genre {
-                None => None,
-                Some(g) => Some(
-                    crate::music::playbook::find(&g)
-                        .ok_or(format!(
-                            "no playbook for {g:?}; there are {}",
-                            crate::music::playbook::ids().join(", ")
-                        ))?
-                        .id
-                        .to_string(),
-                ),
-            };
+            // Any word for it; one of the person's playbooks by its id, if it names one.
+            p.genre = genre
+                .filter(|g| !g.trim().is_empty())
+                .map(|g| crate::music::playbook::find(&g).map_or(g, |b| b.id));
         }
         _ => unreachable!("not one of the song commands"),
     }
