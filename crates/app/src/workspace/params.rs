@@ -80,9 +80,15 @@ impl Workspace {
                     .and_then(|u| crate::mix::strip::knobs(u.kind()).get(i as usize));
                 format!("{name}: {}", knob.map_or("Knob", |p| p.name))
             }
-            Param::Poly(i) => pina_engine::song::project::POLY_PARAMS[i as usize]
-                .name
-                .clone(),
+            // A macro goes by the name its patch gave it.
+            Param::Poly(i) => {
+                use pina_engine::song::project::{MACROS, POLY_PARAMS, macro_param};
+                let named = (0..MACROS)
+                    .find(|&m| macro_param(m) == i as usize)
+                    .and_then(|m| self.poly(track).map(|p| p.macros[m].clone()))
+                    .filter(|n| !n.is_empty());
+                named.unwrap_or_else(|| POLY_PARAMS[i as usize].name.clone())
+            }
             Param::Voice(i) => pina_engine::song::project::VOICE
                 .get(i as usize)
                 .map_or("Voice".into(), |k| k.name.to_string()),

@@ -36,6 +36,7 @@ fn sketch() -> Project {
                     length: 3600,
                     pitch,
                     velocity: 90,
+                    ..Default::default()
                 })
             })
             .collect(),

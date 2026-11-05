@@ -169,6 +169,7 @@ impl Workspace {
                     length,
                     pitch,
                     velocity: 100,
+                    ..Default::default()
                 });
             }
             ws.picked = (first..notes.len()).collect();
@@ -252,6 +253,7 @@ impl Workspace {
                     length: length as u64,
                     pitch,
                     velocity: 100,
+                    ..Default::default()
                 });
             }
             self.picked.extend(first..notes.len());
@@ -375,17 +377,20 @@ impl Workspace {
         }
     }
 
-    /// Velocities drawn across the lane: each note starting between where the mouse was and is
-    /// takes the height it's at (the picked notes only, if some are).
+    /// Velocities (or chances) drawn across the lane: each note starting between where the mouse
+    /// was and is takes the height it's at (the picked notes only, if some are).
     pub(crate) fn drag_velocity_line(&mut self, p: Point<f32>) {
         let Some(Drag::VelocityLine { at, x }) = self.drag else {
             return;
         };
         let lane = self.lane_bounds.get();
         let bottom = f32::from(lane.origin.y) + f32::from(lane.size.height) - 5.0;
-        let v = (((bottom - p.y) / VELOCITY_H) * 127.0)
-            .round()
-            .clamp(1.0, 127.0) as u8;
+        let level = (bottom - p.y) / VELOCITY_H;
+        let chance = self.roll.lane == Lane::Chance;
+        let v = match chance {
+            true => (level * 100.0).round().clamp(1.0, 100.0) as u8,
+            false => (level * 127.0).round().clamp(1.0, 127.0) as u8,
+        };
         let (t0, t1) = (self.tick_at(x.min(p.x)), self.tick_at(x.max(p.x)) + 1.0);
         let start = self.session.project.region(at).start as f64;
         let only = self.picked.clone();
@@ -393,7 +398,10 @@ impl Workspace {
             for (i, n) in notes.iter_mut().enumerate() {
                 let s = start + n.start as f64;
                 if (t0 - 2.0..=t1).contains(&s) && (only.is_empty() || only.contains(&i)) {
-                    n.velocity = v;
+                    match chance {
+                        true => n.chance = v,
+                        false => n.velocity = v,
+                    }
                 }
             }
         }
@@ -417,10 +425,51 @@ impl Workspace {
             Some(l) => (l.min(tick), l.max(tick)),
             None => (tick, tick),
         };
+        let picked = self.picked.clone();
         let r = &mut self.session.project.tracks[at.0].regions[at.1];
-        let Content::Midi { controls, .. } = &mut r.content else {
+        let Content::Midi { notes, controls } = &mut r.content else {
             return;
         };
+        // A note's own: each note the stroke crosses (of those picked, if some are) at its pitch.
+        if lane.expression() {
+            let crossed: Vec<Note> = notes
+                .iter()
+                .enumerate()
+                .filter(|(i, n)| {
+                    (picked.is_empty() || picked.contains(i))
+                        && n.start <= to
+                        && from < n.start + n.length as i64
+                })
+                .map(|(_, n)| *n)
+                .collect();
+            let within = |n: &Note, t: i64| n.start <= t && t < n.start + n.length as i64;
+            controls.retain(|c| {
+                !(c.start >= from
+                    && c.start <= to
+                    && crossed
+                        .iter()
+                        .any(|n| within(n, c.start) && lane.note_holds(&c.kind, n.pitch)))
+            });
+            if !erase {
+                let mut t = from;
+                while t <= to {
+                    for n in crossed.iter().filter(|n| within(n, t)) {
+                        controls.push(ControlPoint {
+                            start: t,
+                            kind: lane.note_make(n.pitch, level),
+                        });
+                    }
+                    t += step;
+                }
+                controls.sort_by_key(|c| c.start);
+            }
+            self.drag = Some(Drag::Control {
+                at,
+                last: Some(tick),
+                erase,
+            });
+            return;
+        }
         controls.retain(|c| !(lane.holds(&c.kind) && c.start >= from && c.start <= to));
         if !erase {
             let mut t = from;
@@ -445,7 +494,7 @@ impl Workspace {
         let Some(at) = self.roll_region() else { return };
         let p = e.position.map(f32::from);
         match self.roll.lane {
-            Lane::Velocity => {
+            Lane::Velocity | Lane::Chance => {
                 self.begin_drag(Drag::VelocityLine { at, x: p.x }, cx);
                 self.drag_velocity_line(p);
             }

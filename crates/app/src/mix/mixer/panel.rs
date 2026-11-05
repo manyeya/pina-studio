@@ -111,10 +111,10 @@ impl Workspace {
                     ),
                     Some(Instrument::Poly(p)) => (
                         match p.patch.is_empty() {
-                            true => "Synth".to_string(),
+                            true => pina_engine::song::project::POLY_NAME.to_string(),
                             false => p.patch.clone(),
                         },
-                        "Synth · built in".into(),
+                        format!("{} · built in", pina_engine::song::project::POLY_NAME),
                         true,
                     ),
                     Some(Instrument::Plugin(r)) => {

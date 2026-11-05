@@ -107,7 +107,7 @@ pub fn devices(plugins: &[PluginInfo]) -> Vec<Device> {
     let mut out = vec![
         own(
             "poly",
-            "Synth",
+            pina_engine::song::project::POLY_NAME,
             Cat::Synth,
             Own::Poly,
             "wavetable subtractive analog oscillators warp saw square filter ladder diode unison \

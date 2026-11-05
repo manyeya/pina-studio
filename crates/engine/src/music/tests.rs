@@ -7,6 +7,7 @@ fn n(start: i64, length: u64, pitch: u8) -> Note {
         length,
         pitch,
         velocity: 100,
+        ..Default::default()
     }
 }
 
@@ -239,4 +240,92 @@ fn keys_have_their_signatures_and_spell_by_them() {
     // C major: plain.
     assert_eq!(key("C").spell(60), (0, 4, 0));
     assert_eq!(key("C").spell(61), (0, 4, 1));
+}
+
+#[test]
+fn span_ornament_and_connect() {
+    let q = PPQ as i64;
+    // Held three quarters of the way to the next start; the last keeps three quarters of itself.
+    let mut notes = vec![n(0, 100, 60), n(q, 100, 64), n(q * 2, 400, 67)];
+    NoteEdit::Span { percent: 75 }.apply(&mut notes, &[]);
+    let lengths: Vec<u64> = notes.iter().map(|n| n.length).collect();
+    assert_eq!(lengths, [PPQ * 3 / 4, PPQ * 3 / 4, 300]);
+
+    // A flam: the note again, softer, just before; a grace note a semitone up.
+    let mut one = vec![n(q, q as u64, 60)];
+    NoteEdit::Ornament {
+        ticks: 30,
+        grace: false,
+    }
+    .apply(&mut one, &[]);
+    assert_eq!(
+        (one[1].start, one[1].pitch, one[1].length),
+        (q - 30, 60, 30)
+    );
+    assert!(one[1].velocity < one[0].velocity);
+    let mut one = vec![n(q, q as u64, 60)];
+    NoteEdit::Ornament {
+        ticks: 30,
+        grace: true,
+    }
+    .apply(&mut one, &[]);
+    assert_eq!(one[1].pitch, 61);
+
+    // C to G a bar apart, quarters walking up between.
+    let mut walk = vec![n(0, q as u64, 60), n(q * 4, q as u64, 67)];
+    NoteEdit::Connect { grid: PPQ }.apply(&mut walk, &[]);
+    let added: Vec<(i64, u8)> = walk[2..].iter().map(|n| (n.start, n.pitch)).collect();
+    assert_eq!(added, [(q, 62), (q * 2, 64), (q * 3, 65)]);
+}
+
+#[test]
+fn recombine_stretch_shape_and_scale_quantize() {
+    let q = PPQ as i64;
+    let line = || vec![n(0, 10, 60), n(q, 20, 62), n(q * 2, 30, 64)];
+    // Pitches rotated round in time order; lengths stay.
+    let mut notes = line();
+    NoteEdit::Recombine {
+        part: NotePart::Pitch,
+        shuffle: false,
+        seed: 0,
+    }
+    .apply(&mut notes, &[]);
+    let pitches: Vec<u8> = notes.iter().map(|n| n.pitch).collect();
+    assert_eq!(pitches, [64, 60, 62]);
+    // Shuffled: the same notes' lengths, in another order, the same for a seed.
+    let shuffled = |seed| {
+        let mut notes = line();
+        NoteEdit::Recombine {
+            part: NotePart::Length,
+            shuffle: true,
+            seed,
+        }
+        .apply(&mut notes, &[]);
+        notes.iter().map(|n| n.length).collect::<Vec<_>>()
+    };
+    let mut sorted = shuffled(7);
+    assert_eq!(shuffled(7), sorted);
+    sorted.sort();
+    assert_eq!(sorted, [10, 20, 30]);
+
+    // Twice as fast, about the first note.
+    let mut notes = vec![n(q, 100, 60), n(q * 3, 100, 62)];
+    NoteEdit::Stretch { percent: 50 }.apply(&mut notes, &[]);
+    assert_eq!((notes[1].start, notes[1].length), (q * 2, 50));
+
+    // A crescendo from 40 to 100.
+    let mut notes = line();
+    NoteEdit::VelocityShape { from: 40, to: 100 }.apply(&mut notes, &[]);
+    let vs: Vec<u8> = notes.iter().map(|n| n.velocity).collect();
+    assert_eq!(vs, [40, 70, 100]);
+
+    // Into A minor: C♯ to C, F♯ to F, G♯ to G.
+    let mut notes = vec![n(0, 10, 61), n(q, 10, 66), n(q * 2, 10, 68)];
+    NoteEdit::ScaleQuantize {
+        root: 9,
+        minor: true,
+    }
+    .apply(&mut notes, &[]);
+    let pitches: Vec<u8> = notes.iter().map(|n| n.pitch).collect();
+    assert_eq!(pitches, [60, 65, 67]);
 }

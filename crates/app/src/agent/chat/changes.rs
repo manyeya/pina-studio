@@ -367,6 +367,7 @@ mod tests {
                         length: PPQ,
                         pitch,
                         velocity: 100,
+                        ..Default::default()
                     })
                     .collect(),
                 controls: Vec::new(),

@@ -10,6 +10,7 @@ fn recording_over_a_region_makes_a_take_folder() {
         length: 240,
         pitch: 64,
         velocity: 90,
+        ..Default::default()
     }];
     let at = p.add_take(
         0,

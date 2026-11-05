@@ -282,12 +282,14 @@ In the app:
   row, and it studies them. Ask for one like them and it writes its own, checks how close it came,
   and leaves it as a card to hear and drag onto the tracks. It doesn't touch the song until you
   do. Everything it writes stays on the panel's MIDI page, in the song's MIDI folder.
-- Pina Studio's own Synth, in the Browser, with its own window: three wavetable oscillators (24
+- Synth-0, Pina Studio's own synth, in the Browser, with its own window: three wavetable oscillators (24
   tables, two warps each, up to sixteen voices of unison), a sub and noise; two filters of twenty
   kinds, the ladder, cascade, diode and snarl solved as circuits; four envelopes, eight LFOs, eight
-  macros and a 64-line matrix; an arpeggiator; thirty patches. Drag any source's ↗ onto any knob,
-  including the knobs of the track's effects, which its Effects page shows. Every parameter can be
-  automated. Agents use `set_synth`, and its patches come up in `sounds`.
+  named macros that each do something on every patch, and a 64-line matrix; an arpeggiator; thirty
+  patches to search, like and hear. The window reads left to right as sound flows, and plays from
+  its own keys and wheels. Drag any source's chip onto any knob, including the knobs of the track's
+  effects, which its Effects page shows; colour on a knob always means what moves it. Every
+  parameter can be automated. Agents use `set_synth`, and its patches come up in `sounds`.
 - Pina Studio's own Reverb and Delay, in the Browser.
   - **Reverb:** Room, Chamber, Hall, Plate, Ambience, Cathedral and Shimmer; pre-delay in ms or
     in time with the song, size, decay, early reflections, diffusion, damping, bass, modulation,
@@ -444,6 +446,17 @@ In the app:
   picked notes (or all): quantize (grid, strength, swing), humanize, legato, chop, arpeggiate,
   strum, glue, reverse, flip, softer and harder. More (in the bar, with chords, velocity colours and Fit) has Ghost, which shows another track's notes behind; Fit
   fits the notes' range; ⌥-scroll makes rows taller or shorter.
+  Its panel has four tabs. Notes: the picked notes' pitch, start, length, velocity, velocity
+  range and chance, mute (0), and picking each chord's top or bottom note. Transform: the tools
+  above, and staccato, flam, grace, connect, 2× and ½ speed, crescendo, fade, recombine and into
+  the key. Generate: Euclidean rhythms, melodies grown from a seed, melodies following a shape.
+  Harmony: the key's chords and borrowed ones, progressions by mood, voiced and played as picked,
+  written in. The ruler names the chords the notes play. Lanes for Chance, and for each note's
+  own Pitch, Slide and Press (MPE): played and recorded from an MPE controller, heard by Synth-0,
+  VST3 and CLAP, and by an Audio Unit or VST2 with MPE on.
+- MIDI FX on instrument tracks, before the instrument: Arpeggiator, Chord Trigger, Scale
+  Quantizer, Transposer, Velocity Processor, Note Repeater, Randomizer, Modifier. The mixer's
+  MIDI FX row opens them.
 - Recording over a region of the same kind makes a take folder. Double-click it to
   see its takes; swipe across a take to comp that stretch from it, click one to use all of it,
   and Flatten to turn the comp back into plain regions.

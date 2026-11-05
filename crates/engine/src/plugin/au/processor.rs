@@ -15,6 +15,8 @@ pub struct AuProcessor {
     pub(crate) time: AudioTimeStamp,
     /// Whether it hears MIDI: an instrument, or an effect that takes it.
     pub(crate) midi: bool,
+    /// The MIDI it hears: each note's channel, with MPE on.
+    pub(crate) mpe: crate::plugin::mpe::Mpe,
     pub(crate) latency: u32,
     pub(crate) sidechain: bool,
     /// Its parameters' ranges, by id, for automation.
@@ -236,6 +238,10 @@ impl ProcessorApi for AuProcessor {
         false
     }
 
+    fn set_mpe(&mut self, on: bool) {
+        self.mpe.set(on);
+    }
+
     fn process(
         &mut self,
         buf: [&mut [f32]; 2],
@@ -270,8 +276,11 @@ impl ProcessorApi for AuProcessor {
         fill(side, sidechain, self.in_channels[1]);
         silence.iter_mut().for_each(|d| d[..frames].fill(0.0));
 
-        // Notes and controls, merged in time.
+        // Notes and controls, merged in time: with MPE on, the zone set up first.
         if self.midi {
+            for [status, a, b] in self.mpe.setup().into_iter().flatten() {
+                unsafe { MusicDeviceMIDIEvent(au, status as u32, a as u32, b as u32, 0) };
+            }
             let (mut n, mut c) = (notes.iter().peekable(), controls.iter().peekable());
             loop {
                 let note_first = match (n.peek(), c.peek()) {
@@ -280,21 +289,23 @@ impl ProcessorApi for AuProcessor {
                     (None, Some(_)) => false,
                     (None, None) => break,
                 };
-                let (offset, [status, data1, data2]) = match note_first {
+                let send = |offset: u32, m: [u8; 3]| {
+                    let [status, data1, data2] = m.map(u32::from);
+                    let offset = offset.min(frames as u32 - 1);
+                    unsafe { MusicDeviceMIDIEvent(au, status, data1, data2, offset) };
+                };
+                match note_first {
                     true => {
                         let note = n.next().unwrap();
-                        (note.offset, note_message(note))
+                        self.mpe.note(note, |m| send(note.offset, m));
                     }
                     false => {
                         let control = c.next().unwrap();
-                        let Some(m) = control_message(control.kind) else {
-                            continue;
-                        };
-                        (control.offset, m)
+                        if let Some(m) = self.mpe.control(control.kind) {
+                            send(control.offset, m);
+                        }
                     }
-                };
-                let offset = offset.min(frames as u32 - 1);
-                unsafe { MusicDeviceMIDIEvent(au, status, data1, data2, offset) };
+                }
             }
         }
 
@@ -355,31 +366,4 @@ impl ProcessorApi for AuProcessor {
             dst[..frames].copy_from_slice(src);
         }
     }
-}
-
-/// A note on (velocity 1 to 127) or off, on channel 1.
-pub(crate) fn note_message(n: &Note) -> [u32; 3] {
-    if n.velocity > 0.0 {
-        let velocity = (n.velocity * 127.0).round().clamp(1.0, 127.0) as u32;
-        [0x90, n.pitch as u32, velocity]
-    } else {
-        [0x80, n.pitch as u32, 0]
-    }
-}
-
-/// A control as a MIDI message on channel 1, if MIDI has one for it.
-pub(crate) fn control_message(kind: ControlKind) -> Option<[u32; 3]> {
-    let seven = |v: f32| (v * 127.0).round().clamp(0.0, 127.0) as u32;
-    Some(match kind {
-        ControlKind::Cc { number, value } => [0xB0, number.min(127) as u32, seven(value)],
-        ControlKind::PitchBend(v) => {
-            let bend = (8192.0 + v as f64 * 8192.0).round().clamp(0.0, 16383.0) as u32;
-            [0xE0, bend & 0x7F, bend >> 7]
-        }
-        ControlKind::Aftertouch(v) => [0xD0, seven(v), 0],
-        ControlKind::PolyPressure { pitch, value } => [0xA0, pitch as u32, seven(value)],
-        // ponytail: per-note expression has no AUv2 message; send it as MIDI 2.0 (or MPE) when a
-        // unit that takes those turns up.
-        ControlKind::Expression { .. } => return None,
-    })
 }

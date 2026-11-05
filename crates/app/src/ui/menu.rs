@@ -158,6 +158,8 @@ pub enum MenuAction {
     DragMode(crate::workspace::DragMode),
     /// The track whose notes the piano roll shows faintly, by id.
     Ghost(Option<u64>),
+    /// A track's plugin instrument to hear each note on a channel of its own (MPE), or not.
+    Mpe(usize),
     /// Something done to the piano roll's notes.
     Roll(crate::editors::pianoroll::RollOp),
     /// What a click in the piano roll writes: a note or a chord.
@@ -506,6 +508,13 @@ impl Workspace {
             MenuAction::Snap(snap) => self.snap = snap,
             MenuAction::DragMode(mode) => self.drag_mode = mode,
             MenuAction::Ghost(id) => self.roll.ghost = id,
+            MenuAction::Mpe(track) => self.edit(cx, |ws| {
+                if let Some(Instrument::Plugin(r)) =
+                    &mut ws.session.project.tracks[track].instrument
+                {
+                    r.mpe ^= true;
+                }
+            }),
             MenuAction::Roll(op) => self.roll_op(op, cx),
             MenuAction::Stamp(stamp) => self.roll.stamp = stamp,
             MenuAction::More(item) => self.pick_more(item, cx),

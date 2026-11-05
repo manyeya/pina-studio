@@ -334,12 +334,8 @@ pub fn meter(level: [f32; 2], held: [f32; 2], w: f32, gap: f32) -> impl IntoElem
 /// How many effect rows (its built-ins, its plugins and an empty slot) and send rows (its sends
 /// and a slot for another) a strip shows in the inspector.
 pub fn rows(ws: &Workspace, ch: Channel) -> (usize, usize) {
-    let (eq, comp) = ws.strip_dsp(ch);
-    let effects = eq.is_some() as usize
-        + comp.is_some() as usize
-        + ws.sat(ch).is_some() as usize
-        + ws.inserts(ch).len()
-        + 1;
+    // Every effect it shows (its limiter and stacked built-ins too), and the slot to add one.
+    let effects = ws.shown_effects(ch).len() + 1;
     let sends = match ch {
         Channel::Track(i) => ws.session.project.tracks[i].sends.len() + 1,
         _ => 0,

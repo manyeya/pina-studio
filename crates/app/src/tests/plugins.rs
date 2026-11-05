@@ -6,7 +6,7 @@ use pina_engine::song::project::{Format, Which};
 
 use super::*;
 use crate::sounds::{
-    catalog::Scope,
+    catalog::{Cat, Scope},
     plugins::{Fact, FileFacts, PluginOp, Shown, subcategory},
 };
 
@@ -438,6 +438,105 @@ fn a_slot_opens_the_picker(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_slots_picker_narrows_by_where_from_kind_maker_star_and_recent(cx: &mut TestAppContext) {
+    use crate::mix::strip::Channel;
+    let (ws, cx) = open_plugins(cx);
+    cx.simulate_keystrokes("x");
+    let rows = |cx: &mut VisualTestContext| {
+        ws.update(cx, |ws, cx| {
+            let rows = ws.mini_rows(cx);
+            rows.into_iter()
+                .map(|d| ws.catalog.devices[d].clone())
+                .collect::<Vec<_>>()
+        })
+    };
+    let open_slot = |cx: &mut VisualTestContext| {
+        let n = ws.read_with(cx, |ws, _| ws.inserts(Channel::Track(1)).len());
+        let slot: &'static str = Box::leak(format!("slot-Track(1)-Insert({n})").into_boxed_str());
+        press(cx, slot);
+        assert!(ws.read_with(cx, |ws, _| ws.plugin_page.mini.is_some()));
+    };
+    open_slot(cx);
+    let all = rows(cx);
+    assert!(
+        all.iter().all(|d| !d.instrument()),
+        "a slot for effects lists effects"
+    );
+    assert!(all.iter().any(|d| d.own.is_some()) && all.iter().any(|d| d.own.is_none()));
+
+    // Where from: only plugins, then only what's built in.
+    press(cx, "mini-from-Plugins");
+    assert!(rows(cx).iter().all(|d| d.own.is_none()));
+    press(cx, "mini-from-Built in");
+    let built_in = rows(cx);
+    assert!(built_in.iter().all(|d| d.own.is_some()));
+    assert_eq!(built_in.len(), 16, "every built-in effect");
+
+    // A category, then a kind in it.
+    press(cx, "mini-cat-Dynamics");
+    let dynamics = rows(cx);
+    assert!(dynamics.len() > 1 && dynamics.iter().all(|d| d.cat == Cat::Dynamics));
+    let kind = subcategory(&dynamics[0]).expect("a dynamics kind");
+    let chip: &'static str = Box::leak(format!("mini-kind-{kind}").into_boxed_str());
+    press(cx, chip);
+    let kinds = rows(cx);
+    assert!(kinds.len() < dynamics.len());
+    assert!(kinds.iter().all(|d| subcategory(d) == Some(kind)));
+
+    // Clear lets go of all of it.
+    press(cx, "mini-clear");
+    assert_eq!(rows(cx).len(), all.len());
+
+    // A maker.
+    press(cx, "mini-maker-Apple");
+    let apple: Vec<String> = rows(cx).into_iter().map(|d| d.key).collect();
+    assert_eq!(apple.len(), 2);
+    assert!(apple.contains(&DELAY.to_string()) && apple.contains(&GRAPHIC.to_string()));
+
+    // Starred from its row, then only the starred.
+    press(cx, "mini-star-0");
+    let starred = rows(cx)[0].key.clone();
+    assert!(ws.read_with(cx, |ws, _| ws.catalog.favourites.contains(&starred)));
+    assert!(
+        ws.read_with(cx, |ws, _| ws.plugin_page.mini.is_some()),
+        "starring keeps it open"
+    );
+    press(cx, "mini-clear");
+    press(cx, "mini-starred");
+    assert_eq!(
+        rows(cx).iter().map(|d| d.key.clone()).collect::<Vec<_>>(),
+        [starred]
+    );
+
+    // Nothing found says so, and lets go of what narrowed it.
+    cx.simulate_input("zzzz");
+    cx.run_until_parked();
+    assert!(rows(cx).is_empty());
+    press(cx, "mini-clear-all");
+    assert_eq!(rows(cx).len(), all.len());
+
+    // Past the rows that show, the keyboard's pick is scrolled to, and goes in.
+    for _ in 0..8 {
+        cx.simulate_keystrokes("down");
+    }
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("mini-8").is_some(), "scrolled to");
+    assert!(
+        cx.debug_bounds("mini-0").is_none(),
+        "only the rows that show are drawn"
+    );
+    let eighth = rows(cx)[8].key.clone();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(ws.read_with(cx, |ws, _| ws.plugin_page.mini.is_none()));
+
+    // What went in last is Recent, first.
+    open_slot(cx);
+    press(cx, "mini-recent");
+    assert_eq!(rows(cx)[0].key, eighth);
+}
+
+#[gpui::test]
 fn the_same_plugin_goes_on_twice(cx: &mut TestAppContext) {
     let (ws, cx) = open_plugins(cx);
     ws.update(cx, |ws, cx| {
@@ -461,7 +560,6 @@ fn the_same_plugin_goes_on_twice(cx: &mut TestAppContext) {
             .count();
         (t.inserts.len(), loaded, ws.status.clone())
     });
-    eprintln!("TWICE inserts {inserts} loaded {loaded} status {status:?}");
     assert_eq!((inserts, loaded), (2, 2), "{status:?}");
 }
 
@@ -547,4 +645,48 @@ fn plugins_added_and_taken_out_leave_the_others_running_as_they_are(cx: &mut Tes
             .collect::<Vec<_>>()
     });
     assert_eq!(names.len(), 2);
+}
+
+#[gpui::test]
+fn an_audio_unit_instrument_is_switched_to_mpe_from_its_slot(cx: &mut TestAppContext) {
+    use pina_engine::song::project::{Instrument, PluginRef};
+    let (ws, cx) = open(cx);
+    let instrument = |format| {
+        Instrument::Plugin(PluginRef {
+            format,
+            class: "Keys".into(),
+            uid: Some("aumu keys pina".into()),
+            ..Default::default()
+        })
+    };
+    let mpe = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| match &ws.session.project.tracks[0].instrument {
+            Some(Instrument::Plugin(r)) => r.mpe,
+            _ => false,
+        })
+    };
+    ws.update(cx, |ws, cx| {
+        ws.session.project.tracks[0].instrument = Some(instrument(Format::Au));
+        cx.notify();
+    });
+    cx.simulate_keystrokes("x");
+    cx.run_until_parked();
+    click_on(
+        cx,
+        "slot-Track(0)-Instrument",
+        Modifiers::none(),
+        MouseButton::Right,
+    );
+    pick(cx, &ws, "MPE: a channel per note");
+    assert!(mpe(cx));
+    cx.simulate_keystrokes("cmd-z");
+    assert!(!mpe(cx));
+    // A VST3 hears each note's expression anyway: nothing to switch.
+    ws.update(cx, |ws, cx| {
+        ws.session.project.tracks[0].instrument = Some(instrument(Format::Vst3));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let items = ws.read_with(cx, |ws, _| ws.mpe_item(0));
+    assert!(items.is_none());
 }

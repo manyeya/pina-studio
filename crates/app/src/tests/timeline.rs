@@ -129,6 +129,57 @@ fn musical_typing_records_a_midi_region(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_take_keeps_what_an_mpe_controller_did_to_each_note(cx: &mut TestAppContext) {
+    use pina_engine::{
+        plugin::{ControlKind, ExpressionKind},
+        song::project::ControlValue,
+    };
+    let (ws, cx) = open(cx);
+    cx.simulate_click(spot(&ws, cx, PPQ, 0), Modifiers::none()); // select Keys
+    let ruler = spot(&ws, cx, BAR * 5, 0) - point(px(0.), px(LANE_H / 2.0 + 10.));
+    cx.simulate_click(ruler, Modifiers::none());
+    until(cx, &ws, |ws| ws.playhead() == BAR * 5);
+    cx.simulate_keystrokes("cmd-k r");
+    until(cx, &ws, |ws| ws.player.playing());
+    cx.simulate_keystrokes("a"); // C3, held
+    until(
+        cx,
+        &ws,
+        |ws| matches!(&ws.recording, Some(Recording::Midi { held, .. }) if !held.is_empty()),
+    );
+    // The controller bends that note up a third, as its own: in from MIDI, as the decoder reads it.
+    ws.update(cx, |ws, _| {
+        ws.player.send_live_move(ControlKind::Expression {
+            pitch: 60,
+            kind: ExpressionKind::Tuning,
+            value: 4.0,
+        })
+    });
+    until(
+        cx,
+        &ws,
+        |ws| matches!(&ws.recording, Some(Recording::Midi { controls, .. }) if !controls.is_empty()),
+    );
+    cx.simulate_keystrokes("r");
+    let controls = ws.read_with(cx, |ws, _| {
+        match &ws.session.project.tracks[0].regions[1].content {
+            Content::Midi { controls, .. } => controls.clone(),
+            _ => Vec::new(),
+        }
+    });
+    assert!(
+        controls.iter().any(|c| c.start >= 0
+            && c.kind
+                == ControlValue::Expression {
+                    pitch: 60,
+                    kind: ExpressionKind::Tuning,
+                    value: 4.0,
+                }),
+        "{controls:?}"
+    );
+}
+
+#[gpui::test]
 fn recording_over_a_region_makes_takes_to_comp_and_flatten(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     cx.simulate_click(spot(&ws, cx, PPQ, 0), Modifiers::none()); // select Keys

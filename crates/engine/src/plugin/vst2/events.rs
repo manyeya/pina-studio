@@ -34,38 +34,6 @@ pub(crate) fn midi(offset: u32, data: [u8; 3]) -> VstMidiEvent {
     }
 }
 
-/// 0 to 1 as MIDI's 0 to 127.
-pub(crate) fn seven_bit(v: f32) -> u8 {
-    (v.clamp(0.0, 1.0) * 127.0).round() as u8
-}
-
-/// A note on or off, on channel 1.
-pub(crate) fn note_midi(n: &Note) -> VstMidiEvent {
-    match n.velocity > 0.0 {
-        true => midi(
-            n.offset,
-            [0x90, n.pitch & 0x7f, seven_bit(n.velocity).max(1)],
-        ),
-        false => midi(n.offset, [0x80, n.pitch & 0x7f, 0]),
-    }
-}
-
-/// A control as MIDI, if MIDI has it.
-pub(crate) fn control_midi(c: &Control) -> Option<VstMidiEvent> {
-    let data = match c.kind {
-        ControlKind::Cc { number, value } => [0xb0, number & 0x7f, seven_bit(value)],
-        ControlKind::PitchBend(v) => {
-            let bend = ((v.clamp(-1.0, 1.0) + 1.0) / 2.0 * 16383.0).round() as u16;
-            [0xe0, (bend & 0x7f) as u8, (bend >> 7) as u8]
-        }
-        ControlKind::Aftertouch(v) => [0xd0, seven_bit(v), 0],
-        ControlKind::PolyPressure { pitch, value } => [0xa0, pitch & 0x7f, seven_bit(value)],
-        // ponytail: VST2 has no per-note expression; MPE (a channel per note) could carry it.
-        ControlKind::Expression { .. } => return None,
-    };
-    Some(midi(c.offset, data))
-}
-
 /// A block's MIDI for the plugin: room for `EVENTS`, made once, so filling it never allocates.
 pub(crate) struct EventList {
     pub(crate) list: VstEvents,

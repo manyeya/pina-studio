@@ -40,6 +40,7 @@ fn a_scan_analyses_whats_new_and_forgets_whats_gone() {
                             length: 480,
                             pitch: 33,
                             velocity: 100,
+                            ..Default::default()
                         })
                         .collect(),
                     controls: Vec::new(),

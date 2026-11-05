@@ -137,9 +137,10 @@ fn history_finds_what_was_said_and_conversations_rename_and_delete(cx: &mut Test
 }
 
 #[cfg(unix)]
-fn stand_in() -> (PathBuf, PathBuf) {
+fn stand_in(name: &str) -> (PathBuf, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
-    let dir = std::env::temp_dir().join(format!("pina-stand-in-{}", std::process::id()));
+    // A folder a test: tests run side by side, and each reads back what it asked.
+    let dir = std::env::temp_dir().join(format!("pina-stand-in-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (claude, log) = (dir.join("claude"), dir.join("asked.log"));
     std::fs::write(
@@ -169,7 +170,8 @@ cat > /dev/null
 
 #[cfg(unix)]
 fn settle_agent(ws: &Entity<Workspace>, cx: &mut VisualTestContext) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // Room for a machine busy with the other tests: it's done as soon as the answer's in.
+    let deadline = Instant::now() + Duration::from_secs(20);
     while ws.read_with(cx, |ws, _| ws.chat.busy) && Instant::now() < deadline {
         cx.run_until_parked();
         thread::sleep(Duration::from_millis(5));
@@ -180,7 +182,7 @@ fn settle_agent(ws: &Entity<Workspace>, cx: &mut VisualTestContext) {
 #[cfg(unix)]
 #[gpui::test]
 fn an_old_conversation_carries_on_and_survives_the_agent_forgetting_it(cx: &mut TestAppContext) {
-    let (claude, log) = stand_in();
+    let (claude, log) = stand_in("carry");
     let asked = |what: &str| {
         let all = std::fs::read_to_string(&log).unwrap_or_default();
         all.lines().find(|l| l.contains(what)).map(str::to_string)
@@ -557,8 +559,7 @@ fn a_run_of_steps_folds_to_a_line_and_opens(cx: &mut TestAppContext) {
 #[cfg(unix)]
 #[gpui::test]
 fn a_move_is_asked_of_the_studio_agent_in_a_click(cx: &mut TestAppContext) {
-    let (claude, log) = stand_in();
-    let _ = std::fs::remove_file(&log);
+    let (claude, log) = stand_in("move");
     cx.executor().allow_parking();
     let (ws, cx, dir) = open_agent(cx, "agent-move");
     ws.update(cx, |ws, cx| {

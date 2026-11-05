@@ -3,5 +3,6 @@
 pub mod eq;
 pub mod export;
 pub mod fx;
+pub mod midi_fx;
 pub mod mixer;
 pub mod strip;

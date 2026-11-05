@@ -187,7 +187,9 @@ impl Workspace {
                     group = param.group;
                     items.push((group.into(), MenuAction::Nothing));
                 }
-                items.push(item(Param::Poly(i as u16), param.name.clone()));
+                let name = self.param_name(track, Param::Poly(i as u16));
+                let _ = param;
+                items.push(item(Param::Poly(i as u16), name));
             }
         }
         // The Sampler's voice: everything that moves smoothly.

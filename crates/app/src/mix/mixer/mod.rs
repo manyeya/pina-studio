@@ -19,7 +19,7 @@ use pina_engine::{
 };
 
 use crate::{
-    mix::strip::{self, Builtin, Channel, Layout, MIXER_INSERTS, MIXER_SENDS},
+    mix::strip::{self, Builtin, Channel, Layout, MIXER_SENDS},
     ui::menu::{Menu, MenuAction},
     ui::theme::*,
     workspace::{Channels, CompField, Drag, LimitField, SatField, Slider, Target, Workspace, pt},

@@ -504,7 +504,79 @@ pub fn poly_patch(name: &str) -> Option<Poly> {
     p.patch = name.to_string();
     // A few voices over a stack, about as loud as one.
     p.params[POLY_MASTER] -= 2.0;
+    give_macros(&mut p);
     Some(p)
+}
+
+/// What every patch's macros are called, in order.
+pub const POLY_MACROS: [&str; MACROS] = [
+    "Bright", "Bite", "Motion", "Width", "Weight", "Air", "Attack", "Tail",
+];
+
+/// Eight macros that mean the same on every patch, down they leave it as it was made. A patch
+/// with no filter gets its brightness and bite from warps that do nothing at 0. A synth made
+/// before patches had them gets them the same way, as many as its matrix has room for.
+pub fn give_macros(p: &mut Poly) {
+    let mut to = |m: usize, param: usize, depth: f32| {
+        if p.routes.len() >= MAX_POLY_ROUTES {
+            return;
+        }
+        p.routes.push(PolyRoute {
+            source: PolySource::Macro(m as u8),
+            dest: PolyDest::Param(param as u16),
+            depth,
+            by: None,
+        });
+    };
+    let filtered = p.filters[0] != PolyFilter::None;
+    let at: [f32; OSCS] = std::array::from_fn(|o| p.params[osc_param(o, OscField::Position)]);
+    let sustain = p.params[env_param(0, EnvField::Sustain)];
+    let sounding: Vec<usize> = (0..OSCS)
+        .filter(|&o| p.params[osc_param(o, OscField::Level)] > 0.0)
+        .collect();
+    if filtered {
+        to(0, filter_param(0, FilterField::Cutoff), 0.35);
+        to(1, filter_param(0, FilterField::Drive), 0.5);
+        to(1, filter_param(0, FilterField::Resonance), 0.3);
+    }
+    for &o in &sounding {
+        if !filtered {
+            to(0, osc_param(o, OscField::WarpB), 0.5);
+            to(1, osc_param(o, OscField::WarpA), 0.35);
+        }
+        // A table at its end moves back through it.
+        let position = osc_param(o, OscField::Position);
+        let way = if at[o] > 0.6 { -0.4 } else { 0.4 };
+        to(2, position, way);
+        to(3, osc_param(o, OscField::Unison), 0.2);
+        to(3, osc_param(o, OscField::Detune), 0.3);
+        to(3, osc_param(o, OscField::Width), 0.4);
+    }
+    // Noise alone moves and widens the only way it can.
+    if sounding.is_empty() {
+        to(2, NOISE_COLOR, 0.5);
+        to(3, filter_param(0, FilterField::Spread), 0.5);
+    }
+    to(4, SUB_LEVEL, 0.7);
+    to(5, NOISE_LEVEL, 0.4);
+    to(6, env_param(0, EnvField::Attack), 0.45);
+    to(7, env_param(0, EnvField::Release), 0.45);
+    // A plucked note has gone before it's let go: its tail is its decay.
+    if sustain < 0.1 {
+        to(7, env_param(0, EnvField::Decay), 0.3);
+    }
+    if !filtered {
+        for &o in &sounding {
+            let [a, b] = &mut p.warps[o];
+            if *a == Warp::None {
+                *a = Warp::Sync;
+            }
+            if *b == Warp::None {
+                *b = Warp::PhaseDist;
+            }
+        }
+    }
+    p.macros = POLY_MACROS.map(str::to_string);
 }
 
 #[cfg(test)]
@@ -526,6 +598,17 @@ mod tests {
                 assert!((lo..=hi).contains(t), "{name}: {} is {t}", q.id);
             }
         }
+        // A synth from before macros gets them, as many as its matrix has room for.
+        let mut full = poly_patch("Init").unwrap();
+        full.routes
+            .retain(|r| !matches!(r.source, PolySource::Macro(_)));
+        full.macros = Default::default();
+        give_macros(&mut full);
+        assert_eq!(full.macros[0], "Bright");
+        let one = full.routes[0];
+        full.routes = vec![one; 60];
+        give_macros(&mut full);
+        assert_eq!(full.routes.len(), MAX_POLY_ROUTES);
         assert!(poly_patch("reese").is_some());
         assert!(poly_patch("nothing").is_none());
     }

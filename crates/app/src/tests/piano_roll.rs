@@ -218,6 +218,8 @@ fn the_pencil_writes_chords_in_key_paints_on_and_the_lane_draws(cx: &mut TestApp
 #[gpui::test]
 fn velocities_drag_and_the_roll_tools_edit_notes(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
+    // The editor dragged taller, its whole panel in sight.
+    ws.update(cx, |ws, _| ws.editor_h = 460.0);
     cx.simulate_click(spot(&ws, cx, PPQ, 1), Modifiers::none()); // the Lead region
     cx.simulate_keystrokes("p");
     cx.run_until_parked();
@@ -237,10 +239,219 @@ fn velocities_drag_and_the_roll_tools_edit_notes(cx: &mut TestAppContext) {
     drag(cx, dot, dot + point(px(0.), px(10.)));
     let after = notes(cx)[0].velocity;
     assert!(after < before, "{before} {after}");
-    // Legato holds each note to the next.
+    // Legato, from the Transform tab, holds each note to the next.
+    click_on(
+        cx,
+        "roll-panel-Transform",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
     click_on(cx, "roll-Legato", Modifiers::none(), MouseButton::Left);
     let n = notes(cx);
     assert_eq!(n[0].start + n[0].length as i64, n[1].start);
+}
+
+#[gpui::test]
+fn the_notes_panel_changes_every_picked_note_and_mutes_them(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    // The editor dragged taller, its whole panel in sight.
+    ws.update(cx, |ws, _| ws.editor_h = 460.0);
+    cx.simulate_click(spot(&ws, cx, PPQ, 0), Modifiers::none()); // the Keys region
+    cx.simulate_keystrokes("p");
+    cx.run_until_parked();
+    let notes = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            ws.session
+                .project
+                .region((0, 0))
+                .content
+                .notes(0)
+                .unwrap()
+                .to_vec()
+        })
+    };
+    let picked = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let mut p = ws.picked.clone();
+            p.sort_unstable();
+            p
+        })
+    };
+    let before = notes(cx);
+    // The top note of each chord, then the rest.
+    click_on(cx, "roll-pick-Top", Modifiers::none(), MouseButton::Left);
+    let tops = picked(cx);
+    assert!(!tops.is_empty() && tops.len() < before.len());
+    for &i in &tops {
+        let n = before[i];
+        assert!(
+            before
+                .iter()
+                .all(|o| o.start != n.start || o.pitch <= n.pitch)
+        );
+    }
+    click_on(cx, "roll-pick-Invert", Modifiers::none(), MouseButton::Left);
+    assert_eq!(picked(cx).len(), before.len() - tops.len());
+
+    // A step up in velocity, for every picked note; one undo takes it back.
+    cx.simulate_keystrokes("cmd-a");
+    click_on(cx, "note-Velocity-up", Modifiers::none(), MouseButton::Left);
+    let up = notes(cx);
+    assert!(
+        up.iter()
+            .zip(&before)
+            .all(|(a, b)| a.velocity == (b.velocity + 1).min(127))
+    );
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(notes(cx), before);
+
+    // Chance dragged down, for all of them at once.
+    let field = cx.debug_bounds("note-field-Chance").unwrap().center();
+    drag(cx, field, field + point(px(0.), px(30.)));
+    let less = notes(cx);
+    assert!(
+        less.iter()
+            .all(|n| n.chance < 100 && n.chance == less[0].chance),
+        "{:?}",
+        less[0]
+    );
+
+    // 0 mutes them, and again plays them.
+    cx.simulate_keystrokes("0");
+    assert!(notes(cx).iter().all(|n| n.muted));
+    cx.simulate_keystrokes("0");
+    assert!(notes(cx).iter().all(|n| !n.muted));
+}
+
+#[gpui::test]
+fn a_notes_own_bend_is_drawn_in_its_lane_and_rubbed_out(cx: &mut TestAppContext) {
+    use pina_engine::song::project::{ControlValue, ExpressionKind};
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, _| ws.editor_h = 460.0);
+    cx.simulate_click(spot(&ws, cx, PPQ, 1), Modifiers::none()); // the Lead region
+    cx.simulate_keystrokes("p");
+    cx.run_until_parked();
+    let region = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            match &ws.session.project.region((1, 0)).content {
+                Content::Midi { notes, controls } => (notes.clone(), controls.clone()),
+                _ => unreachable!(),
+            }
+        })
+    };
+    let (notes, _) = region(cx);
+    let n = notes[0];
+    click_on(cx, "lane-Pitch", Modifiers::none(), MouseButton::Left);
+    // Across the first note's middle, high in the lane: it bends up, the next note doesn't.
+    let mut x = |tick: i64| f32::from(roll_spot(&ws, cx, tick.max(0) as u64, n.pitch).x);
+    let (a, b) = (
+        x(n.start + n.length as i64 / 4),
+        x(n.start + n.length as i64 * 3 / 4),
+    );
+    let lane = cx.debug_bounds("roll-lane").unwrap();
+    let y = lane.origin.y + px(12.);
+    drag(cx, point(px(a), y), point(px(b), y));
+    let bends = |cx: &VisualTestContext| -> Vec<(i64, u8, f32)> {
+        region(cx)
+            .1
+            .iter()
+            .filter_map(|c| match c.kind {
+                ControlValue::Expression {
+                    pitch,
+                    kind: ExpressionKind::Tuning,
+                    value,
+                } => Some((c.start, pitch, value)),
+                _ => None,
+            })
+            .collect()
+    };
+    let drawn = bends(cx);
+    assert!(!drawn.is_empty());
+    let end = n.start + n.length as i64;
+    assert!(
+        drawn
+            .iter()
+            .all(|&(t, p, v)| p == n.pitch && (n.start..end).contains(&t) && v > 6.0),
+        "{drawn:?}"
+    );
+    // ⌥ rubs it out.
+    drag_with(
+        cx,
+        point(px(a - 4.), y),
+        point(px(b + 4.), y),
+        Modifiers::alt(),
+    );
+    assert!(bends(cx).is_empty(), "{:?}", bends(cx));
+}
+
+#[gpui::test]
+fn the_roll_writes_rhythms_and_chords_and_names_what_it_hears(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, _| ws.editor_h = 560.0);
+    cx.simulate_click(spot(&ws, cx, PPQ, 0), Modifiers::none()); // the Keys region
+    cx.simulate_keystrokes("p");
+    cx.run_until_parked();
+    let notes = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            ws.session
+                .project
+                .region((0, 0))
+                .content
+                .notes(0)
+                .unwrap()
+                .to_vec()
+        })
+    };
+    let before = notes(cx);
+    let (length, grid) = ws.read_with(cx, |ws, _| {
+        (ws.session.project.region((0, 0)).length, ws.grid())
+    });
+    // 3 hits in every 8 steps, over the region, in place of its notes.
+    click_on(
+        cx,
+        "roll-panel-Generate",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(
+        cx,
+        "write-Write rhythm",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    let hits = notes(cx);
+    assert_eq!(hits.len() as u64, length / grid / 8 * 3);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(notes(cx), before);
+
+    // C, then A minor, played as picked: written, and read back over the ruler.
+    click_on(
+        cx,
+        "roll-panel-Harmony",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(cx, "harmony-chord-0", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "harmony-chord-5", Modifiers::none(), MouseButton::Left);
+    click_on(
+        cx,
+        "write-Write the chords",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    let chords = notes(cx);
+    assert_eq!(chords.len(), 6);
+    let named = ws.read_with(cx, |ws, _| {
+        pina_engine::music::harmony::read_chords(&chords, (0, length as i64), PPQ)
+            .iter()
+            .map(|c| c.2.name_in(ws.session.project.song_key().as_ref()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(named, ["C", "Am"]);
+    assert!(
+        cx.debug_bounds("roll-chord-1").is_some(),
+        "the ruler names them"
+    );
 }
 
 #[gpui::test]

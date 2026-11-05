@@ -68,9 +68,15 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                 Some(Instrument::Sampler(_)) => {
                     plugin_slot("Sampler".into(), true, ch, Which::Instrument, 24., dot, cx)
                 }
-                Some(Instrument::Poly(_)) => {
-                    plugin_slot("Synth".into(), true, ch, Which::Instrument, 24., dot, cx)
-                }
+                Some(Instrument::Poly(_)) => plugin_slot(
+                    pina_engine::song::project::POLY_NAME.into(),
+                    true,
+                    ch,
+                    Which::Instrument,
+                    24.,
+                    dot,
+                    cx,
+                ),
                 Some(Instrument::Drums) => {
                     plugin_slot("Drum Kit".into(), true, ch, Which::Instrument, 24., dot, cx)
                 }
@@ -166,25 +172,13 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
         ));
     }
     let (fit_effects, fit_sends) = match layout {
-        Layout::Mixer { .. } => (MIXER_INSERTS, MIXER_SENDS),
+        Layout::Mixer { .. } => (super::mixer_inserts(ws), MIXER_SENDS),
         Layout::Compact { effects, sends } => (effects, sends),
     };
-    // In the mixer, room for so many: the slot to add another always last, saying how many more
-    // there are than show (the channel's panel lists them all).
-    if mixer && effects.len() > MIXER_INSERTS {
-        let add = effects.pop();
-        let more = effects.len() - (MIXER_INSERTS - 1);
-        effects.truncate(MIXER_INSERTS - 1);
-        effects.extend(add.map(|d| {
-            d.gap(px(4.)).child(
-                div()
-                    .text_size(px(9.5))
-                    .text_color(rgb(TEXT_4))
-                    .debug_selector(move || format!("strip-more-{ch:?}"))
-                    .child(format!("{more} more")),
-            )
-        }));
-    }
+    // In the mixer the rows grow to fit the busiest strip; past the most, a strip scrolls its
+    // effects rather than hiding any.
+    let effects_h = fit_effects as f32 * 25.0 - 3.0;
+    let scrolls = mixer && effects.len() > fit_effects;
     while effects.len() < fit_effects {
         effects.push(blank(slot_h));
     }
@@ -735,11 +729,21 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                 cx,
             ))
         })
+        // An instrument track's MIDI effects, over its instrument; a row kept for the rest.
+        .child(match ch {
+            Channel::Track(i) if project.tracks[i].instrument.is_some() => {
+                ws.midi_fx_slot(i, 22., cx)
+            }
+            _ => blank(22.),
+        })
         .child(source)
         .when(rows[1], |d| {
             d.child(
                 div()
+                    .id(gpui::SharedString::from(format!("strip-effects-{ch:?}")))
+                    .debug_selector(move || format!("strip-effects-{ch:?}"))
                     .flex_none()
+                    .when(scrolls, |d| d.h(px(effects_h)).overflow_y_scroll())
                     .flex()
                     .flex_col()
                     .gap(px(3.))

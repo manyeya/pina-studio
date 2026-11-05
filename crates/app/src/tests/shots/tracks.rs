@@ -104,7 +104,7 @@ pub(super) fn set_up(
                 ws.view = View::Arrange;
                 ws.show_browser = true;
             }
-            if p == "plugins-mini" {
+            if p.starts_with("plugins-mini") {
                 ws.view = View::Mixer;
                 let ch = crate::mix::strip::Channel::Track(0);
                 ws.open_mini(
@@ -114,6 +114,12 @@ pub(super) fn set_up(
                     window,
                     cx,
                 );
+                // A category picked: its kinds to narrow by too.
+                if let Some(m) = ws.plugin_page.mini.as_mut()
+                    && p == "plugins-mini-dynamics"
+                {
+                    m.cat = Some(crate::sounds::catalog::Cat::Dynamics);
+                }
             }
         }
         p if p.starts_with("adder") => {

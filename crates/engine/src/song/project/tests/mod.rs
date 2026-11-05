@@ -18,6 +18,7 @@ fn midi(start: u64, length: u64, notes: &[(i64, u8)]) -> Region {
             length: 240,
             pitch,
             velocity: 100,
+            ..Default::default()
         })
         .collect();
     Region {
@@ -69,6 +70,7 @@ fn take(start: i64, pitch: u8) -> Take {
         length: 240,
         pitch,
         velocity: 100,
+        ..Default::default()
     }];
     Take {
         start,

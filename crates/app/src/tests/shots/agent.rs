@@ -120,6 +120,7 @@ pub(super) fn set_up(
                         length: step as u64 - 20,
                         pitch: 60 + shift + [0, 3, 7, 10][i as usize % 4],
                         velocity: 100,
+                        ..Default::default()
                     })
                     .collect();
                 let file = MidiFile {

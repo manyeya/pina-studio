@@ -13,7 +13,9 @@ Time is in ticks: 960 to a quarter note, so in 4/4 bar `b` beat `k` starts at
 `(b - 1) * 3840 + (k - 1) * 960` (in 3/4 a bar is 2880; in 6/8, 2880 with 480 to a beat). Tracks, regions, sends and auxes are numbered from 0, in the
 order `pina show` lists them. Levels are in dB (0 is unity, -144 silent); pan is -1 (left) to 1
 (right). A note is `{"start": ticks from the region's start, "length": ticks, "pitch": 0-127,
-"velocity": 1-127}`; middle C is 60. An instrument is `"synth"` (the built-in sine) or
+"velocity": 1-127}`; middle C is 60. A note may also have `"chance"` (1-100, the percent of times
+it plays; 100 if left out), `"spread"` (0-127, how far its velocity strays either way each time)
+and `"muted": true` (kept but not played). An instrument is `"synth"` (the built-in sine) or
 `"drums"` (the built-in kit, on the General MIDI drum notes) or a plugin,
 `{"plugin": {"format": "clap", "path": "/path/to/Plugin.clap", "class": "Plugin Name", "uid": "…"}}`,
 exactly as `pina plugins` lists it (`format` is `vst3`, the default, `clap`, `vst2` or `au`;
@@ -84,6 +86,18 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `add_track` `{"name": "Bass", "instrument": "synth", "index": 1}`: without `instrument` it's an
   audio track; `index` defaults to the end.
 - `delete_track` `{"track": 1}`
+- `set_track` `{"track": 1, "midi_fx": [{"type": "arpeggiator", "rate": 0.25, "order": "up_down", "octaves": 2, "gate": 0.8, "latch": false}]}`:
+  an instrument track's MIDI effects, in order, before its instrument hears its notes (live and
+  from the song), in place of what it has (`[]` takes them all out); up to 8. Each has a `type`
+  and its settings, and `"bypass": true` keeps it but out of the way. Rates are in beats (0.25 a
+  sixteenth, 1/3 an eighth-note triplet). `arpeggiator` (`rate`, `order`: up, down, up_down,
+  played, random or chord, `octaves` 1-4, `gate` 0-1, `latch`), `chord_trigger` (`shape`: major,
+  minor, seventh, major_seventh, minor_seventh, sus2, sus4, power, octave, in_key,
+  in_key_seventh), `scale_quantizer` (`root` 0-11 or null for the song's key, `minor`),
+  `transposer` (`semitones`), `velocity` (`scale` percent, `add`, `min`, `max`),
+  `note_repeater` (`count`, `rate`, `decay` 0-1, `transpose` per repeat), `randomizer` (`pitch`
+  and `velocity` ranges either way, `chance` percent), `modifier` (controller `from` sent as
+  `to`, 0 drops it, `scale` percent).
 - `set_track` `{"track": 1, "name": "Sub", "volume_db": -6, "pan": -0.3, "mute": false, "solo": false}`:
   any of them. `"pan_mode"`: `"balance"` (the default: turns one side down),
   `"stereo"` (places each side, `"spread"` -1 to 1 apart: 1 as recorded, 0 both in the middle,
@@ -95,7 +109,7 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   shade of its family). Icons: kick, snare, clap, hihat, cymbal, tom, drums, sticks, conga, shaker, tambourine, cowbell, 808, bass, synth-bass, piano, keys, organ, chords, guitar, guitar-electric, strings, harp, brass, sax, flute, synth, lead, arp, pluck, pad, bells, mallets, vocals, mic, choir, chop, fx, riser, impact, reverse, vinyl, texture, foley, audio, midi, sampler, loop, reference, click, star, heart, flame, bolt.
 - `set_instrument` `{"track": 1, "instrument": {"plugin": {"path": "…", "class": "…"}}}`
 - `set_synth` `{"track": 1, "patch": "Warm Pad", "settings": {"params": {"filter1_cutoff": 1800, "env1_attack": 600}, "filters": ["ladder", "none"]}}`:
-  Pina Studio's synth on a track. `patch` is one of Init, Sub Bass, Saw Bass, Analog Bass, Reese,
+  Synth-0, Pina Studio's synth, on a track. `patch` is one of Init, Sub Bass, Saw Bass, Analog Bass, Reese,
   Acid, Growl, Wobble, Supersaw, Trance Lead, Square Lead, Soft Lead, Ladder Lead, Sync Lead, Warm
   Pad, Glass Pad, Choir, Evolving Pad, Strings, Brass, Pluck, House Stab, Arp Pulse, Bell, FM Keys,
   Organ, Metal Hit, Noise Sweep, Drone, Tape Keys (its sound as it comes). `settings` is laid over
@@ -128,7 +142,10 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
     `{"drawn": [[0, 0], [0.5, 1], [1, 0]]}`; `beats` a cycle in time with the song.
   - `voicing`: `polyphony`, `mono`, `legato`, `glide_held`, `bend_semitones`. `arp`: `mode` (`off`,
     `up`, `down`, `up_down`, `played`, `random`, `chord`), `beats`, `octaves`, `gate`, `swing`.
-    `quality`: `draft`, `good` or `best`. `sub_wave` 0-3, `sub_octave`.
+    `quality`: `draft`, `good` or `best`. `sub_wave` 0-3, `sub_octave`. `macros`: the eight
+    macros' names, in order. Every patch comes with the same eight, each already moving what its
+    name says and leaving the sound as it was at 0: Bright, Bite, Motion, Width, Weight, Air,
+    Attack, Tail (`macro1` to `macro8`).
   Its numbers can be automated with `set_automation`, `"param": "synth"` and `"knob"` an id, in its
   own units. A track without the synth gets it.
 - `set_insert` `{"channel": {"track": 1}, "index": 0, "plugin": {"format": "au", "class": "AUDelay", "uid": "aufx dely appl"}}`:

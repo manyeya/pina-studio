@@ -10,6 +10,7 @@ pub mod eq;
 pub mod eq_linear;
 pub mod eq_spectral;
 pub mod limit;
+pub mod midi_fx;
 pub mod modulate;
 pub mod pitch;
 pub mod poly;

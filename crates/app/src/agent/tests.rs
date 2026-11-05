@@ -280,6 +280,7 @@ fn an_auxs_limiter_hears_only_what_reaches_it() {
                     length: PPQ * 2,
                     pitch: 69,
                     velocity: 100,
+                    ..Default::default()
                 }],
                 controls: Vec::new(),
             },

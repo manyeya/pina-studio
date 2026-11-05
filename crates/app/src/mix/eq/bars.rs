@@ -549,12 +549,7 @@ impl Workspace {
                 ),
             )
             .child(
-                div()
-                    .absolute()
-                    .right(px(0.))
-                    .bottom(px(0.))
-                    .size(px(14.))
-                    .cursor(gpui::CursorStyle::ResizeUpLeftDownRight)
+                resize_grip()
                     .debug_selector(|| "eq-resize".into())
                     .on_mouse_down(
                         MouseButton::Left,

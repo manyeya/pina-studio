@@ -11,6 +11,9 @@ use std::{collections::BTreeMap, sync::LazyLock};
 
 use super::*;
 
+/// What the synth is called, everywhere it's shown.
+pub const POLY_NAME: &str = "Synth-0";
+
 pub const OSCS: usize = 3;
 pub const FILTERS: usize = 2;
 pub const ENVS: usize = 4;
@@ -748,6 +751,8 @@ pub enum PolySource {
     Bend,
     /// A new value each note.
     Random,
+    /// Each note's own slide (an MPE controller's up and down the key), 0 to 1.
+    Slide,
 }
 
 /// What a route moves: one of the synth's parameters, or a knob of an effect on the track, so a
@@ -878,6 +883,13 @@ pub struct Poly {
     pub voicing: Voicing,
     pub arp: Arp,
     pub quality: PolyQuality,
+    /// What each macro is called; none is named until a patch or a person says.
+    #[serde(skip_serializing_if = "unnamed")]
+    pub macros: [String; MACROS],
+}
+
+fn unnamed(names: &[String; MACROS]) -> bool {
+    names.iter().all(String::is_empty)
 }
 
 impl Default for Poly {
@@ -897,6 +909,7 @@ impl Default for Poly {
             voicing: Voicing::default(),
             arp: Arp::default(),
             quality: PolyQuality::default(),
+            macros: Default::default(),
         }
     }
 }

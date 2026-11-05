@@ -45,6 +45,7 @@ fn song() -> (Vec<f32>, Vec<f32>, Project) {
         length: length as u64,
         pitch,
         velocity,
+        ..Default::default()
     };
     let mut parts: [Vec<Note>; 4] = Default::default();
     let mut at = 0i64;

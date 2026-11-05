@@ -149,9 +149,10 @@ impl Workspace {
         if eq {
             rows.push(("EQ", 44.0));
         }
+        rows.push(("MIDI FX", 22.0));
         rows.push(("Input", 24.0));
         if effects {
-            rows.push(("Effects", slots(MIXER_INSERTS)));
+            rows.push(("Effects", slots(strip::mixer_inserts(self))));
         }
         if sends {
             rows.push(("Sends", slots(MIXER_SENDS)));

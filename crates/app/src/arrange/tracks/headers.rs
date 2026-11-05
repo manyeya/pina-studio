@@ -201,7 +201,7 @@ pub(crate) fn header_panel(roomy: bool) -> Div {
 pub(crate) fn instrument_kind(i: Option<&Instrument>) -> String {
     match i {
         Some(i @ Instrument::Sampler(_)) if i.is_kit() => "Kit".into(),
-        Some(Instrument::Poly(_)) => "Synth".into(),
+        Some(Instrument::Poly(_)) => pina_engine::song::project::POLY_NAME.into(),
         Some(Instrument::Sampler(_)) => "Sampler".into(),
         _ => instrument_name(i),
     }
@@ -215,7 +215,7 @@ pub fn instrument_name(i: Option<&Instrument>) -> String {
         Some(Instrument::Drums) => "Drum Kit".into(),
         Some(Instrument::Kit) => "Kit".into(),
         Some(Instrument::Sampler(s)) => sampler_name(s),
-        Some(Instrument::Poly(_)) => "Synth".into(),
+        Some(Instrument::Poly(_)) => pina_engine::song::project::POLY_NAME.into(),
         Some(Instrument::Plugin(r)) => r.class.clone(),
     }
 }

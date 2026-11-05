@@ -235,6 +235,7 @@ fn voiced(chord: &Chord, start: u64) -> (Vec<Note>, Note) {
             length,
             pitch: 60 + c,
             velocity: 80,
+            ..Default::default()
         })
         .collect();
     let bass = Note {
@@ -242,6 +243,7 @@ fn voiced(chord: &Chord, start: u64) -> (Vec<Note>, Note) {
         length,
         pitch: 36 + chord.root,
         velocity: 92,
+        ..Default::default()
     };
     (up, bass)
 }
@@ -295,6 +297,7 @@ pub fn hearing(p: &Playbook) -> MidiFile {
                         length: STEP,
                         pitch,
                         velocity,
+                        ..Default::default()
                     });
                 }
             }

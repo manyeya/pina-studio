@@ -70,8 +70,8 @@ use objc2_core_foundation::{
 use objc2_foundation::{NSBundle, NSNotification, NSNotificationCenter, NSPoint, NSSize, NSString};
 
 use super::{
-    AUTOMATED, Control, ControlKind, Editor, Note, Plugin, PluginApi, PluginParam, Preset,
-    PresetSource, Processor, ProcessorApi, Window,
+    AUTOMATED, Control, Editor, Note, Plugin, PluginApi, PluginParam, Preset, PresetSource,
+    Processor, ProcessorApi, Window,
 };
 use crate::{
     plugin::scan::PluginInfo,

@@ -27,7 +27,8 @@ pub(super) fn set_up(
                 });
             }
         }
-        "roll-pro" => {
+        "roll-pro" | "roll-chance" | "roll-transform" | "roll-mpe" | "roll-harmony"
+        | "roll-generate" => {
             ws.track = 0;
             ws.region = Some((0, 0));
             ws.editor_h = 460.0;
@@ -36,9 +37,55 @@ pub(super) fn set_up(
             ws.roll.by_velocity = true;
             ws.roll.in_key = true;
             ws.roll.stamp = crate::editors::pianoroll::Stamp::Triad;
+            // A note bending up two semitones and back, as a hand on an MPE controller does.
+            if page == "roll-mpe" {
+                use pina_engine::song::project::{ControlPoint, ControlValue, ExpressionKind};
+                ws.picked.clear();
+                ws.roll.lane = crate::editors::pianoroll::Lane::Pitch;
+                let r = &mut ws.session.project.tracks[0].regions[0];
+                if let Content::Midi { notes, controls } = &mut r.content {
+                    for n in notes.iter().filter(|n| n.start >= 1920).take(3) {
+                        for k in 0..16 {
+                            let t = n.start + (n.length as i64 * k / 16);
+                            let st = (k as f32 / 15.0 * std::f32::consts::PI).sin() * 2.0;
+                            controls.push(ControlPoint {
+                                start: t,
+                                kind: ControlValue::Expression {
+                                    pitch: n.pitch,
+                                    kind: ExpressionKind::Tuning,
+                                    value: st,
+                                },
+                            });
+                        }
+                    }
+                    controls.sort_by_key(|c| c.start);
+                }
+            }
+            if page == "roll-harmony" {
+                use pina_engine::music::harmony;
+                let key = ws.session.project.song_key().unwrap();
+                ws.roll.panel = crate::editors::pianoroll::Panel::Harmony;
+                ws.roll_writing.chords = [0, 5, 3, 4]
+                    .map(|k| harmony::in_key(key, false)[k].1)
+                    .to_vec();
+                ws.roll_writing.performance = harmony::Performance::Arp;
+                ws.roll_writing.bass = true;
+            }
+            if page == "roll-generate" {
+                ws.roll.panel = crate::editors::pianoroll::Panel::Generate;
+            }
+            match page {
+                "roll-chance" => ws.roll.lane = crate::editors::pianoroll::Lane::Chance,
+                "roll-transform" => ws.roll.panel = crate::editors::pianoroll::Panel::Transform,
+                _ => {}
+            }
             if let Some(notes) = ws.session.project.notes_mut((0, 0)) {
                 for (i, n) in notes.iter_mut().enumerate() {
                     n.velocity = (40 + i * 6).min(127) as u8;
+                    // A few that only sometimes play, one muted, some with a velocity range.
+                    n.chance = [100, 100, 100, 100, 60, 100, 35, 100][i % 8];
+                    n.muted = i == 9;
+                    n.spread = if i % 3 == 0 { 14 } else { 0 };
                 }
             }
         }

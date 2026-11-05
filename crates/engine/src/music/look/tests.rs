@@ -70,6 +70,7 @@ fn a_track_looks_like_what_it_plays() {
                 length: 960,
                 pitch: 36,
                 velocity: 100,
+                ..Default::default()
             }],
             controls: Vec::new(),
         },

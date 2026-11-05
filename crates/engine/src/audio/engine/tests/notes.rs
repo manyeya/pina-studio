@@ -296,6 +296,8 @@ fn an_edit_while_playing_lets_go_of_notes_the_song_no_longer_has() {
         shared: Arc::new(Shared::new()),
         live: live_rx,
         played: played_tx,
+        moves: rtrb::RingBuffer::new(16).1,
+        heard: rtrb::RingBuffer::new(16).0,
     };
     let mut engine = Engine::live(RATE, link);
     // A long A, and a long C that the edit keeps.
@@ -535,4 +537,70 @@ fn every_patch_of_the_synth_sounds_on_a_track_and_follows_its_automation() {
     let heard =
         |t: &Track| peak(&render(&project(vec![t.clone()]), Path::new("."), 24_000)[0][12_000..]);
     assert!(heard(&closing) < heard(&open) * 0.1, "{}", heard(&closing));
+}
+
+#[test]
+fn a_notes_chance_and_mute_decide_whether_it_plays_each_time_round() {
+    let dir = scratch_dir("chance");
+    // A short note on each of 40 beats, at a chance, muted or not: which beats sound.
+    let heard = |chance: u8, muted: bool| {
+        let notes = (0..40)
+            .map(|k| MidiNote {
+                chance,
+                muted,
+                ..note(k * PPQ as i64, PPQ / 8, 69)
+            })
+            .collect();
+        let p = project(vec![synth_track("Chance", notes, 40 * PPQ)]);
+        let [l, _] = render(&p, &dir, 40 * BEAT);
+        (0..40)
+            .filter(|k| peak(&l[k * BEAT..k * BEAT + BEAT / 4]) > 0.01)
+            .count()
+    };
+    assert_eq!(heard(100, false), 40);
+    assert_eq!(heard(0, false), 0);
+    assert_eq!(heard(100, true), 0);
+    let half = heard(50, false);
+    assert!((10..=30).contains(&half), "about half: {half}");
+}
+
+#[test]
+fn a_notes_spread_strays_its_velocity_each_time_within_its_range() {
+    let mut held = Held::new();
+    let e = Event {
+        at: 0,
+        pitch: 60,
+        velocity: 64.0 / 127.0,
+        chance: 100,
+        spread: 20,
+    };
+    let played: Vec<f32> = (0..200).map(|_| held.play(&e).unwrap() * 127.0).collect();
+    assert!(
+        played.iter().all(|v| (43.9..=84.1).contains(v)),
+        "{played:?}"
+    );
+    let (lo, hi) = played
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    assert!(hi - lo > 25.0, "it strays: {lo}..{hi}");
+}
+
+#[test]
+fn a_tracks_midi_effects_change_what_its_instrument_plays() {
+    use crate::song::project::{MidiFx, MidiFxSlot};
+    let dir = scratch_dir("midi-fx");
+    // A4 for a beat, through a Transposer an octave up (or bypassed).
+    let heard = |bypass: bool| {
+        let mut t = synth_track("Up", vec![note(0, PPQ, 69)], PPQ);
+        t.midi_fx = vec![MidiFxSlot {
+            fx: MidiFx::Transposer { semitones: 12 },
+            bypass,
+        }];
+        let [l, _] = render(&project(vec![t]), &dir, BEAT);
+        let s = &l[BEAT / 8..BEAT / 2];
+        let ups = s.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count();
+        ups as f64 / (s.len() as f64 / RATE)
+    };
+    assert!((heard(false) - 880.0).abs() < 10.0, "{}", heard(false));
+    assert!((heard(true) - 440.0).abs() < 10.0, "{}", heard(true));
 }

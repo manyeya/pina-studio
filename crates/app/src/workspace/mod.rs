@@ -52,7 +52,6 @@ use gpui::{
     canvas, div, prelude::*, px, rgb,
 };
 use pina_engine::{
-    audio::engine::LiveNote,
     audio::player::Player,
     plugin::scan::{self, PluginInfo},
     song::project::{
@@ -209,6 +208,8 @@ pub struct RollSettings {
     pub key_h: f32,
     /// What the lane under the notes shows and edits.
     pub lane: crate::editors::pianoroll::Lane,
+    /// What the panel left of the keys shows.
+    pub panel: crate::editors::pianoroll::Panel,
 }
 
 /// A level meter's reading: falling back gently, and its peak held a moment.
@@ -390,6 +391,10 @@ pub struct Workspace {
     pub steps: crate::editors::steps::StepsView,
     /// The Plugins page: its filters, the facts about each plugin, pictures being taken.
     pub plugin_page: crate::sounds::plugins::PluginPage,
+    /// A track's MIDI FX panel, open.
+    pub midi_fx_view: Option<crate::mix::midi_fx::MidiFxView>,
+    /// What the piano roll's Generate and Harmony tabs are set to.
+    pub roll_writing: crate::editors::pianoroll::Writing,
     /// What the window shows, kept for every song (Settings, ⌘,); the page's section shown;
     /// where play last started (to go back to on stop, if Settings say).
     pub settings: crate::pages::settings::Settings,
@@ -613,6 +618,8 @@ impl Workspace {
             sounds: Default::default(),
             steps: Default::default(),
             plugin_page: crate::sounds::plugins::PluginPage::new(cx),
+            midi_fx_view: None,
+            roll_writing: Default::default(),
             settings: crate::pages::settings::Settings::load(),
             outputs: Vec::new(),
             buffers: Vec::new(),
@@ -636,6 +643,7 @@ impl Workspace {
                 length: 0,
                 key_h: crate::editors::pianoroll::KEY_H,
                 lane: crate::editors::pianoroll::Lane::Velocity,
+                panel: crate::editors::pianoroll::Panel::Notes,
             },
             show_automation: false,
             editor_h: EDITOR_H,
@@ -817,6 +825,7 @@ impl Render for Workspace {
         self.read_meters();
         self.eq_frame();
         self.fx_frame();
+        let synth = self.poly_frame();
         let sampling = self.sampler_frame();
         self.capture(cx);
         self.automation_frame(cx);
@@ -839,6 +848,7 @@ impl Render for Workspace {
             || self.eq_view.as_ref().is_some_and(|v| playing || v.moving())
             || (self.fx_view.is_some() && playing)
             || (self.poly_view.is_some() && playing)
+            || synth
             || sampling
             || (self.bottom == Some(Bottom::Modulation)
                 && self
@@ -1229,6 +1239,7 @@ impl Render for Workspace {
                 cx.listener(|ws, _: &NudgeRightFine, _, cx| ws.roll_op(RollOp::Nudge(1), cx)),
             )
             .on_action(cx.listener(|ws, _: &QuantizeNotes, _, cx| ws.roll_op(RollOp::Quantize, cx)))
+            .on_action(cx.listener(|ws, _: &MuteNotes, _, cx| ws.roll_op(RollOp::Mute, cx)))
             .on_action(cx.listener(|ws, _: &DeselectNotes, _, cx| ws.roll_op(RollOp::Deselect, cx)))
             .on_action(cx.listener(|ws, _: &BrowserUp, _, cx| ws.move_picked(-1, cx)))
             .on_action(cx.listener(|ws, _: &BrowserDown, _, cx| ws.move_picked(1, cx)))
@@ -1296,6 +1307,7 @@ impl Render for Workspace {
             .children(self.fx_window(cx))
             .children(self.effect_ghost())
             .children(self.mini_view(cx))
+            .children(self.midi_fx_window(cx))
             .children(self.like_create_view(cx))
             .children(self.menu_view(cx))
             .children(self.adder_view(cx))

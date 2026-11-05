@@ -159,10 +159,7 @@ impl Workspace {
                 if !e.is_held {
                     let pitch = (60 + i as i32 + octave as i32 * 12).clamp(0, 127) as u8;
                     self.typed.insert(key.to_string(), pitch);
-                    self.player.send_live(LiveNote {
-                        pitch,
-                        velocity: 100,
-                    });
+                    self.play_note(pitch, 100);
                 }
             }
         }
@@ -172,7 +169,7 @@ impl Workspace {
 
     pub(crate) fn release_key(&mut self, e: &KeyUpEvent, _: &mut Context<Self>) {
         if let Some(pitch) = self.typed.remove(e.keystroke.key.as_str()) {
-            self.player.send_live(LiveNote { pitch, velocity: 0 });
+            self.play_note(pitch, 0);
         }
     }
 

@@ -32,6 +32,10 @@ pub(crate) struct Event {
     pub(crate) pitch: u8,
     /// 0 is a note off.
     pub(crate) velocity: f32,
+    /// A note on's chance of playing, in percent, and how far its velocity may stray (out of
+    /// 127), both rolled as it comes due; 100 and 0 for anything else.
+    pub(crate) chance: u8,
+    pub(crate) spread: u8,
 }
 
 /// A controller move, pitch bend, pressure or note expression, at a sample.
@@ -277,6 +281,9 @@ pub(crate) struct Plan {
     pub(crate) dsp: StripDsp,
     /// The order its built-ins and inserts run in.
     pub(crate) chain: Vec<Fx>,
+    /// Its MIDI effects (those not bypassed), and the song's key, which some follow.
+    pub(crate) midi_fx: Vec<crate::song::project::MidiFx>,
+    pub(crate) key: Option<crate::music::Key>,
 }
 
 impl Plan {
@@ -565,6 +572,8 @@ pub fn compile(
                         at: e.at,
                         pitch: pad.note,
                         velocity: -1.0,
+                        chance: 100,
+                        spread: 0,
                     }),
                     _ => {}
                 }
@@ -785,6 +794,13 @@ pub fn compile(
                 Some(Instrument::Sampler(s)) => Some(Arc::new(s.clone())),
                 _ => None,
             },
+            midi_fx: t
+                .midi_fx
+                .iter()
+                .filter(|s| !s.bypass)
+                .map(|s| s.fx)
+                .collect(),
+            key: project.song_key(),
         });
     }
     let auxes = project
@@ -1024,6 +1040,7 @@ pub(crate) fn play_region(
             };
             for n in notes
                 .iter()
+                .filter(|n| !n.muted)
                 .map(|n| region.played(n))
                 .filter(|n| (from as i64..to as i64).contains(&(at + n.start)))
             {
@@ -1034,12 +1051,16 @@ pub(crate) fn play_region(
                     at: start,
                     pitch,
                     velocity,
+                    chance: n.chance,
+                    spread: n.spread,
                 });
                 let off = project.samples(on + n.length, rate);
                 events.push(Event {
                     at: off,
                     pitch,
                     velocity: 0.0,
+                    chance: 100,
+                    spread: 0,
                 });
             }
             // A pattern's automation rows on MIDI controllers, pitch bend and pressure: a move

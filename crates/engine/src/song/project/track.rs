@@ -137,6 +137,9 @@ pub struct Track {
     /// More built-in effects, past its own of each kind, each where the chain puts it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub more: Vec<Unit>,
+    /// MIDI effects, in order, before its instrument hears its notes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_fx: Vec<MidiFxSlot>,
     /// The order its built-ins and inserts run in (none: the built-ins, then the inserts).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chain: Vec<Fx>,

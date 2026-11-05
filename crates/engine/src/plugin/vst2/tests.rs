@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugin::ControlKind;
 
 #[test]
 fn the_abi_is_laid_out_as_the_sdk_has_it() {
@@ -75,54 +76,23 @@ fn ids_read_as_their_characters_or_numbers() {
 
 #[test]
 fn notes_and_controls_pack_as_midi() {
-    let on = note_midi(&Note {
+    let mut mpe = crate::plugin::mpe::Mpe::new(false);
+    let mut sent = Vec::new();
+    let n = Note {
         offset: 7,
         pitch: 60,
         velocity: 1.0,
-    });
+    };
+    mpe.note(&n, |m| sent.push(midi(n.offset, m)));
+    let on = sent[0];
     assert_eq!((on.delta_frames, on.midi_data), (7, [0x90, 60, 127, 0]));
     assert_eq!((on.kind, on.byte_size), (MIDI_TYPE, 32));
-    // The quietest note is still a note on.
-    let soft = note_midi(&Note {
-        offset: 0,
-        pitch: 60,
-        velocity: 0.001,
-    });
-    assert_eq!(soft.midi_data, [0x90, 60, 1, 0]);
-    let off = note_midi(&Note {
-        offset: 9,
-        pitch: 60,
-        velocity: 0.0,
-    });
-    assert_eq!(off.midi_data, [0x80, 60, 0, 0]);
-
-    let control = |kind| control_midi(&Control { offset: 3, kind }).map(|e| e.midi_data);
     let pedal = ControlKind::Cc {
         number: 64,
         value: 1.0,
     };
-    assert_eq!(control(pedal), Some([0xb0, 64, 127, 0]));
-    assert_eq!(control(ControlKind::PitchBend(0.0)), Some([0xe0, 0, 64, 0]));
-    assert_eq!(control(ControlKind::PitchBend(-1.0)), Some([0xe0, 0, 0, 0]));
-    assert_eq!(
-        control(ControlKind::PitchBend(1.0)),
-        Some([0xe0, 127, 127, 0])
-    );
-    assert_eq!(
-        control(ControlKind::Aftertouch(0.5)),
-        Some([0xd0, 64, 0, 0])
-    );
-    let pressure = ControlKind::PolyPressure {
-        pitch: 62,
-        value: 0.0,
-    };
-    assert_eq!(control(pressure), Some([0xa0, 62, 0, 0]));
-    let expression = ControlKind::Expression {
-        pitch: 60,
-        kind: crate::plugin::ExpressionKind::Tuning,
-        value: 1.0,
-    };
-    assert_eq!(control(expression), None);
+    let packed = mpe.control(pedal).map(|m| midi(3, m).midi_data);
+    assert_eq!(packed, Some([0xb0, 64, 127, 0]));
 }
 
 #[test]

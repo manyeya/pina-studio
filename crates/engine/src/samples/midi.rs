@@ -935,6 +935,7 @@ pub fn parse_notes(text: &str, bar: u64) -> Result<Vec<Note>, String> {
             length: (length * step).round().max(1.0) as u64,
             pitch,
             velocity: velocity.clamp(1, 127),
+            ..Default::default()
         });
     }
     out.sort_by_key(|n| (n.start, n.pitch));

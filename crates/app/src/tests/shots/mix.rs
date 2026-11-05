@@ -47,7 +47,7 @@ pub(super) fn set_up(
             }
             ws.start_export(cx);
         }
-        "mixer" | "mixer-drag" | "mixer-limit" => {
+        "mixer" | "mixer-drag" | "mixer-limit" | "mixer-stacked" | "mixer-midi-fx" => {
             use crate::mix::strip::Channel;
             use crate::workspace::{Drag, View};
             use pina_engine::song::project::{Comp, Eq, Format, Limiter, PluginRef, Saturator};
@@ -73,6 +73,34 @@ pub(super) fn set_up(
             ws.session.project.tracks[0]
                 .set_insert(0, Some(reverb))
                 .unwrap();
+            // Three reverbs and two delays more on the first track: every one in sight.
+            if page == "mixer-stacked" {
+                use pina_engine::song::project::{DelayStyle, ReverbStyle, Unit};
+                let t = &mut ws.session.project.tracks[0];
+                for _ in 0..3 {
+                    t.chain_mut()
+                        .add_more(Unit::Reverb(ReverbStyle::Hall.reverb()));
+                }
+                for _ in 0..2 {
+                    t.chain_mut()
+                        .add_more(Unit::Delay(DelayStyle::Tape.delay()));
+                }
+            }
+            // MIDI effects on the Keys, their panel open.
+            if page == "mixer-midi-fx" {
+                use pina_engine::song::project::{MidiFx, MidiFxSlot};
+                ws.session.project.tracks[0].midi_fx =
+                    ["Arpeggiator", "Chord Trigger", "Velocity Processor"]
+                        .map(|k| MidiFxSlot {
+                            fx: MidiFx::fresh(k).unwrap(),
+                            bypass: k == "Velocity Processor",
+                        })
+                        .to_vec();
+                ws.midi_fx_view = Some(crate::mix::midi_fx::MidiFxView {
+                    track: 0,
+                    at: gpui::point(gpui::px(150.), gpui::px(170.)),
+                });
+            }
             if page == "mixer-limit" {
                 let t = &mut ws.session.project.tracks[0];
                 (t.eq, t.comp, t.sat) = (None, None, None);
@@ -271,8 +299,9 @@ pub(super) fn set_up(
             }
         }
         // The synth, in its window, a patch on the first track.
-        "poly" | "poly-matrix" | "poly-effects" | "poly-lfo" => {
-            use crate::editors::poly::{PolyPage, PolyShape};
+        "poly" | "poly-matrix" | "poly-effects" | "poly-lfo" | "poly-sounds" | "poly-tables"
+        | "poly-sub" => {
+            use crate::editors::poly::PolyPage;
             use pina_engine::song::project::{
                 DelayStyle, Instrument, ReverbStyle, Unit, poly_patch,
             };
@@ -290,9 +319,44 @@ pub(super) fn set_up(
                 match page {
                     "poly-matrix" => v.page = PolyPage::Matrix,
                     "poly-effects" => v.page = PolyPage::Effects,
-                    "poly-lfo" => v.shape = PolyShape::Lfo(1),
+                    "poly-lfo" => v.source = pina_engine::song::project::PolySource::Lfo(1),
+                    "poly-sounds" => v.browsing = true,
+                    "poly-tables" => v.tables = Some(0),
+                    "poly-sub" => v.picked = 3,
                     _ => {}
                 }
+                // As if playing: a chord held, the envelope and LFOs where a note has them, and
+                // what came out, for the scope and the spectrum.
+                use pina_engine::dsp::poly::{LIVE_SOURCES, POLY_LIVE};
+                use pina_engine::song::project::PolySource;
+                v.held = vec![57, 60, 64];
+                for (k, s) in LIVE_SOURCES.iter().enumerate() {
+                    v.live[k] = match s {
+                        PolySource::Env(0) => 0.8,
+                        PolySource::Env(1) => 0.55,
+                        PolySource::Lfo(0) => 0.6,
+                        PolySource::Lfo(1) => -0.4,
+                        PolySource::Velocity => 0.8,
+                        _ => 0.0,
+                    };
+                }
+                v.live[POLY_LIVE - 1] = 3.0;
+                v.scope = (0..4096)
+                    .map(|i| {
+                        let x = i as f32 * std::f32::consts::TAU / 182.0;
+                        0.42 * x.sin() + 0.18 * (2.0 * x).sin() + 0.08 * (3.0 * x + 0.6).sin()
+                    })
+                    .collect();
+                v.spectrum = (0..96)
+                    .map(|k| {
+                        let hz = 20.0 * 1000f32.powf(k as f32 / 95.0);
+                        let near = [264.0f32, 528.0, 792.0, 1056.0, 1584.0]
+                            .iter()
+                            .map(|h| (-((hz / h).log2() * 9.0).powi(2)).exp())
+                            .sum::<f32>();
+                        -78.0 + 52.0 * near.min(1.0) - (hz / 2000.0).log2().max(0.0) * 6.0
+                    })
+                    .collect();
             }
         }
         "comp" | "comp-bus" => {

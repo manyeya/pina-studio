@@ -273,16 +273,13 @@ impl Workspace {
                     self.mod_pos(t, mt, r.depth * low),
                     self.mod_pos(t, mt, r.depth),
                 );
-                let color = match r.source {
-                    PolySource::Env(i) => MOD_COLORS[i as usize % MAX_MODS],
-                    PolySource::Lfo(i) => MOD_COLORS[(i as usize + 3) % MAX_MODS],
-                    _ => MOD_COLORS[6],
-                };
+                // Where it is now, as the engine last said, else at rest.
+                let now = self.poly_now(t, r.source).unwrap_or(low);
                 Ring {
-                    color,
+                    color: crate::editors::poly::source_color(r.source),
                     lo: a.min(b),
                     hi: a.max(b),
-                    live: a,
+                    live: self.mod_pos(t, mt, r.depth * now),
                 }
             })
             .collect()

@@ -72,6 +72,7 @@ fn file(
                         length,
                         pitch,
                         velocity: 100,
+                        ..Default::default()
                     })
                     .collect(),
                 controls: Vec::new(),

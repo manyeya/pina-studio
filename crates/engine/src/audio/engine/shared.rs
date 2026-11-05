@@ -39,8 +39,18 @@ pub enum Msg {
         pitch: u8,
         velocity: u8,
     },
+    /// A controller moved on a lane now, as the synth window's wheels do.
+    Control {
+        slot: usize,
+        kind: crate::plugin::ControlKind,
+    },
     /// Play a sample now, over everything, as a browser previews it; or stop the one playing.
     Audition(Option<Box<Audition>>),
+    /// A lane's plugin instrument to hear each note on a channel of its own (MPE), or not.
+    Mpe {
+        slot: usize,
+        on: bool,
+    },
 }
 
 /// A sample being previewed: its audio, where it's got to, and how fast it's read (2 is an
@@ -234,10 +244,18 @@ pub struct Shared {
     /// how many samples have gone in, ever.
     pub(crate) scope: [Vec<AtomicU32>; 2],
     pub(crate) scope_written: AtomicUsize,
+    /// The lane the synth's window watches, or `usize::MAX`; each of its sources now (f32 bits);
+    /// and what it just played, both sides as one, with how many samples have gone in, ever.
+    pub(crate) poly_slot: AtomicUsize,
+    pub(crate) poly_live: Vec<AtomicU32>,
+    pub(crate) poly_scope: Vec<AtomicU32>,
+    pub(crate) poly_written: AtomicUsize,
 }
 
 /// Samples of a stacked built-in's sound kept for its window.
 pub const SCOPE_LEN: usize = 1024;
+/// Samples of a synth's sound kept for its window: enough for a low note's wave, and a spectrum.
+pub const POLY_SCOPE_LEN: usize = 4096;
 
 impl Shared {
     pub fn new() -> Self {
@@ -267,6 +285,12 @@ impl Shared {
             reading: Default::default(),
             scope: std::array::from_fn(|_| (0..SCOPE_LEN).map(|_| AtomicU32::new(0)).collect()),
             scope_written: AtomicUsize::new(0),
+            poly_slot: AtomicUsize::new(usize::MAX),
+            poly_live: (0..crate::dsp::poly::POLY_LIVE)
+                .map(|_| AtomicU32::new(0))
+                .collect(),
+            poly_scope: (0..POLY_SCOPE_LEN).map(|_| AtomicU32::new(0)).collect(),
+            poly_written: AtomicUsize::new(0),
         }
     }
 
@@ -276,6 +300,26 @@ impl Shared {
         for (slot, v) in self.reading.iter().zip(read) {
             slot.store(v.to_bits(), Ordering::Relaxed);
         }
+    }
+
+    /// Whether the synth's window is watching this lane.
+    pub(crate) fn watches_poly(&self, slot: usize) -> bool {
+        self.poly_slot.load(Ordering::Relaxed) == slot
+    }
+
+    pub(crate) fn write_poly_live(&self, live: &[f32]) {
+        for (slot, v) in self.poly_live.iter().zip(live) {
+            slot.store(v.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn write_poly_scope(&self, l: &[f32], r: &[f32]) {
+        let at = self.poly_written.load(Ordering::Relaxed);
+        for (i, (a, b)) in l.iter().zip(r).enumerate() {
+            let k = (at + i) % POLY_SCOPE_LEN;
+            self.poly_scope[k].store(((a + b) * 0.5).to_bits(), Ordering::Relaxed);
+        }
+        self.poly_written.store(at + l.len(), Ordering::Relaxed);
     }
 
     pub(crate) fn write_scope(&self, l: &[f32], r: &[f32]) {
@@ -436,6 +480,10 @@ pub struct Link {
     pub shared: Arc<Shared>,
     pub live: rtrb::Consumer<LiveNote>,
     pub played: rtrb::Producer<Played>,
+    /// Live controller moves (a note's own, from an MPE controller, among them), and each back
+    /// as played, at the playhead.
+    pub moves: rtrb::Consumer<crate::plugin::ControlKind>,
+    pub heard: rtrb::Producer<(u64, crate::plugin::ControlKind)>,
 }
 
 /// Hands garbage back, or leaks it if the main thread has stopped collecting: freeing it here

@@ -84,6 +84,7 @@ fn a_bounced_song_reads_back_and_comes_into_a_song_that_plays_it() {
             length: 400,
             pitch: 62 + (i % 3) as u8 * 2,
             velocity: 70 + i as u8 * 5,
+            ..Default::default()
         })
         .collect();
     p.add_track(
@@ -184,6 +185,7 @@ fn notes(at: &[(u64, u64, u8)]) -> MidiFile {
                     length: long * bar,
                     pitch,
                     velocity: 100,
+                    ..Default::default()
                 })
                 .collect(),
             controls: Vec::new(),

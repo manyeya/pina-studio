@@ -456,6 +456,7 @@ pub fn read(b: &[u8]) -> Result<MidiFile, String> {
                                     length: t.saturating_sub(start).max(1),
                                     pitch,
                                     velocity,
+                                    ..Default::default()
                                 });
                             }
                         }
@@ -506,6 +507,7 @@ pub fn read(b: &[u8]) -> Result<MidiFile, String> {
                     length: end.saturating_sub(start).max(PPQ / 4),
                     pitch,
                     velocity,
+                    ..Default::default()
                 });
             }
         }

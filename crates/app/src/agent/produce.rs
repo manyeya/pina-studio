@@ -994,7 +994,7 @@ pub fn sounds(
     for (score, v) in patches.iter().take(2) {
         best.push((
             *score,
-            json!({ "instrument": "Pina Studio's synth", "preset": v["name"], "sounds": v["sounds"],
+            json!({ "instrument": pina_engine::song::project::POLY_NAME, "preset": v["name"], "sounds": v["sounds"],
                 "fit": v.get("fit"), "commands": [v["load"]] }),
         ));
     }
@@ -1002,7 +1002,7 @@ pub fn sounds(
         instruments.push((
             top,
             json!({
-                "name": "Pina Studio's synth",
+                "name": pina_engine::song::project::POLY_NAME,
                 "about": "built in: three wavetable oscillators with warps and unison, a sub and noise, two analog-modelled filters, four envelopes, eight LFOs and a matrix that can reach the track's effects; set_synth shapes any patch",
                 "presets": patches.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
             }),

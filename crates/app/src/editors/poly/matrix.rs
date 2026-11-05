@@ -1,6 +1,7 @@
-//! The matrix: every route the synth has, to read and change at once.
+//! The matrix: every route the synth has, to read and change at once, narrowed to a kind of source.
 
 use super::*;
+use modulation::{depth_bar, remove};
 
 pub(crate) fn source_name(s: PolySource) -> String {
     match s {
@@ -13,6 +14,7 @@ pub(crate) fn source_name(s: PolySource) -> String {
         PolySource::Pressure => "Pressure".into(),
         PolySource::Bend => "Pitch Bend".into(),
         PolySource::Random => "Random".into(),
+        PolySource::Slide => "Slide".into(),
     }
 }
 
@@ -28,12 +30,13 @@ fn sources() -> Vec<PolySource> {
             PolySource::Pressure,
             PolySource::Bend,
             PolySource::Random,
+            PolySource::Slide,
         ])
         .collect()
 }
 
 impl Workspace {
-    fn dest_name(&self, t: usize, d: PolyDest) -> String {
+    pub(crate) fn dest_name(&self, t: usize, d: PolyDest) -> String {
         match d {
             PolyDest::Param(i) => POLY_PARAMS
                 .get(i as usize)
@@ -43,10 +46,15 @@ impl Workspace {
     }
 
     pub(crate) fn poly_matrix_page(&mut self, t: usize, p: &Poly, cx: &mut Context<Self>) -> Div {
-        let mut rows = Vec::new();
-        for (i, r) in p.routes.iter().enumerate() {
-            rows.push(self.route_row(t, i, r, cx));
-        }
+        let kind = self.poly_view.as_ref().map_or(RouteKind::All, |v| v.routes);
+        let rows: Vec<Div> = p
+            .routes
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| kind.has(r.source))
+            .map(|(i, r)| self.route_row(t, i, r, cx))
+            .collect();
+        let none = rows.is_empty();
         let add = button("Add a route", false)
             .debug_selector(|| "poly-add-route".into())
             .on_mouse_down(
@@ -56,63 +64,113 @@ impl Workspace {
                     ws.poly_op(t, PolyOp::AddRoute, cx);
                 }),
             );
+        let kinds = tray().p(px(2.)).rounded(px(7.)).children(
+            [
+                ("All", RouteKind::All),
+                ("Envelopes", RouteKind::Env),
+                ("LFOs", RouteKind::Lfo),
+                ("Macros", RouteKind::Macro),
+                ("Playing", RouteKind::Playing),
+            ]
+            .map(|(name, k)| {
+                seg(name, k == kind, 24.)
+                    .debug_selector(move || format!("poly-routes-{}", name.to_lowercase()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, _, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(v) = ws.poly_view.as_mut() {
+                                v.routes = k;
+                            }
+                            cx.notify();
+                        }),
+                    )
+            }),
+        );
         let head = |s: &'static str, w: f32| {
             div()
                 .w(px(w))
-                .text_size(px(10.5))
-                .text_color(rgb(TEXT_4))
+                .flex_none()
+                .text_size(px(11.))
+                .text_color(rgb(TEXT_3))
                 .child(s)
         };
         div()
             .flex_1()
-            .p(px(14.))
+            .min_h(px(0.))
+            .px(px(20.))
+            .pt(px(14.))
             .flex()
             .flex_col()
-            .gap(px(6.))
+            .gap(px(8.))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(12.))
-                    .child(add)
+                    .child(title("Modulation"))
                     .child(
                         div()
-                            .text_size(px(11.5))
-                            .text_color(rgb(TEXT_3))
-                            .child("Or drag a ↗ from any envelope, LFO or macro onto any knob here or on the Effects page."),
-                    ),
+                            .font_family(MONO)
+                            .text_size(px(11.))
+                            .text_color(rgb(TEXT_2))
+                            .child(format!("{} of {MAX_POLY_ROUTES}", p.routes.len())),
+                    )
+                    .child(div().flex_1())
+                    .child(kinds)
+                    .child(add),
             )
+            .child(label(
+                "Or drag any source onto any knob, here or on the Effects page.",
+            ))
             .child(
                 div()
                     .flex()
                     .gap(px(8.))
-                    .pt(px(4.))
+                    .pt(px(6.))
+                    .pb(px(4.))
+                    .border_b_1()
+                    .border_color(rgb(LINE))
                     .child(head("Source", 190.))
                     .child(head("Scaled by", 170.))
-                    .child(head("Moves", 300.))
-                    .child(head("Depth", 300.)),
+                    .child(div().flex_1().child(head("Moves", 100.)))
+                    .child(head("Depth", 330.)),
             )
-            .children(rows)
+            .child(
+                div()
+                    .id("poly-routes")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .children(rows)
+                    .when(none, |d| {
+                        d.child(label("No routes of this kind.").py(px(10.)))
+                    }),
+            )
     }
 
     fn route_row(&self, t: usize, i: usize, r: &PolyRoute, cx: &mut Context<Self>) -> Div {
-        let source = self.poly_menu(
-            format!("poly-route-source-{i}"),
-            source_name(r.source),
-            move |_| {
-                sources()
-                    .into_iter()
-                    .map(|s| {
-                        (
-                            source_name(s),
-                            MenuAction::Poly(t, PolyOp::RouteSource(i, s)),
-                        )
-                    })
-                    .collect()
-            },
-            true,
-            cx,
-        );
+        let source = self
+            .poly_menu(
+                format!("poly-route-source-{i}"),
+                source_name(r.source),
+                move |_| {
+                    sources()
+                        .into_iter()
+                        .map(|s| {
+                            (
+                                source_name(s),
+                                MenuAction::Poly(t, PolyOp::RouteSource(i, s)),
+                            )
+                        })
+                        .collect()
+                },
+                true,
+                cx,
+            )
+            .text_color(rgb(source_color(r.source)));
         let by = self.poly_menu(
             format!("poly-route-by-{i}"),
             r.by.map_or("Nothing".to_string(), source_name),
@@ -132,75 +190,28 @@ impl Workspace {
             true,
             cx,
         );
-        let depth = r.depth;
-        let w = 260.0;
-        let bar = div()
-            .relative()
-            .w(px(w))
-            .h(px(18.))
-            .rounded(px(4.))
-            .bg(rgb(0x191a20))
-            .cursor_ew_resize()
-            .debug_selector(move || format!("poly-route-depth-{i}"))
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px(w / 2.0 + depth.min(0.0) * w / 2.0))
-                    .w(px((depth.abs() * w / 2.0).max(1.0)))
-                    .bg(alpha(SHAPE_COLOR_, 0.7)),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    ws.begin_drag(
-                        Drag::PolyDepth {
-                            track: t,
-                            route: i,
-                            x: pt(e.position).x,
-                            depth,
-                        },
-                        cx,
-                    );
-                }),
-            );
         div()
+            .h(px(38.))
+            .flex_none()
             .flex()
             .items_center()
             .gap(px(8.))
-            .child(div().w(px(190.)).child(source))
-            .child(div().w(px(170.)).child(by))
-            .child(div().w(px(300.)).child(dest))
-            .child(bar)
+            .border_b_1()
+            .border_color(rgb(LINE_SOFT))
+            .child(div().w(px(190.)).flex_none().child(source))
+            .child(div().w(px(170.)).flex_none().child(by))
+            .child(div().flex_1().min_w(px(0.)).child(dest))
+            .child(depth_bar(r.depth, 260.0, source_color(r.source), i, t, cx))
             .child(
                 div()
                     .w(px(44.))
+                    .flex_none()
+                    .font_family(MONO)
                     .text_size(px(11.))
                     .text_color(rgb(TEXT_2))
-                    .child(format!("{:+.0}%", depth * 100.0)),
+                    .child(format!("{:+.0}%", r.depth * 100.0)),
             )
-            .child(
-                div()
-                    .size(px(20.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.))
-                    .cursor_pointer()
-                    .text_color(rgb(TEXT_3))
-                    .hover(|d| d.bg(rgb(OFF)))
-                    .debug_selector(move || format!("poly-route-remove-{i}"))
-                    .child("×")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            cx.stop_propagation();
-                            ws.poly_op(t, PolyOp::RemoveRoute(i), cx);
-                        }),
-                    ),
-            )
+            .child(remove(i, t, "poly-route-remove", cx))
     }
 
     /// Everything a route can move: the synth's parameters, then the track's effects' knobs.
@@ -230,7 +241,7 @@ impl Workspace {
             .map(|(k, u)| (k as u8, Some(*u)));
         for (place, u) in own.into_iter().chain(stacked) {
             let Some(u) = u else { continue };
-            let table = strip::knobs(u.kind());
+            let table = crate::mix::strip::knobs(u.kind());
             for (i, _) in table.iter().enumerate().filter(|(i, _)| knob_shows(&u, *i)) {
                 let d = PolyDest::Effect(place, i as u8);
                 items.push((
@@ -242,5 +253,3 @@ impl Workspace {
         items
     }
 }
-
-const SHAPE_COLOR_: u32 = 0xa78bfa;

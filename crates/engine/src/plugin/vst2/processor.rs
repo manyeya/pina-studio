@@ -17,6 +17,8 @@ pub struct Vst2Processor {
     pub(crate) max_block: usize,
     /// Whether inputs 3 and 4 are a sidechain.
     pub(crate) sidechain: bool,
+    /// The MIDI it hears: each note's channel, with MPE on.
+    pub(crate) mpe: crate::plugin::mpe::Mpe,
 }
 
 // The buffer pointers are only used from the audio thread once the processor moves there.
@@ -55,6 +57,10 @@ impl ProcessorApi for Vst2Processor {
         self.edits.pending()
     }
 
+    fn set_mpe(&mut self, on: bool) {
+        self.mpe.set(on);
+    }
+
     fn process(
         &mut self,
         buf: [&mut [f32]; 2],
@@ -75,8 +81,11 @@ impl ProcessorApi for Vst2Processor {
             i.set(id, value);
         }
 
-        // Notes and controls, merged in time.
+        // Notes and controls, merged in time: with MPE on, the zone set up first.
         self.events.clear();
+        for data in self.mpe.setup().into_iter().flatten() {
+            self.events.push(midi(0, data));
+        }
         let (mut n, mut c) = (notes.iter().peekable(), controls.iter().peekable());
         loop {
             let note_first = match (n.peek(), c.peek()) {
@@ -85,12 +94,18 @@ impl ProcessorApi for Vst2Processor {
                 (None, Some(_)) => false,
                 (None, None) => break,
             };
-            let event = match note_first {
-                true => Some(note_midi(n.next().unwrap())),
-                false => control_midi(c.next().unwrap()),
-            };
-            if let Some(e) = event {
-                self.events.push(e);
+            match note_first {
+                true => {
+                    let note = n.next().unwrap();
+                    let events = &mut self.events;
+                    self.mpe.note(note, |m| events.push(midi(note.offset, m)));
+                }
+                false => {
+                    let control = c.next().unwrap();
+                    if let Some(m) = self.mpe.control(control.kind) {
+                        self.events.push(midi(control.offset, m));
+                    }
+                }
             }
         }
         if self.events.len() > 0 {

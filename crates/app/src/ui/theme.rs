@@ -209,6 +209,9 @@ pub enum Icon {
     Note,
     Curve,
     Learn,
+    /// A thing liked: outlined, and filled once it is.
+    Heart,
+    HeartFilled,
 }
 
 impl Icon {
@@ -404,6 +407,12 @@ impl Icon {
             }
             Icon::Learn => {
                 r##"<circle cx="12" cy="12" r="7.5"/><circle fill="#000" stroke="none" cx="12" cy="12" r="3"/>"##
+            }
+            Icon::Heart => {
+                r##"<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>"##
+            }
+            Icon::HeartFilled => {
+                r##"<path fill="#000" d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>"##
             }
             Icon::Shuffle => {
                 r##"<path d="M4 7h3.5c4.5 0 4.5 10 9 10H20M17.5 14.5L20 17l-2.5 2.5M4 17h3.5c1.6 0 2.6-1.3 3.4-3M13.1 10c.8-1.7 1.8-3 3.4-3H20M17.5 4.5L20 7l-2.5 2.5"/>"##
@@ -635,27 +644,15 @@ pub fn knob(value: f32, size: f32, color: u32, bipolar: bool) -> impl IntoElemen
             {
                 window.paint_path(lit, rgb(color));
             }
+            // The disc as a round quad: the same circle, far cheaper to draw than a path.
             let body = r * 0.68;
-            let mut disc = PathBuilder::fill();
-            disc.move_to(point(c.x + px(body), c.y));
-            disc.arc_to(
-                point(px(body), px(body)),
-                px(0.),
-                false,
-                false,
-                point(c.x - px(body), c.y),
+            window.paint_quad(
+                gpui::fill(
+                    gpui::Bounds::centered_at(c, gpui::size(px(body * 2.0), px(body * 2.0))),
+                    rgb(RAISED),
+                )
+                .corner_radii(px(body)),
             );
-            disc.arc_to(
-                point(px(body), px(body)),
-                px(0.),
-                false,
-                false,
-                point(c.x + px(body), c.y),
-            );
-            disc.close();
-            if let Ok(p) = disc.build() {
-                window.paint_path(p, rgb(RAISED));
-            }
             let mut pointer = PathBuilder::stroke(px(if size >= 30.0 { 2.0 } else { 1.75 }));
             pointer.move_to(at(to, r * 0.18));
             pointer.line_to(at(to, r * 0.6));
@@ -679,4 +676,35 @@ pub fn db_text(db: f32) -> String {
     } else {
         format!("+{db:.1}")
     }
+}
+
+/// A window's corner to drag it bigger or smaller by: three short diagonal lines, as windows have.
+pub fn resize_grip() -> Div {
+    div()
+        .absolute()
+        .right(px(1.))
+        .bottom(px(1.))
+        .size(px(18.))
+        .cursor(gpui::CursorStyle::ResizeUpLeftDownRight)
+        .child(
+            canvas(
+                |_, _, _| {},
+                |b, _, window, _| {
+                    let (r, bottom) = (
+                        b.origin.x + b.size.width - px(4.),
+                        b.origin.y + b.size.height - px(4.),
+                    );
+                    for k in 1..=3 {
+                        let o = px(k as f32 * 4.0);
+                        let mut p = PathBuilder::stroke(px(1.25));
+                        p.move_to(point(r - o, bottom));
+                        p.line_to(point(r, bottom - o));
+                        if let Ok(p) = p.build() {
+                            window.paint_path(p, rgb(TEXT_3));
+                        }
+                    }
+                },
+            )
+            .size_full(),
+        )
 }

@@ -534,3 +534,160 @@ fn poly_load() {
         worst.1
     );
 }
+
+#[test]
+fn every_macro_on_every_patch_leaves_it_alone_down_and_moves_it_up() {
+    let peak = |x: &[f32]| x.iter().fold(0f32, |m, s| m.max(s.abs()));
+    let mut idle = Vec::new();
+    for (name, ..) in POLY_PATCHES {
+        let p = poly_patch(name).unwrap();
+        assert_eq!(p.macros.clone().map(|n| n.is_empty()), [false; MACROS]);
+        let mut made = p.clone();
+        made.routes
+            .retain(|r| !matches!(r.source, PolySource::Macro(_)));
+        for o in 0..OSCS {
+            for (k, f) in [(0, OscField::WarpA), (1, OscField::WarpB)] {
+                if made.params[osc_param(o, f)] == 0.0 {
+                    made.warps[o][k] = Warp::None;
+                }
+            }
+        }
+        let note = 60;
+        let [a, _] = play(&p, note, 24_000, 48_000);
+        let [b, _] = play(&made, note, 24_000, 48_000);
+        let most = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0, f32::max);
+        assert!(
+            most < 0.002 * peak(&b).max(0.05),
+            "{name}: its macros changed it by {most} while down"
+        );
+        for m in 0..MACROS {
+            let mut up = p.clone();
+            up.params[macro_param(m)] = 1.0;
+            let [c, _] = play(&up, note, 24_000, 72_000);
+            let [d, _] = play(&p, note, 24_000, 72_000);
+            let moved = c
+                .iter()
+                .zip(&d)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0.0, f32::max);
+            if moved <= 0.005 * peak(&d).max(0.05) {
+                idle.push(format!("{name}: {}", p.macros[m]));
+            }
+        }
+    }
+    assert!(idle.is_empty(), "macros that do nothing: {idle:?}");
+}
+
+#[test]
+fn a_drawn_wave_is_what_the_warps_make_of_it() {
+    let t = table("Basic");
+    let plain = drawn_wave(&t, 0.5, [Warp::None; 2], [0.0; 2], 0, 256);
+    assert_eq!(plain.len(), 256);
+    let at_nothing = drawn_wave(&t, 0.5, [Warp::Sync, Warp::PhaseDist], [0.0; 2], 0, 256);
+    let same = plain
+        .iter()
+        .zip(&at_nothing)
+        .all(|(a, b)| (a - b).abs() < 1e-4);
+    assert!(same, "a warp at 0 changes nothing");
+    let folded = drawn_wave(&t, 0.5, [Warp::Sync, Warp::None], [0.8, 0.0], 0, 256);
+    let far = plain
+        .iter()
+        .zip(&folded)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f32::max);
+    assert!(far > 0.2, "a warp up changes the wave: {far}");
+}
+
+#[test]
+fn the_window_can_see_a_note_and_its_controllers() {
+    let mut p = poly_patch("Wobble").unwrap();
+    p.routes.push(PolyRoute {
+        source: PolySource::Env(1),
+        dest: PolyDest::Param(filter_param(0, FilterField::Cutoff) as u16),
+        depth: 0.2,
+        by: None,
+    });
+    let plan = PolyPlan::new(&p);
+    let mut s = PolySynth::new(RATE);
+    let (mut l, mut r) = (vec![0f32; 256], vec![0f32; 256]);
+    let notes = [Note {
+        offset: 0,
+        pitch: 60,
+        velocity: 0.75,
+    }];
+    let wheel = [Control {
+        offset: 0,
+        kind: ControlKind::Cc {
+            number: 1,
+            value: 0.5,
+        },
+    }];
+    s.begin(&plan, std::iter::empty(), &Offsets::default());
+    s.process(&plan, [&mut l[..], &mut r[..]], 256, &notes, &wheel);
+    let live = s.live(&plan);
+    let at = |w: PolySource| live[LIVE_SOURCES.iter().position(|s| *s == w).unwrap()];
+    assert!(at(PolySource::Env(1)) > 0.0, "{live:?}");
+    assert_eq!(at(PolySource::Velocity), 0.75);
+    assert_eq!(at(PolySource::Wheel), 0.5);
+    assert_eq!(live[POLY_LIVE - 1], 1.0);
+}
+
+#[test]
+fn each_voice_follows_its_own_notes_pitch_slide_and_press() {
+    let p = saw();
+    let plan = PolyPlan::new(&p);
+    let mut s = PolySynth::new(RATE);
+    let by = Offsets::default();
+    let on = |pitch| Note {
+        offset: 0,
+        pitch,
+        velocity: 1.0,
+    };
+    let block = |s: &mut PolySynth, notes: &[Note], controls: &[Control]| {
+        let (mut l, mut r) = (vec![0f32; 4096], vec![0f32; 4096]);
+        s.begin(&plan, std::iter::empty(), &by);
+        s.process(&plan, [&mut l[..], &mut r[..]], 4096, notes, controls);
+        l
+    };
+    // A3 and E4 held; then E4 alone bent a fifth up to B4, slid and pressed (frequencies none
+    // of A3's harmonics are near).
+    block(&mut s, &[on(57), on(64)], &[]);
+    let before = block(&mut s, &[], &[]);
+    let level = |l: &[f32]| [220.0, 329.63, 493.88].map(|f| level_at(l, f));
+    let at = |kind, value| Control {
+        offset: 0,
+        kind: ControlKind::Expression {
+            pitch: 64,
+            kind,
+            value,
+        },
+    };
+    let pressed = Control {
+        offset: 0,
+        kind: ControlKind::PolyPressure {
+            pitch: 64,
+            value: 0.8,
+        },
+    };
+    let moves = [
+        at(ExpressionKind::Tuning, 7.0),
+        at(ExpressionKind::Brightness, 0.6),
+        pressed,
+    ];
+    block(&mut s, &[], &moves);
+    let after = block(&mut s, &[], &[]);
+    let ([a3, e4, b4], [a3_, e4_, b4_]) = (level(&before), level(&after));
+    assert!(
+        e4_ < e4 * 0.4 && b4_ > e4 * 0.8,
+        "E4 went to B4: {e4} {b4} → {e4_} {b4_}"
+    );
+    assert!((a3_ / a3 - 1.0).abs() < 0.2, "A3 stayed: {a3} → {a3_}");
+    let live = s.live(&plan);
+    let source = |w: PolySource| live[LIVE_SOURCES.iter().position(|s| *s == w).unwrap()];
+    assert_eq!(source(PolySource::Slide), 0.6);
+    assert_eq!(source(PolySource::Pressure), 0.8);
+}

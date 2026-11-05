@@ -48,6 +48,8 @@ pub struct FxView {
     /// Which of the channel's: its own (None), or one stacked, by its place among them.
     pub stacked: Option<usize>,
     pub at: (f32, f32),
+    /// How big it's been made: never smaller than it opens.
+    pub size: (f32, f32),
     /// The compressor's (or limiter's) levels, a frame each, oldest first: in and out (dBFS),
     /// how far it turned down (dB), and (the limiter's) the short-term loudness (LUFS).
     pub history: VecDeque<[f32; 4]>,
@@ -82,6 +84,7 @@ impl FxView {
             which,
             stacked,
             at,
+            size: window_size(which),
             history: VecDeque::with_capacity(HISTORY),
             meter: LimitMeter::default(),
             bars: [-120.0, 0.0, -120.0, -120.0],
@@ -321,28 +324,37 @@ impl Workspace {
         }
     }
 
-    /// The window moved by its title.
+    /// The window moved by its title, or made bigger by its corner.
     pub fn drag_fx_window(
         &mut self,
         from: gpui::Point<f32>,
         start: (f32, f32),
+        resize: bool,
         p: gpui::Point<f32>,
     ) {
         let (vw, vh) = (self.viewport_w, self.viewport_h);
         let Some(v) = self.fx_view.as_mut() else {
             return;
         };
-        let w = window_size(v.which).0;
+        let (dx, dy) = (p.x - from.x, p.y - from.y);
+        if resize {
+            let (w, h) = window_size(v.which);
+            v.size = (
+                (start.0 + dx).clamp(w, vw.max(w)),
+                (start.1 + dy).clamp(h, vh.max(h)),
+            );
+            return;
+        }
         v.at = (
-            (start.0 + p.x - from.x).clamp(-w + 80.0, vw - 80.0),
-            (start.1 + p.y - from.y).clamp(0.0, vh - HEAD_H),
+            (start.0 + dx).clamp(-v.size.0 + 80.0, vw - 80.0),
+            (start.1 + dy).clamp(0.0, vh - HEAD_H),
         );
     }
 
     /// The compressor's or saturator's window, if one's open.
     pub fn fx_window(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let v = self.fx_view.as_ref()?;
-        let (ch, which, at, stacked) = (v.ch, v.which, v.at, v.stacked);
+        let (ch, which, at, stacked, (w, h)) = (v.ch, v.which, v.at, v.stacked, v.size);
         let body = match (which, stacked) {
             (Builtin::Comp, _) => self.comp_window(ch, self.built_in(ch, stacked)?, cx),
             (Builtin::Limit, None) => self.limit_window(ch, self.limiter_heard(ch)?, cx),
@@ -354,10 +366,29 @@ impl Workspace {
             (Builtin::Tool(_), _) => self.tool_window(ch, self.tool_heard(ch, stacked?)?, cx),
             _ => self.sat_window(ch, self.built_in(ch, stacked)?, cx),
         };
-        let (w, h) = window_size(which);
+        let grip = resize_grip()
+            .debug_selector(|| "fx-resize".into())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    let Some(start) = ws.fx_view.as_ref().map(|v| v.size) else {
+                        return;
+                    };
+                    ws.begin_drag(
+                        Drag::FxWindow {
+                            from: pt(e.position),
+                            start,
+                            resize: true,
+                        },
+                        cx,
+                    );
+                }),
+            );
         let frame = div()
             .id("fx-window")
             .occlude()
+            .relative()
             .w(px(w))
             .h(px(h))
             .flex()
@@ -371,7 +402,8 @@ impl Workspace {
             .font_family(SANS)
             .text_color(rgb(TEXT))
             .text_size(px(12.))
-            .children(body);
+            .children(body)
+            .child(grip);
         Some(
             deferred(
                 anchored()
@@ -420,6 +452,7 @@ impl Workspace {
                         Drag::FxWindow {
                             from: pt(e.position),
                             start,
+                            resize: false,
                         },
                         cx,
                     );

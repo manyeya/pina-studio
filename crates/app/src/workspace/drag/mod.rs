@@ -121,6 +121,12 @@ pub enum Drag {
         at: At,
         y: f32,
     },
+    /// A setting of the picked notes dragged in the roll's panel, from the y it was at.
+    NoteField {
+        at: At,
+        y: f32,
+        field: crate::editors::pianoroll::NoteField,
+    },
     /// Drawing velocities across the lane, from the x it was at.
     VelocityLine {
         at: At,
@@ -398,10 +404,11 @@ pub enum Drag {
         grab: f32,
     },
     /// The compressor's or saturator's window, moved by its title.
-    /// The synth's window moved by its title.
+    /// The synth's window moved by its title, or resized by its corner.
     PolyWindow {
         from: Point<f32>,
         start: (f32, f32),
+        resize: bool,
     },
     /// A point on one of the synth's pictures.
     PolyPoint {
@@ -411,6 +418,28 @@ pub enum Drag {
     PolySource {
         track: usize,
         source: pina_engine::song::project::PolySource,
+    },
+    /// One of the synth's long sliders, its left edge and width on screen.
+    PolySlider {
+        target: Target,
+        left: f32,
+        width: f32,
+    },
+    /// An arp or voicing setting on its knob, from the y and position it had.
+    PolyAmount {
+        track: usize,
+        amount: crate::editors::poly::PolyAmount,
+        y: f32,
+        value: f32,
+    },
+    /// A finger on the synth window's keys.
+    PolyKeys,
+    /// One of its wheels, the keys' top and height on screen.
+    PolyWheel {
+        track: usize,
+        bend: bool,
+        top: f32,
+        height: f32,
     },
     /// A route's depth, from the x and depth it had.
     PolyDepth {
@@ -422,6 +451,7 @@ pub enum Drag {
     FxWindow {
         from: Point<f32>,
         start: (f32, f32),
+        resize: bool,
     },
     /// A split between the saturator's bands (the `k`th), moved sideways.
     SatSplit {
@@ -534,6 +564,8 @@ impl Workspace {
                 | Drag::FxWindow { .. }
                 | Drag::PolyWindow { .. }
                 | Drag::PolySource { .. }
+                | Drag::PolyKeys
+                | Drag::PolyWheel { .. }
                 | Drag::Overview { .. }
                 | Drag::Pad { .. }
                 | Drag::TrackScroll { .. }

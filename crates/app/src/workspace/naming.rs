@@ -28,6 +28,8 @@ pub enum Name {
     PluginCollection(usize),
     /// An audio region's own tempo, typed.
     RegionTempo(At),
+    /// A synth's macro, by its track and number.
+    Macro(usize, usize),
 }
 
 /// A name being typed, in a text field where the name shows.
@@ -78,6 +80,11 @@ impl Workspace {
                 .or_else(|| Some("Pattern".into())),
             Name::PatternFolder => Some("New Folder".into()),
             Name::PluginCollection(i) => self.catalog.collections.get(i).map(|c| c.name.clone()),
+            Name::Macro(t, i) => self
+                .poly(t)
+                .map(|s| s.macros[i].clone())
+                .filter(|n| !n.is_empty())
+                .or_else(|| Some(format!("Macro {}", i + 1))),
             Name::RegionTempo(at) => p
                 .tracks
                 .get(at.0)
@@ -183,12 +190,23 @@ impl Workspace {
                 cx.notify();
                 return;
             }
+            (Name::Macro(t, i), Some(text)) => {
+                let text = text.trim().to_string();
+                self.edit(cx, |ws| {
+                    if let Some(p) = ws.poly_mut(t) {
+                        p.macros[i] = text;
+                    }
+                });
+                cx.notify();
+                return;
+            }
             (
                 Name::PatternRow(..)
                 | Name::PatternSave(_)
                 | Name::PatternFolder
                 | Name::PluginCollection(_)
-                | Name::RegionTempo(_),
+                | Name::RegionTempo(_)
+                | Name::Macro(..),
                 _,
             ) => {
                 cx.notify();
@@ -254,7 +272,8 @@ impl Workspace {
                     | Name::PatternSave(_)
                     | Name::PatternFolder
                     | Name::PluginCollection(_)
-                    | Name::RegionTempo(_) => {}
+                    | Name::RegionTempo(_)
+                    | Name::Macro(..) => {}
                 }
             });
         }

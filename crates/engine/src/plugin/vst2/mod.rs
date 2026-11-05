@@ -34,9 +34,9 @@ use std::{
 };
 
 use super::{
-    AUTOMATED, Control, ControlKind, EditReceiver, EditSender, Editor, MainThreadMarker, Note,
-    Plugin, PluginApi, PluginParam, Preset, PresetSource, Processor, ProcessorApi, Window,
-    edit_queue, platform::Binary,
+    AUTOMATED, Control, EditReceiver, EditSender, Editor, MainThreadMarker, Note, Plugin,
+    PluginApi, PluginParam, Preset, PresetSource, Processor, ProcessorApi, Window, edit_queue,
+    platform::Binary,
 };
 use crate::{
     plugin::scan::PluginInfo,

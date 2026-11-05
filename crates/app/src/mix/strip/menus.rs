@@ -61,8 +61,12 @@ impl Workspace {
         let mut items = Vec::new();
         match (ch, which) {
             (Channel::Track(track), Which::Instrument) => {
-                let synth = pina_engine::song::project::poly_patch("Init")
-                    .map(|p| ("Synth", Instrument::Poly(Box::new(p))));
+                let synth = pina_engine::song::project::poly_patch("Init").map(|p| {
+                    (
+                        pina_engine::song::project::POLY_NAME,
+                        Instrument::Poly(Box::new(p)),
+                    )
+                });
                 for (name, instrument) in synth.into_iter().chain([
                     ("Sine Synth", Instrument::Synth),
                     ("Drum Kit", Instrument::Drums),
@@ -101,6 +105,9 @@ impl Workspace {
                 };
                 items.push((label, action));
             }
+        }
+        if let (Channel::Track(t), Which::Instrument) = (ch, which) {
+            items.extend(self.mpe_item(t));
         }
         // Every plugin and built-in, with pictures, in the picker.
         items.push((

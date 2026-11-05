@@ -11,6 +11,8 @@ first for changes that break songs or commands made before.
 
 ### Changed
 
+- The Synth is now called Synth-0. Songs that use it open as they did, and the `set_synth` command
+  and its settings are unchanged; it takes macro names now too.
 - Song Study knows what a file is before it says anything about it: a full song, a loop or a
   stem, and what's in it. A piano loop no longer gets drums, a drum loop no longer gets a key or
   chords, a bass line shows notes, and what isn't there is listed as not there. Loops with no
@@ -35,8 +37,22 @@ first for changes that break songs or commands made before.
   of books, and New playbook starts one.
 - A book made from a song now keeps that song's chords, drums and each section's loudness, and
   links back to its study. Saving a song's book again updates it instead of making a copy.
+- The picker a mixer slot opens narrows down like the Plugins page: All, Built in or Plugins;
+  Starred and Recent; the categories, the kinds in the one picked and the makers, each showing how
+  many it would find; a count of what's found and Clear. Rows have a star, the list shows every
+  match instead of the first 60, and the arrow keys scroll to the one picked.
 
 ### Fixed
+
+- Every effect stacked on a channel shows on its mixer strip. The strips' effect rows grow to fit
+  the busiest channel (up to twelve), and past that a strip scrolls them; before, anything past
+  six hid behind a small "more" label, so a second or third reverb looked as if it hadn't gone on.
+- The built-in effects' windows (Compressor, Saturator, Limiter, Reverb, Delay and the rest) and
+  Synth-0's window can be made bigger or smaller by their corner, which now shows a grip; the
+  Channel EQ's corner, which already worked, shows it too.
+- Synth-0's close button and the arrows either side of its patch's name show again.
+- A slot's picker offers a second Channel EQ, Compressor, Saturator or Limiter on a channel that
+  has one, and the other built-ins on buses and the master too; it used to hide them.
 
 - The Studio Agent can fill a song with loops. Looping a region with nothing after it used to do
   nothing, and said nothing. Now it says how far the loop runs, and what to set if it doesn't
@@ -180,6 +196,59 @@ first for changes that break songs or commands made before.
   a gate.
 
 ### Added
+
+- The piano roll is rebuilt around a panel of four tabs. Notes shows the picked notes' pitch,
+  start, length, velocity, velocity range and chance (drag a value, or step it), with mute (0)
+  and picking the top or bottom note of each chord, or the rest. Transform has its tools and
+  more: staccato, flam, grace note, connect (passing notes between notes), twice and half speed,
+  crescendo and fade, recombine (pitches, velocities or lengths rotated in time order, or
+  shuffled) and into the key. Generate writes a rhythm spread evenly (3 hits in 8, and so on), a
+  melody grown from a seed in the key, or one following a shape (rise, fall, arch, valley, wave).
+  Harmony shows the key's chords and those it borrows (a click plays one and adds it), and
+  progressions by mood; the chords picked are voiced (voice-led, close, open or spread) and
+  played (held, strummed, arpeggiated, pulsed, on the off-beats, in a rhythm or broken), a bass
+  under them if asked, and written into the region.
+- Each note has a chance of playing (rolled every time it comes round, so a loop varies), a
+  velocity range it strays within, and can be muted (drawn hollow, kept, not played). The lane
+  under the notes has Chance as well as Velocity, and shows each note's range. The agent writes
+  them too (`chance`, `spread`, `muted`).
+- The ruler names the chords the notes play, beat by beat.
+- MPE: each note's own pitch, slide and pressure. Pitch, Slide and Press lanes draw them on the
+  notes they cross (the picked ones, if any), and a note bent shows its bend as a line over it.
+  An MPE controller plays and records them: each note's channel read as that note's. Synth-0
+  follows them voice by voice (its matrix has Slide as a source); VST3 and CLAP instruments hear
+  them as note expression; an Audio Unit or VST2 hears them with "MPE: a channel per note" on
+  (its slot's menu, or the roll's More), each note on a MIDI channel of its own.
+- MIDI FX, on every instrument track before its instrument, for the song and live playing alike:
+  Arpeggiator (rate, order, octaves, gate, latch), Chord Trigger (eleven shapes, in key or not),
+  Scale Quantizer (the song's key or its own), Transposer, Velocity Processor, Note Repeater,
+  Randomizer and Modifier (one controller sent as another). The mixer has a MIDI FX row; its slot
+  opens a card for each, to set, bypass, reorder and take out. The agent sets them with
+  `set_track` `midi_fx`.
+- Synth-0 has a new window, laid out the way sound flows: its sources down the left (each with
+  its level and which filter it goes to), the one picked open in the middle with its wavetable in
+  depth and its warps drawn into it, both filters on one curve over a live spectrum of what's
+  playing, and what comes out on a scope. Under them, a chip for every envelope, LFO and playing
+  source: picked to shape it, dragged onto any knob with a cord to see where it lands, and pointed
+  at to light up everything it moves. Colour means one thing: what's moving a knob, its ring and
+  a dot showing where it is right now. Every setting today's window had is still there, with the
+  oscillators' start phase, noise pan, envelope delay, voice count, bend range, glide held, and the
+  arpeggiator's octaves, gate and swing in reach for the first time. Knobs reset with a
+  double-click and offer "Back to", "Automate it on the track" and taking a source off with a
+  right-click.
+- Synth-0 plays from its window: four octaves of keys (lower on a key is louder), bend and mod
+  wheels, and typing A to K while it's open. Its notes go to its own track, and record when that
+  track is armed. Play a demo runs a phrase for the patch's part.
+- Its sounds have a drawer: search by name or sound, narrow by part, like the ones you keep coming
+  back to (they stay liked), and hear one before choosing it. The wavetables open as pictures to
+  choose from, and search too.
+- Every patch has eight named macros that do something: Bright, Bite, Motion, Width, Weight, Air,
+  Attack, Tail. At 0 they leave the patch as it was made; turned up, each changes it, on all 30.
+  Double-click a name to rename it, and the automation list calls them by name. Macros cost
+  nothing while they're down. A synth in a song made before gets them with one click, its sound
+  unchanged until they're turned.
+- The matrix narrows to envelopes, LFOs, macros or playing sources, scrolls when a patch has many
+  routes, and dropping a source on a knob it already moves no longer adds it twice.
 
 - Conversations stay. Each is kept in its song's folder, so a new one leaves the last to come
   back to. History lists them under when they were, finds them by anything said in them, and

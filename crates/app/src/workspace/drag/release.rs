@@ -121,6 +121,19 @@ impl Workspace {
         {
             self.drop_poly_source(track, source, at, cx);
         }
+        match self.drag {
+            Some(Drag::PolySource { .. }) => {
+                if let Some(v) = self.poly_view.as_mut() {
+                    v.cord = None;
+                }
+            }
+            Some(Drag::PolyKeys) => self.poly_lift(),
+            // A bend wheel springs back; the mod wheel stays where it's left.
+            Some(Drag::PolyWheel {
+                track, bend: true, ..
+            }) => self.set_wheel(track, true, 0.0),
+            _ => {}
+        }
         self.steps_release();
         // A lane made taller is the song's to keep, not an undo step.
         if let Some(Drag::LaneHeight { .. } | Drag::StackHeight { .. }) = self.drag {
@@ -152,7 +165,9 @@ impl Workspace {
                 channel: Channel::Track(t),
                 ..
             }) => Some((t, Param::Pan)),
-            Some(Drag::Knob { target, .. }) => self.target_param(target),
+            Some(Drag::Knob { target, .. } | Drag::PolySlider { target, .. }) => {
+                self.target_param(target)
+            }
             Some(Drag::Send { track, index, .. })
             | Some(Drag::Slider {
                 slider: Slider::Send { track, index },

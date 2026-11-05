@@ -1,47 +1,67 @@
-//! The synth's window, its own and over everything: oscillators you can see, filters you can
-//! drag, envelopes and LFOs, macros, the matrix, and the track's effects.
+//! The synth's window. Sound runs left to right: its sources, the one picked open in the middle,
+//! the filters, and what comes out; what moves it sits under them, its keys along the bottom.
 //!
 //! It's deep in the rest of the app: every knob is the same knob as anywhere (its automation, its
 //! modulators' rings and a modulator dropped on it all work), its sources can be dropped on an
 //! effect's knob as well as its own, and its Effects page is the track's chain, not a second one.
+//! Colour means one thing here: what's moving a knob. The sound itself is white.
 
+mod browser;
+mod controls;
+mod effects;
+mod filters;
+mod head;
+mod keys;
 mod matrix;
-mod oscillators;
-mod shapes;
+mod modulation;
+mod output;
+mod sources;
 
-use std::{cell::Cell, rc::Rc};
+pub(crate) use controls::PolyAmount;
+pub(crate) use matrix::source_name;
+
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use gpui::{
-    Bounds, Context, Div, MouseButton, MouseDownEvent, PathBuilder, Pixels, anchored, canvas,
-    deferred, div, point, prelude::*, px, rgb,
+    Bounds, Context, Div, Entity, MouseButton, MouseDownEvent, PathBuilder, Pixels, Subscription,
+    anchored, canvas, deferred, div, point, prelude::*, px, rgb,
 };
 use pina_engine::{
-    dsp::poly::table::{TABLES, table},
+    dsp::poly::{LIVE_SOURCES, POLY_LIVE},
     song::project::*,
 };
 
 use crate::{
-    mix::{
-        eq::{dial, value_line},
-        strip::{self, Builtin, Channel},
-    },
     ui::{
         menu::{Menu, MenuAction},
+        text::TextInput,
         theme::*,
     },
     workspace::{Drag, Target, Workspace, pt},
 };
 
-pub const WINDOW_W: f32 = 1240.0;
-pub const WINDOW_H: f32 = 772.0;
+pub const WINDOW_W: f32 = 1380.0;
+pub const WINDOW_H: f32 = 860.0;
+/// The smallest it's made: its columns, and room for the wave between them.
+const MIN_W: f32 = 1180.0;
+const MIN_H: f32 = 720.0;
 const HEAD_H: f32 = 48.0;
-/// Each part of the synth's colour.
-pub const OSC_COLORS: [u32; OSCS] = [0x34d399, 0x60a5fa, 0xf59e0b];
-const FILTER_COLOR: u32 = 0xf472b6;
-const SHAPE_COLOR: u32 = 0xa78bfa;
+const MOD_H: f32 = 214.0;
+const KEYS_H: f32 = 100.0;
+const SOURCES_W: f32 = 256.0;
+const FILTERS_W: f32 = 300.0;
+const OUTPUT_W: f32 = 184.0;
 
 /// What marks a drag on LFO `n`'s picture: this and `n`.
 const DRAW_LFO: u8 = 10;
+/// What marks a drag on the envelope's picture: its attack, decay and release points.
+const ENV_POINTS: [u8; 3] = [2, 3, 4];
+
+/// Where each long slider was drawn, by its parameter.
+pub type Spots = Rc<RefCell<Vec<(usize, Bounds<Pixels>)>>>;
 
 /// Which page of the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,21 +71,78 @@ pub enum PolyPage {
     Effects,
 }
 
-/// The envelope or LFO in hand.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PolyShape {
-    Env(usize),
-    Lfo(usize),
+/// Which routes the matrix shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RouteKind {
+    #[default]
+    All,
+    Env,
+    Lfo,
+    Macro,
+    Playing,
+}
+
+impl RouteKind {
+    fn has(self, s: PolySource) -> bool {
+        match self {
+            RouteKind::All => true,
+            RouteKind::Env => matches!(s, PolySource::Env(_)),
+            RouteKind::Lfo => matches!(s, PolySource::Lfo(_)),
+            RouteKind::Macro => matches!(s, PolySource::Macro(_)),
+            RouteKind::Playing => !matches!(
+                s,
+                PolySource::Env(_) | PolySource::Lfo(_) | PolySource::Macro(_)
+            ),
+        }
+    }
 }
 
 pub struct PolyView {
     pub track: usize,
     pub at: (f32, f32),
+    /// How big it's been made, if it has.
+    pub size: Option<(f32, f32)>,
     pub page: PolyPage,
-    pub shape: PolyShape,
-    /// Where the filters' and the shape's pictures were drawn, for their points.
-    pub filters: [Rc<Cell<Bounds<Pixels>>>; FILTERS],
+    /// The source open in the middle: an oscillator (0 to 2), the sub (3), the noise (4).
+    pub picked: usize,
+    /// The filter whose settings show.
+    pub filter: usize,
+    /// The modulation source in hand, and the one pointed at: what it moves lights up.
+    pub source: PolySource,
+    pub pointed: Option<PolySource>,
+    /// Where a source's cord starts while it's dragged to a knob.
+    pub cord: Option<gpui::Point<f32>>,
+    /// Where the curve, the shape and the keys were drawn, for the pointer; the long sliders.
+    pub curve: Rc<Cell<Bounds<Pixels>>>,
     pub plot: Rc<Cell<Bounds<Pixels>>>,
+    pub keys: Rc<Cell<Bounds<Pixels>>>,
+    pub sliders: Spots,
+    /// Notes down from the window (its keys, typing, the demo), and the one under the pointer.
+    pub held: Vec<u8>,
+    pub finger: Option<u8>,
+    /// The wheels, as held.
+    pub wheel: f32,
+    pub bend: f32,
+    /// The sounds' drawer, its search and the part it shows; the tables' list and its search.
+    pub browsing: bool,
+    pub part: &'static str,
+    pub find: Option<Entity<TextInput>>,
+    pub query: String,
+    pub tables: Option<usize>,
+    pub table_find: Option<Entity<TextInput>>,
+    pub table_query: String,
+    pub routes: RouteKind,
+    /// The demo playing, by its turn: a new turn stops the old.
+    pub demo: Option<u64>,
+    turns: u64,
+    /// Musical typing was on before the window turned it on.
+    typing_was: bool,
+    /// What the engine says: each source now, what came out, and that as a spectrum (dB).
+    pub live: [f32; POLY_LIVE],
+    pub scope: Vec<f32>,
+    heard: usize,
+    pub spectrum: Vec<f32>,
+    _typed: Vec<Subscription>,
 }
 
 /// Something picked in the window.
@@ -76,13 +153,45 @@ pub enum PolyOp {
     Warp(usize, usize, Warp),
     Filter(usize, PolyFilter),
     LfoWave(usize, LfoWave),
-    Routing(FilterRouting),
+    LfoBeats(usize, f32),
     RouteSource(usize, PolySource),
     RouteBy(usize, Option<PolySource>),
     RouteDest(usize, PolyDest),
     AddRoute,
     RemoveRoute(usize),
     ArpMode(ArpMode),
+    ArpBeats(f32),
+    /// A parameter back to its default; given a lane on the track to automate it.
+    Reset(usize),
+    Automate(usize),
+    /// The eight macros every patch has now, given to a synth made before.
+    GiveMacros,
+}
+
+/// A source's colour, wherever it shows: its chip, its rings, its routes.
+pub fn source_color(s: PolySource) -> u32 {
+    match s {
+        PolySource::Env(_) => AMBER,
+        PolySource::Lfo(_) => SKY,
+        PolySource::Macro(_) => VIOLET,
+        _ => PINK,
+    }
+}
+
+/// A source's short name, on its chip.
+pub fn source_short(s: PolySource) -> String {
+    match s {
+        PolySource::Env(i) => format!("E{}", i + 1),
+        PolySource::Lfo(i) => format!("L{}", i + 1),
+        PolySource::Macro(i) => format!("M{}", i + 1),
+        PolySource::Velocity => "Vel".into(),
+        PolySource::Note => "Note".into(),
+        PolySource::Wheel => "Wheel".into(),
+        PolySource::Pressure => "Press".into(),
+        PolySource::Bend => "Bend".into(),
+        PolySource::Random => "Rand".into(),
+        PolySource::Slide => "Slide".into(),
+    }
 }
 
 impl Workspace {
@@ -108,44 +217,203 @@ impl Workspace {
         }
     }
 
+    /// The window's size: as it's been made, else as large as it opens (or the app's window
+    /// less a margin), never under what its columns need.
+    pub(crate) fn poly_size(&self) -> (f32, f32) {
+        let (w, h) = self
+            .poly_view
+            .as_ref()
+            .and_then(|v| v.size)
+            .unwrap_or((WINDOW_W, WINDOW_H));
+        (
+            w.min(self.viewport_w - 16.0).max(MIN_W),
+            h.min(self.viewport_h - 16.0).max(MIN_H),
+        )
+    }
+
     pub fn open_poly(&mut self, t: usize, cx: &mut Context<Self>) {
         if self.poly(t).is_none() {
             return;
         }
+        if self.poly_view.as_ref().is_some_and(|v| v.track != t) {
+            self.poly_all_off();
+        }
+        let (w, h) = self.poly_size();
         let at = (
-            ((self.viewport_w - WINDOW_W) / 2.0).max(0.0),
-            ((self.viewport_h - WINDOW_H) / 2.0).max(40.0),
+            ((self.viewport_w - w) / 2.0).max(0.0),
+            ((self.viewport_h - h) / 2.0).max(8.0),
         );
-        let held = self.poly_view.as_ref().map(|v| (v.at, v.page, v.shape));
-        let (at, page, shape) = held.unwrap_or((at, PolyPage::Synth, PolyShape::Env(0)));
+        let typing_was = match &self.poly_view {
+            Some(v) => v.typing_was,
+            None => self.typing.is_some(),
+        };
+        // A synth window plays from the computer's keys as well as its own.
+        self.typing.get_or_insert(0);
+        let held = self
+            .poly_view
+            .take()
+            .map(|v| (v.at, v.size, v.page, v.picked, v.filter, v.source));
+        let (at, size, page, picked, filter, source) =
+            held.unwrap_or((at, None, PolyPage::Synth, 0, 0, PolySource::Env(1)));
+        let find = cx.new(|cx| TextInput::search("Search sounds", cx));
+        let table_find = cx.new(|cx| TextInput::search("Search tables", cx));
+        let typed = vec![
+            cx.observe(&find, |ws, input, cx| {
+                let text = input.read(cx).text().trim().to_lowercase();
+                if let Some(v) = ws.poly_view.as_mut().filter(|v| v.query != text) {
+                    v.query = text;
+                    cx.notify();
+                }
+            }),
+            cx.observe(&table_find, |ws, input, cx| {
+                let text = input.read(cx).text().trim().to_lowercase();
+                if let Some(v) = ws.poly_view.as_mut().filter(|v| v.table_query != text) {
+                    v.table_query = text;
+                    cx.notify();
+                }
+            }),
+        ];
         self.poly_view = Some(PolyView {
             track: t,
             at,
+            size,
             page,
-            shape,
-            filters: Default::default(),
+            picked,
+            filter,
+            source,
+            pointed: None,
+            cord: None,
+            curve: Default::default(),
             plot: Default::default(),
+            keys: Default::default(),
+            sliders: Default::default(),
+            held: Vec::new(),
+            finger: None,
+            wheel: 0.0,
+            bend: 0.0,
+            browsing: false,
+            part: "all",
+            find: Some(find),
+            query: String::new(),
+            tables: None,
+            table_find: Some(table_find),
+            table_query: String::new(),
+            routes: RouteKind::All,
+            demo: None,
+            turns: 0,
+            typing_was,
+            live: [0.0; POLY_LIVE],
+            scope: Vec::new(),
+            heard: 0,
+            spectrum: Vec::new(),
+            _typed: typed,
         });
         cx.notify();
     }
 
+    /// Closes the window: what it was playing let go, typing as it was before.
+    pub fn close_poly(&mut self, cx: &mut Context<Self>) {
+        self.poly_all_off();
+        if let Some(v) = self.poly_view.take()
+            && !v.typing_was
+        {
+            self.typing = None;
+        }
+        cx.notify();
+    }
+
+    /// The window moved by its title, or resized by its corner.
     pub fn drag_poly_window(
         &mut self,
         from: gpui::Point<f32>,
         start: (f32, f32),
+        resize: bool,
         p: gpui::Point<f32>,
     ) {
+        let (w, _) = self.poly_size();
         let (vw, vh) = (self.viewport_w, self.viewport_h);
+        if resize {
+            if let Some(v) = self.poly_view.as_mut() {
+                v.size = Some((
+                    (start.0 + p.x - from.x).clamp(MIN_W, (vw - 16.0).max(MIN_W)),
+                    (start.1 + p.y - from.y).clamp(MIN_H, (vh - 16.0).max(MIN_H)),
+                ));
+            }
+            return;
+        }
         if let Some(v) = self.poly_view.as_mut() {
             v.at = (
-                (start.0 + p.x - from.x).clamp(-WINDOW_W + 80.0, vw - 80.0),
+                (start.0 + p.x - from.x).clamp(-w + 80.0, vw - 80.0),
                 (start.1 + p.y - from.y).clamp(0.0, vh - HEAD_H),
             );
         }
     }
 
+    /// The engine's news of the synth whose window is open: its sources, what it played and the
+    /// spectrum of that. Whether anything's moving, so the window keeps drawing.
+    pub(crate) fn poly_frame(&mut self) -> bool {
+        let id = self
+            .poly_view
+            .as_ref()
+            .and_then(|v| self.session.project.tracks.get(v.track))
+            .map(|t| t.id);
+        self.player.watch_poly(id);
+        let rate = self.session.project.sample_rate as f64;
+        let Some(v) = self.poly_view.as_mut() else {
+            return false;
+        };
+        // Tests draw what they're given.
+        if !cfg!(test) {
+            v.live = self.player.poly_live();
+            let seen = self.player.poly_scope(&mut v.scope, v.heard);
+            if seen != v.heard && v.page == PolyPage::Synth {
+                v.spectrum = spectrum_of(&v.scope, rate, &v.spectrum);
+            }
+            v.heard = seen;
+        }
+        let loud = v.scope.iter().any(|s| s.abs() > 1e-4);
+        v.live[POLY_LIVE - 1] > 0.0 || loud || v.demo.is_some() || v.wheel != 0.0
+    }
+
+    /// Where a source is now (0 to 1, -1 for the two-way ones): a macro where it's turned, the
+    /// rest as the engine last said, if this track's window is open.
+    pub(crate) fn poly_now(&self, t: usize, s: PolySource) -> Option<f32> {
+        if let PolySource::Macro(m) = s {
+            return Some(self.poly_at(t, macro_param(m as usize)));
+        }
+        let v = self.poly_view.as_ref().filter(|v| v.track == t)?;
+        LIVE_SOURCES.iter().position(|x| *x == s).map(|k| v.live[k])
+    }
+
+    /// A parameter's knob position as it plays.
+    pub(crate) fn poly_at(&self, t: usize, i: usize) -> f32 {
+        self.target(Target::Poly { track: t, param: i })
+    }
+
+    /// A parameter's knob position with what's moving it now.
+    pub(crate) fn poly_moving(&self, t: usize, i: usize) -> f32 {
+        let base = self.poly_at(t, i);
+        let Some(p) = self.poly(t) else { return base };
+        let moved: f32 = p
+            .routes
+            .iter()
+            .filter(|r| r.dest == PolyDest::Param(i as u16))
+            .map(|r| r.depth * self.poly_now(t, r.source).unwrap_or(0.0))
+            .sum();
+        (base + moved).clamp(0.0, 1.0)
+    }
+
     /// A choice made in the window.
     pub fn poly_op(&mut self, t: usize, op: PolyOp, cx: &mut Context<Self>) {
+        if let PolyOp::Automate(i) = op {
+            self.show_lane(t, Param::Poly(i as u16));
+            self.status = Some(format!(
+                "{} has a lane under its track now",
+                POLY_PARAMS[i].name
+            ));
+            cx.notify();
+            return;
+        }
         self.edit(cx, |ws| {
             let Some(p) = ws.poly_mut(t) else { return };
             match op {
@@ -158,7 +426,7 @@ impl Workspace {
                 PolyOp::Warp(o, k, w) => p.warps[o][k] = w,
                 PolyOp::Filter(i, kind) => p.filters[i] = kind,
                 PolyOp::LfoWave(i, w) => p.lfos[i].wave = w,
-                PolyOp::Routing(r) => p.routing = r,
+                PolyOp::LfoBeats(i, b) => p.lfos[i].beats = b,
                 PolyOp::RouteSource(i, s) => {
                     if let Some(r) = p.routes.get_mut(i) {
                         r.source = s;
@@ -187,11 +455,16 @@ impl Workspace {
                     }
                 }
                 PolyOp::ArpMode(m) => p.arp.mode = m,
+                PolyOp::ArpBeats(b) => p.arp.beats = b,
+                PolyOp::Reset(i) => p.params[i] = POLY_PARAMS[i].default,
+                PolyOp::GiveMacros => give_macros(p),
+                PolyOp::Automate(_) => {}
             }
         });
     }
 
-    /// A source dropped on a knob: routed to it, or to an effect's on the track.
+    /// A source dropped on a knob: routed to it, or to an effect's on the track. Once: dropped on
+    /// a knob it already moves, it's left as it was.
     pub fn drop_poly_source(
         &mut self,
         t: usize,
@@ -213,9 +486,16 @@ impl Workspace {
             Some(ModTarget::Tool(k, i)) => PolyDest::Effect(k, i),
             _ => return,
         };
+        if let Some(v) = self.poly_view.as_mut() {
+            v.source = source;
+        }
         self.edit(cx, |ws| {
             if let Some(p) = ws.poly_mut(t)
                 && p.routes.len() < MAX_POLY_ROUTES
+                && !p
+                    .routes
+                    .iter()
+                    .any(|r| r.source == source && r.dest == dest)
             {
                 p.routes.push(PolyRoute {
                     source,
@@ -227,20 +507,20 @@ impl Workspace {
         });
     }
 
-    /// A point on a picture dragged: filter `i`'s (`i` 0 or 1), or the shape's.
+    /// The pointer on a picture: filter `id`'s curve (0 or 1), the envelope's points, an LFO's
+    /// wave drawn.
     pub fn drag_poly_point(&mut self, id: u8, p: gpui::Point<f32>) {
         let Some(v) = self.poly_view.as_ref() else {
             return;
         };
-        let (t, shape) = (v.track, v.shape);
+        let (t, source) = (v.track, v.source);
         let on = |b: Bounds<Pixels>| {
             (
                 ((p.x - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0),
                 ((p.y - f32::from(b.origin.y)) / f32::from(b.size.height).max(1.0)).clamp(0.0, 1.0),
             )
         };
-        let filter = v.filters.get(id as usize).map(|b| on(b.get()));
-        let shaped = on(v.plot.get());
+        let (curve, shaped) = (on(v.curve.get()), on(v.plot.get()));
         if id >= DRAW_LFO {
             return self.draw_lfo(
                 t,
@@ -250,7 +530,8 @@ impl Workspace {
             );
         }
         let Some(q) = self.poly_mut(t) else { return };
-        if let Some((x, y)) = filter {
+        if (id as usize) < FILTERS {
+            let (x, y) = curve;
             let i = id as usize;
             q.params[filter_param(i, FilterField::Cutoff)] = POLY_PARAMS
                 [filter_param(i, FilterField::Cutoff)]
@@ -259,7 +540,8 @@ impl Workspace {
             q.params[filter_param(i, FilterField::Resonance)] = 1.0 - y;
             return;
         }
-        let PolyShape::Env(e) = shape else { return };
+        let PolySource::Env(e) = source else { return };
+        let e = e as usize;
         let (x, y) = shaped;
         let time = |f| POLY_PARAMS[env_param(e, f)].scale;
         match id {
@@ -270,7 +552,9 @@ impl Workspace {
             3 => {
                 q.params[env_param(e, EnvField::Decay)] =
                     time(EnvField::Decay).value(((x - 1.0 / 3.0) * 3.0).clamp(0.0, 1.0));
-                q.params[env_param(e, EnvField::Sustain)] = 1.0 - y;
+                // The picture keeps a margin top and bottom, so its points can be reached.
+                q.params[env_param(e, EnvField::Sustain)] =
+                    (1.0 - (y - 0.08) / 0.84).clamp(0.0, 1.0);
             }
             _ => {
                 q.params[env_param(e, EnvField::Release)] =
@@ -279,132 +563,39 @@ impl Workspace {
         }
     }
 
-    /// One of the synth's knobs: the same as any in the app.
-    pub(crate) fn poly_knob(
-        &self,
-        t: usize,
-        i: usize,
-        name: &'static str,
-        dial_size: f32,
-        color: u32,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let target = Target::Poly { track: t, param: i };
-        let value = self.target(target);
-        let q = &POLY_PARAMS[i];
-        let reset = q.scale.pos(q.default);
-        let shown = if q.bipolar { value * 2.0 - 1.0 } else { value };
-        let (bipolar, text) = (q.bipolar, q.say(q.scale.value(value)));
-        let sel = q.id.clone();
-        div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(2.))
-            .child(
-                div()
-                    .text_size(px(10.5))
-                    .text_color(rgb(TEXT_3))
-                    .whitespace_nowrap()
-                    .child(name),
-            )
-            .child(
-                div()
-                    .cursor_ns_resize()
-                    .debug_selector(move || format!("poly-knob-{sel}"))
-                    .child(self.modded(
-                        self.mod_key(target),
-                        dial_size,
-                        dial(
-                            shown,
-                            dial_size,
-                            (dial_size / 9.0).clamp(3.5, 6.0),
-                            color,
-                            bipolar,
-                        ),
-                    ))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            if e.modifiers.platform {
-                                ws.edit(cx, |ws| ws.set_target(target, reset));
-                                return;
-                            }
-                            let y = pt(e.position).y;
-                            ws.begin_drag(Drag::Knob { target, y, value }, cx);
-                        }),
-                    ),
-            )
-            .child(value_line(text, 10.5, None))
-    }
-
-    /// A button that opens a menu of choices.
-    pub(crate) fn poly_menu(
-        &self,
-        sel: String,
-        label: String,
-        items: impl Fn(&Self) -> Vec<(String, MenuAction)> + 'static,
-        search: bool,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        div()
-            .h(px(24.))
-            .px(px(9.))
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(6.))
-            .rounded(px(6.))
-            .bg(rgb(0x191a20))
-            .border_1()
-            .border_color(rgb(LINE))
-            .text_size(px(11.5))
-            .text_color(rgb(TEXT_2))
-            .whitespace_nowrap()
-            .cursor_pointer()
-            .hover(|d| d.border_color(rgb(LINE_STRONG)))
-            .debug_selector(move || sel.clone())
-            .child(label)
-            .child(div().text_color(rgb(TEXT_4)).child("▾"))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    let list = items(ws);
-                    ws.menu = Some(match search {
-                        true => Menu::search(e.position, list),
-                        false => Menu {
-                            at: e.position,
-                            items: list,
-                            ..Default::default()
-                        },
-                    });
-                    cx.notify();
-                }),
-            )
-    }
-
     pub fn poly_window(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let v = self.poly_view.as_ref()?;
-        let (t, at, page) = (v.track, v.at, v.page);
+        v.sliders.borrow_mut().clear();
+        let (t, at, page, browsing, tables) = (v.track, v.at, v.page, v.browsing, v.tables);
+        let cord = v.cord.zip(self.mod_drag_at).map(|(from, to)| {
+            let hue = match self.drag {
+                Some(Drag::PolySource { source, .. }) => source_color(source),
+                _ => TEXT,
+            };
+            (from, to, hue)
+        });
         let poly = self.poly(t)?.clone();
+        let (w, h) = self.poly_size();
         let head = self.poly_head(t, &poly, page, cx);
         let body = match page {
             PolyPage::Synth => self.poly_synth_page(t, &poly, cx),
             PolyPage::Matrix => self.poly_matrix_page(t, &poly, cx),
-            PolyPage::Effects => self.poly_effects_page(t, cx),
+            PolyPage::Effects => self.poly_effects_page(t, &poly, cx),
         };
+        let keys = self.poly_keys_row(t, &poly, cx);
+        let drawer = browsing.then(|| self.poly_sounds(t, &poly, cx));
+        let list = tables.map(|o| self.poly_tables(t, &poly, o, cx));
         let frame = div()
             .id("poly-window")
             .occlude()
-            .w(px(WINDOW_W))
-            .h(px(WINDOW_H))
+            .relative()
+            .w(px(w))
+            .h(px(h))
             .flex()
             .flex_col()
             .rounded(px(12.))
             .overflow_hidden()
-            .bg(rgb(0x101115))
+            .bg(rgb(SURFACE))
             .border_1()
             .border_color(rgb(LINE_STRONG))
             .shadow_lg()
@@ -412,7 +603,39 @@ impl Workspace {
             .text_color(rgb(TEXT))
             .text_size(px(12.))
             .child(head)
-            .child(body);
+            .child(body)
+            .child(keys)
+            .children(drawer)
+            .children(list)
+            .child(
+                resize_grip()
+                    .debug_selector(|| "poly-resize".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            let start = ws.poly_size();
+                            ws.begin_drag(
+                                Drag::PolyWindow {
+                                    from: pt(e.position),
+                                    start,
+                                    resize: true,
+                                },
+                                cx,
+                            );
+                        }),
+                    ),
+            )
+            .children(cord.map(|(from, to, hue)| {
+                canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| paint_cord(window, from, to, hue),
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+            }));
         Some(
             deferred(
                 anchored()
@@ -424,495 +647,111 @@ impl Workspace {
         )
     }
 
-    fn poly_head(&self, t: usize, p: &Poly, page: PolyPage, cx: &mut Context<Self>) -> Div {
-        let track = &self.session.project.tracks[t];
-        let patch = match p.patch.is_empty() {
-            true => "Init".to_string(),
-            false => p.patch.clone(),
-        };
-        let patches = self.poly_menu(
-            "poly-patch".into(),
-            patch,
-            move |_| {
-                let mut items = Vec::new();
-                let mut part = "";
-                let mut sorted: Vec<_> = POLY_PATCHES.to_vec();
-                sorted.sort_by_key(|p| p.1);
-                for (name, of, _) in sorted {
-                    if of != part {
-                        part = of;
-                        items.push((capitalized(of), MenuAction::Nothing));
-                    }
-                    items.push((name.to_string(), MenuAction::Poly(t, PolyOp::Patch(name))));
-                }
-                items
-            },
-            true,
-            cx,
-        );
-        let tab = |name: &'static str, to: PolyPage, cx: &mut Context<Self>| {
-            seg(name, page == to, 26.)
-                .debug_selector(move || format!("poly-page-{}", name.to_lowercase()))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        cx.stop_propagation();
-                        if let Some(v) = ws.poly_view.as_mut() {
-                            v.page = to;
-                        }
-                        cx.notify();
-                    }),
-                )
-        };
-        let quality = [
-            ("Draft", PolyQuality::Draft),
-            ("Good", PolyQuality::Good),
-            ("Best", PolyQuality::Best),
-        ];
-        let quality = tray()
-            .p(px(2.))
-            .rounded(px(8.))
-            .children(quality.map(|(name, q)| {
-                seg(name, p.quality == q, 22.)
-                    .debug_selector(move || format!("poly-quality-{}", name.to_lowercase()))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            cx.stop_propagation();
-                            ws.edit(cx, |ws| {
-                                if let Some(p) = ws.poly_mut(t) {
-                                    p.quality = q;
-                                }
-                            });
-                        }),
-                    )
-            }));
-        let at = self.poly_view.as_ref().map_or((0.0, 0.0), |v| v.at);
-        div()
-            .flex_none()
-            .h(px(HEAD_H))
-            .px(px(14.))
-            .flex()
-            .items_center()
-            .gap(px(10.))
-            .border_b_1()
-            .border_color(rgb(LINE))
-            .cursor_grab()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                    ws.begin_drag(
-                        Drag::PolyWindow {
-                            from: pt(e.position),
-                            start: at,
-                        },
-                        cx,
-                    );
-                }),
-            )
-            .child(
-                div()
-                    .text_size(px(14.))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .child("Synth"),
-            )
-            .child(chip(track.name.clone(), TEXT_3))
-            .child(div().w(px(180.)).child(patches))
-            .child(
-                tray()
-                    .p(px(2.))
-                    .rounded(px(8.))
-                    .child(tab("Synth", PolyPage::Synth, cx))
-                    .child(tab("Matrix", PolyPage::Matrix, cx))
-                    .child(tab("Effects", PolyPage::Effects, cx)),
-            )
-            .child(div().flex_1())
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(TEXT_3))
-                    .child("Quality"),
-            )
-            .child(quality)
-            .child(
-                div()
-                    .id("poly-close")
-                    .debug_selector(|| "poly-close".into())
-                    .size(px(24.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .text_color(rgb(TEXT_3))
-                    .hover(|d| d.bg(rgb(OFF)))
-                    .child("×")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, _, _, cx| {
-                            cx.stop_propagation();
-                            ws.poly_view = None;
-                            cx.notify();
-                        }),
-                    ),
-            )
-    }
-
     fn poly_synth_page(&mut self, t: usize, p: &Poly, cx: &mut Context<Self>) -> Div {
-        let oscs = div()
-            .flex()
-            .gap(px(8.))
-            .child(self.poly_osc_card(t, p, 0, cx))
-            .child(self.poly_osc_card(t, p, 1, cx))
-            .child(self.poly_osc_card(t, p, 2, cx))
-            .child(self.sub_noise_card(t, p, cx));
-        let filters = div()
-            .flex()
-            .gap(px(8.))
-            .child(self.filter_card(t, p, 0, cx))
-            .child(self.filter_card(t, p, 1, cx))
-            .child(self.macro_card(t, cx));
-        let shapes = div()
-            .flex()
-            .gap(px(8.))
-            .child(self.shape_card(t, p, cx))
-            .child(self.voice_card(t, p, cx));
+        let column = |d: Div| d.flex_none().h_full().border_r_1().border_color(rgb(LINE));
         div()
             .flex_1()
-            .p(px(10.))
+            .min_h(px(0.))
             .flex()
             .flex_col()
-            .gap(px(8.))
-            .child(oscs)
-            .child(filters)
-            .child(shapes)
-    }
-
-    fn poly_effects_page(&mut self, t: usize, cx: &mut Context<Self>) -> Div {
-        let ch = Channel::Track(t);
-        let track = &self.session.project.tracks[t];
-        let (comp, sat, eq, limit) = (
-            track.comp.is_some(),
-            track.sat.is_some(),
-            track.eq.is_some(),
-            track.limit.is_some(),
-        );
-        let more = track.more.clone();
-        let own = |name: &'static str, b: Builtin, ws: &Self, cx: &mut Context<Self>| {
-            let open = cx.listener(move |ws: &mut Workspace, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                match b {
-                    Builtin::Eq => ws.open_eq(ch, cx),
-                    b => ws.open_fx(ch, b, cx),
-                }
-            });
-            let _ = ws;
-            effect_card(name, "the channel's own")
-                .child(button("Open", false).on_mouse_down(MouseButton::Left, open))
-        };
-        let mut grid = Vec::new();
-        if eq {
-            grid.push(own("Channel EQ", Builtin::Eq, self, cx));
-        }
-        if comp {
-            grid.push(own("Compressor", Builtin::Comp, self, cx));
-        }
-        if sat {
-            grid.push(own("Saturator", Builtin::Sat, self, cx));
-        }
-        if limit {
-            grid.push(own("Limiter", Builtin::Limit, self, cx));
-        }
-        for (k, u) in more.iter().enumerate() {
-            let Some((b, name)) = self.stacked(ch, k) else {
-                continue;
-            };
-            let table = strip::knobs(u.kind());
-            let on = !u.bypassed();
-            let row = div().flex().flex_wrap().gap(px(10.)).children(
-                (0..table.len())
-                    .filter(|&i| knob_shows(u, i))
-                    .map(|i| self.effect_knob(ch, k, i, table[i].name, cx)),
-            );
-            let power = button(if on { "On" } else { "Off" }, on)
-                .debug_selector(move || format!("poly-effect-power-{k}"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        cx.stop_propagation();
-                        ws.edit(cx, |ws| {
-                            if let Some(u) = ws.chain_mut(ch).more.get_mut(k) {
-                                let off = u.bypass_mut();
-                                *off = !*off;
-                            }
-                        });
-                    }),
-                );
-            let open = cx.listener(move |ws: &mut Workspace, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                ws.open_fx_at(ch, b, Some(k), cx);
-            });
-            grid.push(
-                effect_card_owned(name).child(row).child(
-                    div().flex().gap(px(6.)).child(power).child(
-                        button("Open its window", false).on_mouse_down(MouseButton::Left, open),
-                    ),
-                ),
-            );
-        }
-        let add = self.poly_menu(
-            "poly-add-effect".into(),
-            "Add an effect".into(),
-            move |_| {
-                let tools = [
-                    Fx::Reverb,
-                    Fx::Delay,
-                    Fx::Filter,
-                    Fx::Motion,
-                    Fx::Shaper,
-                    Fx::Gate,
-                    Fx::DeEsser,
-                    Fx::Stereo,
-                    Fx::Multiband,
-                    Fx::Pitch,
-                    Fx::TapeStop,
-                    Fx::Tune,
-                ];
-                [Builtin::Eq, Builtin::Comp, Builtin::Sat, Builtin::Limit]
-                    .into_iter()
-                    .chain(tools.map(Builtin::Tool))
-                    .map(|builtin| {
-                        (
-                            builtin.name().to_string(),
-                            MenuAction::AddBuiltin {
-                                channel: ch,
-                                builtin,
-                            },
-                        )
-                    })
-                    .collect()
-            },
-            false,
-            cx,
-        );
-        let page = div()
-            .id("poly-effects")
-            .size_full()
-            .overflow_y_scroll()
-            .p(px(16.))
-            .flex()
-            .flex_col()
-            .gap(px(12.))
             .child(
                 div()
+                    .flex_1()
+                    .min_h(px(0.))
                     .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(div().w(px(180.)).child(add))
+                    .child(column(self.poly_sources(t, p, cx)).w(px(SOURCES_W)))
                     .child(
-                        div()
-                            .text_size(px(11.5))
-                            .text_color(rgb(TEXT_3))
-                            .child("These are the track's own effects, as the mixer shows them. Drag any synth source's ↗ onto one of their knobs to move it."),
+                        self.poly_editor(t, p, cx)
+                            .flex_1()
+                            .min_w(px(0.))
+                            .h_full()
+                            .border_r_1()
+                            .border_color(rgb(LINE)),
+                    )
+                    .child(column(self.poly_filters(t, p, cx)).w(px(FILTERS_W)))
+                    .child(
+                        self.poly_output(t, p, cx)
+                            .flex_none()
+                            .h_full()
+                            .w(px(OUTPUT_W)),
                     ),
-            )
-            .child(div().flex().flex_wrap().gap(px(10.)).children(grid));
-        div().flex_1().overflow_hidden().child(page)
-    }
-
-    /// A stacked effect's knob, on the Effects page.
-    fn effect_knob(
-        &self,
-        ch: Channel,
-        k: usize,
-        i: usize,
-        name: &'static str,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let target = Target::Stacked(ch, k, crate::workspace::Knob::Param(i));
-        let value = self.target(target);
-        let u = self.tool_heard(ch, k);
-        let table = u.map(|u| strip::knobs(u.kind()));
-        let bipolar = table.and_then(|t| t.get(i)).is_some_and(|p| p.bipolar);
-        let text = match (u, table.and_then(|t| t.get(i))) {
-            (Some(u), Some(p)) => (p.say)(&u),
-            _ => String::new(),
-        };
-        let shown = if bipolar { value * 2.0 - 1.0 } else { value };
-        div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(2.))
-            .child(
-                div()
-                    .text_size(px(10.5))
-                    .text_color(rgb(TEXT_3))
-                    .child(name),
             )
             .child(
                 div()
-                    .cursor_ns_resize()
-                    .child(self.modded(
-                        self.mod_key(target),
-                        30.0,
-                        dial(shown, 30.0, 3.5, SHAPE_COLOR, bipolar),
-                    ))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            let y = pt(e.position).y;
-                            ws.begin_drag(Drag::Knob { target, y, value }, cx);
-                        }),
-                    ),
-            )
-            .child(value_line(text, 10.5, None))
-    }
-
-    fn macro_card(&self, t: usize, cx: &mut Context<Self>) -> Div {
-        const NAMES: [&str; MACROS] = ["1", "2", "3", "4", "5", "6", "7", "8"];
-        let mut rows = Vec::new();
-        for chunk in (0..MACROS).collect::<Vec<_>>().chunks(4) {
-            rows.push(
-                div()
+                    .flex_none()
+                    .h(px(MOD_H))
                     .flex()
-                    .justify_between()
-                    .children(chunk.iter().map(|&i| {
-                        div()
-                            .relative()
-                            .child(self.poly_knob(
-                                t,
-                                macro_param(i),
-                                NAMES[i],
-                                28.0,
-                                SHAPE_COLOR,
-                                cx,
-                            ))
-                            .child(
-                                self.source_grip(t, PolySource::Macro(i as u8), cx)
-                                    .absolute()
-                                    .top(px(-2.))
-                                    .right(px(-2.)),
-                            )
-                    })),
-            );
+                    .border_t_1()
+                    .border_color(rgb(LINE))
+                    .child(self.poly_modulation(t, p, cx).flex_1().min_w(px(0.)))
+                    .child(
+                        self.poly_macros(t, p, cx)
+                            .flex_none()
+                            .w(px(FILTERS_W + OUTPUT_W))
+                            .border_l_1()
+                            .border_color(rgb(LINE)),
+                    ),
+            )
+    }
+
+    /// Everything the window plays let go: its keys, typing, the demo.
+    pub(crate) fn poly_all_off(&mut self) {
+        let Some(v) = self.poly_view.as_mut() else {
+            return;
+        };
+        v.demo = None;
+        v.finger = None;
+        let held = std::mem::take(&mut v.held);
+        for pitch in held {
+            self.play_note(pitch, 0);
         }
-        panel("Macros", SHAPE_COLOR)
-            .flex_1()
-            .child(div().flex().flex_col().gap(px(2.)).children(rows))
     }
+}
 
-    /// A ↗ to drag a source onto a knob.
-    pub(crate) fn source_grip(&self, t: usize, source: PolySource, cx: &mut Context<Self>) -> Div {
-        let sel = format!("poly-source-{source:?}").to_lowercase();
-        div()
-            .size(px(15.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(4.))
-            .text_size(px(10.))
-            .text_color(rgb(SHAPE_COLOR))
-            .bg(rgb(0x1a1a22))
-            .cursor_grab()
-            .debug_selector(move || sel.clone())
-            .child("↗")
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |ws, _, _, cx| {
-                    cx.stop_propagation();
-                    ws.begin_drag(Drag::PolySource { track: t, source }, cx);
-                }),
-            )
+/// A sound's spectrum for the filters' picture: dB at 96 places from 20 Hz to 20 kHz, falling
+/// back gently from what it was.
+fn spectrum_of(scope: &[f32], rate: f64, was: &[f32]) -> Vec<f32> {
+    const PLACES: usize = 96;
+    if scope.len() < 2048 {
+        return vec![-120.0; PLACES];
     }
+    let freqs: Vec<f64> = (0..PLACES)
+        .map(|k| 20.0 * 1000f64.powf(k as f64 / (PLACES - 1) as f64))
+        .collect();
+    let now = pina_engine::dsp::eq::spectrum_db(&scope[scope.len() - 2048..], rate, &freqs);
+    now.iter()
+        .enumerate()
+        .map(|(k, &db)| db.max(was.get(k).copied().unwrap_or(-120.0) - 1.5))
+        .collect()
+}
 
-    fn voice_card(&self, t: usize, p: &Poly, cx: &mut Context<Self>) -> Div {
-        let on = |name: &'static str, now: bool, set: fn(&mut Poly), cx: &mut Context<Self>| {
-            button(name, now)
-                .debug_selector(move || format!("poly-{}", name.to_lowercase()))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        cx.stop_propagation();
-                        ws.edit(cx, |ws| {
-                            if let Some(p) = ws.poly_mut(t) {
-                                set(p);
-                            }
-                        });
-                    }),
-                )
-        };
-        let modes = [
-            ("Off", ArpMode::Off),
-            ("Up", ArpMode::Up),
-            ("Down", ArpMode::Down),
-            ("Up/Down", ArpMode::UpDown),
-            ("Played", ArpMode::Played),
-            ("Random", ArpMode::Random),
-            ("Chord", ArpMode::Chord),
-        ];
-        let mode = p.arp.mode;
-        let arp = self.poly_menu(
-            "poly-arp".into(),
-            format!(
-                "Arp: {}",
-                modes.iter().find(|m| m.1 == mode).map_or("Off", |m| m.0)
-            ),
-            move |_| {
-                modes
-                    .iter()
-                    .map(|&(name, m)| (name.to_string(), MenuAction::Poly(t, PolyOp::ArpMode(m))))
-                    .collect()
-            },
-            false,
-            cx,
+/// The cord from a source to the pointer, sagging as a cable does.
+fn paint_cord(window: &mut gpui::Window, from: gpui::Point<f32>, to: gpui::Point<f32>, hue: u32) {
+    let sag = (to.x - from.x).abs() * 0.2 + 40.0;
+    let mid = ((from.x + to.x) / 2.0, from.y.max(to.y) + sag);
+    let mut p = PathBuilder::stroke(px(2.));
+    for k in 0..=32 {
+        let s = k as f32 / 32.0;
+        let (a, b, c) = ((1.0 - s) * (1.0 - s), 2.0 * s * (1.0 - s), s * s);
+        let at = point(
+            px(a * from.x + b * mid.0 + c * to.x),
+            px(a * from.y + b * mid.1 + c * to.y),
         );
-        let rates = [("1/32", 0.125), ("1/16", 0.25), ("1/8", 0.5), ("1/4", 1.0)];
-        let beats = p.arp.beats;
-        let rate = tray()
-            .p(px(2.))
-            .rounded(px(7.))
-            .children(rates.map(|(name, b)| {
-                seg(name, beats == b, 20.).on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        cx.stop_propagation();
-                        ws.edit(cx, |ws| {
-                            if let Some(p) = ws.poly_mut(t) {
-                                p.arp.beats = b;
-                            }
-                        });
-                    }),
-                )
-            }));
-        panel("Voice", TEXT_3)
-            .flex_1()
-            .child(
-                div()
-                    .flex()
-                    .justify_between()
-                    .child(self.poly_knob(t, POLY_GLIDE, "Glide", 28.0, TEXT_2, cx))
-                    .child(self.poly_knob(t, POLY_DRIFT, "Drift", 28.0, TEXT_2, cx))
-                    .child(self.poly_knob(t, POLY_VELOCITY, "Velocity", 28.0, TEXT_2, cx))
-                    .child(self.poly_knob(t, POLY_MASTER, "Master", 28.0, TEXT_2, cx)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(6.))
-                    .items_center()
-                    .child(on("Mono", p.voicing.mono, |p| p.voicing.mono ^= true, cx))
-                    .child(on(
-                        "Legato",
-                        p.voicing.legato,
-                        |p| p.voicing.legato ^= true,
-                        cx,
-                    ))
-                    .child(div().w(px(120.)).child(arp)),
-            )
-            .child(rate)
+        match k {
+            0 => p.move_to(at),
+            _ => p.line_to(at),
+        }
     }
+    if let Ok(path) = p.build() {
+        window.paint_path(path, rgb(hue));
+    }
+    window.paint_quad(
+        gpui::fill(
+            Bounds::centered_at(point(px(to.x), px(to.y)), gpui::size(px(9.), px(9.))),
+            rgb(hue),
+        )
+        .corner_radii(px(4.5)),
+    );
 }
 
 pub(crate) fn capitalized(s: &str) -> String {
@@ -923,63 +762,31 @@ pub(crate) fn capitalized(s: &str) -> String {
     }
 }
 
-/// A part of the window, its name along the top.
-pub(crate) fn panel(name: &'static str, color: u32) -> Div {
-    div()
-        .p(px(8.))
-        .flex()
-        .flex_col()
-        .gap(px(5.))
-        .rounded(px(9.))
-        .bg(rgb(0x14151a))
-        .border_1()
-        .border_color(rgb(LINE))
-        .child(
-            div()
-                .text_size(px(11.))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(rgb(color))
-                .child(name),
-        )
-}
-
-fn effect_card(name: &'static str, about: &'static str) -> Div {
-    effect_card_owned(name.to_string()).child(
-        div()
-            .text_size(px(11.))
-            .text_color(rgb(TEXT_4))
-            .child(about),
-    )
-}
-
-fn effect_card_owned(name: String) -> Div {
-    div()
-        .w(px(590.))
-        .p(px(12.))
-        .flex()
-        .flex_col()
-        .gap(px(8.))
-        .rounded(px(9.))
-        .bg(rgb(0x14151a))
-        .border_1()
-        .border_color(rgb(LINE))
-        .child(
-            div()
-                .text_size(px(12.5))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(name),
-        )
-}
-
-/// A faint picture's background.
+/// A dark screen a picture is drawn on.
 pub(crate) fn picture() -> Div {
     div()
         .relative()
         .overflow_hidden()
         .rounded(px(6.))
-        .bg(rgb(0x0b0b0e))
-        .border_1()
-        .border_color(rgb(LINE_SOFT))
+        .bg(rgb(WELL))
+}
+
+/// A small grey label.
+pub(crate) fn label(s: impl Into<gpui::SharedString>) -> Div {
+    div()
+        .text_size(px(11.))
+        .text_color(rgb(TEXT_3))
+        .whitespace_nowrap()
+        .child(s.into())
+}
+
+/// A part's title.
+pub(crate) fn title(s: impl Into<gpui::SharedString>) -> Div {
+    div()
+        .text_size(px(13.))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .whitespace_nowrap()
+        .child(s.into())
 }
 
 /// A line through `points` on `b`, x and y each 0 to 1 from the top left.
@@ -1007,31 +814,41 @@ pub(crate) fn polyline(
     }
 }
 
-/// A point to drag on a picture: `id` says which.
-pub(crate) fn point_handle(
-    x: f32,
-    y: f32,
-    color: u32,
-    id: u8,
-    sel: &'static str,
-    cx: &mut Context<Workspace>,
-) -> Div {
-    div()
-        .absolute()
-        .left(px(x - 6.0))
-        .top(px(y - 6.0))
-        .size(px(12.))
-        .rounded(px(6.))
-        .bg(rgb(0x0b0b0e))
-        .border_2()
-        .border_color(rgb(color))
-        .cursor_pointer()
-        .debug_selector(move || sel.into())
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |ws, _, _, cx| {
-                cx.stop_propagation();
-                ws.begin_drag(Drag::PolyPoint { id }, cx);
-            }),
+/// The area between `points` and the level `floor` (0 to 1 down), filled.
+pub(crate) fn filled(
+    window: &mut gpui::Window,
+    b: Bounds<Pixels>,
+    points: &[(f32, f32)],
+    floor: f32,
+    color: gpui::Hsla,
+) {
+    let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
+    let at = |x: f32, y: f32| point(b.origin.x + px(x * w), b.origin.y + px(y * h));
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
+        return;
+    };
+    let mut p = PathBuilder::fill();
+    p.move_to(at(first.0, floor));
+    for &(x, y) in points {
+        p.line_to(at(x, y));
+    }
+    p.line_to(at(last.0, floor));
+    p.close();
+    if let Ok(path) = p.build() {
+        window.paint_path(path, color);
+    }
+}
+
+/// A round handle on a picture, at (x, y) in pixels from `b`'s top left.
+pub(crate) fn handle(window: &mut gpui::Window, b: Bounds<Pixels>, x: f32, y: f32, color: u32) {
+    let c = point(b.origin.x + px(x), b.origin.y + px(y));
+    window.paint_quad(
+        gpui::fill(
+            Bounds::centered_at(c, gpui::size(px(11.), px(11.))),
+            rgb(WELL),
         )
+        .corner_radii(px(5.5))
+        .border_widths(px(2.))
+        .border_color(rgb(color)),
+    );
 }

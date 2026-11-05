@@ -37,8 +37,17 @@ impl Engine {
                 };
                 let _ = link.played.push(played);
             }
+            // Live moves go to the armed lane as its controllers, and back as played.
+            while let Ok(kind) = link.moves.pop() {
+                if armed != usize::MAX && self.moved_len < LIVE_NOTES {
+                    self.moved[self.moved_len] = (armed, kind);
+                    self.moved_len += 1;
+                }
+                let _ = link.heard.push((self.position, kind));
+            }
         }
         let pending = std::mem::take(&mut self.pending_len);
+        let controllers = std::mem::take(&mut self.moved_len);
         let [out_l, out_r] = out;
         out_l[..frames].fill(0.0);
         out_r[..frames].fill(0.0);
@@ -129,6 +138,7 @@ impl Engine {
             armed,
             pads: &pads,
             pending: &self.pending[..pending],
+            controllers: &self.moved[..controllers],
             live: &live[..live_len],
             shared,
         };
@@ -233,6 +243,9 @@ impl Engine {
                     s.eq_tap.write_ext(plan.slot, l, r);
                     s.eq_tap.write_lane(plan.slot, l, r);
                     s.report(plan.slot, peak, reduction);
+                    if s.watches_poly(plan.slot) {
+                        s.write_poly_scope(l, r);
+                    }
                 }
                 if let Some(p) = self.peaks.get_mut(plan.slot) {
                     *p = peak[0].max(peak[1]);
@@ -269,6 +282,9 @@ impl Engine {
                     s.eq_tap.write_ext(plan.slot, l, r);
                     s.eq_tap.write_lane(plan.slot, l, r);
                     s.report(plan.slot, peak, reduction);
+                    if s.watches_poly(plan.slot) {
+                        s.write_poly_scope(l, r);
+                    }
                 }
             }
         }
@@ -393,6 +409,7 @@ struct Turn<'a> {
     armed: usize,
     pads: &'a [usize; 128],
     pending: &'a [(usize, Note)],
+    controllers: &'a [(usize, ControlKind)],
     live: &'a [Note],
     shared: Option<&'a Shared>,
 }
@@ -444,6 +461,7 @@ fn track(
         armed,
         pads,
         pending,
+        controllers,
         live,
         shared,
     } = turn;
@@ -455,6 +473,7 @@ fn track(
     if release {
         lane.held.release(0, |_| false, &mut g.notes, &mut g.n);
         lane.live.release(0, |_| false, &mut g.notes, &mut g.n);
+        lane.midi_fx.stop();
     } else if rechase && lane.cell.is_none() {
         // An edit while playing: what the song still has sounding now rings on.
         let still = |p: u8| sounding(&plan.events, from, p);
@@ -524,10 +543,32 @@ fn track(
             g.n += 1;
         }
     }
+    for (_, kind) in controllers.iter().filter(|c| c.0 == slot) {
+        if g.m < BLOCK_CONTROLS {
+            g.controls[g.m] = Control {
+                offset: 0,
+                kind: *kind,
+            };
+            g.m += 1;
+        }
+    }
     // Notes from the song, a cell's loop and live playing can interleave.
     g.notes[..g.n].sort_by_key(|n| n.offset);
     g.controls[..g.m].sort_by_key(|c| c.offset);
     let (notes, controls) = (&g.notes[..g.n], &g.controls[..g.m]);
+    // Through its MIDI effects, in time with the song while it plays.
+    let (notes, controls) = match plan.midi_fx.is_empty() {
+        true => (notes, controls),
+        false => {
+            let clock = crate::dsp::midi_fx::Clock {
+                beats: playing.then_some(beats),
+                tempo,
+                rate,
+            };
+            lane.midi_fx
+                .run_all(&plan.midi_fx, plan.key, (notes, controls), frames, clock)
+        }
+    };
     // Its modulators, this block: in time with the song while it plays, set off by its
     // notes, hearing the tracks they follow as they were last block.
     let mut moved = Offsets::default();
@@ -603,6 +644,9 @@ fn track(
                 s.begin(p, auto, &moved);
                 s.process(p, [&mut *l, &mut *r], frames, notes, controls);
                 s.outward(p, &mut moved);
+                if let Some(shared) = shared.filter(|sh| sh.watches_poly(slot)) {
+                    shared.write_poly_live(&s.live(p));
+                }
             }
         }
         Source::Plugin(p) => {

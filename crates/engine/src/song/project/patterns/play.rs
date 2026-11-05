@@ -201,6 +201,7 @@ pub fn pattern_played(
                     length: (before + held + legato(gate)).max(1),
                     pitch,
                     velocity: velocity as u8,
+                    ..Default::default()
                 });
                 continue;
             }
@@ -233,6 +234,7 @@ pub fn pattern_played(
                     length: held + legato(gate),
                     pitch,
                     velocity: v,
+                    ..Default::default()
                 });
                 t += sub;
             }

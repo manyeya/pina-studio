@@ -6,6 +6,7 @@
 #[cfg(target_os = "macos")]
 pub mod au;
 pub mod clap;
+mod mpe;
 pub mod picture;
 pub mod platform;
 pub mod scan;
@@ -17,6 +18,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use mpe::MPE_BEND;
 pub use platform::{MainThreadMarker, Window};
 
 use crate::song::project::PluginRef;
@@ -122,6 +124,9 @@ pub trait ProcessorApi: Send {
     }
     /// Whether edits from the main thread are still waiting to be applied.
     fn pending(&self) -> bool;
+    /// For a plugin that takes only MIDI 1.0: each note on a channel of its own, so its
+    /// expression is heard (MPE). Others hear each note's expression anyway.
+    fn set_mpe(&mut self, _on: bool) {}
     /// Runs one block in place: `buf` goes to the main input (if it has one) and comes back
     /// holding the main output; `sidechain`, if given, goes to its sidechain input. Applies the
     /// notes and controls (each sorted by offset) and any edits. Allocation-free.
@@ -290,7 +295,7 @@ pub fn instantiate(
     max_block: usize,
     state: Option<&[u8]>,
 ) -> Result<(Plugin, Processor), String> {
-    match r.format {
+    let (plugin, mut processor) = match r.format {
         Format::Vst3 => vst3::instantiate(&mut libs.vst3, r, rate, max_block, state),
         Format::Clap => clap::instantiate(&mut libs.clap, r, rate, max_block, state),
         Format::Vst2 => vst2::instantiate(&mut libs.vst2, r, rate, max_block, state),
@@ -298,7 +303,9 @@ pub fn instantiate(
         Format::Au => au::instantiate(r, rate, max_block, state),
         #[cfg(not(target_os = "macos"))]
         Format::Au => Err(format!("{}: Audio Units are macOS's", r.class)),
-    }
+    }?;
+    processor.set_mpe(r.mpe);
+    Ok((plugin, processor))
 }
 
 /// An open editor: its window, and what closes the plugin's view. Dropping it closes both.

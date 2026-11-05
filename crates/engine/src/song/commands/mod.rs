@@ -109,6 +109,9 @@ pub enum Command {
         mute: Option<bool>,
         #[serde(default)]
         solo: Option<bool>,
+        /// Its MIDI effects, in order: all of them, in place of what it has.
+        #[serde(default)]
+        midi_fx: Option<Vec<crate::song::project::MidiFxSlot>>,
     },
     SetInstrument {
         track: usize,

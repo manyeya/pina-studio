@@ -86,6 +86,7 @@ impl Vst2Plugin {
             outputs,
             max_block,
             sidechain: n_in >= 4,
+            mpe: crate::plugin::mpe::Mpe::new(false),
         };
         Ok((plugin, processor))
     }

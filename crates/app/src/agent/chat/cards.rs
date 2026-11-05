@@ -243,6 +243,7 @@ fn chords_file(names: &[String]) -> MidiFile {
                 length: bar,
                 pitch: 48 + root % 12 + up,
                 velocity: 90,
+                ..Default::default()
             }
         })
     });

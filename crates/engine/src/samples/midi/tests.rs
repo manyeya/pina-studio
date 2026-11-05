@@ -17,6 +17,7 @@ fn note(start: i64, steps: i64, pitch: u8, velocity: u8) -> Note {
         length: (steps * STEP) as u64,
         pitch,
         velocity,
+        ..Default::default()
     }
 }
 

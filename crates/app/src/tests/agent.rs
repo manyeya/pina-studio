@@ -554,6 +554,7 @@ fn midi_at(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
         length: 200,
         pitch: 60,
         velocity: 100,
+        ..Default::default()
     });
     let file = MidiFile {
         parts: vec![Part {

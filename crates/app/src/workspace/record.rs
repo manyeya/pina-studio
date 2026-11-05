@@ -10,7 +10,7 @@ use std::{
 use gpui::Context;
 use pina_engine::{
     audio::record::AudioRecorder,
-    song::project::{AUDIO_DIR, Content, Note, Region},
+    song::project::{AUDIO_DIR, Content, ControlPoint, ControlValue, Note, Region},
 };
 
 use crate::workspace::Workspace;
@@ -23,6 +23,8 @@ pub enum Recording {
         /// Notes still held: their start and velocity, by pitch.
         held: HashMap<u8, (u64, u8)>,
         notes: Vec<Note>,
+        /// Controller moves and each note's own expression, from where recording began.
+        controls: Vec<ControlPoint>,
     },
     Audio {
         track: u64,
@@ -62,6 +64,7 @@ fn note(start: u64, on: u64, off: u64, pitch: u8, velocity: u8) -> Note {
         length: off.saturating_sub(on).max(1),
         pitch,
         velocity,
+        ..Default::default()
     }
 }
 
@@ -84,12 +87,15 @@ impl Workspace {
         };
         let (id, start) = (track.id, self.playhead());
         self.recording = Some(if track.instrument.is_some() {
-            self.player.played(); // notes from before don't count
+            // Notes and moves from before don't count.
+            self.player.played();
+            self.player.moves();
             Recording::Midi {
                 track: id,
                 start,
                 held: HashMap::new(),
                 notes: Vec::new(),
+                controls: Vec::new(),
             }
         } else {
             let file = take_file(&self.session.dir, &track.name);
@@ -116,14 +122,26 @@ impl Workspace {
     /// are dropped.
     pub fn capture(&mut self, cx: &mut Context<Self>) {
         let played = self.player.played();
+        let moves = self.player.moves();
         let notes: Vec<(u64, u8, u8)> =
             played.iter().map(|p| (p.at, p.pitch, p.velocity)).collect();
         self.steps_input(&notes, cx);
         let project = &self.session.project;
         match &mut self.recording {
             Some(Recording::Midi {
-                start, held, notes, ..
+                start,
+                held,
+                notes,
+                controls,
+                ..
             }) => {
+                for (at, kind) in moves {
+                    let tick = project.ticks(at);
+                    controls.push(ControlPoint {
+                        start: tick as i64 - *start as i64,
+                        kind: ControlValue::of(kind),
+                    });
+                }
                 for p in played {
                     let tick = project.ticks(p.at);
                     if p.velocity > 0 {
@@ -156,6 +174,7 @@ impl Workspace {
                 start,
                 held,
                 mut notes,
+                controls,
             } => {
                 for (pitch, (on, velocity)) in held {
                     notes.push(note(start, on, end, pitch, velocity));
@@ -171,10 +190,7 @@ impl Workspace {
                     .unwrap();
                 let bar = self.session.project.bar();
                 let length = end.saturating_sub(start).max(last).div_ceil(bar).max(1) * bar;
-                let content = Content::Midi {
-                    notes,
-                    controls: Vec::new(),
-                };
+                let content = Content::Midi { notes, controls };
                 (
                     track,
                     Region {

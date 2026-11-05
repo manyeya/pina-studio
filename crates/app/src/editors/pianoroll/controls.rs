@@ -89,6 +89,23 @@ pub(crate) fn more_button(
 impl Workspace {
     /// What's used less, in the bar's More: chord stamps, ghost notes, colour by velocity, fit.
     /// Chords and ghost notes are lists of their own, opened from here.
+    /// The MPE switch for a track's plugin instrument, if it's one that needs it: an Audio Unit
+    /// or VST2 hears each note's expression only with each note on a channel of its own.
+    pub(crate) fn mpe_item(&self, track: usize) -> Option<(String, MenuAction)> {
+        use pina_engine::song::project::{Format, Instrument};
+        let Some(Instrument::Plugin(r)) = &self.session.project.tracks.get(track)?.instrument
+        else {
+            return None;
+        };
+        matches!(r.format, Format::Au | Format::Vst2).then(|| {
+            let tick = if r.mpe { "✓ " } else { "" };
+            (
+                format!("{tick}MPE: a channel per note"),
+                MenuAction::Mpe(track),
+            )
+        })
+    }
+
     pub(crate) fn roll_more(&self, at: Point<Pixels>) -> Vec<(String, MenuAction)> {
         let stamp = self.roll.stamp;
         let chords = match stamp {
@@ -104,12 +121,16 @@ impl Workspace {
             true => "✓ Colour by velocity",
             false => "Colour by velocity",
         };
-        vec![
+        let mpe = self.roll_region().and_then(|at| self.mpe_item(at.0));
+        [
             (format!("{chords} ▸"), MenuAction::More(More::Chords(at))),
             (format!("{ghost} ▸"), MenuAction::More(More::Ghost(at))),
             (velocity.to_string(), MenuAction::More(More::Velocity)),
             ("Fit notes".to_string(), MenuAction::More(More::Fit)),
         ]
+        .into_iter()
+        .chain(mpe)
+        .collect()
     }
 
     /// The chord stamps to write with.

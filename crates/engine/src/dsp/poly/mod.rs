@@ -43,6 +43,9 @@ pub struct PolyPlan {
     moved: Vec<usize>,
     /// What rides the effects on its track.
     outward: Vec<(PolySource, Option<PolySource>, ModTarget, f32)>,
+    /// What its macros move on their own: the same for every voice, so worked out once a block
+    /// and costing nothing while they're down.
+    macros: Vec<(usize, usize, f32)>,
     /// Only what something listens to runs: the envelopes, the LFOs each voice has of its own and
     /// those they all share, and which of the oscillators, sub and noise a warp hears.
     envs: Vec<usize>,
@@ -61,7 +64,17 @@ impl PolyPlan {
         let mut routes = Vec::new();
         let mut outward = Vec::new();
         let mut moved: Vec<usize> = Vec::new();
+        let mut macros = Vec::new();
         for r in p.routes.iter().take(MAX_POLY_ROUTES) {
+            match (r.source, r.by, r.dest) {
+                (PolySource::Macro(m), None, PolyDest::Param(i))
+                    if (i as usize) < PARAM_COUNT && (m as usize) < MACROS =>
+                {
+                    macros.push((macro_param(m as usize), i as usize, r.depth));
+                    continue;
+                }
+                _ => {}
+            }
             match r.dest {
                 PolyDest::Param(i) if (i as usize) < PARAM_COUNT => {
                     routes.push((r.source, r.by, i as usize, r.depth));
@@ -110,6 +123,7 @@ impl PolyPlan {
             routes,
             moved,
             outward,
+            macros,
         }
     }
 }
@@ -358,6 +372,10 @@ struct Voice {
     seed: u32,
     drift: f32,
     drift_cut: f32,
+    /// Its note's own expression: how far it's bent (semitones), pressed and slid (0 to 1).
+    tune: f32,
+    press: f32,
+    slide: f32,
 }
 
 impl Voice {
@@ -388,8 +406,81 @@ impl Voice {
             seed: seed | 1,
             drift: 0.0,
             drift_cut: 0.0,
+            tune: 0.0,
+            press: 0.0,
+            slide: 0.0,
         }
     }
+}
+
+/// What the synth's window watches, in the order `PolySynth::live` gives them.
+pub const LIVE_SOURCES: [PolySource; ENVS + LFOS + 7] = {
+    let mut all = [PolySource::Velocity; ENVS + LFOS + 7];
+    let mut i = 0;
+    while i < ENVS {
+        all[i] = PolySource::Env(i as u8);
+        i += 1;
+    }
+    while i < ENVS + LFOS {
+        all[i] = PolySource::Lfo((i - ENVS) as u8);
+        i += 1;
+    }
+    all[i + 1] = PolySource::Note;
+    all[i + 2] = PolySource::Wheel;
+    all[i + 3] = PolySource::Pressure;
+    all[i + 4] = PolySource::Bend;
+    all[i + 5] = PolySource::Random;
+    all[i + 6] = PolySource::Slide;
+    all
+};
+
+/// How many numbers `PolySynth::live` gives: its sources, then the voices sounding.
+pub const POLY_LIVE: usize = LIVE_SOURCES.len() + 1;
+
+/// A wave as an oscillator plays it, for its picture: `n` points of table `t` at `position`
+/// through its warps. What a warp would hear from another oscillator is drawn as a sine.
+pub fn drawn_wave(
+    t: &Table,
+    position: f32,
+    warps: [Warp; 2],
+    amounts: [f32; 2],
+    osc: usize,
+    n: usize,
+) -> Vec<f32> {
+    let at = position.clamp(0.0, 1.0) * (t.frames - 1) as f32;
+    let first = (at as usize).min(t.frames - 1);
+    let second = (first + 1).min(t.frames - 1);
+    let (a, b, part) = (t.frame(first), t.frame(second), at - first as f32);
+    let plain: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
+    let tone: Vec<f32> = plain.iter().map(|p| (TAU * p).sin()).collect();
+    let silence = vec![0.0; n];
+    let heard = |k: usize| match warp_input(warps[k], osc) {
+        Some(_) => &tone,
+        None => &silence,
+    };
+    let mut bent = plain.clone();
+    for k in 0..2 {
+        let ratio = match warps[k] {
+            Warp::Sync => 1.0 + 15.0 * amounts[k] * amounts[k],
+            _ => 1.0,
+        };
+        warp_phases(warps[k], amounts[k], ratio, heard(k), &mut bent);
+    }
+    let size = a.len() as f32;
+    let mut x: Vec<f32> = bent
+        .iter()
+        .map(|p| {
+            let at = p.clamp(0.0, 0.99999) * size;
+            let (i, f) = (at as usize, at.fract());
+            let j = (i + 1) % a.len();
+            let (u, v) = (a[i] + (a[j] - a[i]) * f, b[i] + (b[j] - b[i]) * f);
+            u + (v - u) * part
+        })
+        .collect();
+    for k in 0..2 {
+        warp_wave(warps[k], amounts[k], &plain, heard(k), &mut x);
+    }
+    x
 }
 
 /// What a voice reads from the synth for a step.
@@ -421,9 +512,11 @@ fn source(s: PolySource, v: &Voice, c: &Shared) -> f32 {
         PolySource::Velocity => v.velocity,
         PolySource::Note => v.note as f32 / 127.0,
         PolySource::Wheel => c.wheel,
-        PolySource::Pressure => c.pressure,
+        // The channel's pressure, or the note's own if it's pressed harder.
+        PolySource::Pressure => c.pressure.max(v.press),
         PolySource::Bend => c.bend,
         PolySource::Random => v.random,
+        PolySource::Slide => v.slide,
     }
 }
 
@@ -567,7 +660,7 @@ impl Voice {
         let v = &self.values;
         let drift = v[POLY_DRIFT];
         let bent = c.bend * s.voicing.bend_semitones;
-        let pitch = self.pitch + bent + self.drift * drift * 0.15;
+        let pitch = self.pitch + bent + self.tune + self.drift * drift * 0.15;
         let hz_of = |st: f32| 440.0 * ((st - 69.0) / 12.0 * LN_2).exp();
         let mut bus: [[Buffer; 2]; 3] = [[[0.0; CHUNK]; 2]; 3];
         // The last is silence, for a warp with nothing earlier to hear.
@@ -1043,23 +1136,54 @@ impl PolySynth {
         self.touched.clear();
         for (i, p) in auto.chain(by.polys()) {
             if i < PARAM_COUNT {
-                let was = if self.touched.contains(&i) {
-                    self.pos[i]
-                } else {
-                    plan.pos[i]
-                };
-                // Automation sets the knob; a modulator's offset comes through negative or small.
-                self.pos[i] = (was + p).clamp(0.0, 1.0);
-                self.vals[i] = POLY_PARAMS[i].scale.value(self.pos[i]);
-                if !self.touched.contains(&i) {
-                    self.touched.push(i);
-                }
+                self.shift(plan, i, p);
+            }
+        }
+        for &(from, i, depth) in &plan.macros {
+            let turned = self.pos[from];
+            if turned != 0.0 {
+                self.shift(plan, i, turned * depth);
             }
         }
         // A voice's copy of what isn't moved within it follows.
         for v in self.voices.iter_mut().filter(|v| v.on) {
             v.values.copy_from_slice(&self.vals);
         }
+    }
+
+    /// Moves a parameter's knob this block.
+    fn shift(&mut self, plan: &PolyPlan, i: usize, by: f32) {
+        let was = if self.touched.contains(&i) {
+            self.pos[i]
+        } else {
+            plan.pos[i]
+        };
+        // Automation sets the knob; a modulator's offset comes through negative or small.
+        self.pos[i] = (was + by).clamp(0.0, 1.0);
+        self.vals[i] = POLY_PARAMS[i].scale.value(self.pos[i]);
+        if !self.touched.contains(&i) {
+            self.touched.push(i);
+        }
+    }
+
+    /// Each source as its newest voice has it now, by `live_slot`, and how many voices sound.
+    pub fn live(&self, plan: &PolyPlan) -> [f32; POLY_LIVE] {
+        let shared = self.shared(plan, self.rate, 0.0);
+        let v = &self.voices[self.newest];
+        let mut out = [0.0; POLY_LIVE];
+        for (k, slot) in out[..POLY_LIVE - 1].iter_mut().enumerate() {
+            let s = LIVE_SOURCES[k];
+            *slot = match (v.on, s) {
+                (false, PolySource::Lfo(_) | PolySource::Wheel | PolySource::Bend) => {
+                    source(s, v, &shared)
+                }
+                (false, PolySource::Pressure) => self.pressure,
+                (false, _) => 0.0,
+                (true, _) => source(s, v, &shared),
+            };
+        }
+        out[POLY_LIVE - 1] = self.voices.iter().filter(|v| v.on).count() as f32;
+        out
     }
 
     /// What the synth's matrix does to the effects on its track, from its newest voice.
@@ -1140,6 +1264,7 @@ impl PolySynth {
         v.on = true;
         v.velocity = velocity;
         v.random = random;
+        (v.tune, v.press, v.slide) = (0.0, 0.0, 0.0);
         v.values.copy_from_slice(vals);
         if !was_on {
             v.amp = 0.0;
@@ -1252,6 +1377,22 @@ impl PolySynth {
             }
             ControlKind::PitchBend(b) => self.bend = b,
             ControlKind::Aftertouch(p) => self.pressure = p,
+            // One note's own: every voice playing it (a unison stack, a glide) follows.
+            ControlKind::PolyPressure { pitch, value } => {
+                for v in self.voices.iter_mut().filter(|v| v.on && v.note == pitch) {
+                    v.press = value;
+                }
+            }
+            ControlKind::Expression { pitch, kind, value } => {
+                for v in self.voices.iter_mut().filter(|v| v.on && v.note == pitch) {
+                    match kind {
+                        ExpressionKind::Tuning => v.tune = value,
+                        ExpressionKind::Brightness => v.slide = value,
+                        ExpressionKind::Expression => v.press = value,
+                        _ => {}
+                    }
+                }
+            }
             _ => {}
         }
     }

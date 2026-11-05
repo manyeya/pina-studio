@@ -140,6 +140,8 @@ pub struct Lane {
     /// those played live (a MIDI keyboard, a key clicked in the piano roll).
     pub(crate) held: Held,
     pub(crate) live: Held,
+    /// Its MIDI effects' memories: what they hold and have waiting.
+    pub(crate) midi_fx: Box<crate::dsp::midi_fx::MidiFxRunner>,
     /// Delay compensation: before a track's sends, and after them (or after an aux's inserts).
     pub(crate) pre: Delay,
     pub(crate) post: Delay,
@@ -281,6 +283,7 @@ pub fn make_lane(
         inserts: processors,
         held: Held::new(),
         live: Held::new(),
+        midi_fx: Box::default(),
         pre: Delay::new(),
         post: Delay::new(),
         cell: None,

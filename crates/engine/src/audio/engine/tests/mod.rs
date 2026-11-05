@@ -36,6 +36,7 @@ fn note(start: i64, length: u64, pitch: u8) -> MidiNote {
         length,
         pitch,
         velocity: 127,
+        ..Default::default()
     }
 }
 

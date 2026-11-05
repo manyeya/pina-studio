@@ -616,9 +616,19 @@ fn a_full_mixer_strip_still_takes_another_plugin(cx: &mut TestAppContext) {
         ws.show_channel(Channel::Track(0), cx);
     });
     cx.run_until_parked();
-    // Seven effects, more than a mixer strip shows: the slot for another is still there.
-    assert!(cx.debug_bounds("strip-more-Track(0)").is_some());
-    assert!(cx.debug_bounds("slot-Track(0)-Insert(4)").is_some());
+    // Seven effects, more than the mixer used to show: its rows grow, every one in sight and the
+    // slot for another after them.
+    let slot = |cx: &mut VisualTestContext, s: &'static str| cx.debug_bounds(s).unwrap();
+    let last = slot(cx, "slot-Track(0)-Insert(3)");
+    let add = slot(cx, "slot-Track(0)-Insert(4)");
+    assert!(add.origin.y > last.origin.y);
+    let strip = cx
+        .debug_bounds("strip-effects-Track(0)")
+        .map(|b| b.bottom());
+    assert!(
+        strip.is_none_or(|bottom| add.bottom() <= bottom + px(1.)),
+        "it shows"
+    );
 }
 
 #[gpui::test]
@@ -1303,4 +1313,220 @@ fn every_built_in_is_in_the_automation_list_and_plays_it(cx: &mut TestAppContext
         assert_eq!(ws.target_param(cutoff), Some((0, Param::Voice(knob))));
         assert_eq!(ws.param_name(0, Param::Voice(knob)), "Cutoff");
     });
+}
+
+#[gpui::test]
+fn every_built_in_stacks_on_one_strip_as_many_times_as_asked(cx: &mut TestAppContext) {
+    use crate::{
+        mix::strip::{Builtin, Channel},
+        ui::menu::MenuAction,
+    };
+    use pina_engine::song::project::Fx;
+    let (ws, cx) = open(cx);
+    let kinds = [
+        Builtin::Eq,
+        Builtin::Comp,
+        Builtin::Sat,
+        Builtin::Limit,
+        Builtin::Tool(Fx::Reverb),
+        Builtin::Tool(Fx::Delay),
+        Builtin::Tool(Fx::Filter),
+        Builtin::Tool(Fx::Motion),
+        Builtin::Tool(Fx::Shaper),
+        Builtin::Tool(Fx::Gate),
+        Builtin::Tool(Fx::DeEsser),
+        Builtin::Tool(Fx::Stereo),
+        Builtin::Tool(Fx::Multiband),
+        Builtin::Tool(Fx::Pitch),
+        Builtin::Tool(Fx::TapeStop),
+        Builtin::Tool(Fx::Tune),
+    ];
+    for b in kinds {
+        let before = ws.read_with(cx, |ws, _| ws.more(Channel::Track(0)).len());
+        for _ in 0..4 {
+            let add = MenuAction::AddBuiltin {
+                channel: Channel::Track(0),
+                builtin: b,
+            };
+            ws.update(cx, |ws, cx| {
+                ws.fx_view = None;
+                ws.eq_view = None;
+                ws.choose(add, cx);
+            });
+            cx.run_until_parked();
+        }
+        let (after, status, named) = ws.read_with(cx, |ws, _| {
+            let ch = Channel::Track(0);
+            let n = ws.more(ch).len();
+            let named = (0..n).all(|k| ws.stacked(ch, k).is_some());
+            (n, ws.status.clone(), named)
+        });
+        // The first EQ, compressor, saturator and limiter are the channel's own.
+        let own = matches!(
+            b,
+            Builtin::Eq | Builtin::Comp | Builtin::Sat | Builtin::Limit
+        );
+        let want = if own { 3 } else { 4 };
+        assert_eq!(after - before, want, "{}: {status:?}", b.name());
+        assert!(named, "{}", b.name());
+    }
+}
+
+#[gpui::test]
+fn a_strips_picker_puts_on_another_of_an_effect_it_has(cx: &mut TestAppContext) {
+    use crate::mix::strip::{Builtin, Channel};
+    use pina_engine::song::project::Fx;
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, _| {
+        ws.session.project.add_aux();
+    });
+    cx.simulate_keystrokes("x");
+    let kinds = [
+        Builtin::Eq,
+        Builtin::Comp,
+        Builtin::Sat,
+        Builtin::Limit,
+        Builtin::Tool(Fx::Reverb),
+        Builtin::Tool(Fx::Delay),
+        Builtin::Tool(Fx::Filter),
+        Builtin::Tool(Fx::Motion),
+        Builtin::Tool(Fx::Shaper),
+        Builtin::Tool(Fx::Gate),
+        Builtin::Tool(Fx::DeEsser),
+        Builtin::Tool(Fx::Stereo),
+        Builtin::Tool(Fx::Multiband),
+        Builtin::Tool(Fx::Pitch),
+        Builtin::Tool(Fx::TapeStop),
+        Builtin::Tool(Fx::Tune),
+    ];
+    // How many of a kind a channel runs: its own, and those stacked past it.
+    let count = |ws: &Workspace, ch: Channel, b: Builtin| {
+        let own = match b {
+            Builtin::Eq => ws.strip_dsp(ch).0.is_some(),
+            Builtin::Comp => ws.strip_dsp(ch).1.is_some(),
+            Builtin::Sat => ws.sat(ch).is_some(),
+            Builtin::Limit => ws.limiter(ch).is_some(),
+            Builtin::Tool(_) => false,
+        };
+        let stacked = (0..ws.more(ch).len())
+            .filter(|&k| ws.stacked(ch, k).map(|s| s.0) == Some(b))
+            .count();
+        own as usize + stacked
+    };
+    for ch in [Channel::Track(0), Channel::Aux(0), Channel::Master] {
+        for b in kinds {
+            let was = ws.read_with(cx, |ws, _| count(ws, ch, b));
+            // Twice, from the strip's empty slot: the picker, the name typed, the one found clicked.
+            for _ in 0..2 {
+                let n = ws.read_with(cx, |ws, _| ws.inserts(ch).len());
+                let slot: &'static str =
+                    Box::leak(format!("slot-{ch:?}-Insert({n})").into_boxed_str());
+                click_on(cx, slot, Modifiers::none(), MouseButton::Left);
+                assert!(ws.read_with(cx, |ws, _| ws.plugin_page.mini.is_some()));
+                cx.simulate_input(b.name());
+                cx.run_until_parked();
+                click_on(cx, "mini-0", Modifiers::none(), MouseButton::Left);
+                for close in ["fx-close", "eq-close"] {
+                    if cx.debug_bounds(close).is_some() {
+                        click_on(cx, close, Modifiers::none(), MouseButton::Left);
+                    }
+                }
+            }
+            let now = ws.read_with(cx, |ws, _| count(ws, ch, b));
+            assert_eq!(now, was + 2, "{} on {ch:?}", b.name());
+            cx.simulate_keystrokes("cmd-z cmd-z");
+            cx.run_until_parked();
+            assert_eq!(ws.read_with(cx, |ws, _| count(ws, ch, b)), was);
+        }
+    }
+}
+
+#[gpui::test]
+fn the_built_in_effects_windows_are_made_bigger_by_their_corner(cx: &mut TestAppContext) {
+    use crate::{
+        mix::strip::{Builtin, Channel},
+        ui::menu::MenuAction,
+    };
+    use pina_engine::song::project::Fx;
+    let (ws, cx) = open(cx);
+    for b in [
+        Builtin::Comp,
+        Builtin::Sat,
+        Builtin::Limit,
+        Builtin::Tool(Fx::Reverb),
+        Builtin::Tool(Fx::Delay),
+        Builtin::Tool(Fx::Gate),
+    ] {
+        ws.update(cx, |ws, cx| {
+            ws.fx_view = None;
+            ws.choose(
+                MenuAction::AddBuiltin {
+                    channel: Channel::Track(0),
+                    builtin: b,
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        let size =
+            |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.fx_view.as_ref().unwrap().size);
+        let was = size(cx);
+        let grip = cx
+            .debug_bounds("fx-resize")
+            .expect("its corner is there")
+            .center();
+        drag(cx, grip, grip + point(px(60.), px(40.)));
+        let now = size(cx);
+        assert!(
+            now.0 > was.0 && now.1 > was.1,
+            "{}: {was:?} {now:?}",
+            b.name()
+        );
+        let window = cx.debug_bounds("fx-resize").unwrap();
+        assert!(
+            (f32::from(window.center().x) - f32::from(grip.x) - 60.0).abs() < 2.0,
+            "it's drawn that size"
+        );
+        // Never smaller than it opens.
+        let grip = window.center();
+        drag(cx, grip, grip - point(px(600.), px(600.)));
+        assert_eq!(size(cx), was, "{}", b.name());
+    }
+}
+
+#[gpui::test]
+fn a_tracks_midi_fx_are_added_set_ordered_bypassed_and_taken_out(cx: &mut TestAppContext) {
+    use pina_engine::song::project::MidiFx;
+    let (ws, cx) = open(cx);
+    cx.simulate_keystrokes("x");
+    cx.run_until_parked();
+    let list = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[0].midi_fx.clone())
+    };
+    let click = |cx: &mut VisualTestContext, name: &str| {
+        let name: &'static str = Box::leak(name.to_string().into_boxed_str());
+        click_on(cx, name, Modifiers::none(), MouseButton::Left);
+    };
+    click(cx, "midi-fx-slot-0");
+    assert!(ws.read_with(cx, |ws, _| ws.midi_fx_view.is_some()));
+    click(cx, "midi-fx-add-Arpeggiator");
+    click(cx, "midi-fx-0-Rate-1/8");
+    click(cx, "midi-fx-0-Order-Up & down");
+    let arp = list(cx)[0].fx;
+    assert!(
+        matches!(arp, MidiFx::Arpeggiator { rate, order: pina_engine::song::project::ArpOrder::UpDown, .. } if rate == 0.5),
+        "{arp:?}"
+    );
+    click(cx, "midi-fx-add-Transposer");
+    click(cx, "midi-fx-1-Semitones-+");
+    assert_eq!(list(cx)[1].fx, MidiFx::Transposer { semitones: 13 });
+    // Moved first, bypassed; the arpeggiator taken out.
+    click(cx, "midi-fx-1-↑");
+    assert_eq!(list(cx)[0].fx.name(), "Transposer");
+    click(cx, "midi-fx-0-on");
+    assert!(list(cx)[0].bypass);
+    click(cx, "midi-fx-1-×");
+    assert_eq!(list(cx).len(), 1);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(list(cx).len(), 2);
 }

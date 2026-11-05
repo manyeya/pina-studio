@@ -60,6 +60,8 @@ pub struct Settings {
     pub carry_automation: bool,
     /// The output it plays through, and that output's buffer.
     pub audio: AudioSetup,
+    /// The synth's sounds liked, by name.
+    pub liked_sounds: Vec<String>,
 }
 
 impl Default for Settings {
@@ -89,6 +91,7 @@ impl Default for Settings {
             write_to_latch: true,
             carry_automation: false,
             audio: AudioSetup::default(),
+            liked_sounds: Vec::new(),
         }
     }
 }

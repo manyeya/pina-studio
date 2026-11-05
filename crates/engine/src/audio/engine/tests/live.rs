@@ -15,6 +15,8 @@ fn the_live_engine_follows_its_messages() {
         shared: shared.clone(),
         live: live_rx,
         played: played_tx,
+        moves: rtrb::RingBuffer::new(16).1,
+        heard: rtrb::RingBuffer::new(16).0,
     };
     let mut engine = Engine::live(RATE, link);
     let p = project(vec![synth_track("a", vec![note(0, PPQ * 8, 69)], PPQ * 8)]);
@@ -119,6 +121,8 @@ fn an_audition_plays_over_the_mix_and_lets_go_at_its_end() {
         shared: Arc::new(Shared::new()),
         live: live_rx,
         played: played_tx,
+        moves: rtrb::RingBuffer::new(16).1,
+        heard: rtrb::RingBuffer::new(16).0,
     };
     let mut engine = Engine::live(RATE, link);
     // A thousand samples of 0.5, an octave up: five hundred samples of it, stopped or not.
@@ -145,6 +149,8 @@ fn an_audition_starts_where_its_asked_to() {
         shared: Arc::new(Shared::new()),
         live: live_rx,
         played: played_tx,
+        moves: rtrb::RingBuffer::new(16).1,
+        heard: rtrb::RingBuffer::new(16).0,
     };
     let mut engine = Engine::live(RATE, link);
     // Silence, then a step: from half a second in, it's heard at once.
@@ -173,6 +179,8 @@ fn the_metronome_clicks_on_the_beat_while_playing() {
         shared: shared.clone(),
         live: live_rx,
         played: played_tx,
+        moves: rtrb::RingBuffer::new(16).1,
+        heard: rtrb::RingBuffer::new(16).0,
     };
     let mut engine = Engine::live(RATE, link);
     assert!(tx.push(Msg::Play).is_ok());
@@ -201,6 +209,8 @@ fn stacked_built_ins_get_their_running_state_by_message() {
         shared: shared.clone(),
         live: live_rx,
         played: played_tx,
+        moves: rtrb::RingBuffer::new(16).1,
+        heard: rtrb::RingBuffer::new(16).0,
     };
     let mut engine = Engine::live(RATE, link);
     let mut p = project(vec![synth_track("a", vec![note(0, PPQ * 8, 69)], PPQ * 8)]);
@@ -251,4 +261,76 @@ fn stacked_built_ins_get_their_running_state_by_message() {
         back += matches!(g, Garbage::Strips(_)) as usize;
     }
     assert_eq!(back, 2);
+}
+
+#[test]
+fn the_synth_window_hears_its_synth_and_moves_its_wheels() {
+    use crate::dsp::poly::{LIVE_SOURCES, POLY_LIVE};
+    use crate::song::project::{Instrument, PolySource, poly_patch};
+    use std::sync::atomic::Ordering;
+    let (mut tx, rx) = rtrb::RingBuffer::new(16);
+    let (gtx, _garbage) = rtrb::RingBuffer::new(16);
+    let (_live, live_rx) = rtrb::RingBuffer::new(16);
+    let (played_tx, _played) = rtrb::RingBuffer::new(16);
+    let shared = Arc::new(Shared::new());
+    let link = Link {
+        rx,
+        garbage: gtx,
+        shared: shared.clone(),
+        live: live_rx,
+        played: played_tx,
+        moves: rtrb::RingBuffer::new(16).1,
+        heard: rtrb::RingBuffer::new(16).0,
+    };
+    let mut engine = Engine::live(RATE, link);
+    let mut p = project(vec![synth_track("a", vec![], PPQ * 8)]);
+    p.tracks[0].instrument = poly_patch("Wobble").map(|s| Instrument::Poly(Box::new(s)));
+    let (lane, _, _) = make_lane(
+        p.tracks[0].instrument.as_ref(),
+        &[],
+        &mut Vec::new(),
+        RATE,
+        &mut Modules::new(),
+        Path::new("."),
+    )
+    .unwrap();
+    let mut files = AudioFiles::new(Path::new("."), RATE);
+    let (arrangement, _) = compile(&p, RATE, &[(3, 0)], &[], None, &mut files);
+    for m in [
+        Msg::Insert(3, Box::new(lane)),
+        Msg::Arrange(Box::new(arrangement)),
+        Msg::Note {
+            slot: 3,
+            pitch: 48,
+            velocity: 100,
+        },
+        Msg::Control {
+            slot: 3,
+            kind: crate::plugin::ControlKind::Cc {
+                number: 1,
+                value: 0.5,
+            },
+        },
+    ] {
+        assert!(tx.push(m).is_ok());
+    }
+    // Watched, it says where its sources are and keeps what it played.
+    shared.poly_slot.store(3, Ordering::Relaxed);
+    let [l, _] = run(&mut engine, MAX_BLOCK * 4);
+    assert!(peak(&l) > 0.0);
+    let live: Vec<f32> = shared
+        .poly_live
+        .iter()
+        .map(|v| f32::from_bits(v.load(Ordering::Relaxed)))
+        .collect();
+    let at = |s: PolySource| live[LIVE_SOURCES.iter().position(|x| *x == s).unwrap()];
+    assert_eq!(at(PolySource::Wheel), 0.5, "the wheel reached it");
+    assert!(at(PolySource::Env(0)) > 0.0, "{live:?}");
+    assert_eq!(live[POLY_LIVE - 1], 1.0, "one voice");
+    let wrote = shared.poly_written.load(Ordering::Relaxed);
+    assert!(wrote >= MAX_BLOCK * 3, "{wrote}");
+    // Not watched, it keeps nothing.
+    shared.poly_slot.store(usize::MAX, Ordering::Relaxed);
+    run(&mut engine, MAX_BLOCK);
+    assert_eq!(shared.poly_written.load(Ordering::Relaxed), wrote);
 }

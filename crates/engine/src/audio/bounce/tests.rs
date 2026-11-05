@@ -17,6 +17,7 @@ fn song() -> Project {
                         length: PPQ * 2,
                         pitch,
                         velocity: 100,
+                        ..Default::default()
                     }],
                     controls: Vec::new(),
                 },

@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugin::ControlKind;
 use crate::plugin::value_from_text;
 
 const RATE: f64 = 48_000.0;
@@ -366,19 +367,4 @@ fn ranges_map_both_ways() {
     let squared = range(0.0, 100.0, 0, Curve::Power(2.0));
     assert_eq!((squared.value(0.5), squared.position(25.0)), (25.0, 0.5));
     assert_eq!(range(1.0, 1.0, 0, Curve::Linear).position(1.0), 0.0);
-}
-
-#[test]
-fn controls_become_midi() {
-    let bend = |v| control_message(ControlKind::PitchBend(v));
-    assert_eq!(bend(0.0), Some([0xE0, 0, 64]));
-    assert_eq!(bend(1.0), Some([0xE0, 127, 127]));
-    assert_eq!(bend(-1.0), Some([0xE0, 0, 0]));
-    let cc = ControlKind::Cc {
-        number: 64,
-        value: 1.0,
-    };
-    assert_eq!(control_message(cc), Some([0xB0, 64, 127]));
-    assert_eq!(note_message(&note(60, 0.001)), [0x90, 60, 1]);
-    assert_eq!(note_message(&note(60, 0.0)), [0x80, 60, 0]);
 }

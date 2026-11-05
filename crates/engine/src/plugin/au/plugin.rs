@@ -137,6 +137,7 @@ impl AuPlugin {
             in_channels,
             time,
             midi: kind == kAudioUnitType_MusicDevice || kind == kAudioUnitType_MusicEffect,
+            mpe: crate::plugin::mpe::Mpe::new(false),
             latency: (seconds.max(0.0) * rate).round() as u32,
             sidechain,
             ranges,

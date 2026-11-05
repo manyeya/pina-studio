@@ -99,6 +99,9 @@ pub struct Engine {
     /// Notes asked for by `Msg::Note`, for the next block.
     pending: [(usize, Note); LIVE_NOTES],
     pending_len: usize,
+    /// Controllers moved by `Msg::Control`, for the next block.
+    moved: [(usize, ControlKind); LIVE_NOTES],
+    moved_len: usize,
     master_strip: Box<Strip>,
     /// The metronome's click sounding: samples left, and its pitch.
     click: (u32, f32),
@@ -129,6 +132,8 @@ impl Engine {
             link: None,
             pending: [(0, Note::default()); LIVE_NOTES],
             pending_len: 0,
+            moved: [(0, ControlKind::Aftertouch(0.0)); LIVE_NOTES],
+            moved_len: 0,
             master_strip: Box::new(Strip::new(rate)),
             click: (0, 0.0),
             next_read: 0,
@@ -358,6 +363,19 @@ impl Engine {
                             },
                         );
                         self.pending_len += 1;
+                    }
+                }
+                Msg::Mpe { slot, on } => {
+                    if let Some(Some(lane)) = self.lanes.get_mut(slot)
+                        && let Source::Plugin(p) = &mut lane.source
+                    {
+                        p.set_mpe(on);
+                    }
+                }
+                Msg::Control { slot, kind } => {
+                    if self.moved_len < LIVE_NOTES {
+                        self.moved[self.moved_len] = (slot, kind);
+                        self.moved_len += 1;
                     }
                 }
             }

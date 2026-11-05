@@ -277,6 +277,7 @@ fn an_old_pattern_plays_as_it_did_and_midi_becomes_a_pattern() {
         length,
         pitch,
         velocity,
+        ..Default::default()
     };
     let rows = to_pattern(
         &[

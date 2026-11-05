@@ -69,8 +69,19 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             distance,
             mute,
             solo,
+            midi_fx,
         } => {
             let t = track(p, t)?;
+            if let Some(v) = midi_fx {
+                if v.len() > crate::dsp::midi_fx::MAX_MIDI_FX {
+                    return Err(format!(
+                        "midi_fx: {} is more than a track runs ({})",
+                        v.len(),
+                        crate::dsp::midi_fx::MAX_MIDI_FX
+                    ));
+                }
+                t.midi_fx = v;
+            }
             if let Some(v) = pan_mode {
                 t.pan_mode = v;
             }

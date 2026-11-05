@@ -15,10 +15,14 @@ mod body;
 mod controls;
 mod mouse;
 mod ops;
+mod panel;
 mod view;
+mod write;
 
 pub(crate) use controls::*;
 pub(crate) use mouse::*;
+pub use panel::{NoteField, Panel};
+pub use write::Writing;
 
 use gpui::{
     App, Bounds, Context, Div, FontWeight, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
@@ -38,10 +42,13 @@ use crate::{
 
 /// The height of one pitch, as it opens.
 pub const KEY_H: f32 = 12.0;
+/// How far a note's own bend shows either way in its lane, in semitones (it goes to 48).
+pub const PITCH_SHOWN: f32 = 12.0;
 /// The lane under the notes, and how tall a full velocity (or controller) stands in it.
 pub const VELOCITY_LANE: f32 = 78.0;
 pub const VELOCITY_H: f32 = 60.0;
-const ROLL_RULER: f32 = 20.0;
+/// The ruler: bar numbers, and under them the chords the notes play.
+const ROLL_RULER: f32 = 36.0;
 const KEYS_W: f32 = 56.0;
 
 /// The scroll that puts `pitch` near the top, at the opening row height.
@@ -169,6 +176,12 @@ impl Stamp {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Lane {
     Velocity,
+    /// How likely each note is to play.
+    Chance,
+    /// Each note's own bend, slide and pressure (MPE).
+    Pitch,
+    Slide,
+    Press,
     Mod,
     Bend,
     Expression,
@@ -176,8 +189,12 @@ pub enum Lane {
 }
 
 impl Lane {
-    pub const ALL: [Lane; 5] = [
+    pub const ALL: [Lane; 9] = [
         Lane::Velocity,
+        Lane::Chance,
+        Lane::Pitch,
+        Lane::Slide,
+        Lane::Press,
         Lane::Mod,
         Lane::Bend,
         Lane::Expression,
@@ -187,6 +204,10 @@ impl Lane {
     pub fn short(self) -> &'static str {
         match self {
             Lane::Velocity => "Vel",
+            Lane::Chance => "Chance",
+            Lane::Pitch => "Pitch",
+            Lane::Slide => "Slide",
+            Lane::Press => "Press",
             Lane::Mod => "Mod",
             Lane::Bend => "Bend",
             Lane::Expression => "Expr",
@@ -197,10 +218,87 @@ impl Lane {
     pub fn name(self) -> &'static str {
         match self {
             Lane::Velocity => "Velocity",
+            Lane::Chance => "Chance",
+            Lane::Pitch => "Note pitch",
+            Lane::Slide => "Note slide",
+            Lane::Press => "Note pressure",
             Lane::Mod => "Mod wheel",
             Lane::Bend => "Pitch bend",
             Lane::Expression => "Expression",
             Lane::Sustain => "Sustain",
+        }
+    }
+
+    /// Whether it shows each note's own value (else a controller's moves).
+    pub fn per_note(self) -> bool {
+        matches!(self, Lane::Velocity | Lane::Chance)
+    }
+
+    /// Whether it draws each note's own expression (MPE).
+    pub fn expression(self) -> bool {
+        matches!(self, Lane::Pitch | Lane::Slide | Lane::Press)
+    }
+
+    /// Whether an expression move is this lane's, for the note at `pitch`.
+    fn note_holds(self, v: &ControlValue, pitch: u8) -> bool {
+        use pina_engine::song::project::ExpressionKind as K;
+        match (self, v) {
+            (
+                Lane::Pitch,
+                ControlValue::Expression {
+                    pitch: p,
+                    kind: K::Tuning,
+                    ..
+                },
+            )
+            | (
+                Lane::Slide,
+                ControlValue::Expression {
+                    pitch: p,
+                    kind: K::Brightness,
+                    ..
+                },
+            )
+            | (Lane::Press, ControlValue::PolyPressure { pitch: p, .. }) => *p == pitch,
+            _ => false,
+        }
+    }
+
+    /// The move a height makes for the note at `pitch`: a bend across `PITCH_SHOWN` either way
+    /// (none near the middle), a slide or a pressure.
+    fn note_make(self, pitch: u8, level: f32) -> ControlValue {
+        use pina_engine::song::project::ExpressionKind as K;
+        let level = level.clamp(0.0, 1.0);
+        match self {
+            Lane::Pitch => {
+                let st = (level * 2.0 - 1.0) * PITCH_SHOWN;
+                ControlValue::Expression {
+                    pitch,
+                    kind: K::Tuning,
+                    value: if st.abs() < 0.25 { 0.0 } else { st },
+                }
+            }
+            Lane::Slide => ControlValue::Expression {
+                pitch,
+                kind: K::Brightness,
+                value: level,
+            },
+            _ => ControlValue::PolyPressure {
+                pitch,
+                value: (level * 127.0).round() as u8,
+            },
+        }
+    }
+
+    /// An expression move's height in the lane, 0 to 1.
+    pub(crate) fn note_level(self, v: &ControlValue) -> f32 {
+        match v {
+            ControlValue::Expression { value, .. } if self == Lane::Pitch => {
+                (value / PITCH_SHOWN + 1.0) / 2.0
+            }
+            ControlValue::Expression { value, .. } => *value,
+            ControlValue::PolyPressure { value, .. } => *value as f32 / 127.0,
+            _ => 0.0,
         }
     }
 
@@ -280,7 +378,13 @@ pub enum RollOp {
     SelectAll,
     /// Every note of a pitch.
     SelectPitch(u8),
+    /// Of each chord, its top note (or its bottom one).
+    SelectVoice(bool),
+    /// The notes not picked, instead of those that are.
+    Invert,
     Deselect,
+    /// Mutes the picked notes, or unmutes them if they all are.
+    Mute,
     Copy,
     Cut,
     Paste,

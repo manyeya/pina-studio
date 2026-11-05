@@ -133,8 +133,25 @@ impl Layout {
     }
 }
 
-/// Mixer strips line up: this many effect and send rows each.
+/// Mixer strips line up: this many effect and send rows each, at least.
 pub const MIXER_INSERTS: usize = 6;
+/// The most effect rows the mixer grows to; a strip with more scrolls them.
+pub const MIXER_MOST_INSERTS: usize = 12;
+
+/// How many effect rows the mixer's strips show: room for the busiest channel's effects and the
+/// slot to add another, so nothing added hides; at least `MIXER_INSERTS`, at most
+/// `MIXER_MOST_INSERTS`.
+pub fn mixer_inserts(ws: &Workspace) -> usize {
+    let p = &ws.session.project;
+    (0..p.tracks.len())
+        .map(Channel::Track)
+        .chain((0..p.auxes.len()).map(Channel::Aux))
+        .chain([Channel::Master])
+        .map(|ch| rows(ws, ch).0)
+        .max()
+        .unwrap_or(0)
+        .clamp(MIXER_INSERTS, MIXER_MOST_INSERTS)
+}
 pub const MIXER_SENDS: usize = 2;
 /// How wide a mixer strip is: room for an effect's name.
 pub const MIXER_STRIP_W: f32 = 124.0;

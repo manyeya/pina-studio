@@ -270,6 +270,41 @@ pub struct Note {
     pub length: u64,
     pub pitch: u8,
     pub velocity: u8,
+    /// How likely it is to play each time it comes round, in percent: at 100 it always does.
+    #[serde(default = "always", skip_serializing_if = "is_always")]
+    pub chance: u8,
+    /// How far its velocity may land from `velocity`, either way, each time it plays.
+    #[serde(default, skip_serializing_if = "is_none_u8")]
+    pub spread: u8,
+    /// Kept, and drawn, but not played.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
+}
+
+impl Default for Note {
+    fn default() -> Self {
+        Note {
+            start: 0,
+            length: 0,
+            pitch: 60,
+            velocity: 100,
+            chance: 100,
+            spread: 0,
+            muted: false,
+        }
+    }
+}
+
+fn always() -> u8 {
+    100
+}
+
+fn is_always(v: &u8) -> bool {
+    *v >= 100
+}
+
+fn is_none_u8(v: &u8) -> bool {
+    *v == 0
 }
 
 /// A move of a MIDI controller, pitch bend or pressure, or of one note's expression, at `start`
@@ -301,6 +336,29 @@ pub enum ControlValue {
         kind: ExpressionKind,
         value: f32,
     },
+}
+
+impl ControlValue {
+    /// A move as played live, as a song keeps it.
+    pub fn of(kind: crate::plugin::ControlKind) -> ControlValue {
+        use crate::plugin::ControlKind as K;
+        let seven = |v: f32| (v.clamp(0.0, 1.0) * 127.0).round() as u8;
+        match kind {
+            K::Cc { number, value } => ControlValue::Cc {
+                number,
+                value: seven(value),
+            },
+            K::PitchBend(v) => ControlValue::PitchBend {
+                value: (v * 8192.0).round().clamp(-8192.0, 8191.0) as i16,
+            },
+            K::Aftertouch(v) => ControlValue::Aftertouch { value: seven(v) },
+            K::PolyPressure { pitch, value } => ControlValue::PolyPressure {
+                pitch,
+                value: seven(value),
+            },
+            K::Expression { pitch, kind, value } => ControlValue::Expression { pitch, kind, value },
+        }
+    }
 }
 
 /// The moves from `from` to `to`, led by each controller's value as it stands at `from` (its

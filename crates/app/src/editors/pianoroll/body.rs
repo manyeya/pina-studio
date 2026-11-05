@@ -85,6 +85,16 @@ impl Workspace {
                     };
                     quad(window, 0.0, y + kh - 1.0, w, 1.0, rgb(line).into());
                 }
+                let bar_px = ppt * bar_ticks as f32;
+                if bar_px > 0.0 {
+                    let h = f32::from(b.size.height);
+                    for bar in (sx / bar_px) as u64..=((sx + w) / bar_px) as u64 + 1 {
+                        if bar % 2 == 1 {
+                            let x = bar as f32 * bar_px - sx;
+                            quad(window, x, 0.0, bar_px, h, alpha(0xffffff, 0.014));
+                        }
+                    }
+                }
                 let sixteenth = ppt * (PPQ / 4) as f32;
                 let fine = sixteenth >= 6.0;
                 let step = if fine { PPQ / 4 } else { beat_ticks };
@@ -172,6 +182,11 @@ impl Workspace {
         let lane = self.roll.lane;
         let mut curve: Vec<(f32, f32)> = Vec::new();
         let mut curve_now = None;
+        // Each note's own expression: its curve in the lane, and its bend over it in the grid
+        // (from x, to x, its row's middle, its moves as x and height).
+        type Own = (f32, f32, f32, Vec<(f32, f32)>);
+        let mut owns: Vec<(Own, u32)> = Vec::new();
+        let mut glides: Vec<Own> = Vec::new();
         if let (Some(at), Some((start, end))) = (at, span) {
             let Content::Midi {
                 notes: list,
@@ -195,8 +210,10 @@ impl Workspace {
                     0.92
                 } else {
                     0.55 + 0.45 * n.velocity as f32 / 127.0
-                };
+                } * (0.4 + 0.6 * n.chance.min(100) as f32 / 100.0);
                 let label = w >= 26.0 && kh >= 10.0;
+                let odds =
+                    (n.chance < 100 && w >= 46.0 && kh >= 10.0).then(|| format!("{}%", n.chance));
                 notes.push(
                     div()
                         .absolute()
@@ -207,17 +224,20 @@ impl Workspace {
                         .pl(px(5.))
                         .rounded(px(3.))
                         .overflow_hidden()
-                        .bg(if picked {
-                            Hsla::from(rgb(tint(ink, 0.55)))
-                        } else {
-                            alpha(ink, strength)
+                        .bg(match (picked, n.muted) {
+                            (_, true) => alpha(ink, 0.08),
+                            (true, _) => Hsla::from(rgb(tint(ink, 0.55))),
+                            _ => alpha(ink, strength),
+                        })
+                        .when(n.muted, |d| {
+                            d.border_1().border_dashed().border_color(alpha(ink, 0.7))
                         })
                         .when(picked, |d| d.border_1().border_color(rgb(0xffffff)))
                         .font_family(MONO)
                         .text_size(px(8.5))
                         .line_height(px(kh - 2.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(BG))
+                        .text_color(rgb(if n.muted { ink } else { BG }))
                         .whitespace_nowrap()
                         .cursor(match self.tool {
                             Tool::Eraser => gpui::CursorStyle::OperationNotAllowed,
@@ -225,6 +245,16 @@ impl Workspace {
                             _ => gpui::CursorStyle::OpenHand,
                         })
                         .when(label, |d| d.child(name_in(spelling, n.pitch)))
+                        .when_some(odds, |d, odds| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .right(px(6.))
+                                    .top_0()
+                                    .opacity(0.8)
+                                    .child(odds),
+                            )
+                        })
                         // Its velocity, as a line along its foot as long as it's hard.
                         .when(kh >= 9.0 && w > 8.0, |d| {
                             d.child(
@@ -270,8 +300,25 @@ impl Workspace {
                             }),
                         ),
                 );
-                if lane == Lane::Velocity {
-                    let h = n.velocity as f32 / 127.0 * VELOCITY_H;
+                if lane.per_note() {
+                    let h = match lane {
+                        Lane::Chance => n.chance.min(100) as f32 / 100.0 * VELOCITY_H,
+                        _ => n.velocity as f32 / 127.0 * VELOCITY_H,
+                    };
+                    if lane == Lane::Velocity && n.spread > 0 {
+                        let s = n.spread as f32 / 127.0 * VELOCITY_H;
+                        let (lo, hi) = ((h - s).max(0.0), (h + s).min(VELOCITY_H));
+                        stems.push(
+                            div()
+                                .absolute()
+                                .left(px(x - 2.))
+                                .bottom(px(5.0 + lo))
+                                .w(px(6.))
+                                .h(px(hi - lo))
+                                .rounded(px(3.))
+                                .bg(alpha(ink, 0.3)),
+                        );
+                    }
                     let dot = if picked {
                         Hsla::from(rgb(0xffffff))
                     } else {
@@ -318,7 +365,15 @@ impl Workspace {
                                         .filter_map(|&k| notes.get(k).map(|n| (k, *n)))
                                         .collect();
                                     let y = f32::from(e.position.y);
-                                    ws.begin_drag(Drag::Velocity { at, y }, cx);
+                                    let drag = match ws.roll.lane {
+                                        Lane::Chance => Drag::NoteField {
+                                            at,
+                                            y,
+                                            field: NoteField::Chance,
+                                        },
+                                        _ => Drag::Velocity { at, y },
+                                    };
+                                    ws.begin_drag(drag, cx);
                                 }),
                             ),
                     );
@@ -358,8 +413,47 @@ impl Workspace {
                         )),
                 );
             }
+            let shown_w = f32::from(self.roll_bounds.get().size.width).max(400.0);
+            for (i, n) in list.iter().enumerate() {
+                let x0 = (start as i64 + n.start) as f32 * ppt - sx;
+                let x1 = x0 + n.length as f32 * ppt;
+                if x1 < 0.0 || x0 > shown_w {
+                    continue;
+                }
+                let own = |l: Lane| -> Vec<(f32, f32)> {
+                    let end = n.start + n.length as i64;
+                    let mut points: Vec<&ControlPoint> = controls
+                        .iter()
+                        .filter(|c| c.start >= n.start && c.start < end)
+                        .filter(|c| l.note_holds(&c.kind, n.pitch))
+                        .collect();
+                    points.sort_by_key(|c| c.start);
+                    points
+                        .iter()
+                        .map(|c| {
+                            (
+                                (start as i64 + c.start) as f32 * ppt - sx,
+                                l.note_level(&c.kind),
+                            )
+                        })
+                        .collect()
+                };
+                let mid = (127 - n.pitch) as f32 * kh - sy + kh / 2.0;
+                let bends = own(Lane::Pitch);
+                if !bends.is_empty() {
+                    glides.push((x0, x1, mid, bends));
+                }
+                if lane.expression() && (self.picked.is_empty() || self.picked.contains(&i)) {
+                    let ink = if by_velocity {
+                        velocity_color(n.velocity)
+                    } else {
+                        color
+                    };
+                    owns.push(((x0, x1, mid, own(lane)), ink));
+                }
+            }
             // The lane's controller, as a held line.
-            if lane != Lane::Velocity {
+            if !lane.per_note() && !lane.expression() {
                 let mut points: Vec<&ControlPoint> =
                     controls.iter().filter(|c| lane.holds(&c.kind)).collect();
                 points.sort_by_key(|c| c.start);
@@ -378,6 +472,33 @@ impl Workspace {
                 let _ = end;
             }
         }
+
+        // Notes bent by their own expression: the bend as a line over each, a row a semitone.
+        let bent = (!glides.is_empty()).then(|| {
+            canvas(
+                |_, _, _| {},
+                move |b, _, window, _| {
+                    let (ox, oy) = (f32::from(b.origin.x), f32::from(b.origin.y));
+                    for (x0, x1, mid, moves) in &glides {
+                        let y_of = |level: f32| oy + mid - (level * 2.0 - 1.0) * PITCH_SHOWN * kh;
+                        let mut path = gpui::PathBuilder::stroke(px(1.5));
+                        let mut y = oy + mid;
+                        path.move_to(point(px(ox + x0), px(y)));
+                        for &(x, level) in moves {
+                            path.line_to(point(px(ox + x), px(y)));
+                            y = y_of(level);
+                            path.line_to(point(px(ox + x), px(y)));
+                        }
+                        path.line_to(point(px(ox + x1), px(y)));
+                        if let Ok(p) = path.build() {
+                            window.paint_path(p, alpha(0xffffff, 0.85));
+                        }
+                    }
+                },
+            )
+            .absolute()
+            .size_full()
+        });
 
         // The rubber band.
         let band = match &self.drag {
@@ -552,8 +673,48 @@ impl Workspace {
                     .text_color(rgb(TEXT_2))
                     .child(format!("{}", b + 1))
             });
+        // The chords the region's notes play, beat by beat, named in the song's key.
+        let chords: Vec<Div> = match (at, span) {
+            (Some(at), Some((start, end))) => {
+                let notes = project
+                    .region(at)
+                    .content
+                    .notes(0)
+                    .map(|n| n.to_vec())
+                    .unwrap_or_default();
+                let length = (end - start) as i64;
+                pina_engine::music::harmony::read_chords(&notes, (0, length), beat_ticks)
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(k, (from, to, c))| {
+                        let x = (start as i64 + from) as f32 * ppt - sx;
+                        let w = (to - from) as f32 * ppt;
+                        (x + w > 0.0 && x < width).then(|| {
+                            div()
+                                .absolute()
+                                .left(px(x + 1.))
+                                .top(px(19.))
+                                .w(px((w - 2.).max(4.)))
+                                .h(px(14.))
+                                .px(px(4.))
+                                .rounded(px(3.))
+                                .bg(alpha(color, 0.18))
+                                .text_size(px(10.))
+                                .line_height(px(14.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(TEXT_2))
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .debug_selector(move || format!("roll-chord-{k}"))
+                                .child(c.name_in(spelling.as_ref()))
+                        })
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         let playhead = tick as f32 * ppt - sx;
-        let tools = self.roll_tools(at, cx);
+        let tools = self.roll_panel(at, cx);
 
         // The lane: a tab for each thing it can show.
         let lane_tabs = Lane::ALL.map(|l| {
@@ -574,13 +735,48 @@ impl Workspace {
         let lane_view = canvas(
             move |b, _, _| lane_bounds.set(b),
             move |b, _, window, _| {
-                if lane == Lane::Velocity {
+                if lane.per_note() {
                     return;
                 }
                 let (x0, y0) = (f32::from(b.origin.x), f32::from(b.origin.y));
                 let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
                 let floor = y0 + h - 5.0;
                 let y_of = |level: f32| floor - level * VELOCITY_H;
+                // Each note's own: a band under it, and its moves held from where it starts.
+                if lane.expression() {
+                    let rest = if lane == Lane::Pitch { 0.5 } else { 0.0 };
+                    window.paint_quad(fill(
+                        Bounds::new(point(px(x0), px(y_of(rest))), size(px(w), px(1.))),
+                        alpha(0xffffff, 0.1),
+                    ));
+                    for ((a, z, _, moves), ink) in &owns {
+                        let (a, z) = (a.max(0.0), z.min(w));
+                        if z <= a {
+                            continue;
+                        }
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(px(x0 + a), px(y_of(rest) - 2.0)),
+                                size(px(z - a), px(4.)),
+                            ),
+                            alpha(*ink, 0.25),
+                        ));
+                        let mut path = gpui::PathBuilder::stroke(px(2.));
+                        let mut y = y_of(rest);
+                        path.move_to(point(px(x0 + a), px(y)));
+                        for &(x, level) in moves {
+                            let x = x.clamp(a, z);
+                            path.line_to(point(px(x0 + x), px(y)));
+                            y = y_of(level);
+                            path.line_to(point(px(x0 + x), px(y)));
+                        }
+                        path.line_to(point(px(x0 + z), px(y)));
+                        if let Ok(p) = path.build() {
+                            window.paint_path(p, rgb(*ink));
+                        }
+                    }
+                    return;
+                }
                 if lane == Lane::Bend {
                     window.paint_quad(fill(
                         Bounds::new(point(px(x0), px(y_of(0.5))), size(px(w), px(1.))),
@@ -662,7 +858,8 @@ impl Workspace {
                                     .child(div().font_weight(FontWeight::MEDIUM).child(lane.name()))
                                     .child(div().flex_1().text_size(px(11.)).text_color(rgb(TEXT_3)).whitespace_nowrap().overflow_hidden().child(
                                         match (lane, &curve_now) {
-                                            (Lane::Velocity, _) => "drag a dot, or draw across".to_string(),
+                                            (l, _) if l.per_note() => "drag a dot, or draw across".to_string(),
+                                            (l, _) if l.expression() => "draw over notes (the picked, if any) · ⌥ erases".to_string(),
                                             (_, Some(v)) => format!("now {v} · draw, ⌥ to erase"),
                                             _ => "draw it, ⌥ to erase".to_string(),
                                         },
@@ -689,6 +886,7 @@ impl Workspace {
                             .border_color(rgb(LINE))
                             .cursor_pointer()
                             .children(bars)
+                            .children(chords)
                             .debug_selector(|| "roll-ruler".into())
                             // Click the ruler to move the playhead there.
                             .on_mouse_down(
@@ -711,6 +909,7 @@ impl Workspace {
                             .child(grid)
                             .children(ghosts)
                             .children(notes)
+                            .children(bent)
                             .children(band)
                             .children(tip)
                             .when(at.is_none(), |d| {

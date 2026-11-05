@@ -28,6 +28,8 @@ struct Slot {
     slot: usize,
     sound: Sound,
     latency: u32,
+    /// Whether its plugin instrument hears MPE, as last told.
+    mpe: bool,
     /// What each of the lane's stacked built-ins' running state was made for.
     strips: Vec<Fx>,
     plugins: LanePlugins,
@@ -161,6 +163,7 @@ pub struct Player {
     output: Option<Output>,
     live: LiveInput,
     played: rtrb::Consumer<Played>,
+    heard: rtrb::Consumer<(u64, crate::plugin::ControlKind)>,
     _midi: Vec<midir::MidiInputConnection<()>>,
     dir: PathBuf,
     /// Open plugin editors, by track or aux id.
@@ -189,12 +192,16 @@ impl Player {
         let shared = Arc::new(Shared::new());
         let (live_tx, live) = rtrb::RingBuffer::new(1024);
         let (played_tx, played) = rtrb::RingBuffer::new(4096);
+        let (moves_tx, moves) = rtrb::RingBuffer::new(4096);
+        let (heard_tx, heard) = rtrb::RingBuffer::new(16384);
         let link = Link {
             rx,
             garbage: gtx,
             shared: shared.clone(),
             live,
             played: played_tx,
+            moves,
+            heard: heard_tx,
         };
         let engine = Engine::live(rate, link);
         let player = Player {
@@ -203,8 +210,12 @@ impl Player {
             garbage,
             auditions_ended: 0,
             shared,
-            live: Arc::new(Mutex::new(live_tx)),
+            live: Arc::new(Mutex::new(midi::LiveSink {
+                notes: live_tx,
+                moves: moves_tx,
+            })),
             played,
+            heard,
             _midi: Vec::new(),
             lanes: HashMap::new(),
             kits: HashMap::new(),
@@ -377,6 +388,7 @@ impl Player {
                     slot,
                     sound,
                     latency,
+                    mpe: matches!(instrument, Some(Instrument::Plugin(r)) if r.mpe),
                     strips: Vec::new(),
                     plugins,
                     applied: HashMap::new(),
@@ -386,6 +398,7 @@ impl Player {
                 },
             );
         }
+        let mut told = Vec::new();
         for &(id, instrument, inserts) in &channels {
             let slot = self.lanes.get_mut(&id).unwrap();
             if let Some(Instrument::Plugin(r)) = instrument
@@ -393,11 +406,24 @@ impl Player {
             {
                 problems.push(e);
             }
+            // MPE switched: the running instrument told, not loaded again.
+            if let Some(Instrument::Plugin(r)) = instrument
+                && r.mpe != slot.mpe
+            {
+                slot.mpe = r.mpe;
+                told.push(Msg::Mpe {
+                    slot: slot.slot,
+                    on: r.mpe,
+                });
+            }
             for (i, r) in inserts.iter().enumerate() {
                 if let Err(e) = slot.apply(Which::Insert(i), r) {
                     problems.push(e);
                 }
             }
+        }
+        for msg in told {
+            self.send(msg)?;
         }
         // Each lane with running state for its channel's stacked built-ins: a new strip where
         // there's none, or where a reverb or delay needs one with its lines.
@@ -773,7 +799,12 @@ impl Player {
     /// Plays a note as if from a MIDI keyboard: it goes to the armed track and is reported by
     /// `played`.
     pub fn send_live(&self, note: LiveNote) {
-        let _ = self.live.lock().unwrap().push(note);
+        let _ = self.live.lock().unwrap().notes.push(note);
+    }
+
+    /// Moves a controller as if from a MIDI keyboard: on the armed track, reported by `moves`.
+    pub fn send_live_move(&self, kind: crate::plugin::ControlKind) {
+        let _ = self.live.lock().unwrap().moves.push(kind);
     }
 
     /// Starts a track's Live Loops cell (its index in the track's cells), or stops it with None,
@@ -875,9 +906,54 @@ impl Player {
         }
     }
 
+    /// Moves a controller on a track now, as the synth window's wheels do.
+    pub fn control(&mut self, track: u64, kind: crate::plugin::ControlKind) {
+        if let Some(s) = self.lanes.get(&track) {
+            let slot = s.slot;
+            let _ = self.send(Msg::Control { slot, kind });
+        }
+    }
+
+    /// Which track's synth the synth's window shows, if any.
+    pub fn watch_poly(&self, track: Option<u64>) {
+        let slot = track.and_then(|id| self.lanes.get(&id)).map(|s| s.slot);
+        self.shared.poly_slot.store(
+            slot.unwrap_or(usize::MAX),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// The watched synth's sources now, as `PolySynth::live` gives them.
+    pub fn poly_live(&self) -> [f32; crate::dsp::poly::POLY_LIVE] {
+        use std::sync::atomic::Ordering;
+        std::array::from_fn(|k| f32::from_bits(self.shared.poly_live[k].load(Ordering::Relaxed)))
+    }
+
+    /// What the watched synth just played: `out` filled, oldest first, if anything's gone in
+    /// since `seen`; how many samples have, ever.
+    pub fn poly_scope(&self, out: &mut Vec<f32>, seen: usize) -> usize {
+        use crate::audio::engine::POLY_SCOPE_LEN;
+        use std::sync::atomic::Ordering;
+        let written = self.shared.poly_written.load(Ordering::Relaxed);
+        if written == seen {
+            return seen;
+        }
+        out.resize(POLY_SCOPE_LEN, 0.0);
+        for (k, v) in out.iter_mut().enumerate() {
+            let at = (written + k) % POLY_SCOPE_LEN;
+            *v = f32::from_bits(self.shared.poly_scope[at].load(Ordering::Relaxed));
+        }
+        written
+    }
+
     /// Live notes the engine has played since the last call, at the playhead.
     pub fn played(&mut self) -> Vec<Played> {
         std::iter::from_fn(|| self.played.pop().ok()).collect()
+    }
+
+    /// Live controller moves the engine has played since the last call, at the playhead.
+    pub fn moves(&mut self) -> Vec<(u64, crate::plugin::ControlKind)> {
+        std::iter::from_fn(|| self.heard.pop().ok()).collect()
     }
 
     /// A track's or aux's peak level since the last call, left and right.

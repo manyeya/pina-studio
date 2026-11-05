@@ -3,27 +3,76 @@
 use super::*;
 
 /// The notes an instrument is holding, counted by pitch: the same pitch can be held twice (two
-/// notes overlapping), and each needs its own note-off, or one voice rings on.
+/// notes overlapping), and each needs its own note-off, or one voice rings on. Also the notes
+/// whose chance didn't come up, whose note-offs are let pass; and the dice that decided.
 #[derive(Clone, Copy)]
-pub(crate) struct Held([u8; 128]);
+pub(crate) struct Held {
+    on: [u8; 128],
+    skipped: [u8; 128],
+    dice: u64,
+}
 
 impl Held {
     pub(crate) fn new() -> Self {
-        Held([0; 128])
+        // Each its own dice, so one track's chances don't fall as another's do.
+        static SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let seed = SEED.fetch_add(0x9e37_79b9_7f4a_7c15, std::sync::atomic::Ordering::Relaxed);
+        Held {
+            on: [0; 128],
+            skipped: [0; 128],
+            dice: seed | 1,
+        }
     }
 
     /// Whether any note is held.
     pub(crate) fn any(&self) -> bool {
-        self.0.iter().any(|&c| c > 0)
+        self.on.iter().any(|&c| c > 0)
     }
 
     pub(crate) fn apply(&mut self, pitch: u8, on: bool) {
-        let count = &mut self.0[pitch as usize];
+        let count = &mut self.on[pitch as usize];
         *count = if on {
             count.saturating_add(1)
         } else {
             count.saturating_sub(1)
         };
+    }
+
+    /// A roll of the dice, 0 to 1.
+    fn roll(&mut self) -> f32 {
+        let mut x = self.dice;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.dice = x;
+        (x >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    /// An event as it plays: None for a note whose chance didn't come up (and its note-off),
+    /// else its velocity, strayed as far as it may.
+    // shortcut: a skipped note's note-off is the next one of its pitch, so of two overlapping
+    // notes of one pitch the played one can end where the skipped one would have; key offs to
+    // their notes if that's ever heard.
+    pub(crate) fn play(&mut self, e: &Event) -> Option<f32> {
+        let p = e.pitch as usize & 127;
+        if e.velocity == 0.0 {
+            if self.skipped[p] > 0 {
+                self.skipped[p] -= 1;
+                return None;
+            }
+            return Some(0.0);
+        }
+        if e.velocity > 0.0 && e.chance < 100 && self.roll() * 100.0 >= e.chance as f32 {
+            self.skipped[p] = self.skipped[p].saturating_add(1);
+            return None;
+        }
+        Some(match e.spread {
+            0 => e.velocity,
+            s => {
+                let by = (self.roll() * 2.0 - 1.0) * s as f32 / 127.0;
+                (e.velocity + by).clamp(1.0 / 127.0, 1.0)
+            }
+        })
     }
 
     /// Lets go of every note held, at `offset` in the block, unless `keep` says it's still on;
@@ -35,7 +84,8 @@ impl Held {
         notes: &mut [Note; BLOCK_NOTES],
         n: &mut usize,
     ) {
-        for (pitch, count) in self.0.iter_mut().enumerate() {
+        self.skipped = [0; 128];
+        for (pitch, count) in self.on.iter_mut().enumerate() {
             if *count == 0 || keep(pitch as u8) {
                 continue;
             }
@@ -118,11 +168,14 @@ pub(crate) fn gather(
         if *n == BLOCK_NOTES {
             break;
         }
-        held.apply(e.pitch, e.velocity > 0.0);
+        let Some(velocity) = held.play(e) else {
+            continue;
+        };
+        held.apply(e.pitch, velocity > 0.0);
         notes[*n] = Note {
             offset: (e.at - from) as u32 + into as u32,
             pitch: e.pitch,
-            velocity: e.velocity,
+            velocity,
         };
         *n += 1;
     }

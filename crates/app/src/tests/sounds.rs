@@ -599,6 +599,7 @@ fn midi_files(dir: &Path) -> Vec<pina_engine::samples::midi::MidiSample> {
                                 length,
                                 pitch,
                                 velocity: 100,
+                                ..Default::default()
                             })
                             .collect(),
                         controls: Vec::new(),

@@ -52,6 +52,51 @@ impl Workspace {
                     .collect();
             }
             RollOp::Deselect => self.picked.clear(),
+            // The highest (or lowest) of the notes starting together, of those picked (or all).
+            RollOp::SelectVoice(top) => {
+                let notes = notes_of(self);
+                let from: Vec<usize> = match picked.is_empty() {
+                    true => (0..notes.len()).collect(),
+                    false => picked.clone(),
+                };
+                let mut best: std::collections::BTreeMap<i64, usize> = Default::default();
+                for &i in &from {
+                    let n = notes[i];
+                    let e = best.entry(n.start).or_insert(i);
+                    let better = match top {
+                        true => n.pitch > notes[*e].pitch,
+                        false => n.pitch < notes[*e].pitch,
+                    };
+                    if better {
+                        *e = i;
+                    }
+                }
+                self.region = Some(at);
+                self.picked = best.into_values().collect();
+            }
+            RollOp::Invert => {
+                self.region = Some(at);
+                self.picked = (0..count).filter(|i| !picked.contains(i)).collect();
+            }
+            // Muted if any picked note plays; else all of them play again.
+            RollOp::Mute => {
+                if picked.is_empty() {
+                    return;
+                }
+                let notes = notes_of(self);
+                let mute = picked
+                    .iter()
+                    .any(|&i| notes.get(i).is_some_and(|n| !n.muted));
+                self.edit(cx, |ws| {
+                    if let Some(notes) = ws.session.project.notes_mut(at) {
+                        for &i in &picked {
+                            if let Some(n) = notes.get_mut(i) {
+                                n.muted = mute;
+                            }
+                        }
+                    }
+                });
+            }
             RollOp::Copy | RollOp::Cut => {
                 let notes = notes_of(self);
                 let mut clip: Vec<Note> = picked
@@ -241,6 +286,7 @@ impl Workspace {
         );
         add("Duplicate    ⌘D".into(), RollOp::Duplicate, some);
         add("Delete    ⌫".into(), RollOp::Delete, some);
+        add("Mute / Unmute    0".into(), RollOp::Mute, some);
         add("Quantize    Q".into(), RollOp::Quantize, true);
         add("Up an Octave    ⇧↑".into(), RollOp::Transpose(12), some);
         add("Down an Octave    ⇧↓".into(), RollOp::Transpose(-12), some);
@@ -264,157 +310,5 @@ impl Workspace {
             ..Default::default()
         });
         cx.notify();
-    }
-
-    /// The quantize grid, strength, swing and one-click tools, left of the keyboard.
-    pub(crate) fn roll_tools(
-        &mut self,
-        at: Option<At>,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<Div> {
-        let grid_seg = |label: &'static str, g: u64, on: bool, cx: &mut Context<Self>| {
-            seg(label, on, 20.)
-                .flex_1()
-                .px(px(0.))
-                .font_family(MONO)
-                .text_size(px(10.5))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        ws.roll.grid = g;
-                        cx.notify();
-                    }),
-                )
-        };
-        let g = self.roll.grid;
-        let slider =
-            |ws: &Self, label: &'static str, s: Slider, text: String, cx: &mut Context<Self>| {
-                div()
-                    .h(px(18.))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .text_size(px(11.))
-                    .text_color(rgb(TEXT_3))
-                    .child(div().w(px(46.)).child(label))
-                    .child(ws.slider_bar(s, cx).flex_1().min_w(px(0.)))
-                    .child(
-                        div()
-                            .w(px(30.))
-                            .flex()
-                            .justify_end()
-                            .font_family(MONO)
-                            .text_color(rgb(TEXT_2))
-                            .child(text),
-                    )
-            };
-        // The tools work on the picked notes (or all of them); with no region, greyed out.
-        let tool = |label: &'static str, edit: NoteEdit, cx: &mut Context<Self>| {
-            let b = button(label, false)
-                .h(px(24.))
-                .text_size(px(11.))
-                .debug_selector(move || format!("roll-{label}"));
-            match at {
-                Some(at) => b.on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| ws.edit_notes(at, edit, cx)),
-                ),
-                None => b.opacity(0.4).cursor_default(),
-            }
-        };
-        let picked = self.picked.len();
-        div()
-            .id("roll-tools")
-            .flex_1()
-            .min_w(px(0.))
-            .px(px(12.))
-            .py(px(10.))
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.))
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(TEXT_3))
-                            .child("Quantize"),
-                    )
-                    .child(
-                        tray()
-                            .p(px(2.))
-                            .rounded(px(7.))
-                            .child(grid_seg("1/4", PPQ, g == PPQ, cx))
-                            .child(grid_seg("1/8", PPQ / 2, g == PPQ / 2, cx))
-                            .child(grid_seg("1/16", PPQ / 4, g == PPQ / 4, cx))
-                            .child(grid_seg("1/32", PPQ / 8, g == PPQ / 8, cx)),
-                    ),
-            )
-            .child(slider(
-                self,
-                "Strength",
-                Slider::Strength,
-                format!("{:.0}%", self.roll.strength * 100.0),
-                cx,
-            ))
-            .child(slider(
-                self,
-                "Swing",
-                Slider::Swing,
-                format!("{:.0}%", self.roll.swing),
-                cx,
-            ))
-            .child(
-                div()
-                    .text_size(px(10.5))
-                    .text_color(rgb(TEXT_4))
-                    .child(match picked {
-                        0 => "Tools · on every note".to_string(),
-                        1 => "Tools · on the picked note".to_string(),
-                        n => format!("Tools · on {n} picked notes"),
-                    }),
-            )
-            .child(
-                div()
-                    .grid()
-                    .grid_cols(2)
-                    .gap(px(4.))
-                    .child(tool(
-                        "Humanize",
-                        NoteEdit::Humanize {
-                            timing: 20,
-                            velocity: 8,
-                            seed: fresh_seed(),
-                        },
-                        cx,
-                    ))
-                    .child(tool("Legato", NoteEdit::Legato, cx))
-                    .child(tool("Chop", NoteEdit::Chop { grid: g }, cx))
-                    .child(tool("Arpeggiate", NoteEdit::Arpeggiate { grid: g }, cx))
-                    .child(tool("Strum", NoteEdit::Strum { ticks: PPQ / 32 }, cx))
-                    .child(tool("Glue", NoteEdit::Glue, cx))
-                    .child(tool("Reverse", NoteEdit::Reverse, cx))
-                    .child(tool("Flip", NoteEdit::Flip, cx))
-                    .child(tool(
-                        "Softer",
-                        NoteEdit::Dynamics {
-                            percent: 100,
-                            by: -10,
-                        },
-                        cx,
-                    ))
-                    .child(tool(
-                        "Harder",
-                        NoteEdit::Dynamics {
-                            percent: 100,
-                            by: 10,
-                        },
-                        cx,
-                    )),
-            )
     }
 }

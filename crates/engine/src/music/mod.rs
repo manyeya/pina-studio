@@ -7,6 +7,8 @@ pub mod analysis;
 pub mod arrange;
 pub mod compose;
 pub mod critique;
+pub mod generate;
+pub mod harmony;
 pub mod look;
 pub mod playbook;
 pub mod theory;
@@ -296,6 +298,54 @@ pub enum NoteEdit {
         #[serde(default)]
         by: i32,
     },
+    /// Each note held `percent` of the way to the next one's start: 100 legato, 50 staccato,
+    /// past 100 overlapping. The last keeps its length so scaled.
+    Span {
+        percent: u32,
+    },
+    /// A flam (the note again, softer, `ticks` before) or a grace note (the next pitch up)
+    /// before each note.
+    Ornament {
+        ticks: u64,
+        #[serde(default)]
+        grace: bool,
+    },
+    /// Passing notes a `grid` apart in each gap, walking from one note's pitch to the next's.
+    Connect {
+        grid: u64,
+    },
+    /// One of the notes' parts moved round them in time order: their pitches, velocities or
+    /// lengths rotated by one, or shuffled (the same for a seed).
+    Recombine {
+        part: NotePart,
+        #[serde(default)]
+        shuffle: bool,
+        #[serde(default)]
+        seed: u64,
+    },
+    /// Starts and lengths scaled about the first: 50 twice as fast, 200 half as fast.
+    Stretch {
+        percent: u32,
+    },
+    /// Velocities from `from` at the first note to `to` at the last, along the way in time.
+    VelocityShape {
+        from: u8,
+        to: u8,
+    },
+    /// Each pitch moved to the nearest in the key (the lower, when two are as near).
+    ScaleQuantize {
+        root: u8,
+        minor: bool,
+    },
+}
+
+/// A part of every note, for edits that move one part round them.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotePart {
+    Pitch,
+    Velocity,
+    Length,
 }
 
 fn full() -> f32 {
@@ -493,6 +543,130 @@ impl NoteEdit {
                     i += 1;
                     !gone[i - 1]
                 });
+            }
+            NoteEdit::Span { percent } => {
+                let mut starts: Vec<i64> = notes.iter().map(|n| n.start).collect();
+                starts.sort_unstable();
+                starts.dedup();
+                for &i in &chosen {
+                    let n = &mut notes[i];
+                    let next = starts.get(starts.partition_point(|&s| s <= n.start));
+                    let room = next.map_or(n.length as i64, |&next| next - n.start);
+                    n.length = (room * percent as i64 / 100).max(1) as u64;
+                }
+            }
+            NoteEdit::Ornament { ticks, grace } => {
+                let ticks = ticks.max(1);
+                let added: Vec<Note> = chosen
+                    .iter()
+                    .map(|&i| {
+                        let n = notes[i];
+                        Note {
+                            start: n.start - ticks as i64,
+                            length: ticks,
+                            pitch: if grace {
+                                n.pitch.saturating_add(1).min(127)
+                            } else {
+                                n.pitch
+                            },
+                            velocity: (n.velocity as u32 * 6 / 10).max(1) as u8,
+                            ..n
+                        }
+                    })
+                    .collect();
+                notes.extend(added);
+            }
+            NoteEdit::Connect { grid } => {
+                let grid = grid.max(1) as i64;
+                let mut order = chosen.clone();
+                order.sort_by_key(|&i| (notes[i].start, notes[i].pitch));
+                let mut added = Vec::new();
+                for w in order.windows(2) {
+                    let (a, b) = (notes[w[0]], notes[w[1]]);
+                    let gap_from = a.start + a.length as i64;
+                    let steps = (b.start - gap_from) / grid;
+                    for k in 0..steps {
+                        let at = gap_from + k * grid;
+                        let t = (k + 1) as f32 / (steps + 1) as f32;
+                        let pitch = a.pitch as f32 + (b.pitch as f32 - a.pitch as f32) * t;
+                        added.push(Note {
+                            start: at,
+                            length: grid as u64,
+                            pitch: pitch.round().clamp(0.0, 127.0) as u8,
+                            velocity: ((a.velocity as u32 + b.velocity as u32) / 2) as u8,
+                            ..a
+                        });
+                    }
+                }
+                notes.extend(added);
+            }
+            NoteEdit::Recombine {
+                part,
+                shuffle,
+                seed,
+            } => {
+                let mut order = chosen.clone();
+                order.sort_by_key(|&i| (notes[i].start, notes[i].pitch));
+                let get = |n: &Note| match part {
+                    NotePart::Pitch => n.pitch as u64,
+                    NotePart::Velocity => n.velocity as u64,
+                    NotePart::Length => n.length,
+                };
+                let mut values: Vec<u64> = order.iter().map(|&i| get(&notes[i])).collect();
+                match shuffle {
+                    false => values.rotate_right(1),
+                    true => {
+                        let mut state = seed.wrapping_mul(6364136223846793005) | 1;
+                        for k in (1..values.len()).rev() {
+                            state ^= state << 13;
+                            state ^= state >> 7;
+                            state ^= state << 17;
+                            values.swap(k, (state % (k as u64 + 1)) as usize);
+                        }
+                    }
+                }
+                for (&i, v) in order.iter().zip(values) {
+                    let n = &mut notes[i];
+                    match part {
+                        NotePart::Pitch => n.pitch = v as u8,
+                        NotePart::Velocity => n.velocity = v as u8,
+                        NotePart::Length => n.length = v,
+                    }
+                }
+            }
+            NoteEdit::Stretch { percent } => {
+                let from = chosen.iter().map(|&i| notes[i].start).min().unwrap_or(0);
+                for &i in &chosen {
+                    let n = &mut notes[i];
+                    n.start = from + (n.start - from) * percent as i64 / 100;
+                    n.length = (n.length * percent as u64 / 100).max(1);
+                }
+            }
+            NoteEdit::VelocityShape { from, to } => {
+                let (first, last) = (
+                    chosen.iter().map(|&i| notes[i].start).min().unwrap_or(0),
+                    chosen.iter().map(|&i| notes[i].start).max().unwrap_or(0),
+                );
+                let span = (last - first).max(1) as f32;
+                for &i in &chosen {
+                    let t = (notes[i].start - first) as f32 / span;
+                    let v = from as f32 + (to as f32 - from as f32) * t;
+                    notes[i].velocity = v.round().clamp(1.0, 127.0) as u8;
+                }
+            }
+            NoteEdit::ScaleQuantize { root, minor } => {
+                let key = Key {
+                    root: root % 12,
+                    minor,
+                };
+                for &i in &chosen {
+                    let p = notes[i].pitch as i32;
+                    notes[i].pitch = (0..12)
+                        .flat_map(|d| [p - d, p + d])
+                        .map(|q| q.clamp(0, 127) as u8)
+                        .find(|&q| key.contains(q))
+                        .unwrap_or(notes[i].pitch);
+                }
             }
             NoteEdit::Dynamics { percent, by } => {
                 let vs: Vec<f32> = chosen.iter().map(|&i| notes[i].velocity as f32).collect();

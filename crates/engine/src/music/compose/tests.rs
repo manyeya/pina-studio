@@ -57,12 +57,14 @@ fn chords_are_heard_from_the_notes_without_a_chord_track() {
             length: 3840,
             pitch,
             velocity: 90,
+            ..Default::default()
         })
         .chain([53, 57, 60, 64].iter().map(|&pitch| Note {
             start: 3840,
             length: 3840,
             pitch,
             velocity: 90,
+            ..Default::default()
         }))
         .collect();
     p.tracks[0].regions.push(Region {

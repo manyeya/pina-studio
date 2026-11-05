@@ -179,6 +179,7 @@ impl Workspace {
                     }
                 }
             }
+            Some(Drag::NoteField { .. }) => self.drag_note_field(p),
             Some(Drag::VelocityLine { .. }) => self.drag_velocity_line(p),
             Some(Drag::Control { .. }) => self.drag_control(p),
             Some(Drag::Mark { .. }) => self.drag_mark(p),
@@ -474,14 +475,48 @@ impl Workspace {
                 cx.notify();
                 return;
             }
-            Some(Drag::PolyWindow { from, start }) => {
-                self.drag_poly_window(from, start, p);
+            Some(Drag::PolyWindow {
+                from,
+                start,
+                resize,
+            }) => {
+                self.drag_poly_window(from, start, resize, p);
                 cx.notify();
                 return;
             }
             Some(Drag::PolyPoint { id }) => self.drag_poly_point(id, p),
             Some(Drag::PolySource { .. }) => {
                 self.mod_drag_at = Some(p);
+                cx.notify();
+                return;
+            }
+            Some(Drag::PolySlider {
+                target,
+                left,
+                width,
+            }) => self.slide_poly(target, left, width, p.x),
+            Some(Drag::PolyAmount {
+                track,
+                amount,
+                y,
+                value,
+            }) => {
+                if let Some(s) = self.poly_mut(track) {
+                    amount.set(s, value - (p.y - y) / 150.0);
+                }
+            }
+            Some(Drag::PolyKeys) => {
+                self.poly_finger(p);
+                cx.notify();
+                return;
+            }
+            Some(Drag::PolyWheel {
+                track,
+                bend,
+                top,
+                height,
+            }) => {
+                self.poly_wheel(track, bend, top, height, p.y);
                 cx.notify();
                 return;
             }
@@ -495,8 +530,12 @@ impl Workspace {
                     r.depth = (depth + (p.x - x) / 130.0).clamp(-1.0, 1.0);
                 }
             }
-            Some(Drag::FxWindow { from, start }) => {
-                self.drag_fx_window(from, start, p);
+            Some(Drag::FxWindow {
+                from,
+                start,
+                resize,
+            }) => {
+                self.drag_fx_window(from, start, resize, p);
                 cx.notify();
                 return;
             }

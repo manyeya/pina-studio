@@ -399,3 +399,40 @@ fn a_stacked_effects_knob_is_automated_in_its_own_units() {
     let e = run(&mut p, r#"{"op": "set_automation", "track": 0, "param": "fx", "fx": "wah", "knob": "mid", "points": []}"#).unwrap_err();
     assert!(e.contains("`fx` is"), "{e}");
 }
+
+#[test]
+fn a_tracks_midi_effects_are_set_in_order_and_kept_to_eight() {
+    use crate::song::project::{ArpOrder, MidiFx};
+    let mut p = Project::new(48_000);
+    run(&mut p, r#"{"op": "add_track", "name": "Keys"}"#).unwrap();
+    let set = r#"{"op": "set_track", "track": 0, "midi_fx": [
+        {"type": "chord_trigger", "shape": "in_key"},
+        {"type": "arpeggiator", "rate": 0.25, "order": "up_down", "octaves": 2, "gate": 0.8, "latch": false, "bypass": true}
+    ]}"#;
+    run(&mut p, set).unwrap();
+    let fx = &p.tracks[0].midi_fx;
+    assert_eq!(fx.len(), 2);
+    assert_eq!(fx[0].fx.name(), "Chord Trigger");
+    assert!(matches!(
+        fx[1].fx,
+        MidiFx::Arpeggiator {
+            order: ArpOrder::UpDown,
+            octaves: 2,
+            ..
+        }
+    ));
+    assert!(fx[1].bypass && !fx[0].bypass);
+    // Nine is more than a track runs; none is fine.
+    let one = r#"{"type": "transposer", "semitones": 12}"#;
+    let nine = format!(
+        r#"{{"op": "set_track", "track": 0, "midi_fx": [{}]}}"#,
+        [one; 9].join(",")
+    );
+    assert!(
+        run(&mut p, &nine)
+            .unwrap_err()
+            .contains("more than a track runs")
+    );
+    run(&mut p, r#"{"op": "set_track", "track": 0, "midi_fx": []}"#).unwrap();
+    assert!(p.tracks[0].midi_fx.is_empty());
+}

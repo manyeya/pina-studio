@@ -249,7 +249,9 @@ impl Workspace {
             Some(Instrument::Drums) => format!("Drums {}", n + 1),
             Some(Instrument::Plugin(p)) => p.class.clone(),
             Some(Instrument::Sampler(_)) => format!("Sampler {}", n + 1),
-            Some(Instrument::Poly(_)) => format!("Synth {}", n + 1),
+            Some(Instrument::Poly(_)) => {
+                format!("{} {}", pina_engine::song::project::POLY_NAME, n + 1)
+            }
             Some(Instrument::Kit) => format!("Kit {}", n + 1),
             Some(Instrument::Synth) => format!("Synth {}", n + 1),
             None => format!("Audio {}", n + 1),

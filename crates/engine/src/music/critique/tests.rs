@@ -16,6 +16,7 @@ fn song() -> Project {
         length,
         pitch,
         velocity,
+        ..Default::default()
     };
     let (kicks, roots) = ([0i64, 7, 10], [33u8, 29, 36, 31]);
     let chords = [[57u8, 60, 64], [57, 60, 65], [55, 60, 64], [55, 59, 62]];
@@ -95,6 +96,7 @@ fn wrong_notes_clashes_and_flams_are_heard() {
             length: 3840,
             pitch: 70,
             velocity: 90,
+            ..Default::default()
         })
         .collect();
     p.tracks.push(Track {
