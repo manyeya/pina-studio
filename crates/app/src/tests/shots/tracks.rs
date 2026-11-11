@@ -316,6 +316,26 @@ pub(super) fn set_up(
             cx.notify();
         }
         // ⌥ held: a stretch grip on every region's end; the drums' first listened to for its tempo.
+        // A drum region stretched to twice as long, one squeezed to half; the keys as steps.
+        "stretched" => {
+            let drums = &mut ws.session.project.tracks[2];
+            drums.height = Some(110.0);
+            let (bar, regions) = (PPQ * 4, &mut drums.regions);
+            if let Content::Audio { stretch, .. } = &mut regions[0].content {
+                *stretch = 2.0;
+            }
+            regions[0].length = bar * 2;
+            regions[1].start = bar * 2;
+            if let Content::Audio { stretch, .. } = &mut regions[2].content {
+                *stretch = 0.5;
+            }
+            regions[2].start = bar * 3;
+            regions[2].length = bar / 2;
+            regions[3].start = bar * 4;
+            ws.midi_to_pattern((0, 0), cx);
+            ws.bottom = None;
+            cx.notify();
+        }
         "stretch" => {
             ws.session.project.tracks[2].height = Some(110.0);
             ws.alt = true;

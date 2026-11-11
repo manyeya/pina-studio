@@ -307,3 +307,67 @@ fn a_pattern_on_a_synth_has_rows_of_notes_in_the_key(cx: &mut TestAppContext) {
     let last: PatternRow = shown(&ws, cx).rows.last().unwrap().clone();
     assert!(last.melodic);
 }
+
+#[gpui::test]
+fn midi_made_steps_plays_back_exactly_and_keeps_every_bar(cx: &mut TestAppContext) {
+    use pina_engine::song::project::Note;
+    let (ws, cx) = open(cx);
+    let played = |ws: &Entity<Workspace>, cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let r = &ws.session.project.tracks[0].regions[0];
+            let mut n: Vec<(i64, u8, u64, u8)> = r
+                .content
+                .notes(r.length)
+                .unwrap()
+                .iter()
+                .filter(|n| (n.start as u64) < r.length)
+                .map(|n| (n.start, n.pitch, n.length, n.velocity))
+                .collect();
+            n.sort_unstable();
+            n
+        })
+    };
+    // The demo's keys: the same notes as steps, start, pitch, length and velocity.
+    let before = played(&ws, cx);
+    ws.update(cx, |ws, cx| ws.midi_to_pattern((0, 0), cx));
+    assert!(ws.read_with(cx, |ws, _| matches!(
+        ws.session.project.tracks[0].regions[0].content,
+        Content::Pattern(_)
+    )));
+    assert_eq!(played(&ws, cx), before);
+    // Eight bars whose second half differs: all eight kept, none looped over.
+    let note = |start: u64, pitch: u8| Note {
+        start: start as i64,
+        length: PPQ / 4,
+        pitch,
+        velocity: 90,
+        ..Default::default()
+    };
+    ws.update(cx, |ws, cx| {
+        ws.edit(cx, |ws| {
+            let r = &mut ws.session.project.tracks[1].regions[0];
+            r.length = BAR * 8;
+            r.content = Content::Midi {
+                notes: (0..8)
+                    .map(|b| note(b * BAR, if b < 4 { 60 } else { 67 }))
+                    .collect(),
+                controls: Vec::new(),
+            };
+        })
+    });
+    ws.update(cx, |ws, cx| ws.midi_to_pattern((1, 0), cx));
+    let (steps, pitches) = ws.read_with(cx, |ws, _| {
+        let r = &ws.session.project.tracks[1].regions[0];
+        let Content::Pattern(p) = &r.content else {
+            panic!()
+        };
+        let n = r.content.notes(r.length).unwrap();
+        (p.steps(), n.iter().map(|n| n.pitch).collect::<Vec<_>>())
+    });
+    assert_eq!(steps, 128);
+    assert_eq!(pitches, [60, 60, 60, 60, 67, 67, 67, 67]);
+    // Triplets get triplet steps; the same bar over and over, one bar.
+    let triplets: Vec<Note> = (0..48).map(|k| note(k * PPQ / 3, 60)).collect();
+    let fit = crate::editors::steps::pattern_fit(&triplets, BAR * 4, BAR);
+    assert_eq!(fit, (PPQ / 6, BAR));
+}

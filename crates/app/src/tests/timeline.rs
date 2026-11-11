@@ -130,10 +130,7 @@ fn musical_typing_records_a_midi_region(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn a_take_keeps_what_an_mpe_controller_did_to_each_note(cx: &mut TestAppContext) {
-    use pina_engine::{
-        plugin::{ControlKind, ExpressionKind},
-        song::project::ControlValue,
-    };
+    use pina_engine::plugin::{ControlKind, ExpressionKind};
     let (ws, cx) = open(cx);
     cx.simulate_click(spot(&ws, cx, PPQ, 0), Modifiers::none()); // select Keys
     let ruler = spot(&ws, cx, BAR * 5, 0) - point(px(0.), px(LANE_H / 2.0 + 10.));
@@ -161,21 +158,19 @@ fn a_take_keeps_what_an_mpe_controller_did_to_each_note(cx: &mut TestAppContext)
         |ws| matches!(&ws.recording, Some(Recording::Midi { controls, .. }) if !controls.is_empty()),
     );
     cx.simulate_keystrokes("r");
-    let controls = ws.read_with(cx, |ws, _| {
-        match &ws.session.project.tracks[0].regions[1].content {
-            Content::Midi { controls, .. } => controls.clone(),
-            _ => Vec::new(),
-        }
+    // The bend is the note's own, on it.
+    let notes = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[0].regions[1]
+            .content
+            .notes(0)
+            .map(|n| n.to_vec())
+            .unwrap_or_default()
     });
+    let held = notes.iter().find(|n| n.pitch == 60).unwrap();
     assert!(
-        controls.iter().any(|c| c.start >= 0
-            && c.kind
-                == ControlValue::Expression {
-                    pitch: 60,
-                    kind: ExpressionKind::Tuning,
-                    value: 4.0,
-                }),
-        "{controls:?}"
+        held.expression.pitch.iter().any(|b| b.value == 4.0),
+        "{:?}",
+        held.expression
     );
 }
 
@@ -347,8 +342,40 @@ fn snap_follows_the_menu(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     assert_eq!(ws.read_with(cx, |ws, _| ws.grid()), PPQ); // at the default zoom
     click_on(cx, "snap", Modifiers::none(), MouseButton::Left);
-    click_on(cx, "menu-4", Modifiers::none(), MouseButton::Left); // 1/16
+    click_on(cx, "menu-7", Modifiers::none(), MouseButton::Left); // 1/16
     assert_eq!(ws.read_with(cx, |ws, _| ws.grid()), PPQ / 4);
+    // Triplets and dotted values, as Logic has them.
+    click_on(cx, "snap", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "menu-12", Modifiers::none(), MouseButton::Left); // 1/8 triplet
+    assert_eq!(ws.read_with(cx, |ws, _| ws.grid()), PPQ / 3);
+    click_on(cx, "snap", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "menu-17", Modifiers::none(), MouseButton::Left); // 1/16 dotted
+    assert_eq!(ws.read_with(cx, |ws, _| ws.grid()), PPQ * 3 / 8);
+}
+
+#[gpui::test]
+fn relative_snap_keeps_a_regions_offset_off_the_grid(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    // A drum region a little off the beat; snapping relative, a beat's drag keeps it off.
+    ws.update(cx, |ws, cx| {
+        ws.edit(cx, |ws| {
+            ws.session.project.tracks[2].regions[1].start = BAR + 37
+        });
+        ws.snap = Snap::Beat;
+        ws.snap_relative = true;
+    });
+    cx.run_until_parked();
+    let at = spot(&ws, cx, BAR + PPQ, 2);
+    let beat = ws.read_with(cx, |ws, _| PPQ as f32 * ws.px_per_tick());
+    drag(cx, at, at + point(px(beat * 2.0 + 3.0), px(0.)));
+    let starts: Vec<u64> = ws.read_with(cx, |ws, _| {
+        ws.session.project.tracks[2]
+            .regions
+            .iter()
+            .map(|r| r.start)
+            .collect()
+    });
+    assert!(starts.contains(&(BAR + 37 + PPQ * 2)), "{starts:?}");
 }
 
 #[gpui::test]
@@ -804,4 +831,122 @@ fn a_long_song_scrolls_by_its_overview_the_wheel_and_shift(cx: &mut TestAppConte
     click_on(cx, "nav-follow", Modifiers::none(), MouseButton::Left);
     assert!(ws.read_with(cx, |ws, _| ws.caught && ws.settings.follow_playhead));
     ws.update(cx, |ws, cx| ws.stop(cx));
+}
+
+#[gpui::test]
+fn the_shortcuts_sheet_lists_and_finds_keys_and_the_standard_keys_work(cx: &mut TestAppContext) {
+    use pina_engine::song::project::{Instrument, Track, poly_patch};
+    let (ws, cx) = open(cx);
+    // ⌘/ opens the sheet, its search takes the keys: typing narrows it, not plays or toggles.
+    cx.simulate_keystrokes("cmd-/");
+    assert!(cx.debug_bounds("shortcuts").is_some());
+    cx.simulate_input("duplicate");
+    let rows = ws.read_with(cx, |ws, cx| ws.shortcut_rows(cx));
+    let found: Vec<(&str, &str)> = rows
+        .iter()
+        .flat_map(|(g, _, r)| r.iter().map(|(w, _)| (*g, *w)))
+        .collect();
+    assert!(
+        found.contains(&("Automation", "Duplicate after themselves")),
+        "{found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .all(|(_, w)| w.to_lowercase().contains("duplicate")),
+        "{found:?}"
+    );
+    let keys = rows
+        .iter()
+        .flat_map(|(_, _, r)| r)
+        .find(|(w, _)| *w == "Duplicate after themselves");
+    assert_eq!(keys.unwrap().1, ["⌘D"]);
+    assert!(!ws.read_with(cx, |ws, _| ws.player.playing()));
+    // Its keys, by what they are: "⌘=" finds zooming in.
+    ws.update(cx, |ws, cx| {
+        let find = ws.shortcuts.as_ref().unwrap().find.clone();
+        find.update(cx, |f, cx| f.set_text("⌘=", cx));
+    });
+    cx.run_until_parked();
+    let rows = ws.read_with(cx, |ws, cx| ws.shortcut_rows(cx));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].2[0].0, "Zoom in · out");
+    cx.simulate_keystrokes("escape");
+    assert!(ws.read_with(cx, |ws, _| ws.shortcuts.is_none()));
+
+    // ⌘= ⌘- zoom; End and Home move the playhead.
+    let zoom = ws.read_with(cx, |ws, _| ws.px_per_beat);
+    cx.simulate_keystrokes("cmd-=");
+    assert!(ws.read_with(cx, |ws, _| ws.px_per_beat) > zoom);
+    cx.simulate_keystrokes("cmd--");
+    assert!((ws.read_with(cx, |ws, _| ws.px_per_beat) - zoom).abs() < 0.01);
+    cx.simulate_keystrokes("end");
+    assert!(ws.read_with(cx, |ws, _| ws.playhead()) > 0);
+    cx.simulate_keystrokes("home");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.playhead()), 0);
+
+    // T, then a letter: the pencil; Escape: back to the pointer, then the regions let go.
+    cx.simulate_keystrokes("t");
+    cx.simulate_keystrokes("p");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.tool), Tool::Pencil);
+    assert!(
+        !ws.read_with(cx, |ws, _| ws.bottom
+            == Some(crate::workspace::Bottom::PianoRoll)),
+        "P went to the menu"
+    );
+    cx.simulate_keystrokes("cmd-a");
+    assert!(ws.read_with(cx, |ws, _| ws.selected_regions().len()) > 1);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(ws.read_with(cx, |ws, _| ws.tool), Tool::Pointer);
+    assert!(ws.read_with(cx, |ws, _| ws.selected_regions().len()) > 1);
+    cx.simulate_keystrokes("escape");
+    assert!(ws.read_with(cx, |ws, _| ws.selected_regions().is_empty()));
+
+    // ⌘W closes the synth's window, not the app.
+    let t = ws.update(cx, |ws, cx| {
+        ws.session.project.tracks.push(Track {
+            name: "Synth".into(),
+            instrument: poly_patch("Warm Pad").map(|p| Instrument::Poly(Box::new(p))),
+            ..Default::default()
+        });
+        ws.session.project.assign_ids();
+        let t = ws.session.project.tracks.len() - 1;
+        ws.select_track(t);
+        cx.notify();
+        t
+    });
+    cx.run_until_parked();
+    let slot: &'static str = Box::leak(format!("slot-Track({t})-Instrument").into_boxed_str());
+    click_on(cx, slot, Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.poly_view.is_some()));
+    cx.simulate_keystrokes("cmd-w");
+    assert!(ws.read_with(cx, |ws, _| ws.poly_view.is_none()));
+}
+
+#[gpui::test]
+fn the_playhead_is_on_its_bar_when_the_engine_runs_at_another_rate_than_the_song(
+    cx: &mut TestAppContext,
+) {
+    // A 48 kHz song played through headphones that run at 44.1 kHz: the engine counts samples at
+    // 44.1, and the playhead must read them so (it ran 8% behind, further each bar).
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, _| {
+        let mut at_44 = ws.session.project.clone();
+        at_44.sample_rate = 44_100;
+        ws.player = pina_engine::audio::player::Player::silent(&at_44, &ws.session.dir);
+        let project = ws.engine_project().into_owned();
+        let _ = ws.player.sync(&project);
+        assert_eq!(ws.session.project.sample_rate, 48_000);
+    });
+    let bar = ws.read_with(cx, |ws, _| ws.session.project.bar());
+    ws.update(cx, |ws, cx| ws.locate_tick(bar * 24, cx));
+    cx.run_until_parked();
+    let (tick, samples) = ws.read_with(cx, |ws, _| (ws.playhead(), ws.player.position()));
+    assert_eq!(tick, bar * 24);
+    // Bar 25 at 120 BPM is 48 s in: 48 s at 44.1 kHz.
+    let seconds = ws.read_with(cx, |ws, _| ws.session.project.seconds_at((bar * 24) as f64));
+    assert!(
+        (samples as f64 - seconds * 44_100.0).abs() < 2.0,
+        "{samples}"
+    );
 }

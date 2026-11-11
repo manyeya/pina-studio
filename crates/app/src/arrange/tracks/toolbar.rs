@@ -19,15 +19,21 @@ impl Workspace {
         };
         let snap = match self.snap {
             Snap::Smart => match self.grid() {
+                g if g == PPQ / 8 => "1/32",
                 g if g == PPQ / 4 => "1/16",
-                g if g == PPQ => "Beat",
+                g if g == PPQ / 2 => "1/8",
+                g if g == self.session.project.beat() => "Beat",
                 _ => "Bar",
             },
             s => s.label(),
         };
+        let snap = match self.snap_relative {
+            true => format!("{snap} rel"),
+            false => snap.to_string(),
+        };
         // The drag mode, when it isn't the usual.
         let snap = match self.drag_mode {
-            DragMode::Overlap => snap.to_string(),
+            DragMode::Overlap => snap,
             m => format!("{snap} · {}", m.label()),
         };
         div()
@@ -104,17 +110,37 @@ impl Workspace {
                         MouseButton::Left,
                         cx.listener(|ws, e: &MouseDownEvent, _, cx| {
                             let tick = |on: bool| if on { "✓ " } else { "" };
-                            let mut items: Vec<_> = Snap::ALL
-                                .iter()
-                                .map(|&s| {
-                                    let label = match s {
-                                        Snap::Smart => "Smart (follows zoom)",
-                                        s => s.label(),
-                                    };
-                                    let label = format!("{}{label}", tick(s == ws.snap));
-                                    (label, MenuAction::Snap(s))
-                                })
-                                .collect();
+                            // Grouped as Logic's: what follows the song, note values, triplets,
+                            // dotted, none; then relative.
+                            let rule = || (String::new(), MenuAction::Nothing);
+                            let mut items: Vec<(String, MenuAction)> = Vec::new();
+                            for (k, &s) in Snap::ALL.iter().enumerate() {
+                                if matches!(k, 3 | 9 | 13 | 15) {
+                                    items.push(rule());
+                                }
+                                let label = match s {
+                                    Snap::Smart => "Smart (follows zoom)".to_string(),
+                                    Snap::Beat => "Beat (the time signature's)".to_string(),
+                                    Snap::Off => "Off (ticks)".to_string(),
+                                    s if s.label().ends_with('T') => {
+                                        format!("{} Triplet", s.label().trim_end_matches('T'))
+                                    }
+                                    s if s.label().ends_with('.') => {
+                                        format!("{} Dotted", s.label().trim_end_matches('.'))
+                                    }
+                                    s => format!("{} Note", s.label()),
+                                };
+                                let label = format!("{}{label}", tick(s == ws.snap));
+                                items.push((label, MenuAction::Snap(s)));
+                            }
+                            items.push(rule());
+                            items.push((
+                                format!(
+                                    "{}Snap Relative (keep offsets off the grid)",
+                                    tick(ws.snap_relative)
+                                ),
+                                MenuAction::SnapRelative,
+                            ));
                             // What a region let go on others does.
                             items.push((String::new(), MenuAction::Nothing));
                             items.extend(DragMode::ALL.iter().map(|&m| {

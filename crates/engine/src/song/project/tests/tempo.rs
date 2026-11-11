@@ -17,7 +17,7 @@ fn ticks_and_seconds_go_through_the_tempo_changes() {
     assert_eq!(p.seconds_at((PPQ * 4) as f64), 2.0);
     assert_eq!(p.seconds_at((PPQ * 6) as f64), 4.0);
     assert_eq!(p.samples(PPQ * 6, 48_000.0), 192_000);
-    assert_eq!(p.ticks(192_000), PPQ * 6);
+    assert_eq!(p.ticks(192_000, p.sample_rate as f64), PPQ * 6);
     assert_eq!(p.span(PPQ * 4, PPQ * 5, 48_000.0), 48_000);
     assert_eq!((p.tempo_at(0), p.tempo_at(PPQ * 4)), (120.0, 60.0));
     // Before the start, at the first tempo.
@@ -202,6 +202,29 @@ fn following_a_loop_keeps_whole_beats_and_as_recorded_is_as_recorded() {
     };
     assert_eq!((*stretch, *follow), (1.0, Follow::Off));
     assert_eq!(r.length, p.ticks_for(0, 8 * 48_000 * 60 / 95));
+}
+
+#[test]
+fn stretching_a_following_loop_stretches_its_audio_with_the_region() {
+    // Two bars at 120 following a song at 120: its audio ends where the region does.
+    let mut p = Project::new(48_000);
+    p.tempo = 120.0;
+    p.tracks.push(Track {
+        regions: vec![track_of(Follow::On, Some(120.0))],
+        ..Default::default()
+    });
+    let frames = 8.0 * 24_000.0;
+    let end = |p: &Project| {
+        let r = &p.tracks[0].regions[0];
+        let t = Timing::of(&r.content, 48_000.0).unwrap();
+        (r.length, p.audio_tick(&t, 0.0, frames).round() as u64)
+    };
+    assert_eq!(end(&p), (PPQ * 8, PPQ * 8));
+    // Twice as long: half time, its audio still filling it; then half as long.
+    p.time_stretch((0, 0), PPQ * 16).unwrap();
+    assert_eq!(end(&p), (PPQ * 16, PPQ * 16));
+    p.time_stretch((0, 0), PPQ * 4).unwrap();
+    assert_eq!(end(&p), (PPQ * 4, PPQ * 4));
 }
 
 #[test]

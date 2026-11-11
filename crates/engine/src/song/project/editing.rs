@@ -102,13 +102,14 @@ impl Project {
             return Err("a take folder doesn't stretch: flatten it first".into());
         };
         // Following: its own tempo, so its beats fill `length` (its warps are in its own time).
+        // A faster tempo of its own spreads it over more of the song's beats.
         if !follow.is_off()
             && let Some(t) = tempo
         {
-            let k = (old as f64 / length.max(1) as f64).clamp(0.25, 4.0);
+            let k = (length.max(1) as f64 / old.max(1) as f64).clamp(0.25, 4.0);
             let was = *t;
             *t = (*t * k).clamp(MIN_BPM, MAX_BPM);
-            r.length = (old as f64 * was / *t).round().max(1.0) as u64;
+            r.length = (old as f64 * *t / was).round().max(1.0) as u64;
             return Ok(());
         }
         // The stretch that fills `length`, within limits, and the length that gives; warp
@@ -173,7 +174,7 @@ impl Project {
                     let inside = |n: &&Note| (a as i64..b as i64).contains(&(take.start + n.start));
                     notes.extend(n.iter().filter(inside).map(|n| Note {
                         start: take.start + n.start,
-                        ..*n
+                        ..n.clone()
                     }));
                 }
                 // Each piece's controllers, as they stand where it begins.
@@ -222,6 +223,17 @@ impl Project {
     }
 
     /// Adds a track at `index` and returns its id.
+    /// Track `from` moved to be at `to`, everything on it going with it (its regions, automation,
+    /// sends and the stack it plays into are its own, kept by id).
+    pub fn move_track(&mut self, from: usize, to: usize) {
+        if from >= self.tracks.len() || from == to {
+            return;
+        }
+        let t = self.tracks.remove(from);
+        let to = to.min(self.tracks.len());
+        self.tracks.insert(to, t);
+    }
+
     pub fn add_track(&mut self, index: usize, mut track: Track) -> u64 {
         track.id = next_id();
         let id = track.id;

@@ -202,6 +202,7 @@ pub(crate) fn instrument_kind(i: Option<&Instrument>) -> String {
     match i {
         Some(i @ Instrument::Sampler(_)) if i.is_kit() => "Kit".into(),
         Some(Instrument::Poly(_)) => pina_engine::song::project::POLY_NAME.into(),
+        Some(Instrument::Bloom(_)) => pina_engine::song::project::BLOOM_NAME.into(),
         Some(Instrument::Sampler(_)) => "Sampler".into(),
         _ => instrument_name(i),
     }
@@ -216,6 +217,8 @@ pub fn instrument_name(i: Option<&Instrument>) -> String {
         Some(Instrument::Kit) => "Kit".into(),
         Some(Instrument::Sampler(s)) => sampler_name(s),
         Some(Instrument::Poly(_)) => pina_engine::song::project::POLY_NAME.into(),
+        Some(Instrument::Bloom(b)) if !b.sound.is_empty() => b.sound.clone(),
+        Some(Instrument::Bloom(_)) => pina_engine::song::project::BLOOM_NAME.into(),
         Some(Instrument::Plugin(r)) => r.class.clone(),
     }
 }
@@ -360,6 +363,8 @@ impl Workspace {
             .border_r_1()
             .border_color(rgb(LINE))
             .children(rows)
+            // Where a track dragged up or down would go.
+            .children(self.track_drop_line())
             // Its right edge: drag the column wider or narrower; double-click for its usual width.
             .child(
                 div()
@@ -484,12 +489,24 @@ impl Workspace {
                     .debug_selector(move || format!("mute-{i}"))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
+                            // ⌥: this one alone (the others unmuted); ⌘: every track, as Logic.
+                            let (only, every) = (e.modifiers.alt, e.modifiers.platform);
                             ws.edit(cx, |ws| {
                                 let m = !ws.muted_now(i);
-                                ws.session.project.tracks[i].mute = m;
-                                ws.moved_once(i, Param::Mute, m as u8 as f32);
+                                for t in 0..ws.session.project.tracks.len() {
+                                    let to = match (t == i, only, every) {
+                                        (true, ..) => m,
+                                        (false, true, _) => false,
+                                        (false, false, true) => m,
+                                        _ => continue,
+                                    };
+                                    if ws.session.project.tracks[t].mute != to || t == i {
+                                        ws.session.project.tracks[t].mute = to;
+                                        ws.moved_once(t, Param::Mute, to as u8 as f32);
+                                    }
+                                }
                             });
                         }),
                     ),
@@ -499,9 +516,22 @@ impl Workspace {
                     .debug_selector(move || format!("solo-{i}"))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            ws.edit(cx, |ws| ws.session.project.tracks[i].solo ^= true);
+                            // ⌥: this one alone soloed; ⌘: every track, as Logic.
+                            let (only, every) = (e.modifiers.alt, e.modifiers.platform);
+                            ws.edit(cx, |ws| {
+                                let tracks = &mut ws.session.project.tracks;
+                                let on = !tracks[i].solo;
+                                for (t, track) in tracks.iter_mut().enumerate() {
+                                    match (t == i, only, every) {
+                                        (true, ..) => track.solo = on,
+                                        (false, true, _) => track.solo = false,
+                                        (false, false, true) => track.solo = on,
+                                        _ => {}
+                                    }
+                                }
+                            });
                         }),
                     ),
             )
@@ -778,6 +808,8 @@ impl Workspace {
             );
 
         let height = lh;
+        let lifted =
+            matches!(self.drag, Some(Drag::TrackMove { from, moved: true, .. }) if from == i);
         div()
             .absolute()
             .top(px(top))
@@ -786,6 +818,7 @@ impl Workspace {
             .h(px(lh))
             .flex()
             .items_center()
+            .when(lifted, |d| d.opacity(0.45))
             .bg(rgb(if selected { HEADER_SELECTED } else { HEADERS }))
             .border_b_1()
             .border_color(rgb(LINE_SOFT))
@@ -870,6 +903,18 @@ impl Workspace {
                         false => ws.select_track(i),
                     }
                     ws.region = None;
+                    // Dragged up or down: the track moves there, as Logic's headers do.
+                    if !m.platform && !m.shift && e.click_count == 1 {
+                        ws.begin_drag(
+                            Drag::TrackMove {
+                                from: i,
+                                y: f32::from(e.position.y),
+                                to: i,
+                                moved: false,
+                            },
+                            cx,
+                        );
+                    }
                     cx.notify();
                 }),
             )

@@ -14,6 +14,8 @@ impl Workspace {
                     if phase == DispatchPhase::Bubble {
                         t.update(cx, |ws, cx| {
                             ws.fine = e.modifiers.shift;
+                            ws.cmd = e.modifiers.platform;
+                            ws.mods = e.modifiers;
                             ws.drag_to(pt(e.position), cx)
                         })
                         .ok();

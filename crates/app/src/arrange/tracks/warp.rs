@@ -19,6 +19,23 @@ impl Warping {
 }
 
 impl Workspace {
+    /// The tick where an audio region's file runs out, once it's loaded: its end trims no
+    /// further, as Logic's.
+    pub fn audio_end(&self, at: At) -> Option<u64> {
+        let p = &self.session.project;
+        let r = p.region(at);
+        let Content::Audio { file, .. } = &r.content else {
+            return None;
+        };
+        let (_, frames) = self.player.hits(file, p.sample_rate as f64)?;
+        let t = Timing::of(&r.content, p.sample_rate as f64)?;
+        Some(
+            p.audio_tick(&t, r.start as f64, frames as f64)
+                .floor()
+                .max(0.0) as u64,
+        )
+    }
+
     /// An audio region's warp geometry, once its file is loaded.
     pub fn warping(&self, at: At) -> Option<Warping> {
         let p = &self.session.project;

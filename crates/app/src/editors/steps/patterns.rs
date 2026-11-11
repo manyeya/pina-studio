@@ -1,6 +1,7 @@
 //! Pattern regions: found, made, turned to and from MIDI, their length and rate.
 
 use super::*;
+use pina_engine::song::project::Note;
 
 impl Workspace {
     /// The pattern region the pane shows: the selected one, else the selected track's under the
@@ -76,29 +77,24 @@ impl Workspace {
         });
     }
 
-    /// A MIDI region made a pattern region: a row a pitch, each note on its nearest sixteenth,
-    /// its velocity kept, how far off the step as its offset, how long as ties and a gate; up to
-    /// four bars (64 steps) long, looped over the region.
+    /// A MIDI region made a pattern region, as exactly as steps can hold it: a row a pitch, on
+    /// the step its notes sit on (1/16, or finer, or triplets), each velocity kept and how long
+    /// it holds as ties and a gate. As long as the region, or the shortest whole bars that loop
+    /// through it unchanged.
     pub fn midi_to_pattern(&mut self, at: At, cx: &mut Context<Self>) {
         let r = self.session.project.region(at).clone();
         let Content::Midi { notes, .. } = &r.content else {
             return;
         };
         let bar = self.session.project.bar();
-        let step = PPQ / 4;
-        // As long as it takes to hold what it plays: one, two or four bars.
-        let span = notes
+        let notes: Vec<_> = notes
             .iter()
-            .map(|n| n.start.max(0) as u64 + 1)
-            .max()
-            .unwrap_or(bar);
-        let bars = match span.div_ceil(bar) {
-            0 | 1 => 1,
-            2 => 2,
-            _ => 4,
-        };
-        let steps = ((bar * bars) / step).min(64) as usize;
-        let rows = to_pattern(notes, step, steps);
+            .filter(|n| n.start >= 0 && (n.start as u64) < r.length)
+            .cloned()
+            .collect();
+        let (step, span) = pattern_fit(&notes, r.length, bar);
+        let steps = ((span / step) as usize).clamp(1, MOST_STEPS);
+        let rows = to_pattern(&notes, step, steps);
         if rows.is_empty() {
             self.status = Some("That region has no notes to make steps of.".into());
             cx.notify();
@@ -113,7 +109,26 @@ impl Workspace {
             ws.bottom = Some(Bottom::Steps);
             ws.steps.row = 0;
         });
-        self.status = Some(format!("A pattern now: {steps} steps"));
+        let rate = match step {
+            s if s == PPQ / 4 => "1/16".to_string(),
+            s if s == PPQ / 6 => "1/16 triplets".to_string(),
+            s if s == PPQ / 8 => "1/32".to_string(),
+            s if s == PPQ / 12 => "1/32 triplets".to_string(),
+            s => format!("{s} ticks"),
+        };
+        let bars = span / bar;
+        self.status = Some(
+            match steps * step as usize >= r.length as usize || span < r.length {
+                true => format!(
+                    "A pattern now: {steps} steps of {rate}, {bars} bar{}{}",
+                    if bars == 1 { "" } else { "s" },
+                    if span < r.length { ", looping" } else { "" }
+                ),
+                false => format!(
+                    "A pattern now: its first {steps} steps of {rate} (the most a pattern holds)"
+                ),
+            },
+        );
     }
 
     /// A pattern region made a MIDI region, to edit in the piano roll.
@@ -133,4 +148,42 @@ impl Workspace {
         });
         self.show_bottom(Bottom::PianoRoll, cx);
     }
+}
+
+/// The most steps a converted pattern takes: sixteen bars of sixteenths.
+const MOST_STEPS: usize = 256;
+
+/// The step a region's notes sit on, and how long a pattern holds them: the coarsest of 1/16,
+/// 1/16 triplets, 1/32 and 1/32 triplets every note starts on (1/16, with nudges, if none fit);
+/// the fewest whole bars (1, 2, 4, 8) that repeat unchanged through the region, else all of it.
+pub(crate) fn pattern_fit(notes: &[Note], length: u64, bar: u64) -> (u64, u64) {
+    let step = [PPQ / 4, PPQ / 6, PPQ / 8, PPQ / 12]
+        .into_iter()
+        .find(|&s| notes.iter().all(|n| n.start.rem_euclid(s as i64) == 0))
+        .unwrap_or(PPQ / 4);
+    let total = length.div_ceil(bar).max(1) * bar;
+    let key = |n: &Note, span: u64| (n.start as u64 % span, n.pitch, n.velocity, n.length);
+    let repeats = |span: u64| {
+        let mut first: Vec<_> = notes
+            .iter()
+            .filter(|n| (n.start as u64) < span)
+            .map(|n| key(n, span))
+            .collect();
+        first.sort_unstable();
+        (1..total / span).all(|k| {
+            let mut again: Vec<_> = notes
+                .iter()
+                .filter(|n| (n.start as u64) / span == k)
+                .map(|n| key(n, span))
+                .collect();
+            again.sort_unstable();
+            again == first
+        })
+    };
+    let span = [1, 2, 4, 8]
+        .into_iter()
+        .map(|b| b * bar)
+        .find(|&s| s < total && total.is_multiple_of(s) && repeats(s))
+        .unwrap_or(total);
+    (step, span)
 }

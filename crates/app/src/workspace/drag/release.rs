@@ -109,6 +109,8 @@ impl Workspace {
                 self.finish_sketch(cx);
             }
             Some(Drag::Effect { .. }) => self.release_effect(cx),
+            Some(Drag::RackTile { .. }) => self.release_rack_tile(cx),
+            Some(Drag::Bend { .. }) => self.end_expression(cx),
             _ => {}
         }
         if let Some(Drag::Modulator { track, index }) = self.drag
@@ -128,6 +130,8 @@ impl Workspace {
                 }
             }
             Some(Drag::PolyKeys) => self.poly_lift(),
+            Some(Drag::BloomKeys) => self.bloom_lift(),
+            Some(Drag::BloomBranch { .. }) => self.bloom_let_go(),
             // A bend wheel springs back; the mod wheel stays where it's left.
             Some(Drag::PolyWheel {
                 track, bend: true, ..
@@ -198,7 +202,61 @@ impl Workspace {
             self.let_go_all();
             self.changed(cx);
         }
+        if let Some(Drag::TrackMove {
+            from,
+            to,
+            moved: true,
+            ..
+        }) = self.drag
+            && from != to
+        {
+            self.move_track(from, to, cx);
+        }
+        // A line's bend handle clicked, not dragged: a point on the line there instead.
+        if let Some(Drag::AutoBend {
+            track,
+            param,
+            index,
+            curve,
+            ..
+        }) = self.drag
+        {
+            let points = self.session.project.tracks[track].automation.points(param);
+            let unbent = points.get(index).is_some_and(|q| q.curve == curve);
+            if let (true, Some(a), Some(b)) = (unbent, points.get(index), points.get(index + 1)) {
+                let tick = (a.tick + b.tick) / 2;
+                let value = pina_engine::song::project::value_at(points, tick as f64);
+                self.session.cancel();
+                if let Some(value) = value {
+                    let step = param.steps();
+                    let mut at = 0;
+                    self.edit(cx, |ws| {
+                        at = ws.session.project.tracks[track].automation.add(
+                            param,
+                            pina_engine::song::project::AutoPoint {
+                                step,
+                                ..pina_engine::song::project::AutoPoint::new(tick, value)
+                            },
+                        );
+                    });
+                    self.pick_points(track, param, vec![at]);
+                }
+            }
+        }
         match self.drag {
+            // A click on the line, not a drag: a point on it there, as Logic puts one.
+            Some(Drag::AutoLine {
+                track,
+                k,
+                x,
+                y,
+                free,
+                moved: false,
+                ..
+            }) => {
+                self.session.cancel();
+                self.marquee_done(track, k, (x, y), (x, y), false, free, cx);
+            }
             Some(Drag::AutoMarquee {
                 track,
                 k,
@@ -213,11 +271,20 @@ impl Workspace {
             }
             _ => {}
         }
+        if let Some(Drag::Notes {
+            moved: false,
+            alone: true,
+            lead,
+            ..
+        }) = self.drag
+        {
+            self.picked = vec![lead];
+        }
         if let Some(
             Drag::Region { moved: false, .. }
             | Drag::Notes { moved: false, .. }
             | Drag::Auto { moved: false, .. }
-            | Drag::AutoLine { moved: false, .. }
+            | Drag::AutoStretch { moved: false, .. }
             | Drag::Marker { moved: false, .. }
             | Drag::Tempo { moved: false, .. }
             | Drag::TempoPoint { moved: false, .. }

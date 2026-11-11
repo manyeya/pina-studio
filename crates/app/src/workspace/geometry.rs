@@ -97,15 +97,16 @@ impl Workspace {
     pub fn grid(&self) -> u64 {
         match self.snap {
             Snap::Smart => match self.px_per_beat {
+                z if z >= 192.0 => PPQ / 8,
                 z if z >= 96.0 => PPQ / 4,
+                z if z >= 64.0 => PPQ / 2,
                 z if z >= 20.0 => self.session.project.beat(),
                 _ => self.session.project.bar(),
             },
             Snap::Bar => self.session.project.bar(),
             Snap::Beat => self.session.project.beat(),
-            Snap::Eighth => PPQ / 2,
-            Snap::Sixteenth => PPQ / 4,
             Snap::Off => 1,
+            s => s.ticks().unwrap_or(PPQ),
         }
     }
 

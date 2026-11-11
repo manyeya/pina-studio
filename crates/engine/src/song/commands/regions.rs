@@ -19,10 +19,12 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
                 ));
             }
             controls.sort_by_key(|c| c.start);
+            let mut content = Content::Midi { notes, controls };
+            content.adopt_expression();
             tr.regions.push(Region {
                 start,
                 length: length.max(1),
-                content: Content::Midi { notes, controls },
+                content,
                 ..Default::default()
             });
             return Ok(json!({ "region": [t, tr.regions.len() - 1] }));
@@ -36,6 +38,7 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             controls.sort_by_key(|c| c.start);
             let only = "only MIDI regions have controller moves: that's audio, a pattern or takes";
             *p.controls_mut((t, r)).ok_or(only)? = controls;
+            p.tracks[t].regions[r].content.adopt_expression();
         }
         Command::SetNotes {
             track: t,
@@ -45,6 +48,7 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             region_at(p, t, r)?;
             let only = "only MIDI regions have notes: that's audio, or a take folder";
             *p.notes_mut((t, r)).ok_or(only)? = notes;
+            p.tracks[t].regions[r].content.adopt_expression();
         }
         Command::AddPatternRegion {
             track: t,

@@ -7,6 +7,8 @@ impl Workspace {
         let (ppt, sx, sy) = (self.px_per_tick(), self.scroll_x, self.scroll_y);
         let p = &self.session.project;
         let (beat_ticks, per_bar, bar_ticks) = (p.beat(), p.beats_per_bar(), p.bar());
+        // The snap's division, drawn finer than the beats where there's room for it.
+        let division = self.grid();
         let tracks = self.session.project.tracks.len();
         let selected: Vec<usize> = self.picked_tracks();
         let automation = self.show_automation;
@@ -119,6 +121,22 @@ impl Workspace {
                     quad(window, 0.0, y + row_h - 1.0, w, 1.0, rgb(LINE_SOFT).into());
                 }
                 let _ = sy;
+                let div_px = ppt * division as f32;
+                if division < beat_ticks && div_px >= 8.0 && beat_lines {
+                    let first = (sx / div_px) as u64;
+                    let last = ((sx + w) / div_px) as u64 + 1;
+                    for k in first..=last {
+                        let x = (k as f32 * div_px - sx).round();
+                        quad(
+                            window,
+                            x,
+                            0.0,
+                            1.0,
+                            f32::from(b.size.height),
+                            rgb(0x121217).into(),
+                        );
+                    }
+                }
                 let beat_px = ppt * beat_ticks as f32;
                 let first = (sx / beat_px) as u64;
                 let last = ((sx + w) / beat_px) as u64 + 1;
@@ -194,6 +212,12 @@ impl Workspace {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            // ⇧-click on an empty stretch: the playhead there, as Logic.
+                            if e.modifiers.shift && ws.tool == Tool::Pointer && e.click_count == 1 {
+                                let tick = ws.snap(ws.tick_at(f32::from(e.position.x)));
+                                ws.locate_tick(tick, cx);
+                                return cx.notify();
+                            }
                             ws.select_track(i);
                             ws.region = None;
                             ws.picks.clear();

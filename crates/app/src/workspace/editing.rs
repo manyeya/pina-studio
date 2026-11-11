@@ -73,6 +73,114 @@ impl Workspace {
         self.changed(cx);
     }
 
+    /// Where track `from`, dragged to window y `y`, would go: the gap nearest the pointer,
+    /// a stack's tracks kept among themselves and the others kept out of stacks.
+    pub fn track_drop(&self, from: usize, y: f32) -> usize {
+        let p = &self.session.project;
+        let n = p.tracks.len();
+        let rel = y - f32::from(self.lanes_bounds.get().origin.y);
+        // The gap before track `slot`, `slot` running to n (after the last).
+        let slot = match self.track_at_y(rel) {
+            Some(t) => {
+                let mid = self.row_top(t) + (self.lane_h(t) + self.autos_h(t)) / 2.0;
+                if rel < mid { t } else { t + 1 }
+            }
+            None if rel < 0.0 => 0,
+            None => n,
+        };
+        let stack = |t: usize| p.tracks.get(t).and_then(|t| t.output);
+        let members = |bus: Option<u32>| -> Vec<usize> {
+            (0..n)
+                .filter(|&t| bus.is_some() && stack(t) == bus && p.stack_of(t).is_some())
+                .collect()
+        };
+        let mine = members(stack(from).filter(|_| p.stack_of(from).is_some()));
+        let slot = match (mine.first(), mine.last()) {
+            // In a stack: among its own.
+            (Some(&a), Some(&b)) => slot.clamp(a, b + 1),
+            // Not: never inside one.
+            _ => {
+                let inside = (0..n).find(|&t| {
+                    let m = members(stack(t).filter(|_| p.stack_of(t).is_some()));
+                    m.first().is_some_and(|&a| slot > a) && m.last().is_some_and(|&b| slot <= b)
+                });
+                match inside {
+                    Some(t) => {
+                        let m = members(stack(t));
+                        let (a, b) = (m[0], *m.last().unwrap());
+                        if slot - a < b + 1 - slot { a } else { b + 1 }
+                    }
+                    None => slot,
+                }
+            }
+        };
+        if slot > from { slot - 1 } else { slot }.min(n.saturating_sub(1))
+    }
+
+    /// The line where a dragged track would go, over the headers.
+    pub(crate) fn track_drop_line(&self) -> Option<gpui::Div> {
+        let Some(Drag::TrackMove {
+            from,
+            to,
+            moved: true,
+            ..
+        }) = self.drag
+        else {
+            return None;
+        };
+        let n = self.session.project.tracks.len();
+        // The gap it goes into: before `to`, or (moving down) after it.
+        let y = match to > from {
+            true => self.row_top(to) + self.lane_h(to) + self.autos_h(to),
+            false => self.row_top(to),
+        };
+        let _ = n;
+        Some(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(px(y - 1.5))
+                .h(px(3.))
+                .rounded(px(2.))
+                .bg(rgb(ACCENT))
+                .debug_selector(|| "track-drop-line".into()),
+        )
+    }
+
+    /// Track `from` moved to `to`, one undo; what's selected and open follows it.
+    pub fn move_track(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        let map = |i: usize| match i {
+            i if i == from => to,
+            i if from < to && i > from && i <= to => i - 1,
+            i if to < from && i >= to && i < from => i + 1,
+            i => i,
+        };
+        self.edit(cx, |ws| {
+            ws.session.project.move_track(from, to);
+            ws.track = map(ws.track);
+            ws.region = ws.region.map(|(t, r)| (map(t), r));
+            for pick in &mut ws.picks {
+                pick.0 = map(pick.0);
+            }
+            if let Channel::Track(t) = ws.channel {
+                ws.channel = Channel::Track(map(t));
+            }
+            if let Some(v) = ws.midi_fx_view.as_mut() {
+                v.track = map(v.track);
+            }
+            if let Some(v) = ws.poly_view.as_mut() {
+                v.track = map(v.track);
+            }
+            if let Some(v) = ws.bloom_view.as_mut() {
+                v.track = map(v.track);
+            }
+            if let Some(v) = ws.mpe_view.as_mut() {
+                v.track = map(v.track);
+            }
+        });
+    }
+
     /// Selects a track: in the arrangement, the inspector and the mixer.
     pub fn select_track(&mut self, i: usize) {
         self.track = i;
@@ -251,6 +359,9 @@ impl Workspace {
             Some(Instrument::Sampler(_)) => format!("Sampler {}", n + 1),
             Some(Instrument::Poly(_)) => {
                 format!("{} {}", pina_engine::song::project::POLY_NAME, n + 1)
+            }
+            Some(Instrument::Bloom(_)) => {
+                format!("{} {}", pina_engine::song::project::BLOOM_NAME, n + 1)
             }
             Some(Instrument::Kit) => format!("Kit {}", n + 1),
             Some(Instrument::Synth) => format!("Synth {}", n + 1),

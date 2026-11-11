@@ -5,9 +5,19 @@ use super::*;
 /// What a region shows inside.
 #[derive(Default)]
 pub struct Inside {
-    /// Start (ticks from the region's start), length and pitch.
-    notes: Vec<(i64, u64, u8)>,
+    /// Start (ticks from the region's start), length, pitch and velocity.
+    notes: Vec<(i64, u64, u8, u8)>,
     waves: Vec<Wave>,
+    /// A pattern's: its rows' pitches (top first) and its step, to draw it as steps.
+    steps: Option<(Vec<u8>, u64)>,
+}
+
+#[cfg(test)]
+impl Inside {
+    /// Where its waveform stops, in pixels into the region.
+    pub(crate) fn drawn_to(&self) -> Option<f32> {
+        self.waves.iter().map(|w| w.x1).reduce(f32::max)
+    }
 }
 
 /// A stretch of waveform: from `x0` to `x1` pixels into the region, `offset` the sample at `x0`.
@@ -28,7 +38,10 @@ pub(crate) fn region_name(track: &str, region: &Region) -> String {
                 _ => format!("{track} · Comp"),
             }
         }
-        Content::Audio { stretch, .. } if *stretch != 1.0 => {
+        // Following, its own tempo sets how long it plays: a stretch it kept from before is unused.
+        Content::Audio {
+            stretch, follow, ..
+        } if *stretch != 1.0 && follow.is_off() => {
             format!("{track} · Stretched ×{stretch:.2}")
         }
         Content::Audio { file, .. } => file
@@ -179,6 +192,14 @@ pub(crate) fn grab(
             Tool::Pointer | Tool::Pencil | Tool::Stretch => {}
         }
         ws.auto_picked = None;
+        // ⇧-double-click: every region on its track, as Logic.
+        if e.modifiers.shift && e.click_count == 2 && ws.tool == Tool::Pointer {
+            let n = ws.session.project.tracks[at.0].regions.len();
+            let mut all: Vec<At> = (0..n).map(|i| (at.0, i)).collect();
+            all.swap(0, at.1);
+            ws.select_regions(all);
+            return cx.notify();
+        }
         // ⇧-click: into the selection, or out of it.
         if e.modifiers.shift && !e.modifiers.alt && ws.tool == Tool::Pointer {
             ws.toggle_pick(at);
@@ -275,13 +296,65 @@ pub fn paint_inside(
         let at = point(b.origin.x + px(x), b.origin.y + px(y));
         window.paint_quad(fill(Bounds::new(at, size(px(bw), px(bh))), c).corner_radii(px(1.)));
     };
+    // A pattern: its steps, a row a sound, each step a cell lit by how hard it plays.
+    if let Some((rows, step)) = inside.steps.as_ref().filter(|(r, _)| !r.is_empty()) {
+        let n = rows.len() as f32;
+        let row = ((h - 2.0) / n).min(12.0);
+        let top = (h - row * n) / 2.0;
+        let sw = *step as f32 * ppt;
+        // The empty steps, faintly, where there's room to see them.
+        if sw >= 4.0 && row >= 3.0 {
+            let k0 = 0;
+            let k1 = (w / sw).ceil() as i64;
+            for k in k0..k1 {
+                for r in 0..rows.len() {
+                    let y = top + r as f32 * row;
+                    bar(
+                        k as f32 * sw + 0.5,
+                        y + 0.5,
+                        (sw - 1.5).max(1.0),
+                        (row - 1.5).max(1.0),
+                        color.opacity(0.08),
+                    );
+                }
+            }
+        }
+        for &(start, len, pitch, velocity) in &inside.notes {
+            let Some(r) = rows.iter().position(|&p| p == pitch) else {
+                continue;
+            };
+            let y = top + r as f32 * row;
+            let lit = 0.35 + 0.65 * velocity as f32 / 127.0;
+            // A cell a step it's held over: the first as hard as it plays, those tied on dimmer
+            // and joined to it.
+            let held = (len.div_ceil(*step) as usize).max(1);
+            for j in 0..held {
+                let x = start as f32 * ppt + j as f32 * sw;
+                if x + sw < 0.0 || x > w {
+                    continue;
+                }
+                let c = if j == 0 { lit } else { lit * 0.6 };
+                bar(
+                    x + 0.5,
+                    y + 0.5,
+                    (sw - 1.5).max(1.5),
+                    (row - 1.5).max(1.5),
+                    color.opacity(c),
+                );
+                if j > 0 {
+                    bar(x - 1.5, y + row / 2.0 - 0.75, 2.5, 1.5, color.opacity(c));
+                }
+            }
+        }
+        return;
+    }
     if let Some(lo) = inside.notes.iter().map(|n| n.2).min() {
         let hi = inside.notes.iter().map(|n| n.2).max().unwrap();
         // At least an octave tall, centered on the notes.
         let span = (hi - lo).max(12) as f32 + 1.0;
         let top = (lo as f32 + hi as f32) / 2.0 + span / 2.0;
         let row = (h - 2.0) / span;
-        for &(start, len, pitch) in &inside.notes {
+        for &(start, len, pitch, _) in &inside.notes {
             let (x, nw) = (start as f32 * ppt, (len as f32 * ppt - 1.0).max(1.5));
             if x + nw > 0.0 && x < w {
                 let y = 1.0 + (top - pitch as f32 - 0.5) * row;
@@ -706,7 +779,11 @@ impl Workspace {
                     .filter(|n| (from as i64..to as i64).contains(&(at + n.start)));
                 inside
                     .notes
-                    .extend(shown.map(|n| (at + n.start, n.length, n.pitch)));
+                    .extend(shown.map(|n| (at + n.start, n.length, n.pitch, n.velocity)));
+                if let Content::Pattern(p) = content {
+                    let rows = p.rows.iter().filter(|r| !r.mute).map(|r| r.pitch).collect();
+                    inside.steps = Some((rows, p.step.max(1)));
+                }
             }
             Content::Audio { file, .. } => {
                 let begin = (from as i64).max(at);
@@ -716,9 +793,12 @@ impl Workspace {
                 let Some(timing) = Timing::of(content, project.sample_rate as f64) else {
                     return;
                 };
+                // The overview is at the engine's rate, not always the song's (an output that
+                // can't play the song's runs it at its own): `k` of the song's frames a frame.
+                let k = project.sample_rate as f64 / self.player.rate();
                 // A piece of waveform for each stretch of it that's straight in ticks: between
                 // its warp markers, and where the song's tempo changes.
-                let n = peaks.len_samples() as f64;
+                let n = peaks.len_samples() as f64 * k;
                 let anchor = start_tick as f64 + at as f64;
                 let corners = project.audio_corners(&timing, anchor, n);
                 for w in corners.windows(2) {
@@ -735,8 +815,8 @@ impl Workspace {
                         x0: a as f32 * ppt,
                         x1: b as f32 * ppt,
                         peaks: peaks.clone(),
-                        offset: (i0 + (a - t0) * samples_per_tick) as f32,
-                        samples_per_px: (samples_per_tick / ppt as f64) as f32,
+                        offset: ((i0 + (a - t0) * samples_per_tick) / k) as f32,
+                        samples_per_px: (samples_per_tick / k / ppt as f64) as f32,
                     });
                 }
             }

@@ -97,12 +97,14 @@ pub enum Drag {
     Locate,
     /// Notes in the piano roll, picked up together: each as it began, `lead` the one grabbed
     /// (its snapping moves them all).
+    /// With `alone`, it was pressed among others picked: let go unmoved, it's picked alone.
     Notes {
         at: At,
         lead: usize,
         edge: Edge,
         from: Point<f32>,
         moved: bool,
+        alone: bool,
     },
     /// A rubber band over the piano roll, picking the notes it touches (and those already
     /// picked, with shift: `held_picks`).
@@ -205,6 +207,27 @@ pub enum Drag {
     },
     /// The Zoom tool's drag across bars; the Solo tool held; the Fade tool's drag (`out` at the
     /// region's end).
+    /// A track's header dragged up or down: where it was, where it would go, and whether it's
+    /// gone far enough to be a move.
+    TrackMove {
+        from: usize,
+        y: f32,
+        to: usize,
+        moved: bool,
+    },
+    /// A MIDI effect's dial, from the place it was at (0 to 1).
+    MidiFxDial {
+        track: usize,
+        slot: usize,
+        dial: crate::mix::midi_fx::Dial,
+        y: f32,
+        value: f32,
+    },
+    /// The MIDI FX window moved by its top.
+    MidiFxWindow {
+        from: Point<f32>,
+        start: Point<gpui::Pixels>,
+    },
     ZoomSpan,
     SoloHold,
     Fade {
@@ -227,6 +250,17 @@ pub enum Drag {
         left: f32,
         width: f32,
     },
+    /// A hand on the notes' own expression (`dim`) in the roll: over the notes (`grid`) or in the
+    /// lane under them, doing `how`, from where it pressed; `moved` once it has.
+    Bend {
+        at: At,
+        dim: pina_engine::song::project::Dim,
+        grid: bool,
+        how: crate::editors::pianoroll::BendHow,
+        from: Point<f32>,
+        moved: bool,
+        alone: bool,
+    },
     /// Drawing a controller's moves in the lane under the piano roll, from the tick it was at.
     Control {
         at: At,
@@ -242,12 +276,25 @@ pub enum Drag {
         index: usize,
         moved: bool,
     },
-    /// The line between two points, both ends up or down with it.
+    /// The line between two points, both ends up or down with it; let go unmoved, a point put
+    /// on it where it was pressed (`x`, on the grid unless `free`).
     AutoLine {
         track: usize,
         param: Param,
         k: usize,
+        x: f32,
         y: f32,
+        free: bool,
+        moved: bool,
+    },
+    /// An edge of the picked points' box, stretching them in time or value, from a window
+    /// position; how much they're scaled by so far.
+    AutoStretch {
+        track: usize,
+        param: Param,
+        side: crate::arrange::automation::Side,
+        from: (f32, f32),
+        scale: f32,
         moved: bool,
     },
     /// A line's bend, from its middle.
@@ -395,6 +442,15 @@ pub enum Drag {
         at: (f32, f32),
         moved: bool,
     },
+    /// One of a synth's own effects, its tile in the chain pressed at `start` (x) and dragged
+    /// to another place; let go unmoved, it's picked.
+    RackTile {
+        track: usize,
+        from: usize,
+        to: usize,
+        start: f32,
+        moved: bool,
+    },
     /// The navigation bar's view of the song on screen, dragged to scroll, held `grab` px into
     /// it; and the tracks' scrollbar, likewise.
     Overview {
@@ -409,6 +465,27 @@ pub enum Drag {
         from: Point<f32>,
         start: (f32, f32),
         resize: bool,
+    },
+    /// Bloom's window moved by its title, or resized by its corner.
+    BloomWindow {
+        from: Point<f32>,
+        start: (f32, f32),
+        resize: bool,
+    },
+    /// A branch of Bloom's garden, grown and bent by its flower.
+    BloomBranch {
+        track: usize,
+        branch: usize,
+    },
+    /// A finger on Bloom's keys.
+    BloomKeys,
+    /// A knob steering what a branch grows a gene to, from the y and value it had.
+    BloomSteer {
+        track: usize,
+        branch: usize,
+        gene: usize,
+        y: f32,
+        value: f32,
     },
     /// A point on one of the synth's pictures.
     PolyPoint {
@@ -562,7 +639,11 @@ impl Workspace {
                 | Drag::AutoDraw { .. }
                 | Drag::EqWindow { .. }
                 | Drag::FxWindow { .. }
+                | Drag::MidiFxWindow { .. }
+                | Drag::TrackMove { .. }
                 | Drag::PolyWindow { .. }
+                | Drag::BloomWindow { .. }
+                | Drag::BloomKeys
                 | Drag::PolySource { .. }
                 | Drag::PolyKeys
                 | Drag::PolyWheel { .. }

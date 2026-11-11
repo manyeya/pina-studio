@@ -10,6 +10,7 @@ impl Workspace {
             | Drag::Notes { moved, .. }
             | Drag::Auto { moved, .. }
             | Drag::AutoLine { moved, .. }
+            | Drag::AutoStretch { moved, .. }
             | Drag::Cycle { moved, .. }
             | Drag::Marker { moved, .. }
             | Drag::Tempo { moved, .. }
@@ -33,7 +34,14 @@ impl Workspace {
                 let dt = ((p.x - from.x) / ppt) as f64;
                 match edge {
                     Edge::Move => {
-                        let start = self.snap(start as f64 + dt);
+                        // Relative: the move snaps, the start keeps its offset off the grid.
+                        let start = match self.snap_relative && !self.mods.control {
+                            true => {
+                                let g = self.grid() as f64;
+                                (start as f64 + (dt / g).round() * g).max(0.0) as u64
+                            }
+                            false => self.drag_snap(start as f64 + dt),
+                        };
                         // To the track under the pointer (its own, above the first or past the
                         // last), however tall each is.
                         let _ = (from, track);
@@ -68,12 +76,16 @@ impl Workspace {
                         }
                     }
                     Edge::Start => {
-                        let start = self.snap(start as f64 + dt);
+                        let start = self.drag_snap(start as f64 + dt);
                         self.session.project.trim_start(at, start);
                     }
+                    // Audio no further than its file goes (or the end it had, if past that).
                     Edge::End => {
-                        let end = self.snap(end as f64 + dt);
-                        self.session.project.trim_end(at, end);
+                        let mut to = self.drag_snap(end as f64 + dt);
+                        if let Some(last) = self.audio_end(at) {
+                            to = to.min(last.max(end));
+                        }
+                        self.session.project.trim_end(at, to);
                     }
                     // MIDI and patterns stretch from how they were, so rounding doesn't build up.
                     Edge::Stretch if self.stretching.is_some() => {
@@ -182,6 +194,7 @@ impl Workspace {
             Some(Drag::NoteField { .. }) => self.drag_note_field(p),
             Some(Drag::VelocityLine { .. }) => self.drag_velocity_line(p),
             Some(Drag::Control { .. }) => self.drag_control(p),
+            Some(Drag::Bend { .. }) => self.drag_expression(p),
             Some(Drag::Mark { .. }) => self.drag_mark(p),
             Some(Drag::SamplerEnv { .. }) => self.drag_sampler_env(p),
             Some(Drag::SamplerFilter { .. }) => self.drag_sampler_filter(p),
@@ -315,6 +328,13 @@ impl Workspace {
                 y,
                 curve,
             }) => self.drag_bend(track, param, index, y, curve, p),
+            Some(Drag::AutoStretch {
+                track,
+                param,
+                side,
+                from,
+                ..
+            }) => self.drag_stretch(track, param, side, from, p),
             Some(Drag::AutoMarquee { .. }) => {
                 if let Some(Drag::AutoMarquee { to, .. }) = &mut self.drag {
                     *to = (p.x, p.y);
@@ -452,6 +472,11 @@ impl Workspace {
                 cx.notify();
                 return;
             }
+            Some(Drag::RackTile { .. }) => {
+                self.drag_rack_tile(p.x);
+                cx.notify();
+                return;
+            }
             Some(Drag::Pad {
                 note, from, moved, ..
             }) => {
@@ -484,6 +509,36 @@ impl Workspace {
                 cx.notify();
                 return;
             }
+            Some(Drag::BloomWindow {
+                from,
+                start,
+                resize,
+            }) => {
+                self.drag_bloom_window(from, start, resize, p);
+                cx.notify();
+                return;
+            }
+            Some(Drag::BloomBranch { track, branch }) => {
+                let g = self.bloom_view.as_ref().map(|v| v.garden.get());
+                if let Some(g) = g {
+                    let half = f32::from(g.size.width).max(1.0) / 2.0;
+                    let x = (p.x - f32::from(g.origin.x) - half) / half;
+                    let y = (p.y - f32::from(g.origin.y) - half) / half;
+                    self.drag_bloom_branch(track, branch, x, y);
+                }
+            }
+            Some(Drag::BloomKeys) => {
+                self.bloom_finger(p);
+                cx.notify();
+                return;
+            }
+            Some(Drag::BloomSteer {
+                track,
+                branch,
+                gene,
+                y,
+                value,
+            }) => self.drag_bloom_steer(track, branch, gene, value - (p.y - y) / 150.0),
             Some(Drag::PolyPoint { id }) => self.drag_poly_point(id, p),
             Some(Drag::PolySource { .. }) => {
                 self.mod_drag_at = Some(p);
@@ -529,6 +584,32 @@ impl Workspace {
                 if let Some(r) = self.poly_mut(track).and_then(|s| s.routes.get_mut(route)) {
                     r.depth = (depth + (p.x - x) / 130.0).clamp(-1.0, 1.0);
                 }
+            }
+            Some(Drag::TrackMove { from, y, .. }) => {
+                let to = self.track_drop(from, p.y);
+                if let Some(Drag::TrackMove { to: t, moved, .. }) = &mut self.drag {
+                    *t = to;
+                    *moved |= (p.y - y).abs() > 4.0;
+                }
+                cx.notify();
+                return;
+            }
+            Some(Drag::MidiFxDial {
+                track,
+                slot,
+                dial,
+                y,
+                value,
+            }) => self.drag_midi_fx_dial((track, slot), dial, y, value, p),
+            Some(Drag::MidiFxWindow { from, start }) => {
+                let (vw, vh) = (self.viewport_w, self.viewport_h);
+                if let Some(v) = self.midi_fx_view.as_mut() {
+                    let x = (f32::from(start.x) + p.x - from.x).clamp(-800.0, vw - 80.0);
+                    let y = (f32::from(start.y) + p.y - from.y).clamp(0.0, vh - 48.0);
+                    v.at = gpui::point(gpui::px(x), gpui::px(y));
+                }
+                cx.notify();
+                return;
             }
             Some(Drag::FxWindow {
                 from,
@@ -610,6 +691,9 @@ impl Workspace {
         }
         if let Target::Poly { track, param } = target {
             return Some((track, Param::Poly(param as u16)));
+        }
+        if let Target::Rack { track, slot, knob } = target {
+            return Some((track, Param::Rack(slot as u8, knob as u8)));
         }
         if let Target::Sampler { track, field } = target {
             let name = crate::editors::sampler::voice_name(field)?;

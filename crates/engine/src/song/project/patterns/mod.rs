@@ -241,6 +241,11 @@ pub enum RowTarget {
         place: u8,
         knob: u8,
     },
+    /// A knob of the synth's own effect at `place` in its rack.
+    Rack {
+        place: u8,
+        knob: u8,
+    },
     Voice {
         knob: u8,
     },
@@ -266,6 +271,7 @@ impl RowTarget {
             RowTarget::Modulator { modulator, field } => Param::Mod(modulator, field),
             RowTarget::Limit { field } => Param::Limit(field),
             RowTarget::Tool { place, knob } => Param::Tool(place, knob),
+            RowTarget::Rack { place, knob } => Param::Rack(place, knob),
             RowTarget::Voice { knob } => Param::Voice(knob),
             RowTarget::Poly { param } => Param::Poly(param),
             RowTarget::Cc(_) | RowTarget::PitchBend | RowTarget::Pressure => return None,
@@ -283,6 +289,7 @@ impl RowTarget {
             Param::Mod(modulator, field) => RowTarget::Modulator { modulator, field },
             Param::Limit(field) => RowTarget::Limit { field },
             Param::Tool(place, knob) => RowTarget::Tool { place, knob },
+            Param::Rack(place, knob) => RowTarget::Rack { place, knob },
             Param::Voice(knob) => RowTarget::Voice { knob },
             Param::Poly(param) => RowTarget::Poly { param },
         }
@@ -309,6 +316,7 @@ impl RowTarget {
                 Some(Param::Mod(m, field)) => format!("Modulator {} {:?}", m + 1, field),
                 Some(Param::Limit(field)) => format!("Limiter {}", field.name()),
                 Some(Param::Tool(..)) => "Effect knob".into(),
+                Some(Param::Rack(..)) => "Synth effect knob".into(),
                 Some(Param::Voice(k)) => VOICE.get(k as usize).map_or("Voice", |v| v.name).into(),
                 Some(Param::Poly(i)) => POLY_PARAMS
                     .get(i as usize)

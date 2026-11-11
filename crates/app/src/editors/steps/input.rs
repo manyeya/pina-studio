@@ -104,7 +104,7 @@ impl Workspace {
             let on = velocity > 0;
             // Live: as the pattern plays, into the step nearest where it's played.
             if self.steps.live && self.player.playing() {
-                let tick = self.session.project.ticks(sample);
+                let tick = self.session.project.ticks(sample, self.player.rate());
                 let r = self.session.project.region(at);
                 if !(r.start..r.start + r.length.max(1) * 64).contains(&tick) {
                     continue;

@@ -299,6 +299,23 @@ impl Workspace {
                     let top = f32::from(ws.lanes_bounds.get().origin.y) - RULER_H;
                     if f32::from(e.position.y) < top + RULER_H / 2.0 {
                         let anchor = ws.snap(ws.tick_at(f32::from(e.position.x)));
+                        // ⇧-click: the cycle out (or in) to here, as Logic.
+                        if e.modifiers.shift
+                            && let Some(c) = ws.session.project.cycle.filter(|c| c.end > c.start)
+                        {
+                            let (start, end) = match anchor < c.start {
+                                true => (anchor, c.end),
+                                false => (c.start, anchor.max(c.start + 1)),
+                            };
+                            ws.edit(cx, |ws| {
+                                ws.session.project.cycle = Some(pina_engine::song::project::Cycle {
+                                    start,
+                                    end,
+                                    off: false,
+                                })
+                            });
+                            return;
+                        }
                         ws.begin_drag(
                             Drag::Cycle {
                                 anchor,

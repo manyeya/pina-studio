@@ -189,6 +189,55 @@ fn option_dragging_an_audio_regions_end_flexes_it(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn an_audio_regions_end_trims_no_further_than_its_file(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let (start, file_end) = ws.read_with(cx, |ws, _| {
+        (
+            ws.session.project.region((2, 0)).start,
+            ws.audio_end((2, 0)).expect("the drums' file loaded"),
+        )
+    });
+    let length =
+        |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.session.project.region((2, 0)).length);
+    // Its end's bottom half, dragged two bars on: it stops where the drums' audio does.
+    let edge = spot(&ws, cx, BAR, 2) + point(px(-2.), px(12.));
+    drag(cx, edge, edge + point(px(48. * 8.), px(0.)));
+    assert_eq!(length(cx), file_end - start);
+    // In by a beat it trims as ever.
+    let edge = spot(&ws, cx, file_end, 2) + point(px(-2.), px(12.));
+    drag(cx, edge, edge - point(px(48.), px(0.)));
+    assert!(length(cx) < file_end - start);
+}
+
+#[gpui::test]
+fn audio_draws_to_where_it_ends_whatever_rate_the_engine_runs_at(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    // The drums' region a bar longer than its audio: its waveform stops where the audio does.
+    let drawn = |cx: &mut VisualTestContext| {
+        ws.update(cx, |ws, _| {
+            let file_end = ws.audio_end((2, 0)).unwrap();
+            let r = &mut ws.session.project.tracks[2].regions[0];
+            r.length = file_end - r.start + BAR;
+            let (r, ppt) = (r.clone(), ws.px_per_tick());
+            let to = ws.inside(&r.content, r.start, r.length).drawn_to().unwrap();
+            (to, (file_end - r.start) as f32 * ppt)
+        })
+    };
+    let (to, end) = drawn(cx);
+    assert!((to - end).abs() < 1.0, "{to} {end}");
+    // An output that can't play the song's 48 kHz runs the engine at 44.1: the same.
+    ws.update(cx, |ws, _| {
+        let mut slower = ws.session.project.clone();
+        slower.sample_rate = 44_100;
+        ws.player = Player::silent(&slower, &ws.session.dir);
+        ws.player.sync(&ws.session.project).unwrap();
+        assert_eq!(ws.player.rate(), 44_100.0);
+    });
+    let (to, end) = drawn(cx);
+    assert!((to - end).abs() < 1.0, "{to} {end}");
+}
+
+#[gpui::test]
 fn option_drag_copies_a_region_and_option_shift_drag_makes_an_alias(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     let regions = |cx: &VisualTestContext| {
@@ -677,4 +726,149 @@ fn q_on_an_audio_region_puts_its_hits_on_the_grid(cx: &mut TestAppContext) {
     assert!(off.iter().all(|&o| o < 1.0), "{off:?}");
     cx.simulate_keystrokes("cmd-z");
     assert!(warps(cx).is_empty());
+}
+
+#[gpui::test]
+fn a_recording_dropped_on_blooms_grow_page_is_grown_toward(cx: &mut TestAppContext) {
+    use crate::editors::bloom::{BloomOp, BloomPage};
+    use gpui::{ExternalPaths, FileDropEvent};
+    use pina_engine::song::project::{Instrument, Track};
+    let dir = demo_copy("bloom-grow-drop");
+    let file = dir.join("Outside A.wav");
+    std::fs::create_dir_all(&dir).unwrap();
+    tone(&file, 1.0, 220.0);
+    let (ws, cx) = open_at(cx, &dir);
+    let t = ws.update(cx, |ws, cx| {
+        ws.session.project.tracks.push(Track {
+            name: "Bloom".into(),
+            instrument: Some(crate::sounds::catalog::new_bloom()),
+            ..Default::default()
+        });
+        ws.session.project.assign_ids();
+        let t = ws.session.project.tracks.len() - 1;
+        ws.open_bloom(t, cx);
+        ws.bloom_op(t, BloomOp::Page(BloomPage::Grow), cx);
+        t
+    });
+    cx.run_until_parked();
+    let at = cx.debug_bounds("bloom-grow-stage").unwrap().center();
+    cx.simulate_event(FileDropEvent::Entered {
+        position: at,
+        paths: ExternalPaths(std::iter::once(file.clone()).collect()),
+    });
+    cx.simulate_event(FileDropEvent::Pending { position: at });
+    cx.simulate_event(FileDropEvent::Submit { position: at });
+    cx.simulate_event(FileDropEvent::Exited);
+    cx.run_until_parked();
+    until(cx, &ws, |ws| {
+        ws.bloom_view
+            .as_ref()
+            .is_some_and(|v| v.grow.current().is_some())
+    });
+    let note = ws.read_with(cx, |ws, _| {
+        let g = &ws.bloom_view.as_ref().unwrap().grow;
+        g.current().unwrap().recording.note
+    });
+    assert_eq!(note, 57, "heard at A3");
+    // Grown a generation, a find tried: it's the seed, the plant before it kept.
+    click_on(cx, "bloom-grow-stage", Modifiers::none(), MouseButton::Left);
+    until(cx, &ws, |ws| {
+        ws.bloom_view.as_ref().is_some_and(|v| {
+            v.grow
+                .grown
+                .as_ref()
+                .is_some_and(|g| g.lock().unwrap().generation >= 1)
+        })
+    });
+    let family = ws.read_with(cx, |ws, _| ws.bloom(t).unwrap().ancestors.len());
+    ws.update(cx, |ws, cx| ws.bloom_try_find(t, (0, 0), cx));
+    let (b, find) = ws.read_with(cx, |ws, _| {
+        let g = ws.bloom_view.as_ref().unwrap().grow.grown.clone().unwrap();
+        let find = g.lock().unwrap().strands[0].1[0].genes;
+        (ws.bloom(t).unwrap().clone(), find)
+    });
+    assert_eq!(b.seed(), find);
+    assert_eq!(b.ancestors.len(), family + 1);
+    // Stopped, it stops.
+    click_on(cx, "bloom-grow-stage", Modifiers::none(), MouseButton::Left);
+    until(cx, &ws, |ws| {
+        ws.bloom_view.as_ref().is_some_and(|v| !v.grow.running())
+    });
+    // A sample from the Browser dropped on the window is another take; nothing lands on the
+    // tracks under it.
+    let library = little_library(&dir.join("Library"));
+    let index = library.samples.len() - 1;
+    let path = library.samples[index].path.clone();
+    ws.update(cx, |ws, cx| ws.set_library(library, cx));
+    let tracks = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    let on = ws.read_with(cx, |ws, _| {
+        let v = ws.bloom_view.as_ref().unwrap();
+        point(v.at.0 + 300.0, v.at.1 + 300.0)
+    });
+    ws.update(cx, |ws, cx| {
+        let drag = crate::workspace::Drag::Sample {
+            index,
+            from: on,
+            at: on,
+            moved: true,
+        };
+        ws.drop_sample(Some(drag), cx)
+    });
+    until(cx, &ws, |ws| {
+        ws.bloom_view
+            .as_ref()
+            .is_some_and(|v| v.grow.takes.len() == 2)
+    });
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks.len()),
+        tracks
+    );
+    let grow = |cx: &VisualTestContext,
+                f: &dyn Fn(&crate::editors::bloom::grow::GrowView) -> bool| {
+        ws.read_with(cx, |ws, _| f(&ws.bloom_view.as_ref().unwrap().grow))
+    };
+    assert!(grow(cx, &|g| g.take == 1 && g.takes[1].file == path));
+    // Both grown toward together.
+    click_on(cx, "bloom-grow-stage", Modifiers::none(), MouseButton::Left);
+    until(cx, &ws, |ws| {
+        ws.bloom_view.as_ref().is_some_and(|v| {
+            v.grow
+                .grown
+                .as_ref()
+                .is_some_and(|g| g.lock().unwrap().generation >= 1)
+        })
+    });
+    click_on(cx, "bloom-grow-stage", Modifiers::none(), MouseButton::Left);
+    until(cx, &ws, |ws| {
+        ws.bloom_view.as_ref().is_some_and(|v| !v.grow.running())
+    });
+    // Each recording can be heard, and the seed tried beside it.
+    click_on(
+        cx,
+        "bloom-take-hear-1",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(cx, "bloom-hear-seed", Modifiers::none(), MouseButton::Left);
+    click_on(
+        cx,
+        "bloom-hear-recording",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert!(
+        ws.read_with(cx, |ws, _| ws.status.is_none()),
+        "{:?}",
+        ws.read_with(cx, |ws, _| ws.status.clone())
+    );
+    // The first shown again; the second taken out.
+    click_on(cx, "bloom-take-0", Modifiers::none(), MouseButton::Left);
+    assert!(grow(cx, &|g| g.take == 0));
+    click_on(cx, "bloom-take-out-1", Modifiers::none(), MouseButton::Left);
+    assert!(grow(cx, &|g| g.takes.len() == 1 && g.take == 0));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(matches!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[t].instrument.clone()),
+        Some(Instrument::Bloom(_))
+    ));
 }

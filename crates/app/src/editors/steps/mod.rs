@@ -26,6 +26,8 @@ pub mod keys;
 mod library;
 mod ops;
 mod patterns;
+#[cfg(test)]
+pub(crate) use patterns::pattern_fit;
 
 pub use gestures::StepDrag;
 pub use inspector::Field;
