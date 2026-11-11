@@ -3,9 +3,11 @@
 //! people and agents can read, diff and edit it.
 
 mod automation;
+mod bloom;
 mod chain;
 mod editing;
 mod eq;
+mod expression;
 mod kits;
 mod knobs;
 mod midi_fx;
@@ -14,6 +16,7 @@ mod patterns;
 mod plugins;
 mod poly;
 mod poly_patches;
+mod rack;
 mod regions;
 mod sampler;
 mod sections;
@@ -27,8 +30,10 @@ mod tools;
 mod track;
 
 pub use automation::*;
+pub use bloom::*;
 pub use chain::*;
 pub use eq::*;
+pub use expression::*;
 pub use kits::*;
 pub use knobs::*;
 pub use midi_fx::*;
@@ -37,6 +42,7 @@ pub use patterns::*;
 pub use plugins::*;
 pub use poly::*;
 pub use poly_patches::*;
+pub use rack::*;
 pub use regions::*;
 pub use sampler::*;
 pub use sections::*;
@@ -389,6 +395,7 @@ impl Project {
         p.upgrade_patterns();
         p.upgrade_audio();
         p.upgrade_synths();
+        p.adopt_expression();
         Ok(p)
     }
 

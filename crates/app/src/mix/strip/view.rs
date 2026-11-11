@@ -68,6 +68,15 @@ pub fn strip(ws: &Workspace, ch: Channel, layout: Layout, cx: &mut Context<Works
                 Some(Instrument::Sampler(_)) => {
                     plugin_slot("Sampler".into(), true, ch, Which::Instrument, 24., dot, cx)
                 }
+                Some(Instrument::Bloom(_)) => plugin_slot(
+                    pina_engine::song::project::BLOOM_NAME.into(),
+                    true,
+                    ch,
+                    Which::Instrument,
+                    24.,
+                    dot,
+                    cx,
+                ),
                 Some(Instrument::Poly(_)) => plugin_slot(
                     pina_engine::song::project::POLY_NAME.into(),
                     true,

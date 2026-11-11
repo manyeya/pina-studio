@@ -68,6 +68,9 @@ impl Workspace {
                     if device.own == Some(Own::Poly) {
                         self.open_poly(t, cx);
                     }
+                    if device.own == Some(Own::Bloom) {
+                        self.open_bloom(t, cx);
+                    }
                     return;
                 }
                 // An effect: on the new audio track, as on any other.

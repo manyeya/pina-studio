@@ -71,6 +71,23 @@ pub enum Own {
     Tool(pina_engine::song::project::Fx),
     /// The synth: a sampler of oscillators.
     Poly,
+    /// Bloom: sounds grown from a seed.
+    Bloom,
+}
+
+/// A new Bloom: a seed of anything, its branches sprouting.
+pub fn new_bloom() -> pina_engine::song::project::Instrument {
+    let mut b = pina_engine::song::project::Bloom::default();
+    let luck = match cfg!(test) {
+        true => 1,
+        false => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| d.subsec_nanos()),
+    };
+    b.plant(pina_engine::song::project::SeedKind::Any, luck);
+    b.ancestors.clear();
+    b.generation = 0;
+    pina_engine::song::project::Instrument::Bloom(Box::new(b))
 }
 
 /// Something that can go on a track.

@@ -1,5 +1,5 @@
 //! The Plugins page: the Browser's instruments and effects as a page of its own, as the sample
-//! library has one. It opens from the Browser's Expand (or ⌃⌥D) and goes back with Compact, the
+//! library has one. It opens from the Browser's Expand (or ⌃⌘P) and goes back with Compact, the
 //! Browser's search and tab coming with it either way.
 //!
 //! On the left what to look for: the search, all, instruments or effects, the starred ones,
@@ -623,6 +623,7 @@ impl Workspace {
                     matches!(&t.instrument, Some(Instrument::Sampler(_)))
                 }
                 Some(Own::Poly) => matches!(&t.instrument, Some(Instrument::Poly(_))),
+                Some(Own::Bloom) => matches!(&t.instrument, Some(Instrument::Bloom(_))),
                 None => {
                     matches!(&t.instrument, Some(Instrument::Plugin(r)) if is(r))
                         || t.inserts.iter().any(is)

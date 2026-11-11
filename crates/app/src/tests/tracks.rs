@@ -263,13 +263,23 @@ fn the_new_track_palette_adds_beats_samplers_and_instruments(cx: &mut TestAppCon
     click_on(cx, "adder-Sampler", Modifiers::none(), MouseButton::Left);
     let (instrument, _, bottom) = last(cx);
     assert!(matches!(instrument, Some(Instrument::Sampler(_))) && bottom == Some(Bottom::Sampler));
-    // Instrument narrows the list to instruments; Pina Studio's synth is first.
+    // Instrument narrows the list to instruments, Pina Studio's own first, by name: Bloom,
+    // whose window opens, then the Sine Synth.
     click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
     click_on(cx, "adder-Instrument", Modifiers::none(), MouseButton::Left);
     assert!(ws.read_with(cx, |ws, _| ws.adder.is_some()));
     click_on(cx, "adder-row-0", Modifiers::none(), MouseButton::Left);
-    assert_eq!(last(cx).0, Some(Instrument::Synth));
+    assert!(matches!(last(cx).0, Some(Instrument::Bloom(_))));
     assert!(ws.read_with(cx, |ws, _| ws.adder.is_none()));
+    assert!(
+        ws.read_with(cx, |ws, _| ws.bloom_view.is_some()),
+        "Bloom's window opens"
+    );
+    ws.update(cx, |ws, cx| ws.close_bloom(cx));
+    click_on(cx, "new-track", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "adder-Instrument", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "adder-row-1", Modifiers::none(), MouseButton::Left);
+    assert_eq!(last(cx).0, Some(Instrument::Synth));
 }
 
 #[gpui::test]
@@ -562,4 +572,34 @@ fn a_stack_shows_the_name_being_typed_for_it(cx: &mut TestAppContext) {
         ws.read_with(cx, |ws, _| ws.session.project.auxes[0].name.clone()),
         "Rhythm"
     );
+}
+
+#[gpui::test]
+fn a_track_dragged_by_its_header_moves_up_or_down(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let names = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            (ws.session.project.tracks.iter())
+                .map(|t| t.name.clone())
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(names(cx), ["Keys", "Lead", "Drums"]);
+    // Keys's header, dragged below the drums: last, still selected, its regions with it.
+    let from = cx.debug_bounds("header-0").unwrap();
+    let below = cx.debug_bounds("header-2").unwrap();
+    let start = point(from.origin.x + px(60.), from.center().y);
+    let end = point(start.x, below.origin.y + below.size.height - px(4.));
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::none());
+    assert!(cx.debug_bounds("track-drop-line").is_some());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(names(cx), ["Lead", "Drums", "Keys"]);
+    assert_eq!(ws.read_with(cx, |ws, _| ws.track), 2);
+    let notes = ws.read_with(cx, |ws, _| ws.session.project.tracks[2].regions.len());
+    assert_eq!(notes, 1);
+    // One undo puts it back.
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(names(cx), ["Keys", "Lead", "Drums"]);
 }

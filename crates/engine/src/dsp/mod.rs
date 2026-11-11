@@ -3,6 +3,7 @@
 //! strip's compressor (`comp`), multiband saturator (`sat`) and limiter (`limit`). Here the
 //! strip runs them.
 
+pub mod bloom;
 pub mod comp;
 pub mod delay;
 pub mod drums;

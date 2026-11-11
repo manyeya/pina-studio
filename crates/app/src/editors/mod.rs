@@ -1,6 +1,7 @@
 //! The editors in the pane under the tracks: piano roll, step sequencer, score, sampler, modulation and the binaural panner.
 
 pub mod binaural;
+pub mod bloom;
 pub mod drums;
 pub mod modulation;
 pub mod pianoroll;

@@ -175,6 +175,45 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             };
             track(p, t)?.set_instrument(Instrument::Poly(Box::new(s)));
         }
+        Command::SetBloom {
+            track: t,
+            plant,
+            luck,
+            replant,
+            settings,
+        } => {
+            use crate::song::project::Bloom;
+            let tr = track(p, t)?;
+            if tr
+                .regions
+                .iter()
+                .any(|r| matches!(r.content, Content::Audio { .. }))
+            {
+                return Err("an audio track with audio regions can't take an instrument".into());
+            }
+            let mut b = match &tr.instrument {
+                Some(Instrument::Bloom(b)) => (**b).clone(),
+                _ => {
+                    let mut b = Bloom::default();
+                    b.plant(plant.unwrap_or_default(), luck.unwrap_or(1));
+                    b.ancestors.clear();
+                    b.generation = 0;
+                    b
+                }
+            };
+            if let (Some(kind), Some(Instrument::Bloom(_))) = (plant, &tr.instrument) {
+                b.plant(kind, luck.unwrap_or(1));
+            }
+            if replant {
+                b.replant(luck.unwrap_or(1));
+            }
+            if let Some(v) = settings {
+                let mut was = serde_json::to_value(&b).map_err(|e| e.to_string())?;
+                mixing::overlay(&mut was, v);
+                b = serde_json::from_value(was).map_err(|e| format!("Bloom: {e}"))?;
+            }
+            track(p, t)?.set_instrument(Instrument::Bloom(Box::new(b)));
+        }
         Command::SetInsert {
             channel,
             index,

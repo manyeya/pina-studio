@@ -308,6 +308,7 @@ fn every_command_is_described() {
         "set_comp",
         "set_saturator",
         "set_synth",
+        "set_bloom",
         "set_reverb",
         "set_delay",
         "set_fx",
@@ -439,6 +440,68 @@ fn a_track_takes_the_synth_by_patch_and_settings() {
     )
     .unwrap_err();
     assert!(e.contains("Supersaw") && e.contains("Drone"), "{e}");
+}
+
+#[test]
+fn a_track_takes_bloom_planted_grown_and_automated() {
+    use crate::song::project::{
+        BLOOM_GROWTH, BloomKeys, Instrument, Param, SeedKind, branch_length, gene_param,
+    };
+    let mut p = Project::new(48_000);
+    run(&mut p, r#"{"op": "add_track", "name": "Garden"}"#).unwrap();
+    let b = |p: &Project| match &p.tracks[0].instrument {
+        Some(Instrument::Bloom(b)) => (**b).clone(),
+        i => panic!("{i:?}"),
+    };
+    run(
+        &mut p,
+        r#"{"op": "set_bloom", "track": 0, "plant": "bell", "luck": 4}"#,
+    )
+    .unwrap();
+    assert_eq!(b(&p).kind, SeedKind::Bell);
+    let seed = b(&p).seed();
+    // Only what's given changes.
+    run(&mut p, r#"{"op": "set_bloom", "track": 0, "settings": {"keys": "layer", "params": {"branch3_length": 0.9, "growth": 0.25, "gene_cutoff": 0.4}}}"#).unwrap();
+    let now = b(&p);
+    assert_eq!(now.keys, BloomKeys::Layer);
+    assert_eq!(now.params[branch_length(2)], 0.9);
+    assert_eq!(now.params[BLOOM_GROWTH], 0.25);
+    assert_eq!(now.params[gene_param(32)], 0.4);
+    assert_eq!(now.seed()[0], seed[0], "the rest of the seed as it was");
+    // Replanted: the chosen branch is the seed.
+    run(
+        &mut p,
+        r#"{"op": "set_bloom", "track": 0, "settings": {"chosen": 2}}"#,
+    )
+    .unwrap();
+    let tip = b(&p).branch_genes(2, b(&p).reach(2, 0.0));
+    run(
+        &mut p,
+        r#"{"op": "set_bloom", "track": 0, "replant": true}"#,
+    )
+    .unwrap();
+    assert_eq!(b(&p).seed(), tip);
+    // Its parameters automated in their own units, by id or by name.
+    run(&mut p, r#"{"op": "set_automation", "track": 0, "param": "synth", "knob": "Growth", "points": [{"tick": 0, "value": 0.5}]}"#).unwrap();
+    let points = p.tracks[0]
+        .automation
+        .points(Param::Poly(BLOOM_GROWTH as u16));
+    assert!((points[0].value - 0.5).abs() < 1e-3, "{points:?}");
+    run(&mut p, r#"{"op": "set_automation", "track": 0, "param": "synth", "knob": "tune", "points": [{"tick": 0, "value": 12}]}"#).unwrap();
+    let tune = crate::song::project::BLOOM_TUNE as u16;
+    assert!((p.tracks[0].automation.points(Param::Poly(tune))[0].value - 0.75).abs() < 1e-3);
+    // Another instrument: its lanes go, they'd mean other things.
+    run(
+        &mut p,
+        r#"{"op": "set_synth", "track": 0, "patch": "Reese"}"#,
+    )
+    .unwrap();
+    assert!(
+        p.tracks[0]
+            .automation
+            .points(Param::Poly(BLOOM_GROWTH as u16))
+            .is_empty()
+    );
 }
 
 #[test]

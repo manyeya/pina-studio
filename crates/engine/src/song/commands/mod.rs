@@ -128,6 +128,23 @@ pub enum Command {
         #[serde(default)]
         settings: Option<Value>,
     },
+    /// Bloom on a track: a seed `plant`ed as a kind (bass, pluck, keys, pad, lead, bell, perc,
+    /// texture, drone, any; `luck` a number for which one), and its `settings` laid over it,
+    /// field by field (`params` by id: growth, wildness, atonality, effect, tune, volume,
+    /// release, glide, branchN_length and branchN_bend for N 1 to 12, gene_<id> for each
+    /// gene; `keys`: octave, spread, velocity, layer, cycle or one; `chosen`; `layer` as
+    /// bits). `replant` makes the chosen branch the seed. A track without Bloom gets one.
+    SetBloom {
+        track: usize,
+        #[serde(default)]
+        plant: Option<crate::song::project::SeedKind>,
+        #[serde(default)]
+        luck: Option<u32>,
+        #[serde(default)]
+        replant: bool,
+        #[serde(default)]
+        settings: Option<Value>,
+    },
     /// Puts a plugin in an insert slot (an index past the last adds one), or takes it out.
     SetInsert {
         channel: ChannelRef,
@@ -927,6 +944,7 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         | Command::SetTrack { .. }
         | Command::SetInstrument { .. }
         | Command::SetSynth { .. }
+        | Command::SetBloom { .. }
         | Command::SetInsert { .. }
         | Command::MoveEffect { .. }
         | Command::SetInput { .. }

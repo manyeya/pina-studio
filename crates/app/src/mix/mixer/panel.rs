@@ -117,9 +117,19 @@ impl Workspace {
                         format!("{} · built in", pina_engine::song::project::POLY_NAME),
                         true,
                     ),
-                    Some(Instrument::Plugin(r)) => {
-                        (r.class.clone(), "Instrument · VST3".into(), true)
-                    }
+                    Some(Instrument::Bloom(b)) => (
+                        match b.sound.is_empty() {
+                            true => pina_engine::song::project::BLOOM_NAME.to_string(),
+                            false => b.sound.clone(),
+                        },
+                        format!("{} · built in", pina_engine::song::project::BLOOM_NAME),
+                        true,
+                    ),
+                    Some(Instrument::Plugin(r)) => (
+                        r.class.clone(),
+                        format!("Instrument · {}", r.format.name()),
+                        true,
+                    ),
                 };
                 Some(
                     card()
