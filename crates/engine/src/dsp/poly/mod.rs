@@ -28,7 +28,7 @@ const UNISON: usize = 16;
 const STEP: usize = 8;
 const MOST_TIMES: usize = 4;
 const CHUNK: usize = STEP * MOST_TIMES;
-const MAX_FRAMES: usize = 4096;
+pub(crate) const MAX_FRAMES: usize = 4096;
 /// One cycle, in the whole-number phases the oscillators turn in.
 const TURN: f32 = 4_294_967_296.0;
 
@@ -84,6 +84,9 @@ impl PolyPlan {
                 }
                 PolyDest::Effect(place, knob) => {
                     outward.push((r.source, r.by, ModTarget::Tool(place, knob), r.depth));
+                }
+                PolyDest::Rack(k, knob) => {
+                    outward.push((r.source, r.by, ModTarget::Rack(k, knob), r.depth));
                 }
                 _ => {}
             }
@@ -986,10 +989,10 @@ fn add_panned(
     add_stereo(bus, to, routing, (&l, &r), level, n);
 }
 
-const TAPS: usize = 63;
+pub(crate) const TAPS: usize = 63;
 
 /// A half-band low-pass that keeps every other sample: back down an octave of rate.
-struct Down {
+pub(crate) struct Down {
     /// One side's taps, either side of the middle's half: every other tap of a half-band is nothing.
     sides: [f32; TAPS / 4 + 1],
     middle: f32,
@@ -998,7 +1001,7 @@ struct Down {
 }
 
 impl Down {
-    fn new() -> Down {
+    pub(crate) fn new() -> Down {
         const N: usize = TAPS;
         let mid = (N / 2) as f32;
         let mut taps: Vec<f32> = (0..N)
@@ -1024,8 +1027,13 @@ impl Down {
         }
     }
 
+    /// What it heard forgotten.
+    pub(crate) fn reset(&mut self) {
+        self.line.fill(0.0);
+    }
+
     /// `x` in, half as many out, in place.
-    fn run(&mut self, x: &mut [f32]) -> usize {
+    pub(crate) fn run(&mut self, x: &mut [f32]) -> usize {
         let n = x.len();
         self.line[TAPS - 1..TAPS - 1 + n].copy_from_slice(x);
         let out = n / 2;

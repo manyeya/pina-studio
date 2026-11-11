@@ -41,6 +41,7 @@ fn speaks_mcp() {
             "plugins",
             "params",
             "presets",
+            "synth_sounds",
             "samples_find",
             "samples_similar",
             "samples_kit",

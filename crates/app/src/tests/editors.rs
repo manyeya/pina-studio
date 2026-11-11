@@ -275,7 +275,7 @@ fn the_sampler_takes_samples_slices_them_and_its_knobs_and_marks_turn(cx: &mut T
 
 #[gpui::test]
 fn the_synth_has_its_own_window_and_everything_in_it_works(cx: &mut TestAppContext) {
-    use crate::{editors::poly::PolyPage, mix::strip::Channel, ui::menu::MenuAction};
+    use crate::{editors::poly::PolyPage, ui::menu::MenuAction};
     use pina_engine::song::project::{
         EnvField, FilterField, Instrument, LfoWave, OscField, Param, PolyDest, PolyFilter,
         PolySource, Reverb, Track, Unit, Warp, env_param, filter_param, osc_param, poly_patch,
@@ -456,12 +456,17 @@ fn the_synth_has_its_own_window_and_everything_in_it_works(cx: &mut TestAppConte
     };
     assert!(points[32].1 > 0.8 || points[31].1 > 0.8, "{points:?}");
 
-    // The sounds: narrowed to a part and by typing, liked, picked.
+    // The sounds: the library a page of its own, narrowed to a part and by typing, liked,
+    // picked and loaded.
     click(cx, "poly-patch");
-    click(cx, "poly-part-bass");
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.poly_view.as_ref().unwrap().page),
+        PolyPage::Sounds
+    );
+    click(cx, "poly-lib-part-bass");
     assert!(cx.debug_bounds("poly-sound-Reese").is_some());
     assert!(cx.debug_bounds("poly-sound-Supersaw").is_none());
-    click(cx, "poly-part-all");
+    click(cx, "poly-lib-part-all");
     let search = bounds(cx, "poly-sound-search").center();
     cx.simulate_click(search, Modifiers::none());
     cx.simulate_input("acid");
@@ -473,11 +478,163 @@ fn the_synth_has_its_own_window_and_everything_in_it_works(cx: &mut TestAppConte
         vec!["Acid".to_string()]
     );
     click(cx, "poly-sound-Acid");
+    click(cx, "poly-lib-load");
     assert_eq!(poly(cx).patch, "Acid");
     assert_eq!(poly(cx).macros[0], "Bright");
     ws.update(cx, |ws, cx| ws.undo(cx));
     assert_eq!(poly(cx).patch, "Warm Pad");
-    click(cx, "poly-sounds-close");
+
+    // Saving: changed, the bar says so; saved as a sound of its own (the factory's stays),
+    // then over it; compared with how it was saved, and taken back to it.
+    use crate::editors::poly::library::Library;
+    let changed = |cx: &mut VisualTestContext| cx.debug_bounds("poly-patch-changed").is_some();
+    // Changed since it was loaded, by all the above (and put back after).
+    assert!(changed(cx));
+    let before = poly(cx);
+    click(cx, "poly-sound-Acid");
+    click(cx, "poly-lib-load");
+    assert!(!changed(cx));
+    ws.update(cx, |ws, cx| {
+        ws.edit(cx, |ws| ws.poly_mut(t).unwrap().params[0] += 0.1);
+    });
+    cx.run_until_parked();
+    assert!(changed(cx));
+    click(cx, "poly-save");
+    // Typed into its name: words, not notes (the computer's keys play the synth otherwise).
+    let octave = ws.read_with(cx, |ws, _| ws.typing);
+    cx.simulate_input("wax");
+    cx.run_until_parked();
+    let typed = ws.read_with(cx, |ws, cx| {
+        let Some(crate::editors::poly::saving::Dialog::Save(f)) =
+            ws.poly_view.as_ref().unwrap().lib.dialog.as_ref()
+        else {
+            panic!("Save's dialog");
+        };
+        f.name.read(cx).text().to_string()
+    });
+    assert!(typed.ends_with("wax"), "{typed}");
+    assert!(
+        ws.read_with(cx, |ws, _| ws.typed.is_empty()),
+        "no notes played"
+    );
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.typing),
+        octave,
+        "x didn't move the octave"
+    );
+    ws.update(cx, |ws, cx| {
+        let v = ws.poly_view.as_mut().unwrap();
+        let Some(crate::editors::poly::saving::Dialog::Save(f)) = v.lib.dialog.as_ref() else {
+            panic!("Save's dialog");
+        };
+        f.name.update(cx, |i, cx| i.set_text("My Pad", cx));
+    });
+    click(cx, "poly-save-word-glassy");
+    click(cx, "poly-save-part-pad");
+    click(cx, "poly-save-confirm");
+    assert_eq!(poly(cx).patch, "/My Pad");
+    assert!(!changed(cx));
+    let dir = ws.read_with(cx, |ws, _| ws.sounds_dir.clone());
+    let read = Library::read(&dir);
+    let mine = read.find("/My Pad").expect("on disk");
+    assert_eq!(
+        (mine.sound.part.as_str(), mine.sound.words.clone()),
+        ("Pad", vec!["Glassy".to_string()])
+    );
+    assert!(read.find("Warm Pad").is_some_and(|e| e.factory()));
+    ws.update(cx, |ws, cx| {
+        ws.edit(cx, |ws| ws.poly_mut(t).unwrap().params[0] += 0.1);
+    });
+    cx.run_until_parked();
+    let now = poly(cx).params[0];
+    click(cx, "poly-compare");
+    let heard = ws.read_with(cx, |ws, _| {
+        match &ws.engine_project().tracks[t].instrument {
+            Some(pina_engine::song::project::Instrument::Poly(p)) => p.params[0],
+            _ => 0.0,
+        }
+    });
+    assert!(
+        (heard - (now - 0.1)).abs() < 1e-5,
+        "compared: heard as saved"
+    );
+    click(cx, "poly-compare");
+    click(cx, "poly-save");
+    assert!(!changed(cx), "saved over its own, no dialog");
+    assert!(
+        (Library::read(&dir)
+            .find("/My Pad")
+            .unwrap()
+            .sound
+            .poly
+            .params[0]
+            - now)
+            .abs()
+            < 1e-5
+    );
+    ws.update(cx, |ws, cx| {
+        ws.edit(cx, |ws| ws.poly_mut(t).unwrap().params[0] += 0.2);
+    });
+    cx.run_until_parked();
+    click(cx, "poly-undo-all");
+    assert!((poly(cx).params[0] - now).abs() < 1e-5);
+
+    // A pack made for it, the sound moved in, the pack shared as one file and brought back
+    // in as a pack of its own.
+    ws.update(cx, |ws, cx| ws.open_pack_dialog(None, None, cx));
+    ws.update(cx, |ws, cx| {
+        let v = ws.poly_view.as_mut().unwrap();
+        let Some(crate::editors::poly::saving::Dialog::Pack(f)) = v.lib.dialog.as_ref() else {
+            panic!("the pack's dialog");
+        };
+        f.name.update(cx, |i, cx| i.set_text("Night Drive", cx));
+    });
+    click(cx, "poly-pack-confirm");
+    use crate::editors::poly::sounds::SoundOp;
+    ws.update(cx, |ws, cx| {
+        ws.sound_op(
+            t,
+            SoundOp::Move("/My Pad".into(), Some("Night Drive".into())),
+            cx,
+        )
+    });
+    assert_eq!(poly(cx).patch, "Night Drive/My Pad");
+    assert!(cx.debug_bounds("poly-pack-share").is_some());
+    // The agent: the synth's sound saved into the pack through the open app, then a sound
+    // loaded back onto the track, as Save and Load do.
+    let saved = ws.update(cx, |ws, cx| {
+        ws.agent_sounds(
+            &serde_json::json!({ "op": "save", "track": t, "name": "Agent Pad", "part": "Pad",
+                "words": ["Wide"], "pack": "Night Drive" }),
+            cx,
+        )
+    });
+    assert_eq!(saved.unwrap()["saved"], "Night Drive/Agent Pad");
+    assert_eq!(poly(cx).patch, "Night Drive/Agent Pad");
+    let loaded = ws.update(cx, |ws, cx| {
+        ws.agent_sounds(
+            &serde_json::json!({ "op": "load", "track": t, "key": "Acid" }),
+            cx,
+        )
+    });
+    assert!(loaded.is_ok(), "{loaded:?}");
+    assert_eq!(poly(cx).patch, "Acid");
+    ws.update(cx, |ws, cx| ws.undo(cx));
+    let file = ws.update(cx, |ws, _| ws.library().export("Night Drive").unwrap());
+    let path = dir.join("shared.pinapack");
+    std::fs::write(&path, file).unwrap();
+    ws.update(cx, |ws, cx| {
+        ws.import_files(std::slice::from_ref(&path), cx)
+    });
+    let read = Library::read(&dir);
+    assert!(read.pack("Night Drive 2").is_some_and(|p| p.imported));
+    assert!(read.find("Night Drive 2/My Pad").is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+    click(cx, "poly-page-synth");
+    ws.update(cx, |ws, cx| {
+        ws.edit(cx, |ws| *ws.poly_mut(t).unwrap() = before.clone());
+    });
+    cx.run_until_parked();
 
     // The matrix: a route's depth dragged, then taken off.
     ws.update(cx, |ws, cx| {
@@ -504,11 +661,196 @@ fn the_synth_has_its_own_window_and_everything_in_it_works(cx: &mut TestAppConte
     click(cx, &format!("poly-route-remove-{at}"));
     assert_eq!(poly(cx).routes.len(), routes + 1);
 
-    // The Effects page is the track's chain: its knob is the same knob, its switch the same.
+    // The Effects page is its own rack: the patch's chorus and hall, in the order they run.
     click(cx, "poly-page-effects");
-    click(cx, "poly-effect-power-0");
-    let bypassed = ws.read_with(cx, |ws, _| ws.more(Channel::Track(t))[0].bypassed());
-    assert!(bypassed);
+    let names = |cx: &VisualTestContext| -> Vec<String> {
+        poly(cx)
+            .fx
+            .iter()
+            .map(pina_engine::song::project::rack_name)
+            .collect()
+    };
+    assert_eq!(names(cx), ["Chorus", "Hall Reverb"]);
+    // One switched off; the hall picked: the stage is the mixer's reverb editor, on the
+    // synth's own hall, its mix turned down by its knob.
+    click(cx, "poly-fx-power-0");
+    assert!(poly(cx).fx[0].bypassed());
+    click(cx, "poly-fx-1");
+    assert!(cx.debug_bounds("reverb-display").is_some(), "its picture");
+    assert!(
+        !ws.read_with(cx, |ws, _| ws.fx_window_open()),
+        "not a window of its own"
+    );
+    let table = crate::mix::strip::knobs(poly(cx).fx[1].kind());
+    let mix = table.iter().position(|k| k.name == "Mix").unwrap();
+    let was = (table[mix].pos)(&poly(cx).fx[1]);
+    pull(cx, "fx-knob-mix", (0.0, 40.0));
+    assert!((table[mix].pos)(&poly(cx).fx[1]) < was);
+    // The whole rack passed by and back, each effect keeping its own switch.
+    click(cx, "poly-rack-on");
+    assert!(poly(cx).rack_off && poly(cx).fx[0].bypassed() && !poly(cx).fx[1].bypassed());
+    click(cx, "poly-rack-on");
+    assert!(!poly(cx).rack_off);
+    // The browser: searched by what it sounds like; pointed at, an offer's heard in the sound
+    // without going in; clicked, a tube drive goes in last and opens. Moved earlier, it's in
+    // the middle.
+    click(cx, "poly-add-effect");
+    assert!(cx.debug_bounds("poly-offer-Tube").is_some());
+    let hover = bounds(cx, "poly-offer-Ensemble").center();
+    cx.simulate_mouse_move(hover, None, Modifiers::none());
+    let heard = ws.read_with(cx, |ws, _| ws.rack_preview.map(|(_, u)| u.kind()));
+    assert_eq!(heard, Some(pina_engine::song::project::Fx::Motion));
+    assert_eq!(names(cx), ["Chorus", "Hall Reverb"], "only heard");
+    click(cx, "poly-offer-Tube");
+    assert!(ws.read_with(cx, |ws, _| ws.rack_preview.is_none()));
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.settings.recent_effects.clone()),
+        ["Tube"]
+    );
+    assert_eq!(names(cx), ["Chorus", "Hall Reverb", "Warm Tube Drive"]);
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.poly_view.as_ref().unwrap().fx_open),
+        2
+    );
+    click(cx, "poly-fx-earlier");
+    assert_eq!(names(cx), ["Chorus", "Warm Tube Drive", "Hall Reverb"]);
+    // Dragged along the chain past the hall, the chorus goes last; undone, it's back.
+    let from = bounds(cx, "poly-fx-0").center();
+    let to = bounds(cx, "poly-fx-2").center();
+    drag(cx, from, to + point(px(30.), px(0.)));
+    assert_eq!(names(cx), ["Warm Tube Drive", "Hall Reverb", "Chorus"]);
+    ws.update(cx, |ws, cx| ws.undo(cx));
+    cx.run_until_parked();
+    assert_eq!(names(cx), ["Chorus", "Warm Tube Drive", "Hall Reverb"]);
+    // An LFO and a lane on the hall's mix follow it when the drive's taken out.
+    ws.update(cx, |ws, cx| {
+        ws.poly_mut(t)
+            .unwrap()
+            .routes
+            .push(pina_engine::song::project::PolyRoute {
+                source: PolySource::Lfo(0),
+                dest: PolyDest::Rack(2, mix as u8),
+                depth: 0.2,
+                by: None,
+            });
+        ws.session.project.tracks[t]
+            .automation
+            .points_mut(Param::Rack(2, mix as u8))
+            .push(pina_engine::song::project::AutoPoint::new(0, 0.5));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.param_name(t, Param::Rack(2, mix as u8))),
+        "Synth-0: Hall Reverb · Mix"
+    );
+    click(cx, "poly-fx-1");
+    click(cx, "poly-fx-remove");
+    assert_eq!(names(cx), ["Chorus", "Hall Reverb"]);
+    assert!(
+        poly(cx)
+            .routes
+            .iter()
+            .any(|r| r.dest == PolyDest::Rack(1, mix as u8))
+    );
+    let lanes = ws.read_with(cx, |ws, _| ws.session.project.tracks[t].automation.params());
+    assert!(lanes.contains(&Param::Rack(1, mix as u8)), "{lanes:?}");
+    // The track's own effects come after, and are a click away.
+    assert!(cx.debug_bounds("poly-open-mixer").is_some());
+    // An EQ of its own is the whole EQ on the stage: a click on it makes a band there.
+    ws.update(cx, |ws, cx| {
+        ws.poly_op(t, crate::editors::poly::PolyOp::AddFx("EQ"), cx)
+    });
+    assert_eq!(names(cx), ["Chorus", "Hall Reverb", "EQ"]);
+    cx.run_until_parked();
+    let display = cx.debug_bounds("eq-display").expect("the EQ's display");
+    let at = point(
+        display.origin.x + display.size.width * 0.5,
+        display.origin.y + display.size.height * 0.3,
+    );
+    cx.simulate_click(at, Modifiers::none());
+    let bands = match poly(cx).fx[2] {
+        pina_engine::song::project::Unit::Eq(e) => e.bands.len(),
+        _ => 0,
+    };
+    assert_eq!(bands, 1);
+    assert!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[t].eq.is_none()),
+        "not the track's"
+    );
+
+    // An LFO's rate: any length on the grid, any typed, or free as fast as it was.
+    ws.update(cx, |ws, cx| {
+        let v = ws.poly_view.as_mut().unwrap();
+        v.page = PolyPage::Synth;
+        v.source = PolySource::Lfo(0);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    click(cx, "poly-lfo-sync");
+    click(cx, "poly-rate-2-1");
+    assert!(
+        (poly(cx).lfos[0].beats - 0.25 * 2.0 / 3.0).abs() < 1e-6,
+        "1/16 T"
+    );
+    click(cx, "poly-rate-typed");
+    ws.update(cx, |ws, cx| ws.finish_naming(Some("3/16".into()), cx));
+    assert_eq!(poly(cx).lfos[0].beats, 0.75);
+    click(cx, "poly-rate-free");
+    let rate = crate::editors::poly::lfo_rate_param(0);
+    let tempo = ws.read_with(cx, |ws, _| ws.session.project.tempo) as f32;
+    assert_eq!(poly(cx).lfos[0].beats, 0.0);
+    assert!(
+        (poly(cx).params[rate] - tempo / 60.0 / 0.75).abs() < 1e-3,
+        "as fast as it was"
+    );
+    click(cx, "poly-rate-in-time");
+    assert_eq!(
+        poly(cx).lfos[0].beats,
+        0.75,
+        "back on the grid where it was"
+    );
+
+    // Racks kept: this one saved by name, then a factory sound's put in its place.
+    ws.update(cx, |ws, cx| {
+        ws.poly_view.as_mut().unwrap().page = PolyPage::Effects;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let kept: Vec<String> = names(cx);
+    click(cx, "poly-rack-save");
+    ws.update(cx, |ws, cx| ws.finish_naming(Some("Wide Space".into()), cx));
+    let racks = ws.update(cx, |ws, _| ws.library().racks());
+    let mine = racks
+        .iter()
+        .position(|r| r.0 == "Wide Space")
+        .expect("kept");
+    let pad = racks
+        .iter()
+        .position(|r| r.0 == "Evolving Pad's")
+        .expect("the factory's");
+    ws.update(cx, |ws, cx| {
+        ws.choose(
+            MenuAction::Poly(t, crate::editors::poly::PolyOp::LoadRack(pad)),
+            cx,
+        )
+    });
+    assert_eq!(names(cx), ["Ensemble", "Hall Reverb"]);
+    assert!(
+        !poly(cx)
+            .routes
+            .iter()
+            .any(|r| matches!(r.dest, PolyDest::Rack(..))),
+        "the old rack's rides went with it"
+    );
+    ws.update(cx, |ws, cx| {
+        ws.choose(
+            MenuAction::Poly(t, crate::editors::poly::PolyOp::LoadRack(mine)),
+            cx,
+        )
+    });
+    assert_eq!(names(cx), kept);
+    let _ = std::fs::remove_dir_all(ws.read_with(cx, |ws, _| ws.sounds_dir.clone()));
 
     // Every parameter's in the automation list, by its part, a macro by its name.
     ws.read_with(cx, |ws, _| {
@@ -528,7 +870,13 @@ fn the_synth_has_its_own_window_and_everything_in_it_works(cx: &mut TestAppConte
     // A patch from its menu: all of it at once, and undone with one step.
     ws.update(cx, |ws, cx| {
         use crate::editors::poly::PolyOp;
-        ws.choose(MenuAction::Poly(t, PolyOp::Patch("Reese")), cx);
+        ws.choose(
+            MenuAction::Poly(
+                t,
+                PolyOp::Sound(crate::editors::poly::sounds::SoundOp::Load("Reese".into())),
+            ),
+            cx,
+        );
     });
     assert_eq!(poly(cx).patch, "Reese");
     ws.update(cx, |ws, cx| ws.undo(cx));
@@ -552,19 +900,36 @@ fn the_synth_has_its_own_window_and_everything_in_it_works(cx: &mut TestAppConte
             .any(|r| r.source == PolySource::Macro(7))
     );
     assert!(cx.debug_bounds("poly-give-macros").is_none());
-    // Its corner makes it smaller or bigger, never under what its columns need; its close
-    // button and the patch's arrows are drawn where they can be seen.
-    let was = ws.read_with(cx, |ws, _| ws.poly_size());
+    // Its corner makes it smaller or bigger as a whole: its layout never changes, so what's in
+    // it stays where it was in it; no smaller than its least scale; its close button and the
+    // sound's arrows always seen.
+    let share = |cx: &mut VisualTestContext, sel: &str| {
+        let from = bounds(cx, "poly-patch").origin.x;
+        let close = bounds(cx, "poly-close").center();
+        let on = bounds(cx, sel).center();
+        f32::from(on.x - from) / f32::from(close.x - from)
+    };
+    let placed = share(cx, "poly-patch-next");
     let grip = bounds(cx, "poly-resize").center();
     drag(cx, grip, grip - point(px(120.), px(60.)));
-    let now = ws.read_with(cx, |ws, _| ws.poly_size());
-    assert!(now.0 < was.0 && now.1 < was.1, "{was:?} {now:?}");
+    let s = ws.read_with(cx, |ws, _| ws.poly_scale());
+    assert!(s < 1.0, "{s}");
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.poly_size()),
+        (1380.0, 860.0),
+        "its layout's"
+    );
+    let moved = share(cx, "poly-patch-next");
+    assert!(
+        (moved - placed).abs() < 0.01,
+        "nothing moved inside it: {placed} {moved}"
+    );
     let grip = bounds(cx, "poly-resize").center();
     drag(cx, grip, grip - point(px(2000.), px(2000.)));
-    assert_eq!(ws.read_with(cx, |ws, _| ws.poly_size()), (1180.0, 720.0));
+    assert_eq!(ws.read_with(cx, |ws, _| ws.poly_scale()), 0.7);
     for sel in ["poly-close", "poly-patch-back", "poly-patch-next"] {
         let b = bounds(cx, sel);
-        assert!(b.size.width > px(20.) && b.size.height > px(20.), "{sel}");
+        assert!(b.size.width > px(14.) && b.size.height > px(14.), "{sel}");
     }
     // Closing it closes only it, and typing goes back off.
     click(cx, "poly-close");
@@ -689,4 +1054,211 @@ fn the_samplers_mono_and_legato_are_in_more(cx: &mut TestAppContext) {
     click_on(cx, "editor-more", Modifiers::none(), MouseButton::Left);
     pick(cx, &ws, "Mono");
     assert!(!voice(cx).mono);
+}
+
+#[gpui::test]
+fn bloom_grows_from_its_window_and_everything_in_it_works(cx: &mut TestAppContext) {
+    use crate::editors::bloom::{BloomOp, BloomPage};
+    use pina_engine::song::project::*;
+    let (ws, cx) = open(cx);
+    let t = ws.update(cx, |ws, cx| {
+        ws.session.project.tracks.push(Track {
+            name: "Bloom".into(),
+            instrument: Some(crate::sounds::catalog::new_bloom()),
+            ..Default::default()
+        });
+        ws.session.project.assign_ids();
+        let t = ws.session.project.tracks.len() - 1;
+        ws.select_track(t);
+        cx.notify();
+        t
+    });
+    cx.run_until_parked();
+    // Its slot on the channel opens it.
+    let slot: &'static str = Box::leak(format!("slot-Track({t})-Instrument").into_boxed_str());
+    click_on(cx, slot, Modifiers::none(), MouseButton::Left);
+    assert!(
+        ws.read_with(cx, |ws, _| ws.bloom_view.is_some()),
+        "the window opens"
+    );
+    let bloom = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.bloom(t).unwrap().clone());
+    // Settle the garden where it's drawn: every branch as long as it is.
+    ws.update(cx, |ws, cx| {
+        let b = ws.bloom(t).unwrap().clone();
+        if let Some(v) = ws.bloom_view.as_mut() {
+            v.shown = std::array::from_fn(|k| b.reach(k, 0.0));
+            v.speed = [0.0; BRANCHES];
+        }
+        cx.notify();
+    });
+    cx.run_until_parked();
+    // A branch dragged out by its flower grows, bends, and is picked; its note plays meanwhile.
+    let garden = cx.debug_bounds("bloom-garden").unwrap();
+    let half = f32::from(garden.size.width) / 2.0;
+    let center = garden.center();
+    let b = bloom(cx);
+    let k = 4;
+    let tip = crate::editors::bloom::garden_tip(&b, k, b.reach(k, 0.0));
+    let at = |x: f32, y: f32| center + point(px(x * half), px(y * half));
+    cx.simulate_mouse_down(at(tip.0, tip.1), MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        ws.read_with(cx, |ws, _| ws
+            .bloom_view
+            .as_ref()
+            .unwrap()
+            .audition
+            .is_some()),
+        "it plays"
+    );
+    // Out to the full length, a little round clockwise.
+    let a = crate::editors::bloom::garden_angle(k) + 0.2;
+    let far = 0.8;
+    cx.simulate_mouse_move(
+        at(far * a.cos(), far * a.sin()),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_up(
+        at(far * a.cos(), far * a.sin()),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    let b = bloom(cx);
+    assert!(
+        b.params[branch_length(k)] > 0.95,
+        "{}",
+        b.params[branch_length(k)]
+    );
+    assert!(
+        b.params[branch_bend(k)] > 0.3,
+        "{}",
+        b.params[branch_bend(k)]
+    );
+    assert_eq!(b.chosen as usize, k);
+    assert!(
+        ws.read_with(cx, |ws, _| ws
+            .bloom_view
+            .as_ref()
+            .unwrap()
+            .audition
+            .is_none()),
+        "let go"
+    );
+    // The growth knob, as any knob: dragged up, it grows.
+    let knob = cx.debug_bounds("bloom-knob-growth").unwrap().center();
+    drag(cx, knob, knob - point(px(0.), px(60.)));
+    assert!(bloom(cx).params[BLOOM_GROWTH] > 0.3);
+    // Its lane is named for it.
+    let name = ws.read_with(cx, |ws, _| {
+        ws.param_name(t, Param::Poly(BLOOM_GROWTH as u16))
+    });
+    assert_eq!(name, "Growth");
+    let gene = ws.read_with(cx, |ws, _| {
+        ws.param_name(t, Param::Poly(gene_param(32) as u16))
+    });
+    assert_eq!(gene, "Cutoff");
+    // Replanted, the branch is the seed and the old seed is family.
+    let tip_genes = bloom(cx).branch_genes(k, bloom(cx).reach(k, 0.0));
+    click_on(cx, "bloom-replant", Modifiers::none(), MouseButton::Left);
+    let b = bloom(cx);
+    assert_eq!(b.seed(), tip_genes);
+    let family = b.ancestors.len();
+    assert!(family >= 1);
+    // Going back swaps it again.
+    click_on(
+        cx,
+        Box::leak(format!("bloom-ancestor-{}", family - 1).into_boxed_str()),
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert_ne!(bloom(cx).seed(), tip_genes);
+    // Planting a reese: picked from every kind, a new seed drawn as one.
+    click_on(
+        cx,
+        "bloom-kind-picker",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert!(ws.read_with(cx, |ws, _| ws.bloom_view.as_ref().unwrap().picking));
+    click_on(cx, "bloom-kind-reese", Modifiers::none(), MouseButton::Left);
+    assert!(!ws.read_with(cx, |ws, _| ws.bloom_view.as_ref().unwrap().picking));
+    click_on(cx, "bloom-plant", Modifiers::none(), MouseButton::Left);
+    assert_eq!(bloom(cx).kind, SeedKind::Reese);
+    // Crossing: the picked branch with another, by clicking it.
+    click_on(cx, "bloom-cross", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.bloom_view.as_ref().unwrap().crossing));
+    let before = bloom(cx).seed();
+    ws.update(cx, |ws, cx| ws.bloom_op(t, BloomOp::CrossWith(9), cx));
+    assert_ne!(bloom(cx).seed(), before);
+    assert!(!ws.read_with(cx, |ws, _| ws.bloom_view.as_ref().unwrap().crossing));
+    // The keys: Layer, a branch put in it.
+    click_on(cx, "bloom-keys-layer", Modifiers::none(), MouseButton::Left);
+    assert_eq!(bloom(cx).keys, BloomKeys::Layer);
+    // The Strand: a gene locked, a branch steered.
+    click_on(
+        cx,
+        "bloom-page-strand",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(
+        cx,
+        "bloom-lock-cutoff",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert!(bloom(cx).locked(32));
+    click_on(cx, "bloom-steer-true", Modifiers::none(), MouseButton::Left);
+    let dial = cx.debug_bounds("bloom-steer-knob-attack").unwrap().center();
+    drag(cx, dial, dial - point(px(0.), px(40.)));
+    let b = bloom(cx);
+    assert!(
+        b.edits.iter().any(|e| e.branch == b.chosen && e.gene == 0),
+        "steered"
+    );
+    // Sounds: filtered and planted.
+    click_on(
+        cx,
+        "bloom-page-sounds",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    click_on(
+        cx,
+        "bloom-filter-bell",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    let shown = ws.read_with(cx, |ws, _| ws.bloom_view.as_ref().unwrap().sounds.shown());
+    assert!(!shown.is_empty() && shown.iter().all(|(_, s)| s.kind == SeedKind::Bell));
+    let first = shown[0].0;
+    click_on(
+        cx,
+        Box::leak(format!("bloom-sound-{first}").into_boxed_str()),
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert_eq!(bloom(cx).sound, shown[0].1.name);
+    // Its frames draw it alone: the app under it isn't drawn again while it moves.
+    let drawn = crate::workspace::MAIN_RENDERS.with(|n| n.get());
+    let view = ws.read_with(cx, |ws, _| ws.bloom_window_view().unwrap());
+    for _ in 0..5 {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    assert_eq!(crate::workspace::MAIN_RENDERS.with(|n| n.get()), drawn);
+    // A change to the song draws both.
+    ws.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(crate::workspace::MAIN_RENDERS.with(|n| n.get()) > drawn);
+    // Undo takes it back; ⌘W closes the window.
+    ws.update(cx, |ws, cx| ws.undo(cx));
+    assert_ne!(bloom(cx).sound, shown[0].1.name);
+    ws.update(cx, |ws, cx| {
+        ws.bloom_op(t, BloomOp::Page(BloomPage::Garden), cx)
+    });
+    ws.update(cx, |ws, cx| ws.close_bloom(cx));
+    assert!(ws.read_with(cx, |ws, _| ws.bloom_view.is_none()));
 }

@@ -41,8 +41,20 @@ impl Workspace {
             PolyDest::Param(i) => POLY_PARAMS
                 .get(i as usize)
                 .map_or("?".into(), |p| p.name.clone()),
+            PolyDest::Rack(k, i) => self.rack_name(t, k, i),
             PolyDest::Effect(k, i) => self.param_name(t, Param::Tool(k, i)),
         }
+    }
+
+    /// A knob of the synth's own effect at `k` in its rack, as people say it.
+    pub(crate) fn rack_name(&self, t: usize, k: u8, i: u8) -> String {
+        let Some(u) = self.poly(t).and_then(|p| p.fx.get(k as usize)) else {
+            return "Its effect".into();
+        };
+        let knob = crate::mix::strip::knobs(u.kind())
+            .get(i as usize)
+            .map_or("?", |p| p.name);
+        format!("{} · {knob}", rack_name(u))
     }
 
     pub(crate) fn poly_matrix_page(&mut self, t: usize, p: &Poly, cx: &mut Context<Self>) -> Div {
@@ -228,6 +240,18 @@ impl Workspace {
                 q.name.clone(),
                 MenuAction::Poly(t, PolyOp::RouteDest(route, d)),
             ));
+        }
+        // Its own effects' knobs, then the track's.
+        let rack = self.poly(t).map(|p| p.fx.clone()).unwrap_or_default();
+        for (k, u) in rack.iter().enumerate() {
+            let table = crate::mix::strip::knobs(u.kind());
+            for (i, _) in table.iter().enumerate().filter(|(i, _)| knob_shows(u, *i)) {
+                let d = PolyDest::Rack(k as u8, i as u8);
+                items.push((
+                    self.dest_name(t, d),
+                    MenuAction::Poly(t, PolyOp::RouteDest(route, d)),
+                ));
+            }
         }
         let track = &self.session.project.tracks[t];
         let own = [

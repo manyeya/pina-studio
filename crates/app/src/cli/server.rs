@@ -68,6 +68,10 @@ pub enum Request {
         plugin: Which,
         name: String,
     },
+    /// Synth-0's sounds: listed, a track's saved, one loaded, a pack made, one moved.
+    SynthSounds {
+        args: Value,
+    },
     /// What Claude is doing for `pina ask`, for the Agent panel to show.
     Agent {
         event: crate::agent::Event,
@@ -335,6 +339,7 @@ impl Workspace {
                 self.heard_agent(event, cx);
                 ok
             }
+            Request::SynthSounds { args } => self.agent_sounds(&args, cx),
             Request::Undo | Request::Redo => {
                 let done = match request {
                     Request::Undo => self.session.undo(),

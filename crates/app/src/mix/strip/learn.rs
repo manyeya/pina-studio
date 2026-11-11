@@ -32,6 +32,8 @@ impl Workspace {
             return;
         };
         let dir = self.session.dir.clone();
+        // A synth's own, if that's what's shown: set there, wherever the window's gone since.
+        let rack = self.fx_view.as_ref().and_then(|v| v.rack);
         self.learning = Some(channel);
         self.status = Some("Listening to set the compressor…".into());
         cx.notify();
@@ -53,8 +55,8 @@ impl Workspace {
                 ws.learning = None;
                 ws.status = Some(match heard {
                     // Still has a compressor (it wasn't taken out while it listened): set.
-                    Ok(Some(c)) if ws.built_in::<Comp>(channel, stacked).is_some() => {
-                        ws.edit(cx, |ws| ws.set_built_in(channel, stacked, Some(c)));
+                    Ok(Some(c)) if ws.learns::<Comp>(rack, channel, stacked) => {
+                        ws.edit(cx, |ws| ws.set_learned(rack, channel, stacked, c));
                         format!(
                             "Compressor set by listening: {}, {} dB at {}:1, {} ms in, {}",
                             c.style.name(),
@@ -119,6 +121,8 @@ impl Workspace {
             return;
         };
         let dir = self.session.dir.clone();
+        // A synth's own, if that's what's shown: set there, wherever the window's gone since.
+        let rack = self.fx_view.as_ref().and_then(|v| v.rack);
         self.learning = Some(channel);
         self.status = Some("Listening to set the saturator…".into());
         cx.notify();
@@ -143,8 +147,8 @@ impl Workspace {
                     heard.map(|v| serde_json::from_value::<Saturator>(v["sat"].clone()).ok());
                 ws.status = Some(match learned {
                     // Still has a saturator (it wasn't taken out while it listened): set.
-                    Ok(Some(s)) if ws.built_in::<Saturator>(channel, stacked).is_some() => {
-                        ws.edit(cx, |ws| ws.set_built_in(channel, stacked, Some(s)));
+                    Ok(Some(s)) if ws.learns::<Saturator>(rack, channel, stacked) => {
+                        ws.edit(cx, |ws| ws.set_learned(rack, channel, stacked, s));
                         let styles: Vec<&str> = s.bands.iter().map(|b| b.style.name()).collect();
                         format!(
                             "Saturator set by listening: {} band{}, {}",
@@ -178,6 +182,8 @@ impl Workspace {
             return;
         };
         let dir = self.session.dir.clone();
+        // A synth's own, if that's what's shown: set there, wherever the window's gone since.
+        let rack = self.fx_view.as_ref().and_then(|v| v.rack);
         self.learning = Some(channel);
         self.status = Some(format!(
             "Listening to set the limiter for {target:.0} LUFS…"
@@ -207,7 +213,11 @@ impl Workspace {
                 });
                 ws.status = Some(match learned {
                     // Still has a limiter (it wasn't taken out while it listened): set.
-                    Ok(Some((l, lufs))) if ws.limiter(channel).is_some() => {
+                    Ok(Some((l, lufs))) if rack.is_some() && ws.learns::<Limiter>(rack, channel, None) => {
+                        ws.edit(cx, |ws| ws.set_learned(rack, channel, None, l));
+                        format!("Limiter set by listening: {}, +{:.1} dB: {lufs:.1} LUFS", l.style.name(), l.gain_db)
+                    }
+                    Ok(Some((l, lufs))) if rack.is_none() && ws.limiter(channel).is_some() => {
                         ws.edit(cx, |ws| *ws.limiter_mut(channel) = Some(l));
                         format!(
                             "Limiter set by listening: {}, +{:.1} dB, release {} ms: {lufs:.1} LUFS",
@@ -242,5 +252,46 @@ pub fn bus_comp() -> Comp {
         sidechain_hz: 90.0,
         spectral: 0.4,
         ..Comp::default()
+    }
+}
+
+impl Workspace {
+    /// Whether what Learn set out to set is still there: a synth's own effect at `rack`, else
+    /// the channel's.
+    fn learns<T: channel::Stackable>(
+        &self,
+        rack: Option<(usize, usize)>,
+        ch: Channel,
+        at: Option<usize>,
+    ) -> bool {
+        match rack {
+            Some((t, slot)) => self
+                .poly(t)
+                .and_then(|p| p.fx.get(slot))
+                .and_then(T::of)
+                .is_some(),
+            None => self.built_in::<T>(ch, at).is_some(),
+        }
+    }
+
+    fn set_learned<T: channel::Stackable>(
+        &mut self,
+        rack: Option<(usize, usize)>,
+        ch: Channel,
+        at: Option<usize>,
+        v: T,
+    ) {
+        match rack {
+            Some((t, slot)) => {
+                if let Some(u) = self
+                    .poly_mut(t)
+                    .and_then(|p| p.fx.get_mut(slot))
+                    .and_then(T::of_mut)
+                {
+                    *u = v;
+                }
+            }
+            None => self.set_built_in(ch, at, Some(v)),
+        }
     }
 }

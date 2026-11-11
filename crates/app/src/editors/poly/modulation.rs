@@ -54,16 +54,6 @@ const WAVES: [(&str, LfoWave); 9] = [
     ("Chaos: Rossler", LfoWave::Rossler),
 ];
 
-const SYNC: [(&str, f32); 7] = [
-    ("Free", 0.0),
-    ("1/8", 0.5),
-    ("1/4", 1.0),
-    ("1/2", 2.0),
-    ("1 bar", 4.0),
-    ("2 bars", 8.0),
-    ("4 bars", 16.0),
-];
-
 /// Where the envelope's points sit across its picture: attack, decay, release, 0 to 1.
 fn env_points(a: f32, d: f32, r: f32) -> [f32; 3] {
     let third = 1.0 / 3.0;
@@ -359,20 +349,7 @@ impl Workspace {
             false,
             cx,
         );
-        let beats = lfo.beats;
-        let sync = self.poly_menu(
-            "poly-lfo-sync".into(),
-            SYNC.iter()
-                .find(|s| s.1 == beats)
-                .map_or_else(|| format!("{beats} beats"), |s| s.0.to_string()),
-            move |_| {
-                SYNC.iter()
-                    .map(|&(n, b)| (n.to_string(), MenuAction::Poly(t, PolyOp::LfoBeats(l, b))))
-                    .collect()
-            },
-            false,
-            cx,
-        );
+        let sync = self.lfo_rate_button(t, l, p, cx);
         let flip = |name: &'static str,
                     sel: &'static str,
                     on: bool,
@@ -395,7 +372,7 @@ impl Workspace {
         };
         vec![
             div().w(px(132.)).child(shape),
-            div().w(px(92.)).child(sync),
+            div().w(px(112.)).child(sync),
             flip(
                 "Retrigger",
                 "poly-lfo-retrigger",

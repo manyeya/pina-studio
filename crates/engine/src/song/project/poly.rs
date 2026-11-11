@@ -135,6 +135,9 @@ pub enum Reads {
     Cents,
     Whole,
     Octaves,
+    Semitones,
+    /// One of Bloom's genes, by its place: said in its own units.
+    Gene(u8),
 }
 
 /// One of a synth's parameters.
@@ -164,6 +167,8 @@ impl PolyParam {
             Reads::Cents => format!("{v:+.0} ct"),
             Reads::Whole => format!("{v:.0}"),
             Reads::Octaves => format!("{v:.2} oct"),
+            Reads::Semitones => format!("{v:+.1} st"),
+            Reads::Gene(g) => super::bloom::say_gene(g as usize, v),
         }
     }
 }
@@ -755,12 +760,14 @@ pub enum PolySource {
     Slide,
 }
 
-/// What a route moves: one of the synth's parameters, or a knob of an effect on the track, so a
+/// What a route moves: one of the synth's parameters, a knob of one of its own effects (by its
+/// place in the rack and the knob's in its table), or a knob of an effect on the track, so a
 /// synth's LFO can ride the reverb.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PolyDest {
     Param(u16),
+    Rack(u8, u8),
     Effect(u8, u8),
 }
 
@@ -886,7 +893,17 @@ pub struct Poly {
     /// What each macro is called; none is named until a patch or a person says.
     #[serde(skip_serializing_if = "unnamed")]
     pub macros: [String; MACROS],
+    /// Its own effects, in order, after its voices and before the track's: part of its sound,
+    /// kept with its patch.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fx: Vec<Unit>,
+    /// The whole rack passed by, each effect keeping its own switch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rack_off: bool,
 }
+
+/// How many effects a synth's rack holds.
+pub const RACK: usize = 8;
 
 fn unnamed(names: &[String; MACROS]) -> bool {
     names.iter().all(String::is_empty)
@@ -910,6 +927,8 @@ impl Default for Poly {
             arp: Arp::default(),
             quality: PolyQuality::default(),
             macros: Default::default(),
+            fx: Vec::new(),
+            rack_off: false,
         }
     }
 }

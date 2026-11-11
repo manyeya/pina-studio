@@ -124,6 +124,7 @@ impl Workspace {
             .poly_view
             .as_ref()
             .map(|v| v.track)
+            .or(self.bloom_view.as_ref().map(|v| v.track))
             .filter(|&t| armed != Some(t))
             .and_then(|t| self.session.project.tracks.get(t))
             .map(|t| t.id);
@@ -133,9 +134,19 @@ impl Workspace {
                 v.held.push(pitch);
             }
         }
+        if let Some(v) = self.bloom_view.as_mut() {
+            v.held.retain(|&p| p != pitch);
+            if velocity > 0 {
+                v.held.push(pitch);
+            }
+        }
         match to {
             Some(id) => self.player.preview(id, pitch, velocity),
-            None => self.player.send_live(LiveNote { pitch, velocity }),
+            None => self.player.send_live(LiveNote {
+                pitch,
+                velocity,
+                release: 0,
+            }),
         }
     }
 
@@ -187,6 +198,12 @@ impl Workspace {
         };
         self.player.control(id, kind);
         if let Some(v) = self.poly_view.as_mut() {
+            match bend {
+                true => v.bend = value,
+                false => v.wheel = value,
+            }
+        }
+        if let Some(v) = self.bloom_view.as_mut() {
             match bend {
                 true => v.bend = value,
                 false => v.wheel = value,

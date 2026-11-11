@@ -81,6 +81,7 @@ impl Workspace {
             Target::Stacked(ch, k, knob) => {
                 (track(ch)?, ModTarget::Tool(k as u8, knob.table()? as u8))
             }
+            Target::Rack { track, slot, knob } => (track, ModTarget::Rack(slot as u8, knob as u8)),
             Target::Param { track: id, param } => {
                 let t = self
                     .session
@@ -168,13 +169,20 @@ impl Workspace {
                 };
                 strip::sat_pos(field, &s)
             }
-            ModTarget::Poly(i) => match &track.instrument {
-                Some(Instrument::Poly(p)) => {
-                    let q = &pina_engine::song::project::POLY_PARAMS[i as usize];
-                    (q.scale.pos(p.params[i as usize]) + by).clamp(0.0, 1.0)
-                }
-                _ => 0.0,
-            },
+            ModTarget::Poly(i) => track
+                .instrument
+                .as_ref()
+                .and_then(|x| x.own_pos(i as usize))
+                .map_or(0.0, |p| (p + by).clamp(0.0, 1.0)),
+            ModTarget::Rack(k, i) => {
+                let Some(mut u) = self.poly(t).and_then(|p| p.fx.get(k as usize)).copied() else {
+                    return 0.0;
+                };
+                modulate::apply_tool(&mut u, i, by);
+                strip::knobs(u.kind())
+                    .get(i as usize)
+                    .map_or(0.0, |p| (p.pos)(&u))
+            }
             ModTarget::Tool(k, i) => {
                 let Some(mut u) = track.unit_at(k) else {
                     return 0.0;
@@ -259,6 +267,7 @@ impl Workspace {
         let dest = match mt {
             ModTarget::Poly(i) => PolyDest::Param(i),
             ModTarget::Tool(k, i) => PolyDest::Effect(k, i),
+            ModTarget::Rack(k, i) => PolyDest::Rack(k, i),
             _ => return Vec::new(),
         };
         p.routes

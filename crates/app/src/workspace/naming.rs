@@ -30,6 +30,15 @@ pub enum Name {
     RegionTempo(At),
     /// A synth's macro, by its track and number.
     Macro(usize, usize),
+    /// A synth's LFO's length (or speed), typed: by its track and number.
+    LfoBeats(usize, usize),
+    /// A synth's rack kept as a preset, by the name typed: by its track.
+    RackSave(usize),
+    /// How far recordings move back for the input's lateness, ms; the name on sounds shared.
+    RecordOffset,
+    /// How much later than it says the output's heard (ms).
+    HeardLater,
+    Maker,
 }
 
 /// A name being typed, in a text field where the name shows.
@@ -80,6 +89,23 @@ impl Workspace {
                 .or_else(|| Some("Pattern".into())),
             Name::PatternFolder => Some("New Folder".into()),
             Name::PluginCollection(i) => self.catalog.collections.get(i).map(|c| c.name.clone()),
+            Name::RecordOffset => Some(format!("{}", self.settings.record_offset_ms)),
+            Name::HeardLater => Some(format!("{}", self.heard_later_ms())),
+            Name::Maker => Some(self.settings.maker.clone()),
+            Name::RackSave(t) => self.poly(t).map(|p| {
+                let name = p.patch.rsplit('/').next().unwrap_or_default();
+                format!("{} rack", if name.is_empty() { "My" } else { name })
+            }),
+            Name::LfoBeats(t, l) => self.poly(t).map(|p| {
+                let beats = p.lfos[l].beats;
+                match beats > 0.0 {
+                    true => format!("{beats}"),
+                    false => {
+                        let rate = crate::editors::poly::lfo_rate_param(l);
+                        format!("{:.2} hz", self.poly_hz(t, rate))
+                    }
+                }
+            }),
             Name::Macro(t, i) => self
                 .poly(t)
                 .map(|s| s.macros[i].clone())
@@ -190,6 +216,37 @@ impl Workspace {
                 cx.notify();
                 return;
             }
+            (Name::RecordOffset, Some(text)) => {
+                match text.trim().trim_end_matches("ms").trim().parse::<f32>() {
+                    Ok(ms) => self.settings.record_offset_ms = ms.clamp(-200.0, 500.0),
+                    Err(_) => self.status = Some(format!("\"{text}\" isn't a number of ms")),
+                }
+                self.settings.save();
+                cx.notify();
+                return;
+            }
+            (Name::HeardLater, Some(text)) => {
+                match text.trim().trim_end_matches("ms").trim().parse::<f32>() {
+                    Ok(ms) => self.set_heard_later(ms.clamp(-200.0, 1000.0), cx),
+                    Err(_) => self.status = Some(format!("\"{text}\" isn't a number of ms")),
+                }
+                cx.notify();
+                return;
+            }
+            (Name::Maker, Some(text)) => {
+                self.settings.maker = text.trim().to_string();
+                self.settings.save();
+                cx.notify();
+                return;
+            }
+            (Name::RackSave(t), Some(text)) => {
+                self.save_rack(t, text, cx);
+                return;
+            }
+            (Name::LfoBeats(t, l), Some(text)) => {
+                self.lfo_rate_typed(t, l, text, cx);
+                return;
+            }
             (Name::Macro(t, i), Some(text)) => {
                 let text = text.trim().to_string();
                 self.edit(cx, |ws| {
@@ -206,7 +263,12 @@ impl Workspace {
                 | Name::PatternFolder
                 | Name::PluginCollection(_)
                 | Name::RegionTempo(_)
-                | Name::Macro(..),
+                | Name::Macro(..)
+                | Name::LfoBeats(..)
+                | Name::RackSave(_)
+                | Name::RecordOffset
+                | Name::HeardLater
+                | Name::Maker,
                 _,
             ) => {
                 cx.notify();
@@ -273,7 +335,12 @@ impl Workspace {
                     | Name::PatternFolder
                     | Name::PluginCollection(_)
                     | Name::RegionTempo(_)
-                    | Name::Macro(..) => {}
+                    | Name::Macro(..)
+                    | Name::LfoBeats(..)
+                    | Name::RackSave(_)
+                    | Name::RecordOffset
+                    | Name::HeardLater
+                    | Name::Maker => {}
                 }
             });
         }
@@ -320,11 +387,14 @@ impl Workspace {
             .map(|n| n.input.clone())
     }
 
-    /// Whether the agent's message box or the look picker's search has the keyboard.
+    /// Whether a text field has the keyboard.
     pub(crate) fn typing_in_field(&self, window: &Window, cx: &App) -> bool {
-        let focused = |input: &Entity<crate::ui::text::TextInput>| {
-            input.read(cx).focus_handle(cx).is_focused(window)
-        };
-        focused(&self.chat.input) || self.picker.as_ref().is_some_and(|p| focused(&p.search))
+        // Any text field with the keyboard (a name, a search, Save's, a question for the agent):
+        // what's typed is words, not notes.
+        let _ = cx;
+        window
+            .context_stack()
+            .iter()
+            .any(|c| c.contains("TextInput"))
     }
 }

@@ -42,6 +42,7 @@ fn play(p: &Poly, note: u8, hold: usize, samples: usize) -> [Vec<f32>; 2] {
                 offset: 0,
                 pitch: note,
                 velocity: 1.0,
+                release: 0.0,
             });
         }
         if at <= hold && hold < at + n {
@@ -49,6 +50,7 @@ fn play(p: &Poly, note: u8, hold: usize, samples: usize) -> [Vec<f32>; 2] {
                 offset: (hold - at) as u32,
                 pitch: note,
                 velocity: 0.0,
+                release: 0.0,
             });
         }
         s.begin(&plan, std::iter::empty(), &by);
@@ -235,6 +237,7 @@ fn notes_share_and_steal_voices_and_mono_glides() {
             offset: i * 10,
             pitch: 60 + i as u8,
             velocity: 0.8,
+            release: 0.0,
         })
         .collect();
     s.begin(&plan, std::iter::empty(), &by);
@@ -251,6 +254,7 @@ fn notes_share_and_steal_voices_and_mono_glides() {
         offset,
         pitch,
         velocity,
+        release: 0.0,
     };
     s.begin(&plan, std::iter::empty(), &by);
     s.process(&plan, [&mut l, &mut r], 512, &[at(60, 1.0, 0)], &[]);
@@ -276,6 +280,7 @@ fn automation_and_modulators_reach_it() {
                 offset: 0,
                 pitch: 57,
                 velocity: 1.0,
+                release: 0.0,
             }];
             s.begin(
                 &plan,
@@ -336,11 +341,13 @@ fn the_arpeggiator_steps_through_whats_held() {
             offset: 0,
             pitch: 60,
             velocity: 1.0,
+            release: 0.0,
         },
         Note {
             offset: 0,
             pitch: 64,
             velocity: 1.0,
+            release: 0.0,
         },
     ];
     s.set_tempo(120.0);
@@ -442,6 +449,7 @@ fn an_idle_synth_costs_nothing_and_rings_out_first() {
         offset: 0,
         pitch: 60,
         velocity,
+        release: 0.0,
     };
     s.begin(&plan, std::iter::empty(), &by);
     s.process(&plan, [&mut l, &mut r], 64, &[note(0.9)], &[]);
@@ -489,6 +497,7 @@ fn share(patch: &Poly, chord: usize) -> f64 {
             offset: 0,
             pitch: [48, 55, 60, 64, 67, 72, 76, 79][i],
             velocity: 0.8,
+            release: 0.0,
         })
         .collect();
     let (mut l, mut r) = (vec![0f32; 256], vec![0f32; 256]);
@@ -618,6 +627,7 @@ fn the_window_can_see_a_note_and_its_controllers() {
         offset: 0,
         pitch: 60,
         velocity: 0.75,
+        release: 0.0,
     }];
     let wheel = [Control {
         offset: 0,
@@ -646,6 +656,7 @@ fn each_voice_follows_its_own_notes_pitch_slide_and_press() {
         offset: 0,
         pitch,
         velocity: 1.0,
+        release: 0.0,
     };
     let block = |s: &mut PolySynth, notes: &[Note], controls: &[Control]| {
         let (mut l, mut r) = (vec![0f32; 4096], vec![0f32; 4096]);

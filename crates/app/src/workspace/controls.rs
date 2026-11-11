@@ -24,6 +24,13 @@ pub enum Target {
         track: usize,
         param: usize,
     },
+    /// A knob of one of a track's synth's own effects: the effect's place in its rack, the
+    /// knob's in its table.
+    Rack {
+        track: usize,
+        slot: usize,
+        knob: usize,
+    },
     /// A setting of a track's built-in sampler (by track index).
     Sampler {
         track: usize,
@@ -228,6 +235,11 @@ impl Workspace {
                 }
             }
             Target::Poly { track, param } => self.now_value(track, Param::Poly(param as u16)),
+            Target::Rack { track, slot, knob } => self
+                .poly(track)
+                .and_then(|p| p.fx.get(slot))
+                .and_then(|u| Some((crate::mix::strip::knobs(u.kind()).get(knob)?.pos)(u)))
+                .unwrap_or(0.0),
             Target::Sampler { track, field } => self.sampler_pos(track, field),
         }
     }
@@ -261,16 +273,24 @@ impl Workspace {
                 comp_set(field, self.strip_dsp_mut(ch).1.get_or_insert_default(), v)
             }
             Target::Poly { track, param } => {
-                let q = &pina_engine::song::project::POLY_PARAMS[param];
-                let value = match q.reads {
-                    pina_engine::song::project::Reads::Whole => q.scale.value(v).round(),
-                    _ => q.scale.value(v),
-                };
-                if let Some(p) = self.poly_mut(track) {
-                    p.params[param] = value;
+                if let Some(i) = self
+                    .session
+                    .project
+                    .tracks
+                    .get_mut(track)
+                    .and_then(|t| t.instrument.as_mut())
+                {
+                    i.set_own_pos(param, v);
                 }
             }
             Target::Sampler { track, field } => self.sampler_set(track, field, v),
+            Target::Rack { track, slot, knob } => {
+                if let Some(u) = self.poly_mut(track).and_then(|p| p.fx.get_mut(slot))
+                    && let Some(k) = crate::mix::strip::knobs(u.kind()).get(knob)
+                {
+                    (k.set)(u, v);
+                }
+            }
             Target::Sat(ch, field) => {
                 crate::mix::strip::sat_set(field, self.sat_mut(ch).get_or_insert_default(), v)
             }

@@ -65,6 +65,7 @@ impl Workspace {
                 format!("{}: {}", self.mod_name(track, k as usize), setting.name())
             }
             Param::Limit(field) => format!("Limiter: {}", field.name()),
+            Param::Rack(k, i) => format!("Synth-0: {}", self.rack_name(track, k, i)),
             Param::Tool(k, i) => {
                 use pina_engine::song::project::{OWN_COMP, OWN_SAT};
                 let ch = crate::mix::strip::Channel::Track(track);
@@ -87,7 +88,18 @@ impl Workspace {
                     .find(|&m| macro_param(m) == i as usize)
                     .and_then(|m| self.poly(track).map(|p| p.macros[m].clone()))
                     .filter(|n| !n.is_empty());
-                named.unwrap_or_else(|| POLY_PARAMS[i as usize].name.clone())
+                let table = self
+                    .session
+                    .project
+                    .tracks
+                    .get(track)
+                    .and_then(|t| t.instrument.as_ref()?.own_params())
+                    .unwrap_or(&POLY_PARAMS);
+                named.unwrap_or_else(|| {
+                    table
+                        .get(i as usize)
+                        .map_or("Synth".into(), |q| q.name.clone())
+                })
             }
             Param::Voice(i) => pina_engine::song::project::VOICE
                 .get(i as usize)

@@ -505,7 +505,35 @@ pub fn poly_patch(name: &str) -> Option<Poly> {
     // A few voices over a stack, about as loud as one.
     p.params[POLY_MASTER] -= 2.0;
     give_macros(&mut p);
+    p.fx = patch_fx(name)
+        .iter()
+        .filter_map(|n| rack_effect(n))
+        .collect();
     Some(p)
+}
+
+/// The effects each patch has in its rack: what makes it the sound it's called.
+fn patch_fx(name: &str) -> &'static [&'static str] {
+    match name {
+        "Evolving Pad" | "Strings" => &["Ensemble", "Hall"],
+        "Warm Pad" => &["Chorus", "Hall"],
+        "Glass Pad" => &["Ping-Pong Delay", "Shimmer"],
+        "Choir" => &["Ensemble", "Cathedral"],
+        "Drone" | "Noise Sweep" => &["Phaser", "Cathedral"],
+        "Supersaw" => &["Hall"],
+        "Trance Lead" | "Pluck" => &["Ping-Pong Delay", "Plate"],
+        "Soft Lead" => &["Tape Delay", "Room"],
+        "Square Lead" => &["Digital Delay"],
+        "Sync Lead" => &["Tube", "Ping-Pong Delay"],
+        "Growl" => &["Crunch"],
+        "Acid" => &["Tube", "Tape Delay"],
+        "House Stab" | "FM Keys" | "Organ" => &["Chorus", "Room"],
+        "Arp Pulse" => &["Tape Delay"],
+        "Bell" | "Metal Hit" => &["Plate"],
+        "Tape Keys" => &["Lo-Fi", "Room"],
+        "Brass" => &["Room"],
+        _ => &[],
+    }
 }
 
 /// What every patch's macros are called, in order.

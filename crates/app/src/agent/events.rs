@@ -183,6 +183,7 @@ pub fn label(name: &str, input: &Value, bar: u64) -> (String, String) {
         "plugins" => ("Looking at plugins", String::new()),
         "params" => ("Reading a plugin", String::new()),
         "presets" => ("Reading presets", String::new()),
+        "synth_sounds" => ("Synth-0's sounds", String::new()),
         "critique" => (
             "Listening critically",
             if input["quick"].as_bool() == Some(true) {

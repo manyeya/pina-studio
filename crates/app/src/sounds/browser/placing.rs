@@ -143,6 +143,27 @@ impl Workspace {
     /// the browser: a loop fitted to the song's tempo and key. One undo takes it all back.
     pub fn drop_files(&mut self, paths: &[PathBuf], at: Point<f32>, cx: &mut Context<Self>) {
         self.file_drag = None;
+        // Packs of the synth's sounds go into its library, wherever they're dropped.
+        if paths
+            .iter()
+            .any(|p| p.extension().is_some_and(|x| x == "pinapack"))
+        {
+            return self.import_files(paths, cx);
+        }
+        // On Bloom's Grow page, a recording is what it grows toward.
+        let growing = self
+            .bloom_view
+            .as_ref()
+            .is_some_and(|v| v.page == crate::editors::bloom::BloomPage::Grow);
+        if growing
+            && let Some(file) = paths.iter().find(|p| {
+                p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                    pina_engine::samples::library::EXTENSIONS.contains(&e.to_lowercase().as_str())
+                })
+            })
+        {
+            return self.bloom_load_recording(file.clone(), cx);
+        }
         // On the Song Study page, a picture of a spectrogram is studied as one.
         if self.view == View::Study {
             for file in paths
@@ -415,6 +436,11 @@ impl Workspace {
                 moved: true,
                 ..
             }) => {
+                // On Bloom's window while it grows, what it grows toward.
+                let growing = self.over_bloom_growing(at);
+                if let Some(s) = self.browser.library.samples.get(index).filter(|_| growing) {
+                    return self.bloom_load_recording(s.path.clone(), cx);
+                }
                 // On the Drum Machine's pad sound, a layer on it; on a pad, that pad's sound.
                 if let Some(note) = self.strip_under(at) {
                     self.drum_op(DrumOp::Layer { note, index }, cx);

@@ -28,7 +28,10 @@ it appears in the Agent panel for them to hear and drag in, it doesn't touch the
 section its own parts, fills and transitions, `sounds` and samples for real instruments (or Pina Studio's own synth: `set_synth`, a patch \
 shaped with all it has: wavetables and where through them, warps, unison, analog-modelled filters \
 with drive, envelopes, LFOs and a matrix that can also ride the track's effects, and `describe` \
-lists it all), \
+lists it all; `synth_sounds` saves a sound made into the person's library and packs, and loads theirs; \
+or Bloom, `set_bloom`: sounds grown from a seed, twelve branches each its own variation of it, one \
+per note of the octave unless `keys` says otherwise: plant a kind, grow branches with their \
+lengths and the plant's growth, automate growth over a section for sounds that evolve), \
 `critique` after every step and fix what it says, `mix` and `master` to finish. `mix` sets \
 every channel by listening (EQ, compressor, saturator, sends, levels): a starting point, not the \
 end. Then shape each part's built-in effects for this song, and use all they have: the \
@@ -307,6 +310,26 @@ fn tools() -> Value {
                     "save": { "type": "string", "description": "A name to save its settings as." }
                 },
                 "required": ["project", "channel", "plugin"]
+            }
+        },
+        {
+            "name": "synth_sounds",
+            "description": "Synth-0's sounds, the same library its window shows (the factory's, those saved, packs). op `list` (query words, part, pack) gives each sound's key, part, words and pack, and the packs; `save` keeps a track's Synth-0 sound as it is now: name, part (Lead, Bass, Pad, Keys, Pluck, FX, Arp, Chord, Drone), words (what it sounds like: Warm, Bright, Dark, Wide, Evolving, Aggressive, Soft, Glassy, Analog, Digital, Lo-fi, Mono, or any), about (a line) and pack (none: just the person's); `load` puts a sound (by key) on a track; `make_pack` (name, about) makes a pack; `move` (key, pack) moves a saved sound into one. Shape a sound with set_synth first, then save it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "op": { "type": "string", "enum": ["list", "save", "load", "make_pack", "move"] },
+                    "project": project,
+                    "track": { "type": "integer" },
+                    "name": { "type": "string" },
+                    "part": { "type": "string" },
+                    "words": { "type": "array", "items": { "type": "string" } },
+                    "about": { "type": "string" },
+                    "pack": { "type": "string" },
+                    "key": { "type": "string" },
+                    "query": { "type": "string" }
+                },
+                "required": ["op"]
             }
         },
         {
@@ -789,6 +812,7 @@ pub(crate) fn call(name: &str, args: &Value) -> Result<Value, String> {
             Some("info") => crate::cli::samples::info(&path(args, "path")?),
             _ => Err("`action` is one of status, scan, add, remove, info".into()),
         },
+        "synth_sounds" => crate::cli::sounds::synth_sounds(args),
         "presets" => {
             let parse = |key: &str| args.get(key).cloned().unwrap_or_default();
             let channel =

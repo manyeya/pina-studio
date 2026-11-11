@@ -5,6 +5,7 @@ pub mod midi;
 pub mod reference;
 pub mod samples;
 pub mod server;
+pub mod sounds;
 pub mod study;
 use std::path::{Path, PathBuf};
 

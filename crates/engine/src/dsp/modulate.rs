@@ -137,6 +137,9 @@ pub enum ModTarget {
     Tool(u8, u8),
     /// One of the synth's parameters, by its place: a share of its knob's travel.
     Poly(u16),
+    /// A knob of one of the synth's own effects, by the effect's place in its rack and the knob's
+    /// in its table: a share of the knob's travel.
+    Rack(u8, u8),
     /// A step pattern's sound (by its row), each step as it falls in the song: its velocity, its
     /// pitch (semitones), its chance (%). Worked out ahead, so only an LFO, steps, random or a
     /// macro can move it.
@@ -663,6 +666,8 @@ pub struct Offsets {
     pub plugin_count: usize,
     pub tools: [(u8, u8, f32); 16],
     pub tool_count: usize,
+    pub rack: [(u8, u8, f32); 16],
+    pub rack_count: usize,
     pub poly: [(u16, f32); 32],
     pub poly_count: usize,
     /// Whether anything moves the strip, the Sampler.
@@ -687,6 +692,8 @@ impl Default for Offsets {
             plugin_count: 0,
             tools: [(0, 0, 0.0); 16],
             tool_count: 0,
+            rack: [(0, 0, 0.0); 16],
+            rack_count: 0,
             poly: [(0, 0.0); 32],
             poly_count: 0,
             strip: false,
@@ -778,6 +785,17 @@ impl Offsets {
                     None => {}
                 }
             }
+            ModTarget::Rack(k, knob) => {
+                let n = self.rack_count;
+                match self.rack[..n].iter().position(|t| t.0 == k && t.1 == knob) {
+                    Some(i) => self.rack[i].2 += amount,
+                    None if n < self.rack.len() => {
+                        self.rack[n] = (k, knob, amount);
+                        self.rack_count += 1;
+                    }
+                    None => {}
+                }
+            }
             ModTarget::Plugin(which, id) => {
                 let n = self.plugin_count;
                 let at = self.plugins[..n]
@@ -835,6 +853,20 @@ impl Offsets {
         self.poly[..self.poly_count]
             .iter()
             .map(|p| (p.0 as usize, p.1))
+    }
+
+    /// The synth's own effect at `k` in its rack, its knobs moved by what moves them; None if
+    /// nothing does.
+    pub fn racked(&self, k: u8, u: &Unit) -> Option<Unit> {
+        let mut u = *u;
+        let mut any = false;
+        for &(at, knob, by) in &self.rack[..self.rack_count] {
+            if at == k {
+                apply_tool(&mut u, knob, by);
+                any = true;
+            }
+        }
+        any.then_some(u)
     }
 
     /// Whether a modulator's on the effect at `place`.
@@ -983,7 +1015,9 @@ pub fn default_depth(target: ModTarget) -> f32 {
         ModTarget::Sampler(SamplerParam::Vibrato) => 50.0,
         ModTarget::Sampler(SamplerParam::FilterEnv | SamplerParam::LfoFilter) => 2.0,
         ModTarget::Sampler(_) => 0.5,
-        ModTarget::Plugin(..) | ModTarget::Tool(..) | ModTarget::Poly(_) => 0.3,
+        ModTarget::Plugin(..) | ModTarget::Tool(..) | ModTarget::Poly(_) | ModTarget::Rack(..) => {
+            0.3
+        }
         ModTarget::Sound(_, SoundParam::Velocity) => -40.0,
         ModTarget::Sound(_, SoundParam::Pitch) => 12.0,
         ModTarget::Sound(_, SoundParam::Chance) => -50.0,
@@ -999,7 +1033,11 @@ pub fn depth_range(target: ModTarget) -> f32 {
         ModTarget::EqGain(_) | ModTarget::CompMakeup | ModTarget::SatDrive => 24.0,
         ModTarget::LimitGain => 30.0,
         ModTarget::LimitCeiling => 12.0,
-        ModTarget::SatMix | ModTarget::Plugin(..) | ModTarget::Tool(..) | ModTarget::Poly(_) => 1.0,
+        ModTarget::SatMix
+        | ModTarget::Plugin(..)
+        | ModTarget::Tool(..)
+        | ModTarget::Poly(_)
+        | ModTarget::Rack(..) => 1.0,
         ModTarget::Sampler(SamplerParam::Cutoff | SamplerParam::FilterEnv) => 8.0,
         ModTarget::Sampler(SamplerParam::LfoFilter) => 6.0,
         ModTarget::Sampler(SamplerParam::Transpose) => 24.0,
