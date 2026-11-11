@@ -9,12 +9,14 @@ mod headers;
 mod lanes;
 mod menus;
 mod recording;
+mod selection;
 mod values;
 mod views;
 
 pub use editing::*;
 pub use menus::*;
 pub use recording::*;
+pub use selection::*;
 pub use values::*;
 
 use gpui::{

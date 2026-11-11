@@ -32,14 +32,19 @@ pub enum AutoParam {
 
 /// One of a track's synth's parameters, as automation names it.
 pub(crate) fn synth_param(p: &mut Project, t: usize, knob: Option<&str>) -> Result<Param, String> {
-    if !matches!(track(p, t)?.instrument, Some(Instrument::Poly(_))) {
-        return Err(format!("track {t} has no synth: add one with set_synth"));
-    }
+    let bloom = match track(p, t)?.instrument {
+        Some(Instrument::Poly(_)) => false,
+        Some(Instrument::Bloom(_)) => true,
+        _ => return Err(format!("track {t} has no synth: add one with set_synth")),
+    };
     let Some(knob) = knob else {
         return Err("a synth's automation needs `knob`: a parameter's id or name".into());
     };
-    let i = poly_param(knob)
-        .ok_or_else(|| format!("the synth has no {knob}: `describe` lists them"))?;
+    let i = match bloom {
+        true => crate::song::project::bloom_param(knob),
+        false => poly_param(knob),
+    }
+    .ok_or_else(|| format!("the synth has no {knob}: `describe` lists them"))?;
     Ok(Param::Poly(i as u16))
 }
 
@@ -90,7 +95,12 @@ pub(crate) fn tool_param(
 /// A value in a knob's own units, as where the knob sits: what its lane holds.
 fn lane_value(p: &mut Project, t: usize, param: Param, v: f32) -> Result<f32, String> {
     if let Param::Poly(i) = param {
-        return Ok(POLY_PARAMS[i as usize].scale.pos(v));
+        let table = track(p, t)?
+            .instrument
+            .as_ref()
+            .and_then(|x| x.own_params())
+            .unwrap_or(&POLY_PARAMS);
+        return Ok(table.get(i as usize).map_or(v, |q| q.scale.pos(v)));
     }
     let Param::Tool(place, knob) = param else {
         return Ok(v);

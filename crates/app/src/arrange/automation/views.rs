@@ -95,6 +95,7 @@ impl Workspace {
                                 Param::Pan => Some(0.0),
                                 Param::Plugin(..)
                                 | Param::Tool(..)
+                                | Param::Rack(..)
                                 | Param::Voice(_)
                                 | Param::Poly(_) => Some(0.5),
                                 Param::Eq(_, EqField::Gain) => Some(0.0),
@@ -235,20 +236,21 @@ impl Workspace {
                     out.push(
                         div()
                             .absolute()
-                            .left(px(cx_ - 5.))
-                            .top(px(cy - 5.))
-                            .size(px(10.))
+                            .left(px(cx_ - 7.))
+                            .top(px(cy - 7.))
+                            .size(px(14.))
                             .flex()
                             .items_center()
                             .justify_center()
-                            .opacity(if bent { 0.8 } else { 0.0 })
+                            // Always there to grab: faint until the lane's under the pointer.
+                            .opacity(if bent { 0.9 } else { 0.35 })
                             .group_hover(group.clone(), |s| s.opacity(1.0))
                             .cursor_ns_resize()
                             .debug_selector(move || format!("auto-bend-{t}-{k}-{n}"))
                             .child(
                                 div()
-                                    .size(px(6.))
-                                    .rounded(px(1.))
+                                    .size(px(8.))
+                                    .rounded(px(2.))
                                     .bg(rgb(0x0b0b0e))
                                     .border_1()
                                     .border_color(alpha(color, 0.9)),
@@ -284,6 +286,8 @@ impl Workspace {
                             .into_any_element(),
                     );
                 }
+                // Two or more picked: a box round them, its edges to stretch them by.
+                out.extend(self.stretch_box(t, k, param, &points, &picked, cx));
                 // The points.
                 for (n, q) in points.iter().enumerate() {
                     let px_ = q.tick as f32 * ppt - sx;
@@ -395,6 +399,174 @@ impl Workspace {
                     .text_color(rgb(TEXT))
                     .whitespace_nowrap()
                     .child(format!("{}  ·  {when}", self.value_text(t, param, q.value)))
+                    .into_any_element(),
+            );
+        }
+        out
+    }
+
+    /// The box round a lane's picked points (two or more), and its edges: left and right while
+    /// they're at different times, top and bottom while at different values.
+    fn stretch_box(
+        &self,
+        t: usize,
+        k: usize,
+        param: Param,
+        points: &[AutoPoint],
+        picked: &[usize],
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let chosen: Vec<AutoPoint> = picked
+            .iter()
+            .filter_map(|&i| points.get(i).copied())
+            .collect();
+        if chosen.len() < 2 {
+            return Vec::new();
+        }
+        let (ppt, sx, h, top) = (
+            self.px_per_tick(),
+            self.scroll_x,
+            self.auto_h(),
+            self.lane_top(t, k),
+        );
+        let xs = chosen.iter().map(|q| q.tick as f32 * ppt - sx);
+        let ys: Vec<f32> = chosen.iter().map(|q| to_y(param, q.value, h)).collect();
+        let (x0, x1) = xs.fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), x| {
+            (a.min(x), b.max(x))
+        });
+        let y0 = ys.iter().copied().fold(f32::INFINITY, f32::min);
+        let y1 = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let wide = x1 - x0 >= 1.0;
+        let tall = y1 - y0 >= 1.0 && !param.steps();
+        // Kept clear of the points at its edges, and inside the lane.
+        let (l, r) = (x0 - 12.0, x1 + 12.0);
+        let (u, d) = (
+            (top + y0 - 10.0).max(top + 1.0),
+            (top + y1 + 10.0).min(top + h - 1.0),
+        );
+        let color = self.color(t);
+        let mut out = vec![
+            div()
+                .absolute()
+                .left(px(l))
+                .top(px(u))
+                .w(px(r - l))
+                .h(px(d - u))
+                .rounded(px(3.))
+                .bg(alpha(color, 0.06))
+                .border_1()
+                .border_color(alpha(color, 0.45))
+                .into_any_element(),
+        ];
+        let sides = [
+            (
+                Side::Left,
+                wide,
+                l - 5.0,
+                u + 6.0,
+                10.0,
+                (d - u - 12.0).max(6.0),
+            ),
+            (
+                Side::Right,
+                wide,
+                r - 5.0,
+                u + 6.0,
+                10.0,
+                (d - u - 12.0).max(6.0),
+            ),
+            (
+                Side::Top,
+                tall,
+                l + 6.0,
+                u - 5.0,
+                (r - l - 12.0).max(6.0),
+                10.0,
+            ),
+            (
+                Side::Bottom,
+                tall,
+                l + 6.0,
+                d - 5.0,
+                (r - l - 12.0).max(6.0),
+                10.0,
+            ),
+        ];
+        // How much a stretch has scaled them, over the box.
+        if let Some(Drag::AutoStretch {
+            track,
+            param: sp,
+            side,
+            scale,
+            moved: true,
+            ..
+        }) = self.drag
+            && track == t
+            && sp == param
+        {
+            let what = match side {
+                Side::Left | Side::Right => "Time",
+                Side::Top | Side::Bottom => "Values",
+            };
+            out.push(
+                div()
+                    .absolute()
+                    .left(px(if side == Side::Left {
+                        l
+                    } else {
+                        (r - 84.0).max(l)
+                    }))
+                    .top(px((u - 22.0).max(top)))
+                    .px(px(6.))
+                    .py(px(2.))
+                    .rounded(px(4.))
+                    .bg(rgb(0x0b0b0e))
+                    .border_1()
+                    .border_color(rgb(LINE_STRONG))
+                    .font_family(MONO)
+                    .text_size(px(10.))
+                    .text_color(rgb(TEXT))
+                    .whitespace_nowrap()
+                    .child(format!("{what} ×{scale:.2}"))
+                    .into_any_element(),
+            );
+        }
+        for (side, shown, x, y, w, hh) in sides {
+            if !shown {
+                continue;
+            }
+            let across = matches!(side, Side::Left | Side::Right);
+            let name = format!("{side:?}").to_lowercase();
+            out.push(
+                div()
+                    .id(gpui::ElementId::Name(
+                        format!("auto-stretch-{t}-{k}-{name}").into(),
+                    ))
+                    .debug_selector(move || format!("auto-stretch-{t}-{k}-{name}"))
+                    .absolute()
+                    .left(px(x))
+                    .top(px(y))
+                    .w(px(w))
+                    .h(px(hh))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(across, |d| d.cursor_ew_resize())
+                    .when(!across, |d| d.cursor_ns_resize())
+                    .child(
+                        div()
+                            .w(px(if across { 3. } else { 18. }))
+                            .h(px(if across { 18. } else { 3. }))
+                            .rounded(px(1.5))
+                            .bg(alpha(color, 0.9)),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            ws.stretch_press(t, param, side, e, cx);
+                        }),
+                    )
                     .into_any_element(),
             );
         }

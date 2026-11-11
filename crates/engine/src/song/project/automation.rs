@@ -37,6 +37,9 @@ pub struct Automation {
     /// Its synth's parameters over time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub poly: Vec<PolyAuto>,
+    /// Its synth's own effects' knobs over time, each by its place in the rack.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rack: Vec<ToolAuto>,
     #[serde(default, skip_serializing_if = "AutoMode::is_read")]
     pub mode: AutoMode,
 }
@@ -331,6 +334,11 @@ impl Automation {
                 .iter()
                 .find(|a| a.place == place && a.knob == knob)
                 .map_or(&[], |a| &a.points),
+            Param::Rack(place, knob) => self
+                .rack
+                .iter()
+                .find(|a| a.place == place && a.knob == knob)
+                .map_or(&[], |a| &a.points),
             Param::Voice(knob) => self
                 .voice
                 .iter()
@@ -430,6 +438,21 @@ impl Automation {
                     }
                 };
                 &mut self.limit[i].points
+            }
+            Param::Rack(place, knob) => {
+                let at = |a: &ToolAuto| a.place == place && a.knob == knob;
+                let i = match self.rack.iter().position(at) {
+                    Some(i) => i,
+                    None => {
+                        self.rack.push(ToolAuto {
+                            place,
+                            knob,
+                            points: Vec::new(),
+                        });
+                        self.rack.len() - 1
+                    }
+                };
+                &mut self.rack[i].points
             }
             Param::Tool(place, knob) => {
                 let at = |a: &ToolAuto| a.place == place && a.knob == knob;
@@ -592,6 +615,12 @@ impl Automation {
                 .iter()
                 .filter(|a| !a.points.is_empty())
                 .map(|a| Param::Tool(a.place, a.knob)),
+        );
+        out.extend(
+            self.rack
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| Param::Rack(a.place, a.knob)),
         );
         out.extend(
             self.voice

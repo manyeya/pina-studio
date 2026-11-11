@@ -41,11 +41,16 @@ impl Workspace {
         let focus = self.auto_focus.filter(|f| f.0 == id).map(|f| f.1);
         let param = focus.unwrap_or_else(|| self.lane_param(track));
         let picked = self.picked_points(track, param);
+        // The points picked, or with none, every line on the lane.
         let reshape = |ws: &mut Workspace, f: &dyn Fn(&mut AutoPoint)| {
             let points = ws.session.project.tracks[track]
                 .automation
                 .points_mut(param);
-            for &i in &picked {
+            let all: Vec<usize> = match picked.is_empty() {
+                true => (0..points.len()).collect(),
+                false => picked.clone(),
+            };
+            for i in all {
                 if let Some(q) = points.get_mut(i) {
                     f(q);
                 }
@@ -210,7 +215,11 @@ impl Workspace {
                 false => (-0.8, 0.8),
             },
             Param::Mute => (0.0, 1.0),
-            Param::Plugin(..) | Param::Tool(..) | Param::Voice(_) | Param::Poly(_) => match ramp {
+            Param::Plugin(..)
+            | Param::Tool(..)
+            | Param::Rack(..)
+            | Param::Voice(_)
+            | Param::Poly(_) => match ramp {
                 true => (0.0, 1.0),
                 false => (0.1, 0.9),
             },
@@ -314,10 +323,72 @@ impl Workspace {
                 format!("Smooth {what} More"),
                 MenuAction::Auto(id, AutoOp::Smooth(PPQ * 2)),
             ));
+            items.push((
+                format!("S-Curve Every Line of the {what}"),
+                MenuAction::Auto(id, AutoOp::SCurve),
+            ));
+            items.push((
+                format!("Straighten the {what}"),
+                MenuAction::Auto(id, AutoOp::Straight),
+            ));
         }
         items.push(("Select All".into(), MenuAction::Auto(id, AutoOp::SelectAll)));
         items.push(("Thin Points".into(), MenuAction::Auto(id, AutoOp::Thin)));
         items.push(("Clear Lane".into(), MenuAction::Auto(id, AutoOp::Clear)));
+        self.menu = Some(Menu {
+            at,
+            items,
+            ..Default::default()
+        });
+        cx.notify();
+    }
+
+    /// A lane's Curves button: its lines (the selection's, else all of them) made S-curves or
+    /// straight, smoothed, thinned.
+    pub fn curves_menu(
+        &mut self,
+        track: usize,
+        k: usize,
+        at: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let param = self.lane_at(track, k);
+        let id = self.session.project.tracks[track].id;
+        self.auto_focus = Some((id, param));
+        let what = match self.picked_points(track, param).len() > 1 {
+            true => "the selection",
+            false => "the lane",
+        };
+        let items = vec![
+            (format!("Lines of {what}"), MenuAction::Nothing),
+            (
+                "S-Curves: Smooth Every Line".into(),
+                MenuAction::Auto(id, AutoOp::SCurve),
+            ),
+            (
+                "Curves: Slow Start".into(),
+                MenuAction::Auto(id, AutoOp::SlowStart),
+            ),
+            (
+                "Curves: Fast Start".into(),
+                MenuAction::Auto(id, AutoOp::FastStart),
+            ),
+            (
+                "Straight Lines".into(),
+                MenuAction::Auto(id, AutoOp::Straight),
+            ),
+            ("Steps".into(), MenuAction::Auto(id, AutoOp::Step)),
+            (String::new(), MenuAction::Nothing),
+            (
+                "Smooth Out Bumps".into(),
+                MenuAction::Auto(id, AutoOp::Smooth(PPQ / 2)),
+            ),
+            (
+                "Smooth Out More".into(),
+                MenuAction::Auto(id, AutoOp::Smooth(PPQ * 2)),
+            ),
+            ("Thin Points".into(), MenuAction::Auto(id, AutoOp::Thin)),
+        ];
         self.menu = Some(Menu {
             at,
             items,

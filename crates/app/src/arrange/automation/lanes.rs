@@ -180,9 +180,9 @@ impl Workspace {
             }
         }
         // The synth: all of it, by the part it's in.
-        if matches!(t.instrument, Some(Instrument::Poly(_))) {
+        if let Some(table) = t.instrument.as_ref().and_then(|x| x.own_params()) {
             let mut group = "";
-            for (i, param) in POLY_PARAMS.iter().enumerate() {
+            for (i, param) in table.iter().enumerate() {
                 if param.group != group {
                     group = param.group;
                     items.push((group.into(), MenuAction::Nothing));
@@ -190,6 +190,20 @@ impl Workspace {
                 let name = self.param_name(track, Param::Poly(i as u16));
                 let _ = param;
                 items.push(item(Param::Poly(i as u16), name));
+            }
+        }
+        // Its own effects: every knob of each.
+        if let Some(Instrument::Poly(p)) = &t.instrument {
+            for (k, u) in p.fx.iter().enumerate() {
+                items.push((
+                    format!("Its {}", pina_engine::song::project::rack_name(u)),
+                    MenuAction::Nothing,
+                ));
+                for (i, knob) in strip::knobs(u.kind()).iter().enumerate() {
+                    if knob_shows(u, i) {
+                        items.push(item(Param::Rack(k as u8, i as u8), knob.name.to_string()));
+                    }
+                }
             }
         }
         // The Sampler's voice: everything that moves smoothly.

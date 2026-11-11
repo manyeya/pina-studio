@@ -513,3 +513,155 @@ fn automation_moves_with_regions_when_set(cx: &mut TestAppContext) {
     assert_eq!(value_at(&line, BAR as f64), Some(-20.0));
     assert!((value_at(&line, (BAR + BAR / 2) as f64).unwrap() + 10.0).abs() < 0.1);
 }
+
+#[gpui::test]
+fn picked_points_stretch_from_their_box_and_move_with_keys(cx: &mut TestAppContext) {
+    use crate::workspace::Snap;
+    use pina_engine::song::project::{AutoPoint, Param};
+    let (ws, cx) = open(cx);
+    cx.simulate_keystrokes("a");
+    let volume = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            ws.session.project.tracks[0].automation.volume.clone()
+        })
+    };
+    let line = vec![
+        AutoPoint::new(0, -12.0),
+        AutoPoint::new(BAR, -6.0),
+        AutoPoint::new(BAR * 2, 0.0),
+        AutoPoint::new(BAR * 4, -20.0),
+    ];
+    ws.update(cx, |ws, cx| {
+        ws.snap = Snap::Beat;
+        ws.session.project.tracks[0].automation.volume = line.clone();
+        ws.pick_points(0, Param::Volume, vec![1, 2]);
+        ws.changed(cx);
+    });
+    cx.run_until_parked();
+    let ppt = ws.read_with(cx, |ws, _| ws.px_per_tick());
+    // The right edge pulled out half a bar: the second picked stretches away from the first.
+    let right = cx
+        .debug_bounds("auto-stretch-0-0-right")
+        .expect("a box round the picked")
+        .center();
+    drag(cx, right, right + point(px(BAR as f32 / 2.0 * ppt), px(0.)));
+    let v = volume(cx);
+    assert_eq!((v[1].tick, v[2].tick), (BAR, BAR * 5 / 2), "{v:?}");
+    // No further than the next point, however far it's pulled.
+    cx.simulate_keystrokes("cmd-z");
+    let right = cx.debug_bounds("auto-stretch-0-0-right").unwrap().center();
+    drag(cx, right, right + point(px(BAR as f32 * 6.0 * ppt), px(0.)));
+    assert_eq!(volume(cx)[2].tick, BAR * 4);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(volume(cx), line);
+    // The top edge pulled up: the loudest goes up, the quietest stays.
+    let top = cx.debug_bounds("auto-stretch-0-0-top").unwrap().center();
+    drag(cx, top, top - point(px(0.), px(4.)));
+    let v = volume(cx);
+    assert!(v[2].value > 0.0 && (v[1].value + 6.0).abs() < 0.01, "{v:?}");
+    cx.simulate_keystrokes("cmd-z");
+    // Keys: right a beat, up a little, ⌘D after themselves, Escape lets go.
+    cx.simulate_keystrokes("right");
+    let v = volume(cx);
+    assert_eq!((v[1].tick, v[2].tick), (BAR + PPQ, BAR * 2 + PPQ), "{v:?}");
+    cx.simulate_keystrokes("shift-up");
+    let up = volume(cx);
+    assert!(
+        up[1].value > v[1].value && up[2].value > v[2].value,
+        "{up:?}"
+    );
+    assert_eq!((up[0], up[3]), (line[0], line[3]));
+    // From a beat past the last: as far apart as they were, the copies picked (not the points
+    // that keep the line as it was either side of them).
+    cx.simulate_keystrokes("cmd-d");
+    let v = volume(cx);
+    let picked = ws.read_with(cx, |ws, _| ws.picked_points(0, Param::Volume));
+    let copies: Vec<(u64, f32)> = picked.iter().map(|&i| (v[i].tick, v[i].value)).collect();
+    let at = BAR * 2 + PPQ * 2;
+    assert_eq!(
+        copies,
+        [(at, up[1].value), (at + BAR, up[2].value)],
+        "{v:?}"
+    );
+    cx.simulate_keystrokes("escape");
+    assert!(ws.read_with(cx, |ws, _| ws.picked_points(0, Param::Volume).is_empty()));
+    let v = volume(cx);
+    cx.simulate_keystrokes("right");
+    assert_eq!(volume(cx), v, "arrows walk regions again");
+    // ⌘A: the whole lane.
+    cx.simulate_keystrokes("cmd-a");
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.picked_points(0, Param::Volume))
+            .len(),
+        v.len()
+    );
+}
+
+#[gpui::test]
+fn a_click_on_the_line_puts_a_point_on_it_and_curves_are_a_button_away(cx: &mut TestAppContext) {
+    use pina_engine::song::project::{AutoPoint, Param};
+    let (ws, cx) = open(cx);
+    cx.simulate_keystrokes("a");
+    // Two points on Lead's volume, a bar apart: a line between them.
+    ws.update(cx, |ws, cx| {
+        ws.edit(cx, |ws| {
+            *ws.session.project.tracks[1]
+                .automation
+                .points_mut(Param::Volume) =
+                vec![AutoPoint::new(0, 0.2), AutoPoint::new(BAR * 2, 0.8)];
+        })
+    });
+    cx.run_until_parked();
+    let volume = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            ws.session.project.tracks[1]
+                .automation
+                .points(Param::Volume)
+                .to_vec()
+        })
+    };
+    // A click right on the line, halfway: a third point there, on the line.
+    let lane = cx
+        .debug_bounds("auto-lane-1")
+        .expect("automation lanes show");
+    let y = ws.read_with(cx, |ws, _| {
+        let v = pina_engine::song::project::value_at(
+            ws.session.project.tracks[1]
+                .automation
+                .points(Param::Volume),
+            BAR as f64,
+        )
+        .unwrap();
+        crate::arrange::automation::to_y(Param::Volume, v, ws.auto_h())
+    });
+    let on = point(spot(&ws, cx, BAR, 1).x, lane.origin.y + px(y));
+    cx.simulate_mouse_down(on, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_up(on, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    let points = volume(cx);
+    assert_eq!(points.len(), 3, "{points:?}");
+    assert_eq!(points[1].tick, BAR);
+    assert!((points[1].value - 0.5).abs() < 0.05, "{points:?}");
+    // Nothing picked, the Curves button's S-curves smooth every line.
+    ws.update(cx, |ws, _| ws.auto_picked = None);
+    click_on(cx, "auto-curves-1-0", Modifiers::none(), MouseButton::Left);
+    let item = ws.read_with(cx, |ws, _| {
+        ws.menu
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .position(|(l, _)| l.starts_with("S-Curves"))
+            .unwrap()
+    });
+    ws.update(cx, |ws, cx| {
+        let action = ws.menu.as_ref().unwrap().items[item].1.clone();
+        ws.choose(action, cx);
+    });
+    assert!(
+        volume(cx).iter().take(2).all(|q| q.ease),
+        "{:?}",
+        volume(cx)
+    );
+}

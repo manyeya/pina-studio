@@ -94,6 +94,24 @@ impl Workspace {
             let line = value_at(points, tick).map(|v| to_y(param, v, self.auto_h()));
             if line.is_some_and(|l| (l - y).abs() < NEAR) {
                 let i = points.partition_point(|q| (q.tick as f64) <= tick);
+                // ⌃⇧-drag the line: it bends, as Logic's does.
+                if e.modifiers.control
+                    && e.modifiers.shift
+                    && let Some(a) = i.checked_sub(1).filter(|&a| a + 1 < points.len())
+                {
+                    let curve = points[a].curve;
+                    self.begin_drag(
+                        Drag::AutoBend {
+                            track,
+                            param,
+                            index: a,
+                            y: p.1,
+                            curve,
+                        },
+                        cx,
+                    );
+                    return;
+                }
                 let ends: Vec<usize> = match (i.checked_sub(1), i < points.len()) {
                     (Some(a), true) => vec![a, i],
                     (Some(a), false) => vec![a],
@@ -106,7 +124,9 @@ impl Workspace {
                         track,
                         param,
                         k,
+                        x: p.0,
                         y: p.1,
+                        free: e.modifiers.platform,
                         moved: false,
                     },
                     cx,
@@ -197,22 +217,8 @@ impl Workspace {
         let h = self.auto_h();
         let free = self.fine;
         let tick = self.auto_tick(p.x, free) as i64;
-        let mut dt = tick - held.tick as i64;
         // None past a neighbour that isn't moving.
-        for &i in &picked {
-            let t = grab[i].tick as i64;
-            let prev = (0..i)
-                .rev()
-                .find(|j| !picked.contains(j))
-                .map(|j| grab[j].tick as i64);
-            let next = (i + 1..grab.len())
-                .find(|j| !picked.contains(j))
-                .map(|j| grab[j].tick as i64);
-            dt = dt.max(prev.unwrap_or(0) - t).max(-t);
-            if let Some(n) = next {
-                dt = dt.min(n - t);
-            }
-        }
+        let dt = room(grab, &picked, tick - held.tick as i64);
         let dy = self.lane_y(track, k, p.y) - to_y(param, held.value, h);
         let mut points = grab.clone();
         for &i in &picked {
@@ -508,18 +514,36 @@ impl Workspace {
             length: clip.length,
             lanes: vec![(param, points)],
         };
-        self.edit(cx, |ws| {
-            ws.session.project.tracks[track].automation.put(tick, &one);
-        });
-        let a = &self.session.project.tracks[track].automation;
-        let picked = a
-            .points(param)
-            .iter()
-            .enumerate()
-            .filter(|(_, q)| q.tick >= tick && q.tick <= tick + clip.length)
-            .map(|(i, _)| i)
-            .collect();
-        self.pick_points(track, param, picked);
+        self.put_clip(track, param, tick, &one, cx);
         true
+    }
+
+    /// Points put on a lane at a tick (what was there goes), and picked: those put, not the
+    /// ones holding the line either side.
+    pub(crate) fn put_clip(
+        &mut self,
+        track: usize,
+        param: Param,
+        tick: u64,
+        clip: &AutoClip,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(cx, |ws| {
+            ws.session.project.tracks[track].automation.put(tick, clip);
+        });
+        let points = self.session.project.tracks[track].automation.points(param);
+        let mut picked: Vec<usize> = Vec::new();
+        for q in clip
+            .lanes
+            .iter()
+            .filter(|l| l.0 == param)
+            .flat_map(|l| &l.1)
+        {
+            let i = points.iter().enumerate().rposition(|(i, p)| {
+                p.tick == q.tick + tick && p.value == q.value && !picked.contains(&i)
+            });
+            picked.extend(i);
+        }
+        self.pick_points(track, param, picked);
     }
 }

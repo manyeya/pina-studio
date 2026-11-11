@@ -266,9 +266,9 @@ impl Workspace {
         };
         let key = (t.id, param);
         let carries = matches!(t.automation.mode, AutoMode::Latch | AutoMode::Write);
+        let tick = self.playhead();
         if let Some(touch) = self.touches.get_mut(&key) {
             if touch.from.is_some() {
-                let tick = self.session.project.ticks(self.player.position());
                 let last = touch.by.last().map_or(0.0, |b| b.1);
                 if touch.by.last().is_none_or(|b| b.0 < tick) {
                     touch.by.push((tick, last));

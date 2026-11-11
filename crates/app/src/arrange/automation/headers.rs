@@ -44,7 +44,11 @@ impl Workspace {
                 }
                 Param::Pan => vec![(-1.0, "L"), (0.0, "C"), (1.0, "R")],
                 Param::Mute => vec![(0.0, "play"), (1.0, "mute")],
-                Param::Plugin(..) | Param::Tool(..) | Param::Voice(_) | Param::Poly(_) => {
+                Param::Plugin(..)
+                | Param::Tool(..)
+                | Param::Rack(..)
+                | Param::Voice(_)
+                | Param::Poly(_) => {
                     vec![(1.0, "100"), (0.5, "50"), (0.0, "0")]
                 }
                 Param::Eq(_, EqField::Freq) => {
@@ -180,6 +184,34 @@ impl Workspace {
                     )
                 })
                 .child(div().flex_1())
+                // Its lines' shapes and smoothing, in reach: the selection's, or the lane's.
+                .when(!param.steps(), |d| {
+                    d.child(
+                        div()
+                            .h(px(20.))
+                            .px(px(6.))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .rounded(px(5.))
+                            .cursor_pointer()
+                            .text_size(px(10.5))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(rgb(TEXT_2))
+                            .bg(rgb(0x1c1d23))
+                            .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+                            .debug_selector(move || format!("auto-curves-{i}-{k}"))
+                            .child(icon(Icon::Curve, 11.).text_color(rgb(TEXT_3)))
+                            .child("Curves")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    ws.curves_menu(i, k, e.position, cx);
+                                }),
+                            ),
+                    )
+                })
                 .when(k == n - 1, |d| {
                     d.child(
                         icon_button(Icon::Plus, format!("auto-add-{i}")).on_mouse_down(
