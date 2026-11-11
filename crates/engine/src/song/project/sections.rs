@@ -189,6 +189,17 @@ impl Project {
         }
     }
 
+    /// `from..to` played twice: a copy of everything in it laid down after it, the rest of the
+    /// song moving later to make room.
+    pub fn repeat_time(&mut self, from: u64, to: u64) {
+        if to <= from {
+            return;
+        }
+        let span = self.lift(from, to);
+        self.insert_time(to, span.length);
+        self.lay(to, &span);
+    }
+
     /// `from..to` taken out of the song, everything after it moving up to close the gap.
     pub fn remove_time(&mut self, from: u64, to: u64) {
         if to <= from {

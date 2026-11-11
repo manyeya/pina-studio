@@ -388,8 +388,8 @@ fn the_compact_browser_hears_finds_alike_and_drags_onto_tracks(cx: &mut TestAppC
     assert_eq!(after.len(), before + 1);
     assert_eq!(after.last().unwrap().start, BAR);
 
-    // ⇧F: the page; its Compact button, beside the tracks again; F hides it.
-    cx.simulate_keystrokes("shift-f");
+    // ⇧B: the page; its Compact button, beside the tracks again; F hides it.
+    cx.simulate_keystrokes("shift-b");
     assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Samples);
     click_on(cx, "samples-compact", Modifiers::none(), MouseButton::Left);
     let shown = ws.read_with(cx, |ws, _| (ws.view, ws.show_browser));

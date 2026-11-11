@@ -115,6 +115,124 @@ actions!(
         RepeatRegion,
         MuteRegion,
         TogglePlugins,
+        PointsLeft,
+        PointsRight,
+        PointsLeftFine,
+        PointsRightFine,
+        PointsUp,
+        PointsDown,
+        PointsUpMore,
+        PointsDownMore,
+        DuplicatePoints,
+        SelectAll,
+        DeselectPoints,
+        Deselect,
+        ShowShortcuts,
+        CloseWindow,
+        // Logic Pro's keys, for its Piano Roll, its Tracks area and everywhere.
+        SelectPrevNote,
+        SelectNextNote,
+        TogglePrevNote,
+        ToggleNextNote,
+        FirstNote,
+        LastNote,
+        NotesShorter,
+        NotesLonger,
+        JoinNotes,
+        SplitNotes,
+        NotesStartToPlayhead,
+        NotesEndToPlayhead,
+        NotesToPlayhead,
+        NotesToPlayheadNext,
+        RepeatNotes,
+        DeleteDuplicateNotes,
+        VelocityUp,
+        VelocityDown,
+        VelocityUpMore,
+        VelocityDownMore,
+        NotesFollowing,
+        NotesFollowingSamePitch,
+        NotesInsideCycle,
+        NotesOverlapped,
+        NotesEqual,
+        NotesSimilar,
+        NotesSameSubposition,
+        NotesMuted,
+        InvertNotes,
+        DeselectAllNotes,
+        TogglePrevRegion,
+        ToggleNextRegion,
+        FirstRegion,
+        LastRegion,
+        RegionShorter,
+        RegionLonger,
+        RegionToPlayheadNext,
+        SplitAtLocators,
+        RemoveOverlaps,
+        TrimToNext,
+        CropToLocators,
+        OptimalLengths,
+        Dequantize,
+        RenameRegion,
+        NameRegionsByTrack,
+        AliasToCopy,
+        SelectAliases,
+        RegionsToTrack,
+        RegionsFollowing,
+        RegionsFollowingSameTrack,
+        RegionsInsideCycle,
+        RegionsOverlapped,
+        RegionsEqual,
+        RegionsSimilar,
+        RegionsSameSubposition,
+        RegionsMuted,
+        InvertRegions,
+        DeselectAllRegions,
+        NewAudioTrack,
+        NewInstrumentTrack,
+        DuplicateTrackContent,
+        OpenStack,
+        CloseStack,
+        TrackTaller,
+        TrackShorter,
+        ToggleTrackZoom,
+        ResetTrackZoom,
+        ResetAllTrackZoom,
+        UnmuteAll,
+        UnsoloAll,
+        CutBetweenLocators,
+        InsertSilence,
+        RepeatBetweenLocators,
+        GoToLeftLocator,
+        GoToRightLocator,
+        GoToSelectionStart,
+        GoToSelectionEnd,
+        CycleForward,
+        CycleBack,
+        CycleDouble,
+        CycleHalve,
+        MarkerForSelection,
+        DeleteMarker,
+        RenameMarker,
+        ToggleCountIn,
+        CatchPlayhead,
+        ScrollToSelection,
+        ZoomToLocators,
+        NextTool,
+        PrevTool,
+        NudgeByDivision,
+        NudgeByBeat,
+        NudgeByBar,
+        NudgeByTick,
+        DiscardRecording,
+        SwitchKeys,
+        FullScreen,
+        MinimizeWindow,
+        ZoomWindow,
+        HideApp,
+        HideOthers,
+        NewEmptySong,
+        ExportStems,
     ]
 );
 
@@ -122,6 +240,13 @@ actions!(
 /// "Naming", so these keys type instead.
 /// The window's shortcuts. Those with no ⌘, ⌃ or ⌥ stand down while a text field has the
 /// keyboard, so typing "a" types it rather than showing automation.
+/// Where the arrows walk regions and tracks: the arrangement, nothing else with the keys.
+const ARROWS: &str = "Arrange && !Roll && !Steps && !Samples && !Plugins && !TextInput && !Auto";
+/// Where a letter or ⇧-letter works on regions: the arrangement, no editor with the keys.
+const REGIONS: &str = "Arrange && !Roll && !Steps && !TextInput";
+/// Where it works on the piano roll's notes: the roll open, with the keys.
+const NOTES: &str = "Roll && !TextInput";
+
 pub fn bind_keys(cx: &mut App) {
     crate::ui::text::bind_keys(cx);
     crate::editors::steps::keys::bind_keys(cx);
@@ -133,7 +258,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("backspace", Delete, Some("Workspace && !TextInput")),
         KeyBinding::new("delete", Delete, Some("Workspace && !TextInput")),
         KeyBinding::new("cmd-backspace", DeleteTrack, Some("Workspace && !Steps")),
-        KeyBinding::new("cmd-t", Split, Some("Workspace")),
+        KeyBinding::new("cmd-t", Split, Some("Workspace && !Roll")),
         // Letters are notes while musical typing is on, so these only work in the arrangement.
         KeyBinding::new("x", ToggleMixer, Some("Arrange && !TextInput")),
         KeyBinding::new("i", ToggleInspector, Some("Arrange && !TextInput")),
@@ -144,7 +269,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("c", ToggleCycle, Some("Arrange && !TextInput")),
         KeyBinding::new("k", ToggleMetronome, Some("Arrange && !TextInput")),
         KeyBinding::new("f", ToggleSamples, Some("Arrange && !TextInput")),
-        KeyBinding::new("shift-f", ToggleSamplesPage, Some("Arrange && !TextInput")),
+        KeyBinding::new("shift-b", ToggleSamplesPage, Some("Arrange && !TextInput")),
         KeyBinding::new("g", ToggleTempoLane, Some("Arrange && !TextInput")),
         // In the sample browser: the next sound plays as it's picked.
         // Arrows walk the results while their search is typed.
@@ -190,69 +315,29 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("down", NotesDown, Some("Roll")),
         KeyBinding::new("shift-up", NotesOctaveUp, Some("Roll")),
         KeyBinding::new("shift-down", NotesOctaveDown, Some("Roll")),
-        KeyBinding::new("left", NudgeLeft, Some("Roll")),
-        KeyBinding::new("right", NudgeRight, Some("Roll")),
-        KeyBinding::new("alt-left", NudgeLeftFine, Some("Roll")),
-        KeyBinding::new("alt-right", NudgeRightFine, Some("Roll")),
+        KeyBinding::new("left", SelectPrevNote, Some("Roll")),
+        KeyBinding::new("right", SelectNextNote, Some("Roll")),
+        KeyBinding::new("alt-left", NudgeLeft, Some("Roll")),
+        KeyBinding::new("alt-right", NudgeRight, Some("Roll")),
         KeyBinding::new("q", QuantizeNotes, Some("Roll")),
         KeyBinding::new("0", MuteNotes, Some("Roll")),
         KeyBinding::new("escape", DeselectNotes, Some("Roll")),
         KeyBinding::new("up", AdderUp, Some("Adder")),
         KeyBinding::new("down", AdderDown, Some("Adder")),
         KeyBinding::new("cmd-,", ShowSettings, None),
-        KeyBinding::new("ctrl-alt-d", TogglePlugins, Some("Workspace")),
+        KeyBinding::new("ctrl-cmd-p", TogglePlugins, Some("Workspace")),
         KeyBinding::new("t", ToolMenu, Some("Arrange && !TextInput")),
         // The arrangement's regions, tracks, playhead, markers and view (see `shortcuts`).
-        KeyBinding::new(
-            "left",
-            RegionPrev,
-            Some("Arrange && !Roll && !Steps && !Samples && !Plugins && !TextInput"),
-        ),
-        KeyBinding::new(
-            "right",
-            RegionNext,
-            Some("Arrange && !Roll && !Steps && !Samples && !Plugins && !TextInput"),
-        ),
-        KeyBinding::new(
-            "up",
-            TrackPrev,
-            Some("Arrange && !Roll && !Steps && !Samples && !Plugins && !TextInput"),
-        ),
-        KeyBinding::new(
-            "down",
-            TrackNext,
-            Some("Arrange && !Roll && !Steps && !Samples && !Plugins && !TextInput"),
-        ),
-        KeyBinding::new(
-            "alt-left",
-            NudgeRegionLeft,
-            Some("Arrange && !Roll && !Steps && !Samples && !Plugins && !TextInput"),
-        ),
-        KeyBinding::new(
-            "alt-right",
-            NudgeRegionRight,
-            Some("Arrange && !Roll && !Steps && !Samples && !Plugins && !TextInput"),
-        ),
-        KeyBinding::new(
-            "alt-up",
-            TransposeUp,
-            Some("Arrange && !Roll && !Steps && !Samples && !Plugins && !TextInput"),
-        ),
-        KeyBinding::new(
-            "alt-down",
-            TransposeDown,
-            Some("Arrange && !Roll && !Steps && !Samples && !Plugins && !TextInput"),
-        ),
-        KeyBinding::new(
-            "alt-shift-up",
-            TransposeOctaveUp,
-            Some("Arrange && !Roll && !Steps && !Samples && !Plugins && !TextInput"),
-        ),
-        KeyBinding::new(
-            "alt-shift-down",
-            TransposeOctaveDown,
-            Some("Arrange && !Roll && !Steps && !Samples && !Plugins && !TextInput"),
-        ),
+        KeyBinding::new("left", RegionPrev, Some(ARROWS)),
+        KeyBinding::new("right", RegionNext, Some(ARROWS)),
+        KeyBinding::new("up", TrackPrev, Some(ARROWS)),
+        KeyBinding::new("down", TrackNext, Some(ARROWS)),
+        KeyBinding::new("alt-left", NudgeRegionLeft, Some(ARROWS)),
+        KeyBinding::new("alt-right", NudgeRegionRight, Some(ARROWS)),
+        KeyBinding::new("alt-up", TransposeUp, Some(ARROWS)),
+        KeyBinding::new("alt-down", TransposeDown, Some(ARROWS)),
+        KeyBinding::new("alt-shift-up", TransposeOctaveUp, Some(ARROWS)),
+        KeyBinding::new("alt-shift-down", TransposeOctaveDown, Some(ARROWS)),
         KeyBinding::new("l", LoopRegion, Some("Arrange && !TextInput")),
         KeyBinding::new(
             "q",
@@ -260,7 +345,7 @@ pub fn bind_keys(cx: &mut App) {
             Some("Arrange && !Roll && !Steps && !TextInput"),
         ),
         KeyBinding::new("cmd-j", JoinRegions, Some("Arrange && !Roll && !Steps")),
-        KeyBinding::new(";", RegionToPlayhead, Some("Arrange && !TextInput")),
+        KeyBinding::new(";", RegionToPlayhead, Some(REGIONS)),
         KeyBinding::new("cmd-[", StartToPlayhead, Some("Arrange && !Roll && !Steps")),
         KeyBinding::new("cmd-]", EndToPlayhead, Some("Arrange && !Roll && !Steps")),
         KeyBinding::new("cmd-g", ToggleSnap, Some("Workspace")),
@@ -289,9 +374,345 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("s", SoloTrack, Some("Arrange && !TextInput")),
         KeyBinding::new("ctrl-r", ArmTrack, Some("Workspace")),
         KeyBinding::new("shift-enter", RenameTrack, Some("Arrange && !TextInput")),
-        KeyBinding::new("cmd-d", DuplicateTrack, Some("Arrange && !Roll && !Steps")),
+        KeyBinding::new(
+            "cmd-d",
+            DuplicateTrack,
+            Some("Arrange && !Roll && !Steps && !Auto"),
+        ),
         KeyBinding::new("e", ToggleEditor, Some("Arrange && !TextInput")),
+        // Automation points picked: the arrows move them (⌥ finely), up and down change them
+        // (⇧ in bigger steps), ⌘D repeats them after themselves, Escape lets them go.
+        KeyBinding::new("left", PointsLeft, Some("Auto && !TextInput")),
+        KeyBinding::new("right", PointsRight, Some("Auto && !TextInput")),
+        KeyBinding::new("alt-left", PointsLeftFine, Some("Auto && !TextInput")),
+        KeyBinding::new("alt-right", PointsRightFine, Some("Auto && !TextInput")),
+        KeyBinding::new("up", PointsUp, Some("Auto && !TextInput")),
+        KeyBinding::new("down", PointsDown, Some("Auto && !TextInput")),
+        KeyBinding::new("shift-up", PointsUpMore, Some("Auto && !TextInput")),
+        KeyBinding::new("shift-down", PointsDownMore, Some("Auto && !TextInput")),
+        KeyBinding::new("cmd-d", DuplicatePoints, Some("Auto")),
+        KeyBinding::new("escape", DeselectPoints, Some("Auto")),
+        // A lane worked on last: all its points; else every region.
+        KeyBinding::new(
+            "cmd-a",
+            SelectAll,
+            Some("Arrange && !Roll && !Steps && !Eq && !TextInput"),
+        ),
+        // Escape: back to the pointer, else what's picked let go.
+        KeyBinding::new(
+            "escape",
+            Deselect,
+            Some("Arrange && !Roll && !Steps && !Eq && !Auto && !TextInput"),
+        ),
+        KeyBinding::new("home", GoToStart, Some("Workspace && !TextInput")),
+        KeyBinding::new("end", GoToEnd, Some("Workspace && !TextInput")),
+        KeyBinding::new("cmd-=", ZoomIn, Some("Workspace")),
+        KeyBinding::new("cmd--", ZoomOut, Some("Workspace")),
+        KeyBinding::new("cmd-/", ShowShortcuts, None),
+        KeyBinding::new("shift-/", ShowShortcuts, Some("Workspace && !TextInput")),
         KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-w", Quit, None),
+        // The front window (a plugin's, the synth's) closes; with none, the app quits.
+        KeyBinding::new("cmd-w", CloseWindow, None),
     ]);
+    bind_logic_keys(cx);
+}
+
+/// Logic Pro's default keys (its U.S. preset), where Pina does the same thing: the Piano
+/// Roll's, the Tracks area's, and the global ones.
+fn bind_logic_keys(cx: &mut App) {
+    cx.bind_keys([
+        // The Piano Roll: ← → walk the notes (⇧ adds), ⌥ moves them by the nudge value, ⌥⇧
+        // changes their length, ⌃⌥ moves them a quarter step.
+        KeyBinding::new("shift-left", TogglePrevNote, Some("Roll")),
+        KeyBinding::new("shift-right", ToggleNextNote, Some("Roll")),
+        KeyBinding::new("ctrl-alt-left", NudgeLeftFine, Some("Roll")),
+        KeyBinding::new("ctrl-alt-right", NudgeRightFine, Some("Roll")),
+        KeyBinding::new("alt-shift-left", NotesShorter, Some("Roll")),
+        KeyBinding::new("alt-shift-right", NotesLonger, Some("Roll")),
+        KeyBinding::new("alt-up", NotesUp, Some("Roll")),
+        KeyBinding::new("alt-down", NotesDown, Some("Roll")),
+        KeyBinding::new("alt-shift-up", NotesOctaveUp, Some("Roll")),
+        KeyBinding::new("alt-shift-down", NotesOctaveDown, Some("Roll")),
+        KeyBinding::new("shift-home", FirstNote, Some("Roll")),
+        KeyBinding::new("shift-end", LastNote, Some("Roll")),
+        KeyBinding::new("ctrl-m", MuteNotes, Some("Roll")),
+        KeyBinding::new("cmd-j", JoinNotes, Some("Roll")),
+        KeyBinding::new("cmd-t", SplitNotes, Some("Roll")),
+        KeyBinding::new("cmd-[", NotesStartToPlayhead, Some("Roll")),
+        KeyBinding::new("cmd-]", NotesEndToPlayhead, Some("Roll")),
+        KeyBinding::new(";", NotesToPlayhead, Some(NOTES)),
+        KeyBinding::new("shift-;", NotesToPlayheadNext, Some(NOTES)),
+        KeyBinding::new("cmd-r", RepeatNotes, Some("Roll")),
+        KeyBinding::new("alt-d", DeleteDuplicateNotes, Some(NOTES)),
+        KeyBinding::new("=", VelocityUp, Some(NOTES)),
+        KeyBinding::new("-", VelocityDown, Some(NOTES)),
+        KeyBinding::new("shift-=", VelocityUpMore, Some(NOTES)),
+        KeyBinding::new("shift--", VelocityDownMore, Some(NOTES)),
+        KeyBinding::new("shift-f", NotesFollowing, Some(NOTES)),
+        KeyBinding::new("ctrl-shift-f", NotesFollowingSamePitch, Some(NOTES)),
+        KeyBinding::new("shift-l", NotesInsideCycle, Some(NOTES)),
+        KeyBinding::new("shift-o", NotesOverlapped, Some(NOTES)),
+        KeyBinding::new("shift-e", NotesEqual, Some(NOTES)),
+        KeyBinding::new("shift-s", NotesSimilar, Some(NOTES)),
+        KeyBinding::new("shift-p", NotesSameSubposition, Some(NOTES)),
+        KeyBinding::new("shift-m", NotesMuted, Some(NOTES)),
+        KeyBinding::new("shift-i", InvertNotes, Some(NOTES)),
+        KeyBinding::new("shift-d", DeselectAllNotes, Some(NOTES)),
+        // The Tracks area: regions picked, trimmed, cut and named; tracks made and sized.
+        KeyBinding::new("shift-left", TogglePrevRegion, Some(ARROWS)),
+        KeyBinding::new("shift-right", ToggleNextRegion, Some(ARROWS)),
+        KeyBinding::new("alt-shift-left", RegionShorter, Some(ARROWS)),
+        KeyBinding::new("alt-shift-right", RegionLonger, Some(ARROWS)),
+        KeyBinding::new("shift-home", FirstRegion, Some(REGIONS)),
+        KeyBinding::new("shift-end", LastRegion, Some(REGIONS)),
+        KeyBinding::new("shift-;", RegionToPlayheadNext, Some(REGIONS)),
+        KeyBinding::new("alt-cmd-t", SplitAtLocators, Some(REGIONS)),
+        KeyBinding::new("\\", RemoveOverlaps, Some(REGIONS)),
+        KeyBinding::new("shift-\\", TrimToNext, Some(REGIONS)),
+        KeyBinding::new("cmd-\\", CropToLocators, Some(REGIONS)),
+        KeyBinding::new("ctrl-\\", OptimalLengths, Some(REGIONS)),
+        KeyBinding::new("alt-cmd-q", Dequantize, Some(REGIONS)),
+        KeyBinding::new("shift-n", RenameRegion, Some(REGIONS)),
+        KeyBinding::new("alt-shift-n", NameRegionsByTrack, Some(REGIONS)),
+        KeyBinding::new("ctrl-a", AliasToCopy, Some(REGIONS)),
+        KeyBinding::new("alt-shift-a", SelectAliases, Some(REGIONS)),
+        KeyBinding::new("ctrl-shift-t", RegionsToTrack, Some(REGIONS)),
+        KeyBinding::new("ctrl-l", LoopRegion, Some(REGIONS)),
+        KeyBinding::new("j", JoinRegions, Some(REGIONS)),
+        KeyBinding::new("shift-f", RegionsFollowing, Some(REGIONS)),
+        KeyBinding::new("ctrl-shift-f", RegionsFollowingSameTrack, Some(REGIONS)),
+        KeyBinding::new("shift-l", RegionsInsideCycle, Some(REGIONS)),
+        KeyBinding::new("shift-o", RegionsOverlapped, Some(REGIONS)),
+        KeyBinding::new("shift-e", RegionsEqual, Some(REGIONS)),
+        KeyBinding::new("shift-s", RegionsSimilar, Some(REGIONS)),
+        KeyBinding::new("shift-p", RegionsSameSubposition, Some(REGIONS)),
+        KeyBinding::new("shift-m", RegionsMuted, Some(REGIONS)),
+        KeyBinding::new("shift-i", InvertRegions, Some(REGIONS)),
+        KeyBinding::new("shift-d", DeselectAllRegions, Some(REGIONS)),
+        KeyBinding::new("alt-cmd-a", NewAudioTrack, Some("Workspace")),
+        KeyBinding::new("alt-cmd-s", NewInstrumentTrack, Some("Workspace")),
+        KeyBinding::new("alt-shift-cmd-d", DuplicateTrackContent, Some(REGIONS)),
+        KeyBinding::new("ctrl-cmd-right", OpenStack, Some(REGIONS)),
+        KeyBinding::new("ctrl-cmd-left", CloseStack, Some(REGIONS)),
+        KeyBinding::new("alt-cmd-down", TrackTaller, Some(REGIONS)),
+        KeyBinding::new("alt-cmd-up", TrackShorter, Some(REGIONS)),
+        KeyBinding::new("alt-cmd-z", ToggleTrackZoom, Some(REGIONS)),
+        KeyBinding::new("alt-cmd-backspace", ResetTrackZoom, Some(REGIONS)),
+        KeyBinding::new("alt-shift-cmd-backspace", ResetAllTrackZoom, Some(REGIONS)),
+        KeyBinding::new("ctrl-shift-m", UnmuteAll, Some("Arrange && !TextInput")),
+        KeyBinding::new("alt-s", UnsoloAll, Some("Arrange && !TextInput")),
+        KeyBinding::new("ctrl-cmd-x", CutBetweenLocators, Some("Arrange")),
+        KeyBinding::new("ctrl-cmd-i", InsertSilence, Some("Arrange")),
+        KeyBinding::new("ctrl-cmd-r", RepeatBetweenLocators, Some("Arrange")),
+        // Everywhere: the locators, markers, the view, the windows.
+        KeyBinding::new("cmd-u", CycleToSelection, Some("Arrange")),
+        KeyBinding::new(
+            "ctrl-shift-,",
+            GoToLeftLocator,
+            Some("Workspace && !TextInput"),
+        ),
+        KeyBinding::new(
+            "ctrl-shift-.",
+            GoToRightLocator,
+            Some("Workspace && !TextInput"),
+        ),
+        KeyBinding::new(
+            "ctrl-home",
+            GoToSelectionStart,
+            Some("Workspace && !TextInput"),
+        ),
+        KeyBinding::new(
+            "ctrl-end",
+            GoToSelectionEnd,
+            Some("Workspace && !TextInput"),
+        ),
+        KeyBinding::new("shift-cmd-.", CycleForward, Some("Workspace")),
+        KeyBinding::new("shift-cmd-,", CycleBack, Some("Workspace")),
+        KeyBinding::new("alt-shift-cmd-.", CycleDouble, Some("Workspace")),
+        KeyBinding::new("alt-shift-cmd-,", CycleHalve, Some("Workspace")),
+        KeyBinding::new("alt-shift-'", MarkerForSelection, Some("Workspace")),
+        KeyBinding::new(
+            "alt-backspace",
+            DeleteMarker,
+            Some("Workspace && !TextInput"),
+        ),
+        KeyBinding::new("shift-'", RenameMarker, Some("Workspace && !TextInput")),
+        KeyBinding::new("shift-k", ToggleCountIn, Some("Arrange && !TextInput")),
+        KeyBinding::new("`", CatchPlayhead, Some("Arrange && !TextInput")),
+        KeyBinding::new("shift-`", ScrollToSelection, Some("Arrange && !TextInput")),
+        KeyBinding::new("ctrl-shift-z", ZoomToLocators, Some("Arrange")),
+        KeyBinding::new("alt-pagedown", NextTool, Some("Arrange")),
+        KeyBinding::new("alt-pageup", PrevTool, Some("Arrange")),
+        KeyBinding::new("ctrl-alt-d", NudgeByDivision, Some("Workspace")),
+        KeyBinding::new("ctrl-alt-b", NudgeByBeat, Some("Workspace")),
+        KeyBinding::new("ctrl-alt-m", NudgeByBar, Some("Workspace")),
+        KeyBinding::new("ctrl-alt-t", NudgeByTick, Some("Workspace")),
+        KeyBinding::new("cmd-.", DiscardRecording, Some("Workspace")),
+        KeyBinding::new("tab", SwitchKeys, Some("Arrange && !TextInput")),
+        KeyBinding::new("b", ToggleSamples, Some("Arrange && !TextInput")),
+        KeyBinding::new("alt-k", ShowShortcuts, Some("Workspace")),
+        KeyBinding::new("cmd-2", ToggleMixer, Some("Workspace")),
+        KeyBinding::new("cmd-4", TogglePianoRoll, Some("Workspace")),
+        KeyBinding::new("cmd-5", ToggleScore, Some("Workspace")),
+        KeyBinding::new("ctrl-cmd-f", FullScreen, None),
+        KeyBinding::new("cmd-m", MinimizeWindow, None),
+        KeyBinding::new("ctrl-cmd-m", ZoomWindow, None),
+        KeyBinding::new("cmd-h", HideApp, None),
+        KeyBinding::new("alt-cmd-h", HideOthers, None),
+        KeyBinding::new("shift-cmd-n", NewEmptySong, None),
+        KeyBinding::new("shift-cmd-e", ExportStems, Some("Workspace")),
+    ]);
+}
+
+/// What Logic's keys do here: the Piano Roll's to its notes, the rest to the arrangement.
+pub(crate) fn on_logic_keys(d: gpui::Div, cx: &mut Context<Workspace>) -> gpui::Div {
+    use crate::editors::pianoroll::{NotePick as N, RollOp};
+    use pina_engine::music::NoteEdit;
+    use shortcuts::{Nudge, RegionPick as R, Shortcut as S};
+    macro_rules! roll {
+        ($d:expr, $($action:ident => $op:expr),* $(,)?) => {
+            $d$(.on_action(cx.listener(|ws, _: &$action, _, cx| ws.roll_op($op, cx))))*
+        };
+    }
+    macro_rules! keys {
+        ($d:expr, $($action:ident => $s:expr),* $(,)?) => {
+            $d$(.on_action(cx.listener(|ws, _: &$action, w, cx| ws.shortcut($s, w, cx))))*
+        };
+    }
+    let d = roll!(d,
+        SelectPrevNote => RollOp::Step { next: false, extend: false },
+        SelectNextNote => RollOp::Step { next: true, extend: false },
+        TogglePrevNote => RollOp::Step { next: false, extend: true },
+        ToggleNextNote => RollOp::Step { next: true, extend: true },
+        FirstNote => RollOp::Edge(false),
+        LastNote => RollOp::Edge(true),
+        JoinNotes => RollOp::Edit(NoteEdit::Glue),
+        SplitNotes => RollOp::SplitAtPlayhead,
+        NotesStartToPlayhead => RollOp::StartToPlayhead,
+        NotesEndToPlayhead => RollOp::EndToPlayhead,
+        NotesToPlayhead => RollOp::ToPlayhead { then_next: false },
+        NotesToPlayheadNext => RollOp::ToPlayhead { then_next: true },
+        RepeatNotes => RollOp::Duplicate,
+        DeleteDuplicateNotes => RollOp::DeleteDuplicates,
+        NotesFollowing => RollOp::Pick(N::Following),
+        NotesFollowingSamePitch => RollOp::Pick(N::FollowingSamePitch),
+        NotesInsideCycle => RollOp::Pick(N::InsideCycle),
+        NotesOverlapped => RollOp::Pick(N::Overlapped),
+        NotesEqual => RollOp::Pick(N::Equal),
+        NotesSimilar => RollOp::Pick(N::Similar),
+        NotesSameSubposition => RollOp::Pick(N::SameSubposition),
+        NotesMuted => RollOp::Pick(N::Muted),
+        InvertNotes => RollOp::Invert,
+        DeselectAllNotes => RollOp::Deselect,
+    );
+    // Velocity, and length by the nudge value: only on notes picked.
+    let d = d
+        .on_action(cx.listener(|ws, _: &NotesShorter, _, cx| {
+            let by = ws.nudge_ticks() as i64;
+            ws.roll_op(RollOp::Resize(-by), cx)
+        }))
+        .on_action(cx.listener(|ws, _: &NotesLonger, _, cx| {
+            let by = ws.nudge_ticks() as i64;
+            ws.roll_op(RollOp::Resize(by), cx)
+        }));
+    let velocity = |by: i32| {
+        move |ws: &mut Workspace, cx: &mut Context<Workspace>| {
+            if ws.picked.is_empty() {
+                ws.status = Some("Pick the notes to change".into());
+                return cx.notify();
+            }
+            ws.roll_op(RollOp::Edit(NoteEdit::Velocity { by }), cx)
+        }
+    };
+    let (up, down, up10, down10) = (velocity(1), velocity(-1), velocity(10), velocity(-10));
+    let d = d
+        .on_action(cx.listener(move |ws, _: &VelocityUp, _, cx| up(ws, cx)))
+        .on_action(cx.listener(move |ws, _: &VelocityDown, _, cx| down(ws, cx)))
+        .on_action(cx.listener(move |ws, _: &VelocityUpMore, _, cx| up10(ws, cx)))
+        .on_action(cx.listener(move |ws, _: &VelocityDownMore, _, cx| down10(ws, cx)));
+    let d = keys!(d,
+        TogglePrevRegion => S::ToggleRegion(false),
+        ToggleNextRegion => S::ToggleRegion(true),
+        FirstRegion => S::EdgeRegion(false),
+        LastRegion => S::EdgeRegion(true),
+        RegionShorter => S::Resize(-1),
+        RegionLonger => S::Resize(1),
+        RegionToPlayheadNext => S::RegionToPlayheadNext,
+        SplitAtLocators => S::SplitAtLocators,
+        RemoveOverlaps => S::RemoveOverlaps,
+        TrimToNext => S::TrimToNext,
+        CropToLocators => S::CropToLocators,
+        OptimalLengths => S::OptimalLengths,
+        Dequantize => S::Dequantize,
+        RenameRegion => S::RenameRegion,
+        NameRegionsByTrack => S::NameByTrack,
+        AliasToCopy => S::AliasToCopy,
+        SelectAliases => S::PickRegions(R::Aliases),
+        RegionsToTrack => S::RegionsToTrack,
+        RegionsFollowing => S::PickRegions(R::Following),
+        RegionsFollowingSameTrack => S::PickRegions(R::FollowingSameTrack),
+        RegionsInsideCycle => S::PickRegions(R::InsideCycle),
+        RegionsOverlapped => S::PickRegions(R::Overlapped),
+        RegionsEqual => S::PickRegions(R::Equal),
+        RegionsSimilar => S::PickRegions(R::Similar),
+        RegionsSameSubposition => S::PickRegions(R::SameSubposition),
+        RegionsMuted => S::PickRegions(R::Muted),
+        InvertRegions => S::InvertRegions,
+        DeselectAllRegions => S::DeselectAll,
+        NewAudioTrack => S::NewAudioTrack,
+        NewInstrumentTrack => S::NewInstrumentTrack,
+        DuplicateTrackContent => S::DuplicateWithContent,
+        OpenStack => S::Stack(true),
+        CloseStack => S::Stack(false),
+        TrackTaller => S::TrackZoom(1.25),
+        TrackShorter => S::TrackZoom(0.8),
+        ToggleTrackZoom => S::ToggleTrackZoom,
+        ResetTrackZoom => S::ResetTrackZoom(false),
+        ResetAllTrackZoom => S::ResetTrackZoom(true),
+        UnmuteAll => S::UnmuteAll,
+        UnsoloAll => S::UnsoloAll,
+        CutBetweenLocators => S::CutBetweenLocators,
+        InsertSilence => S::InsertSilence,
+        RepeatBetweenLocators => S::RepeatBetweenLocators,
+        GoToLeftLocator => S::GoToLocator(false),
+        GoToRightLocator => S::GoToLocator(true),
+        GoToSelectionStart => S::GoToSelection(false),
+        GoToSelectionEnd => S::GoToSelection(true),
+        CycleForward => S::MoveCycle(1),
+        CycleBack => S::MoveCycle(-1),
+        CycleDouble => S::ScaleCycle(true),
+        CycleHalve => S::ScaleCycle(false),
+        MarkerForSelection => S::MarkerForSelection,
+        DeleteMarker => S::DeleteMarker,
+        RenameMarker => S::RenameMarker,
+        ToggleCountIn => S::ToggleCountIn,
+        CatchPlayhead => S::CatchPlayhead,
+        ScrollToSelection => S::ScrollToSelection,
+        ZoomToLocators => S::ZoomToLocators,
+        NextTool => S::NextTool(1),
+        PrevTool => S::NextTool(-1),
+        NudgeByDivision => S::SetNudge(Nudge::Division),
+        NudgeByBeat => S::SetNudge(Nudge::Beat),
+        NudgeByBar => S::SetNudge(Nudge::Bar),
+        NudgeByTick => S::SetNudge(Nudge::Tick),
+        DiscardRecording => S::DiscardRecording,
+        SwitchKeys => S::SwitchKeys,
+    );
+    // The window and the app.
+    d.on_action(cx.listener(|_, _: &FullScreen, w, _| w.toggle_fullscreen()))
+        .on_action(cx.listener(|_, _: &MinimizeWindow, w, _| w.minimize_window()))
+        .on_action(cx.listener(|_, _: &ZoomWindow, w, _| w.zoom_window()))
+        .on_action(cx.listener(|_, _: &HideApp, _, cx| cx.hide()))
+        .on_action(cx.listener(|_, _: &HideOthers, _, cx| cx.hide_other_apps()))
+        .on_action(cx.listener(|ws, _: &NewEmptySong, w, cx| {
+            ws.show_home(false, w, cx);
+            ws.create_song(crate::pages::projects::Template::Empty, w, cx);
+        }))
+        .on_action(cx.listener(|ws, _: &ExportStems, _, cx| {
+            ws.open_export(cx);
+            if let Some(e) = ws.export.as_mut() {
+                e.what = crate::mix::export::What::Stems;
+            }
+            cx.notify();
+        }))
 }

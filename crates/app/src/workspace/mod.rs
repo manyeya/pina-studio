@@ -12,8 +12,10 @@ mod panels;
 mod params;
 mod saving;
 mod selection;
+mod sheet;
 mod shortcuts;
 mod status;
+mod tapping;
 mod transport;
 
 pub use controls::*;
@@ -24,9 +26,11 @@ pub use naming::*;
 pub use panels::*;
 pub use params::*;
 pub(crate) use saving::*;
+pub use sheet::*;
 pub use shortcuts::*;
 pub use status::Help;
 pub use status::*;
+pub use tapping::*;
 
 pub mod context;
 pub mod editor;
@@ -93,8 +97,18 @@ pub enum Snap {
     Smart,
     Bar,
     Beat,
+    Half,
+    Quarter,
     Eighth,
     Sixteenth,
+    ThirtySecond,
+    SixtyFourth,
+    QuarterTriplet,
+    EighthTriplet,
+    SixteenthTriplet,
+    ThirtySecondTriplet,
+    DottedEighth,
+    DottedSixteenth,
     Off,
 }
 
@@ -121,12 +135,22 @@ impl DragMode {
 }
 
 impl Snap {
-    pub const ALL: [Snap; 6] = [
+    pub const ALL: [Snap; 16] = [
         Snap::Smart,
         Snap::Bar,
         Snap::Beat,
+        Snap::Half,
+        Snap::Quarter,
         Snap::Eighth,
         Snap::Sixteenth,
+        Snap::ThirtySecond,
+        Snap::SixtyFourth,
+        Snap::QuarterTriplet,
+        Snap::EighthTriplet,
+        Snap::SixteenthTriplet,
+        Snap::ThirtySecondTriplet,
+        Snap::DottedEighth,
+        Snap::DottedSixteenth,
         Snap::Off,
     ];
 
@@ -135,10 +159,39 @@ impl Snap {
             Snap::Smart => "Smart",
             Snap::Bar => "Bar",
             Snap::Beat => "Beat",
+            Snap::Half => "1/2",
+            Snap::Quarter => "1/4",
             Snap::Eighth => "1/8",
             Snap::Sixteenth => "1/16",
+            Snap::ThirtySecond => "1/32",
+            Snap::SixtyFourth => "1/64",
+            Snap::QuarterTriplet => "1/4T",
+            Snap::EighthTriplet => "1/8T",
+            Snap::SixteenthTriplet => "1/16T",
+            Snap::ThirtySecondTriplet => "1/32T",
+            Snap::DottedEighth => "1/8.",
+            Snap::DottedSixteenth => "1/16.",
             Snap::Off => "Off",
         }
+    }
+
+    /// Its step in ticks, if it's a fixed note value.
+    pub fn ticks(self) -> Option<u64> {
+        Some(match self {
+            Snap::Half => PPQ * 2,
+            Snap::Quarter => PPQ,
+            Snap::Eighth => PPQ / 2,
+            Snap::Sixteenth => PPQ / 4,
+            Snap::ThirtySecond => PPQ / 8,
+            Snap::SixtyFourth => PPQ / 16,
+            Snap::QuarterTriplet => PPQ * 2 / 3,
+            Snap::EighthTriplet => PPQ / 3,
+            Snap::SixteenthTriplet => PPQ / 6,
+            Snap::ThirtySecondTriplet => PPQ / 12,
+            Snap::DottedEighth => PPQ * 3 / 4,
+            Snap::DottedSixteenth => PPQ * 3 / 8,
+            _ => return None,
+        })
     }
 }
 
@@ -210,6 +263,10 @@ pub struct RollSettings {
     pub lane: crate::editors::pianoroll::Lane,
     /// What the panel left of the keys shows.
     pub panel: crate::editors::pianoroll::Panel,
+    /// How far the MPE tab's shapes go (percent of how they usually go), and how fast the
+    /// waving ones wave (times a beat).
+    pub gesture_amount: u32,
+    pub gesture_rate: f32,
 }
 
 /// A level meter's reading: falling back gently, and its peak held a moment.
@@ -299,6 +356,16 @@ pub struct Workspace {
     pub snap: Snap,
     /// What snap was before ⌘G turned it off.
     pub snap_was: Snap,
+    /// Regions keep how far off the grid they were as they move: the move snaps, not the start
+    /// (Logic's Snap Regions to Relative Value).
+    pub snap_relative: bool,
+    /// The keys go to the tracks area though an editor is open: it was clicked in last (or Tab
+    /// passed them back). An editor opening takes them, as Logic's does.
+    pub tracks_keys: bool,
+    /// The editor open when the keys were last given out, to see one open.
+    pub keys_bottom: Option<Bottom>,
+    /// How far ⌥← and ⌥→ move what's picked: the grid, a beat, a bar or a tick.
+    pub nudge: Nudge,
     pub drag_mode: DragMode,
     /// What the control under the pointer does, for the status bar.
     pub help: Option<&'static str>,
@@ -349,10 +416,22 @@ pub struct Workspace {
     pub stretching: Option<pina_engine::song::project::Content>,
     /// ⇧ held while dragging a fader or knob: it moves a fifth as far.
     pub fine: bool,
+    /// Every modifier held as the pointer last moved in a drag: Logic's ⌃ (finer), ⌃⇧ (by the
+    /// tick), ⇧ (ends together) and ⌥⇧ (lengths the same) read it.
+    pub mods: gpui::Modifiers,
     /// A channel whose compressor is being set by listening.
     pub learning: Option<crate::mix::strip::Channel>,
     /// ⌥ (Alt) held: a region's end time-stretches it, and shows a grip to say so.
     pub alt: bool,
+    /// ⌘ held while dragging: a note's bend lands between semitones.
+    pub cmd: bool,
+    /// The notes a stroke drew on, and the ticks (into the region) it went from and to, to
+    /// thin when it's let go; what a hand on the notes' expression reads, and where.
+    pub bend_touched: Vec<usize>,
+    pub bend_stroke: Option<(i64, i64)>,
+    pub bend_readout: Option<(Point<f32>, String)>,
+    /// A note's expression copied, and how long that note was.
+    pub expression_clip: Option<(pina_engine::song::project::NoteExpression, u64)>,
     /// Audio regions being listened to for their tempo: their files and where they start.
     pub listening: Vec<(std::path::PathBuf, u64)>,
     /// Modulation: each track's modulators' values and their recent ones; the knobs a
@@ -393,6 +472,11 @@ pub struct Workspace {
     pub plugin_page: crate::sounds::plugins::PluginPage,
     /// A track's MIDI FX panel, open.
     pub midi_fx_view: Option<crate::mix::midi_fx::MidiFxView>,
+    /// A song opening, a piece at a time, and its loading screen fading out once it has.
+    pub(crate) loading: Option<crate::pages::projects::opening::Opening>,
+    pub(crate) splash: Option<crate::pages::projects::opening::Splash>,
+    /// The MPE card open, for a plugin instrument.
+    pub mpe_view: Option<crate::mix::mpe::MpeView>,
     /// What the piano roll's Generate and Harmony tabs are set to.
     pub roll_writing: crate::editors::pianoroll::Writing,
     /// What the window shows, kept for every song (Settings, ⌘,); the page's section shown;
@@ -402,6 +486,14 @@ pub struct Workspace {
     pub outputs: Vec<String>,
     pub buffers: Vec<u32>,
     pub settings_section: crate::pages::settings::Section,
+    /// Settings' search, and what's typed in it.
+    /// The shortcuts sheet, while it's open.
+    pub shortcuts: Option<Sheet>,
+    /// Tapping along to the click, to learn how late the output's heard.
+    pub tapping: Option<Tapping>,
+    pub settings_find: Option<Entity<crate::ui::text::TextInput>>,
+    pub settings_query: String,
+    pub _settings_typed: Option<gpui::Subscription>,
     pub play_from: u64,
     /// The Sampler editor: the zone picked and the waveforms read; where its waveform was drawn.
     pub sampler_ui: crate::editors::sampler::SamplerUi,
@@ -445,7 +537,7 @@ pub struct Workspace {
     pub recording: Option<Recording>,
     /// Musical typing's octave shift, when it's on; and the notes its held keys play.
     pub typing: Option<i8>,
-    typed: HashMap<String, u8>,
+    pub(crate) typed: HashMap<String, u8>,
     /// An open pop-up menu.
     pub menu: Option<Menu>,
     /// A name being typed.
@@ -474,7 +566,25 @@ pub struct Workspace {
     load_sum: f32,
     load_reads: u32,
     pub load_late: Option<Instant>,
+    /// Each buffer that came late lately: Settings counts the last ten minutes'.
+    pub lates: std::collections::VecDeque<Instant>,
     pub status: Option<String>,
+    /// Why the audio output last couldn't change, shown with the outputs; and the output last
+    /// moved to and failed, not tried again until there's another.
+    pub audio_error: Option<String>,
+    /// An effect pointed at in the synth's browser: heard in that track's rack, last, without
+    /// being put in.
+    pub rack_preview: Option<(usize, pina_engine::song::project::Unit)>,
+    /// The synth's sounds, read when first wanted, and where they're kept.
+    pub library: Option<crate::editors::poly::library::Library>,
+    pub sounds_dir: std::path::PathBuf,
+    pub output_tried: Option<String>,
+    /// Settings' Audio page: the outputs and inputs and what each can do, an input listened to,
+    /// and its channels' levels as they fall.
+    pub outputs_info: Vec<pina_engine::audio::engine::DeviceInfo>,
+    pub inputs_info: Vec<pina_engine::audio::engine::DeviceInfo>,
+    pub input_meter: Option<pina_engine::audio::record::InputMeter>,
+    pub in_levels: Vec<f32>,
     /// What agents have done, newest last.
     pub agent: Vec<AgentEdit>,
     /// The parameters Smart Controls shows for each track's instrument plugin, by track id.
@@ -488,6 +598,12 @@ pub struct Workspace {
     /// The compressor's or saturator's window, when one's open.
     pub fx_view: Option<crate::mix::fx::FxView>,
     pub poly_view: Option<crate::editors::poly::PolyView>,
+    /// Bloom's window, when it's open, and the view that draws it (by itself, as it moves).
+    pub bloom_view: Option<crate::editors::bloom::BloomView>,
+    bloom_window: Option<Entity<crate::editors::bloom::BloomWindow>>,
+    /// The app's pages and panels, a view of their own: drawn again when the workspace changes,
+    /// not when a window that moves by itself (Bloom's garden) draws a frame.
+    main: Option<Entity<MainView>>,
     pub eq_clipboard: Vec<pina_engine::song::project::EqBand>,
     /// The window's size, for what fits.
     pub viewport_h: f32,
@@ -539,9 +655,32 @@ impl Workspace {
             }
         })
         .detach();
+        // The sound goes where the system's does (or back to the output picked, plugged in again).
         cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(KEEP_EVERY).await;
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let Ok(setup) = this.update(cx, |ws, _| ws.settings.audio.clone()) else {
+                    break;
+                };
+                let now = cx
+                    .background_executor()
+                    .spawn(async move { pina_engine::audio::engine::output_now(&setup) })
+                    .await;
+                if this.update(cx, |ws, cx| ws.follow_output(now, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            loop {
+                // As often as Settings says (30 s as it comes).
+                let every = this
+                    .update(cx, |ws, _| {
+                        Duration::from_secs(ws.settings.keep_every.max(10) as u64)
+                    })
+                    .unwrap_or(KEEP_EVERY);
+                cx.background_executor().timer(every).await;
                 if this.update(cx, |ws, _| ws.keep_edits()).is_err() {
                     break;
                 }
@@ -569,6 +708,10 @@ impl Workspace {
             tool: Tool::Pointer,
             snap: Snap::Smart,
             snap_was: Snap::Smart,
+            snap_relative: false,
+            tracks_keys: false,
+            keys_bottom: None,
+            nudge: Nudge::Division,
             drag_mode: DragMode::Overlap,
             help: None,
             pattern_mode: false,
@@ -597,6 +740,12 @@ impl Workspace {
             fine: false,
             learning: None,
             alt: false,
+            mods: Default::default(),
+            cmd: false,
+            bend_touched: Vec::new(),
+            bend_stroke: None,
+            bend_readout: None,
+            expression_clip: None,
             listening: Vec::new(),
             panner: None,
             mod_values: HashMap::new(),
@@ -619,11 +768,19 @@ impl Workspace {
             steps: Default::default(),
             plugin_page: crate::sounds::plugins::PluginPage::new(cx),
             midi_fx_view: None,
+            loading: None,
+            splash: None,
+            mpe_view: None,
             roll_writing: Default::default(),
             settings: crate::pages::settings::Settings::load(),
             outputs: Vec::new(),
             buffers: Vec::new(),
             settings_section: Default::default(),
+            shortcuts: None,
+            tapping: None,
+            settings_find: None,
+            settings_query: String::new(),
+            _settings_typed: None,
             play_from: 0,
             sampler_ui: Default::default(),
             drums: Default::default(),
@@ -644,6 +801,8 @@ impl Workspace {
                 key_h: crate::editors::pianoroll::KEY_H,
                 lane: crate::editors::pianoroll::Lane::Velocity,
                 panel: crate::editors::pianoroll::Panel::Notes,
+                gesture_amount: 100,
+                gesture_rate: 3.0,
             },
             show_automation: false,
             editor_h: EDITOR_H,
@@ -679,7 +838,17 @@ impl Workspace {
             load_sum: 0.0,
             load_reads: 0,
             load_late: None,
+            lates: Default::default(),
             status,
+            audio_error: None,
+            rack_preview: None,
+            library: None,
+            sounds_dir: crate::editors::poly::library::sounds_dir(),
+            output_tried: None,
+            outputs_info: Vec::new(),
+            inputs_info: Vec::new(),
+            input_meter: None,
+            in_levels: Vec::new(),
             agent: Vec::new(),
             smart: HashMap::new(),
             exporting: false,
@@ -687,6 +856,9 @@ impl Workspace {
             eq_view: None,
             fx_view: None,
             poly_view: None,
+            bloom_view: None,
+            bloom_window: None,
+            main: None,
             eq_clipboard: Vec::new(),
             slider_bounds: Rc::new(RefCell::new(HashMap::new())),
             viewport_h: 900.0,
@@ -708,6 +880,7 @@ impl Workspace {
             trying: None,
             title: String::new(),
         };
+        ws.apply_midi_inputs();
         ws.refresh_looks(cx);
         ws.refresh_songs(cx);
         // For screenshots and docs: PINA_PAGE=playbooks[:genre[@scroll]] (or study, agent)
@@ -737,11 +910,32 @@ impl Workspace {
     }
 
     /// What the engine plays: the project, or in pattern mode just the selected region, looped.
-    fn engine_project(&self) -> Cow<'_, Project> {
+    pub(crate) fn engine_project(&self) -> Cow<'_, Project> {
         let mut p = self.pattern_project();
         // Controls a hand has taken over play as it has them.
         if !self.taken.is_empty() {
             self.without_live(p.to_mut());
+        }
+        // Comparing: the synth plays its sound as saved, the changes kept aside.
+        if let Some(v) = self.poly_view.as_ref().filter(|v| v.lib.comparing)
+            && let Some(saved) = v.lib.saved.clone()
+            && let Some(pina_engine::song::project::Instrument::Poly(poly)) = p
+                .to_mut()
+                .tracks
+                .get_mut(v.track)
+                .and_then(|t| t.instrument.as_mut())
+        {
+            **poly = saved;
+        }
+        if let Some((t, u)) = self.rack_preview
+            && let Some(pina_engine::song::project::Instrument::Poly(poly)) = p
+                .to_mut()
+                .tracks
+                .get_mut(t)
+                .and_then(|t| t.instrument.as_mut())
+            && poly.fx.len() < pina_engine::song::project::RACK
+        {
+            poly.fx.push(u);
         }
         p
     }
@@ -772,12 +966,98 @@ impl Workspace {
     }
 }
 
-impl Render for Workspace {
+/// The app's pages and panels: everything the workspace draws but the windows that move by
+/// themselves. It's drawn again whenever the workspace changes; a window that animates alone
+/// (Bloom's) draws its own frames, and this is kept as it was.
+pub struct MainView {
+    ws: gpui::WeakEntity<Workspace>,
+    _changes: Subscription,
+}
+
+impl MainView {
+    fn new(ws: &Entity<Workspace>, cx: &mut Context<Self>) -> MainView {
+        MainView {
+            ws: ws.downgrade(),
+            _changes: cx.observe(ws, |_, _, cx| cx.notify()),
+        }
+    }
+}
+
+impl Render for MainView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ws
+            .update(cx, |ws, cx| ws.render_main(window, cx))
+            .unwrap_or_else(|_| gpui::Empty.into_any_element())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times the app's pages have been drawn, on this thread.
+    pub static MAIN_RENDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl Render for Workspace {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let me = cx.entity();
+        let main = self
+            .main
+            .get_or_insert_with(|| cx.new(|cx| MainView::new(&me, cx)))
+            .clone();
+        let bloom = match self.bloom_view.as_ref().map(|v| v.at) {
+            Some(at) => {
+                let view = self
+                    .bloom_window
+                    .get_or_insert_with(|| {
+                        cx.new(|cx| crate::editors::bloom::BloomWindow::new(&me, cx))
+                    })
+                    .clone();
+                let (w, h) = self.bloom_size();
+                Some(
+                    gpui::deferred(
+                        gpui::anchored()
+                            .position(gpui::point(px(at.0), px(at.1)))
+                            .snap_to_window()
+                            .child(
+                                gpui::AnyView::from(view)
+                                    .cached(gpui::StyleRefinement::default().w(px(w)).h(px(h))),
+                            ),
+                    )
+                    .with_priority(0),
+                )
+            }
+            None => {
+                self.bloom_window = None;
+                None
+            }
+        };
+        div()
+            .size_full()
+            .child(gpui::AnyView::from(main).cached(gpui::StyleRefinement::default().size_full()))
+            .children(bloom)
+    }
+}
+
+impl Workspace {
+    /// The view drawing Bloom's window, while it's open.
+    #[cfg(test)]
+    pub(crate) fn bloom_window_view(&self) -> Option<Entity<crate::editors::bloom::BloomWindow>> {
+        self.bloom_window.clone()
+    }
+
+    /// Everything the workspace draws but Bloom's window: drawn in `MainView`.
+    fn render_main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        #[cfg(test)]
+        MAIN_RENDERS.with(|n| n.set(n.get() + 1));
         // The knobs a modulator can be dropped on, and the effects' rows, as this frame draws
         // them.
         self.mod_targets.borrow_mut().clear();
         self.effect_rows.borrow_mut().clear();
+        // An editor just opened (or another in its place): the keys are its.
+        if self.bottom != self.keys_bottom {
+            self.keys_bottom = self.bottom;
+            self.tracks_keys = false;
+        }
         if let Some(what) = self.pending_name.take() {
             self.start_naming(what, window, cx);
         }
@@ -809,6 +1089,7 @@ impl Render for Workspace {
             self.home = Some(crate::pages::projects::Home::new(window, cx));
         }
         self.browser_frame(window, cx);
+        self.opening_frame(window, cx);
         if std::mem::take(&mut self.refocus) && self.naming.is_none() {
             self.focus.focus(window, cx);
         }
@@ -825,6 +1106,13 @@ impl Render for Workspace {
         self.read_meters();
         self.eq_frame();
         self.fx_frame();
+        // The input listened to for Settings' meters, only while they show.
+        if self.view != View::Settings {
+            self.input_meter = None;
+            if self.tapping.is_some() {
+                self.stop_tapping(cx);
+            }
+        }
         let synth = self.poly_frame();
         let sampling = self.sampler_frame();
         self.capture(cx);
@@ -907,7 +1195,9 @@ impl Render for Workspace {
             .key_context({
                 let context = match (
                     &self.naming,
-                    self.menu.as_ref().is_some_and(|m| m.searchable),
+                    self.menu
+                        .as_ref()
+                        .is_some_and(|m| m.searchable || m.keyed()),
                 ) {
                     (Some(_), _) => "Naming",
                     (None, true) => "Menu",
@@ -917,6 +1207,7 @@ impl Render for Workspace {
                     // The piano roll open: arrows, copy and paste work on its notes.
                     _ if self.view == View::Arrange
                         && self.bottom == Some(Bottom::PianoRoll)
+                        && !self.tracks_keys
                         && !self.browser_open() =>
                     {
                         "Workspace Arrange Roll"
@@ -924,6 +1215,7 @@ impl Render for Workspace {
                     // The step sequencer open: its shortcuts.
                     _ if self.view == View::Arrange
                         && self.bottom == Some(Bottom::Steps)
+                        && !self.tracks_keys
                         && !self.browser_open() =>
                     {
                         "Workspace Arrange Steps"
@@ -937,6 +1229,13 @@ impl Render for Workspace {
                 };
                 if self.view == View::Plugins && self.naming.is_none() {
                     context += " Plugins";
+                }
+                // Automation points picked, nothing else with the keys: theirs.
+                if context == "Workspace Arrange"
+                    && self.show_automation
+                    && self.picked_lane().is_some()
+                {
+                    context += " Auto";
                 }
                 // The EQ window clicked in last: ⌘A and Escape are its bands'.
                 if self.naming.is_none() && self.eq_view.as_ref().is_some_and(|v| v.focused) {
@@ -964,6 +1263,42 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|ws, _: &Record, _, cx| ws.record(cx)))
+            .on_action(cx.listener(|ws, _: &PointsLeft, _, cx| {
+                ws.nudge_picked(-(ws.grid().max(1) as i64), 0.0, cx);
+            }))
+            .on_action(cx.listener(|ws, _: &PointsRight, _, cx| {
+                ws.nudge_picked(ws.grid().max(1) as i64, 0.0, cx);
+            }))
+            .on_action(cx.listener(|ws, _: &PointsLeftFine, _, cx| {
+                ws.nudge_picked(-((ws.grid() / 4).max(1) as i64), 0.0, cx);
+            }))
+            .on_action(cx.listener(|ws, _: &PointsRightFine, _, cx| {
+                ws.nudge_picked((ws.grid() / 4).max(1) as i64, 0.0, cx);
+            }))
+            .on_action(cx.listener(|ws, _: &PointsUp, _, cx| {
+                ws.nudge_picked(0, 0.01, cx);
+            }))
+            .on_action(cx.listener(|ws, _: &PointsDown, _, cx| {
+                ws.nudge_picked(0, -0.01, cx);
+            }))
+            .on_action(cx.listener(|ws, _: &PointsUpMore, _, cx| {
+                ws.nudge_picked(0, 0.1, cx);
+            }))
+            .on_action(cx.listener(|ws, _: &PointsDownMore, _, cx| {
+                ws.nudge_picked(0, -0.1, cx);
+            }))
+            .on_action(cx.listener(|ws, _: &DuplicatePoints, _, cx| {
+                ws.duplicate_picked(cx);
+            }))
+            .on_action(cx.listener(|ws, _: &DeselectPoints, _, cx| {
+                ws.auto_picked = None;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|ws, _: &SelectAll, _, cx| {
+                if !ws.pick_lane(cx) {
+                    ws.select_all_regions(cx);
+                }
+            }))
             .on_action(cx.listener(|ws, _: &NewPattern, _, cx| ws.new_pattern(cx)))
             .on_action(cx.listener(|ws, _: &TogglePlugins, _, cx| ws.toggle_plugins_page(cx)))
             .on_action(cx.listener(|ws, _: &PreviousPlugin, _, cx| ws.step_plugin(-1, cx)))
@@ -1121,7 +1456,13 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|ws, _: &ToggleTyping, _, cx| ws.toggle_typing(cx)))
-            .on_action(cx.listener(|ws, _: &PlayStop, _, cx| ws.play_stop(cx)))
+            // Space is a tap while tapping along.
+            .on_action(
+                cx.listener(|ws, _: &PlayStop, _, cx| match ws.tapping.is_some() {
+                    true => ws.tap(cx),
+                    false => ws.play_stop(cx),
+                }),
+            )
             .on_action(cx.listener(|ws, _: &GoToStart, _, cx| ws.go_to_start(cx)))
             .on_action(cx.listener(|ws, _: &Undo, _, cx| ws.undo(cx)))
             .on_action(cx.listener(|ws, _: &EqSelectAll, _, cx| {
@@ -1187,6 +1528,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|ws, _: &ToggleCycle, _, cx| ws.toggle_cycle(cx)))
             .on_action(cx.listener(|ws, _: &ToggleMetronome, _, cx| ws.toggle_metronome(cx)))
             .on_action(cx.listener(|ws, _: &Quit, window, cx| ws.quit(window, cx)))
+            .on_action(cx.listener(|ws, _: &CloseWindow, window, cx| ws.close_front(window, cx)))
+            .on_action(
+                cx.listener(|ws, _: &ShowShortcuts, window, cx| ws.toggle_shortcuts(window, cx)),
+            )
+            .on_action(cx.listener(|ws, _: &Deselect, _, cx| ws.deselect(cx)))
             // Audio dragged in from the Finder: followed here, and let go by `file_listener`.
             // (gpui's own drop needs the pointer to count as hovering, which it doesn't after a
             // key press, as a Finder drag isn't a mouse move.)
@@ -1230,8 +1576,15 @@ impl Render for Workspace {
                     ws.roll_op(RollOp::Transpose(-12), cx)
                 }),
             )
-            .on_action(cx.listener(|ws, _: &NudgeLeft, _, cx| ws.roll_op(RollOp::Nudge(-4), cx)))
-            .on_action(cx.listener(|ws, _: &NudgeRight, _, cx| ws.roll_op(RollOp::Nudge(4), cx)))
+            .on_action(cx.listener(|ws, _: &NudgeLeft, _, cx| {
+                let by = ws.nudge_ticks() as i64;
+                ws.roll_op(RollOp::Move(-by), cx)
+            }))
+            .on_action(cx.listener(|ws, _: &NudgeRight, _, cx| {
+                let by = ws.nudge_ticks() as i64;
+                ws.roll_op(RollOp::Move(by), cx)
+            }))
+            .map(|d| keys::on_logic_keys(d, cx))
             .on_action(
                 cx.listener(|ws, _: &NudgeLeftFine, _, cx| ws.roll_op(RollOp::Nudge(-1), cx)),
             )
@@ -1278,7 +1631,20 @@ impl Render for Workspace {
                                     .min_w(px(0.))
                                     .flex()
                                     .flex_col()
-                                    .child(self.tracks_area(cx))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_h(px(0.))
+                                            .flex()
+                                            .flex_col()
+                                            .capture_any_mouse_down(cx.listener(|ws, _, _, cx| {
+                                                if ws.bottom.is_some() && !ws.tracks_keys {
+                                                    ws.tracks_keys = true;
+                                                    cx.notify();
+                                                }
+                                            }))
+                                            .child(self.tracks_area(cx)),
+                                    )
                                     .when_some(self.bottom, |d, pane| {
                                         d.child(self.editor(pane, cx))
                                     }),
@@ -1308,10 +1674,14 @@ impl Render for Workspace {
             .children(self.effect_ghost())
             .children(self.mini_view(cx))
             .children(self.midi_fx_window(cx))
+            .children(self.mpe_window(cx))
             .children(self.like_create_view(cx))
             .children(self.menu_view(cx))
             .children(self.adder_view(cx))
             .children(self.export_view(cx))
+            .children(self.shortcuts_view(window, cx))
             .children(self.picker_view(cx))
+            .children(self.splash_view())
+            .into_any_element()
     }
 }

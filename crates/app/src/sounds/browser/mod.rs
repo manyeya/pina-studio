@@ -46,11 +46,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::ui::scale::px;
 use gpui::{
     App, Bounds, Context, Div, Entity, Focusable, FontWeight, Hsla, MouseButton, MouseDownEvent,
     MouseMoveEvent, PathBuilder, PathPromptOptions, Pixels, Point, ScrollDelta, ScrollStrategy,
     ScrollWheelEvent, SharedString, Subscription, UniformListScrollHandle, Window, canvas, div,
-    fill, point, prelude::*, px, relative, rgb, size, uniform_list,
+    fill, point, prelude::*, relative, rgb, size, uniform_list,
 };
 use pina_engine::{
     audio::stretch,

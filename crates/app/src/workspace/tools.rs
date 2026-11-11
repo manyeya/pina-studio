@@ -35,6 +35,23 @@ impl Tool {
         )
     }
 
+    /// Its letter in the Tool menu (T, then it).
+    pub fn key(self) -> char {
+        match self {
+            Tool::Pointer => 'T',
+            Tool::Pencil => 'P',
+            Tool::Scissors => 'I',
+            Tool::Eraser => 'E',
+            Tool::Text => 'X',
+            Tool::Glue => 'G',
+            Tool::Solo => 'S',
+            Tool::Mute => 'M',
+            Tool::Zoom => 'Z',
+            Tool::Fade => 'F',
+            Tool::Stretch => 'R',
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Tool::Pointer => "Pointer",
@@ -101,7 +118,10 @@ impl Workspace {
             .iter()
             .map(|&t| {
                 let tick = if t == self.tool { "✓ " } else { "" };
-                (format!("{tick}{}", t.name()), MenuAction::Tool(t))
+                (
+                    format!("{tick}{}\t{}", t.name(), t.key()),
+                    MenuAction::Tool(t),
+                )
             })
             .collect();
         self.menu = Some(Menu {
@@ -110,6 +130,41 @@ impl Workspace {
             ..Default::default()
         });
         cx.notify();
+    }
+
+    /// Escape: back to the pointer; with it already, whatever's picked let go (regions, points,
+    /// a menu).
+    pub fn deselect(&mut self, cx: &mut Context<Self>) {
+        if self.menu.take().is_none() {
+            match self.tool {
+                Tool::Pointer => {
+                    self.region = None;
+                    self.picks.clear();
+                    self.auto_picked = None;
+                }
+                _ => self.tool = Tool::Pointer,
+            }
+        }
+        cx.notify();
+    }
+
+    /// ⌘W: the window in front closes (an effect's, the EQ, the synth); with none, the app quits.
+    pub fn close_front(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        if self.shortcuts.is_some() {
+            self.close_shortcuts(window, cx);
+        } else if self.mpe_view.take().is_some() || self.midi_fx_view.take().is_some() {
+            cx.notify();
+        } else if self.fx_view.as_ref().is_some_and(|v| v.rack.is_none()) {
+            self.close_fx(cx);
+        } else if self.eq_view.as_ref().is_some_and(|v| v.rack.is_none()) {
+            self.close_eq(cx);
+        } else if self.bloom_view.is_some() {
+            self.close_bloom(cx);
+        } else if self.poly_view.is_some() {
+            self.close_poly(cx);
+        } else {
+            self.quit(window, cx);
+        }
     }
 
     /// A region joined to the next on its track (starting where it ends, or after): MIDI's notes
@@ -143,7 +198,7 @@ impl Workspace {
                 let mut notes = notes.clone();
                 notes.extend(more.iter().map(|n| pina_engine::song::project::Note {
                     start: n.start + shift,
-                    ..*n
+                    ..n.clone()
                 }));
                 notes.sort_by_key(|n| n.start);
                 let mut controls = controls.clone();

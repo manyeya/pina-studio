@@ -72,6 +72,28 @@ impl Menu {
             .map(|i| self.items[i].1.clone())
             .find(|a| !matches!(a, MenuAction::Nothing))
     }
+
+    /// An item's own key, a letter shown after its tab ("Pencil\tP"), if it has one.
+    fn key_of(label: &str) -> Option<char> {
+        let mut k = label.rsplit_once('\t')?.1.chars();
+        let c = k.next().filter(|c| c.is_ascii_alphanumeric())?;
+        k.next().is_none().then_some(c.to_ascii_lowercase())
+    }
+
+    /// Items with letters of their own: pressing one picks it, so the window's keys stand down.
+    pub fn keyed(&self) -> bool {
+        !self.searchable && self.items.iter().any(|(l, _)| Self::key_of(l).is_some())
+    }
+
+    /// The item a letter picks.
+    pub fn by_key(&self, c: &str) -> Option<MenuAction> {
+        let c = c.chars().next()?.to_ascii_lowercase();
+        let (_, action) = self
+            .items
+            .iter()
+            .find(|(l, _)| Self::key_of(l) == Some(c))?;
+        Some(action.clone())
+    }
 }
 
 #[derive(Clone)]
@@ -90,6 +112,10 @@ pub enum MenuAction {
     CloseSong,
     /// A new song's key.
     NewSongKey(Option<String>),
+    /// The Songs page's order or a filter.
+    Songs(crate::pages::projects::Shelf),
+    /// A plugin put at the end of a track's MIDI FX (Scaler, a MIDI-processing Audio Unit).
+    MidiFxPlugin(usize, pina_engine::song::project::PluginRef),
     /// Works with this agent in the Agent panel.
     Agent(crate::agent::Kind),
     /// The agent's model, or effort (None: its own setting).
@@ -155,11 +181,17 @@ pub enum MenuAction {
     /// Whether choosing a key moves the music into it, or only names it. Reopens the key menu.
     KeyMovesNotes(Point<Pixels>),
     Snap(Snap),
+    /// Regions move by the grid, keeping how far off it they were.
+    SnapRelative,
     DragMode(crate::workspace::DragMode),
     /// The track whose notes the piano roll shows faintly, by id.
     Ghost(Option<u64>),
     /// A track's plugin instrument to hear each note on a channel of its own (MPE), or not.
     Mpe(usize),
+    /// A track's plugin instrument's MPE card.
+    MpeSettings(usize),
+    /// A setting of the roll's Chords tab.
+    Writing(crate::editors::pianoroll::WritingSet),
     /// Something done to the piano roll's notes.
     Roll(crate::editors::pianoroll::RollOp),
     /// What a click in the piano roll writes: a note or a chord.
@@ -178,6 +210,8 @@ pub enum MenuAction {
     Drums(crate::editors::drums::DrumOp),
     /// A choice in a synth's window, on a track by place.
     Poly(usize, crate::editors::poly::PolyOp),
+    /// A choice in Bloom's window, on a track by place.
+    Bloom(usize, crate::editors::bloom::BloomOp),
     /// An automation lane's or point's item, on a track by id.
     Auto(u64, crate::arrange::automation::AutoOp),
     /// A sound picked for the agent: its part, out, or all of them.
@@ -267,7 +301,7 @@ pub const MARKER_NAMES: [&str; 9] = [
 
 impl Workspace {
     pub fn choose(&mut self, action: MenuAction, cx: &mut Context<Self>) {
-        self.menu = None;
+        let menu_at = self.menu.take().map(|m| m.at);
         match action {
             MenuAction::Nothing => {}
             MenuAction::Genre(genre) => {
@@ -278,6 +312,12 @@ impl Workspace {
             MenuAction::NewSongKey(key) => {
                 if let Some(h) = self.home.as_mut() {
                     h.key = key.as_deref().and_then(pina_engine::music::Key::parse);
+                }
+            }
+            MenuAction::MidiFxPlugin(t, r) => self.add_midi_fx_plugin(t, r, cx),
+            MenuAction::Songs(change) => {
+                if let Some(h) = self.home.as_mut() {
+                    h.shelving.change(change);
                 }
             }
             // Songs need the window (to ask about saving): the next frame does them.
@@ -313,11 +353,15 @@ impl Workspace {
                     ));
                 } else {
                     let synth = matches!(instrument, Instrument::Poly(_));
+                    let bloom = matches!(instrument, Instrument::Bloom(_));
                     self.edit(cx, |ws| {
                         ws.session.project.tracks[track].set_instrument(instrument);
                     });
                     if synth {
                         self.open_poly(track, cx);
+                    }
+                    if bloom {
+                        self.open_bloom(track, cx);
                     }
                 }
             }
@@ -506,6 +550,7 @@ impl Workspace {
                 self.menu = Some(self.key_menu(at));
             }
             MenuAction::Snap(snap) => self.snap = snap,
+            MenuAction::SnapRelative => self.snap_relative ^= true,
             MenuAction::DragMode(mode) => self.drag_mode = mode,
             MenuAction::Ghost(id) => self.roll.ghost = id,
             MenuAction::Mpe(track) => self.edit(cx, |ws| {
@@ -515,6 +560,8 @@ impl Workspace {
                     r.mpe ^= true;
                 }
             }),
+            MenuAction::MpeSettings(track) => self.open_mpe(track, menu_at.unwrap_or_default(), cx),
+            MenuAction::Writing(set) => self.set_writing_to(set, cx),
             MenuAction::Roll(op) => self.roll_op(op, cx),
             MenuAction::Stamp(stamp) => self.roll.stamp = stamp,
             MenuAction::More(item) => self.pick_more(item, cx),
@@ -525,6 +572,7 @@ impl Workspace {
             MenuAction::Steps(op) => self.steps_op(op, cx),
             MenuAction::Plugins(op) => self.plugin_op(op, cx),
             MenuAction::Poly(track, op) => self.poly_op(track, op, cx),
+            MenuAction::Bloom(track, op) => self.bloom_op(track, op, cx),
             MenuAction::Auto(track, op) => self.auto_op(track, op, cx),
             MenuAction::Palette(op) => self.palette_op(op, cx),
             MenuAction::Eq(op) => self.eq_op(op, cx),
@@ -588,6 +636,10 @@ impl Workspace {
                 }
             }
             "backspace" if menu.searchable => drop(menu.query.pop()),
+            key if menu.keyed() && !k.modifiers.modified() => match menu.by_key(key) {
+                Some(action) => self.choose(action, cx),
+                None => return false,
+            },
             _ if menu.searchable && !k.modifiers.platform && !k.modifiers.control => {
                 match &k.key_char {
                     Some(c) => menu.query.push_str(c),
@@ -742,6 +794,7 @@ impl Workspace {
                 ws.menu = None;
                 cx.notify();
             }));
-        Some(deferred(anchored().position(menu.at).snap_to_window().child(list)).with_priority(1))
+        // Over every window (they go up to 3): menus open from them.
+        Some(deferred(anchored().position(menu.at).snap_to_window().child(list)).with_priority(4))
     }
 }

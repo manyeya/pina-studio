@@ -429,7 +429,7 @@ impl Workspace {
                             30.,
                         )
                         .debug_selector(|| "samples".into())
-                        .help("Browser: sounds and plugins · F (⇧F its page)", cx)
+                        .help("Browser: sounds and plugins · F or B (⇧B its page)", cx)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|ws, _, _, cx| ws.toggle_samples(cx)),

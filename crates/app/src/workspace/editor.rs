@@ -166,7 +166,7 @@ impl Workspace {
                                         Bottom::ALL
                                             .into_iter()
                                             .filter(|&b| b == pane || self.settings.shows(b))
-                                            .map(|b| tab(b.name(), b, cx))
+                                            .map(|b| tab(b.short(), b, cx))
                                             .collect::<Vec<_>>(),
                                     ),
                             ),
@@ -230,6 +230,8 @@ impl Workspace {
                     ws.begin_drag(Drag::Editor { y, height }, cx);
                 }),
             );
+        // A press anywhere in it gives it the keys; while it has them, its frame says so.
+        let keys = !self.tracks_keys;
         div()
             .h(px(height))
             .flex_none()
@@ -237,8 +239,25 @@ impl Workspace {
             .flex()
             .flex_col()
             .bg(rgb(LANE))
+            .capture_any_mouse_down(cx.listener(|ws, _, _, cx| {
+                if ws.tracks_keys {
+                    ws.tracks_keys = false;
+                    cx.notify();
+                }
+            }))
             .child(bar)
             .child(body)
             .child(edge)
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .border_1()
+                    .border_color(match keys {
+                        true => alpha(ACCENT, 0.55),
+                        false => gpui::transparent_black(),
+                    })
+                    .debug_selector(move || format!("editor-keys-{keys}")),
+            )
     }
 }

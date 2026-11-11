@@ -23,7 +23,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ⇧F: the browser's page, in the tracks' place, or the tracks again.
+    /// ⇧B: the browser's page, in the tracks' place, or the tracks again.
     pub fn toggle_samples_page(&mut self, cx: &mut Context<Self>) {
         self.view = match self.view {
             View::Samples => View::Arrange,

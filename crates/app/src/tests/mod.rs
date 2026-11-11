@@ -6,7 +6,9 @@ mod automation;
 mod drums;
 mod editors;
 mod eq;
+mod expression;
 mod like;
+mod logic_keys;
 mod midi_browser;
 mod mix;
 mod modulation;
@@ -420,7 +422,7 @@ fn open_browser<'a>(
     let library = little_library(&dir.join("Library"));
     let (ws, cx) = open_at(cx, &dir);
     ws.update(cx, |ws, cx| ws.set_library(library, cx));
-    cx.simulate_keystrokes("shift-f");
+    cx.simulate_keystrokes("shift-b");
     assert_eq!(ws.read_with(cx, |ws, _| ws.view), View::Samples);
     (ws, cx, dir)
 }

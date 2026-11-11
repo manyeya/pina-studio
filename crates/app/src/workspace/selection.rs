@@ -42,6 +42,33 @@ impl Workspace {
         out
     }
 
+    /// ⌘A: every region in the song, the focused one kept if there is one.
+    pub fn select_all_regions(&mut self, cx: &mut Context<Self>) {
+        let all: Vec<At> = (self.session.project.tracks.iter().enumerate())
+            .flat_map(|(t, track)| (0..track.regions.len()).map(move |i| (t, i)))
+            .collect();
+        let Some(&first) = all.first() else { return };
+        let focus = self.region.filter(|at| all.contains(at)).unwrap_or(first);
+        self.region = Some(focus);
+        self.picks = all
+            .into_iter()
+            .filter(|&at| at != focus)
+            .map(|at| self.pick(at))
+            .collect();
+        self.auto_picked = None;
+        cx.notify();
+    }
+
+    /// These regions selected, the first focused (none: nothing selected).
+    pub fn select_regions(&mut self, all: Vec<At>) {
+        self.region = all.first().copied();
+        self.picks = all.iter().skip(1).map(|&at| self.pick(at)).collect();
+        if let Some(at) = self.region {
+            self.select_track(at.0);
+        }
+        self.auto_picked = None;
+    }
+
     pub fn is_selected(&self, at: At) -> bool {
         self.region == Some(at) || self.picks.iter().any(|&p| self.region_at(p) == Some(at))
     }
