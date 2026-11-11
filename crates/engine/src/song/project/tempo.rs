@@ -63,9 +63,10 @@ impl Project {
         (self.seconds_at(ticks as f64) * rate).round() as u64
     }
 
-    /// A sample at the project's rate as a tick, rounded down.
-    pub fn ticks(&self, samples: u64) -> u64 {
-        (self.tick_at_seconds(samples as f64 / self.sample_rate as f64) + 1e-6).max(0.0) as u64
+    /// A sample at `rate` as a tick, rounded down. The rate is the one the samples were counted
+    /// at: the engine's (the player's) when it runs at another than the song's.
+    pub fn ticks(&self, samples: u64, rate: f64) -> u64 {
+        (self.tick_at_seconds(samples as f64 / rate) + 1e-6).max(0.0) as u64
     }
 
     /// How many samples at `rate` from one tick to another.

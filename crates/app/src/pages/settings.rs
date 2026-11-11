@@ -5,12 +5,17 @@
 //! with a double-click), the transport (following the playhead, going back where play started on
 //! stop), automation (its lanes' height, what an automated control does moved while stopped,
 //! snapping, thinning, Write turning to Latch, automation going with regions), and the editor's
-//! tabs (a hidden one's shortcut still opens it). And audio: the output, and its buffer.
+//! tabs (a hidden one's shortcut still opens it). And audio: the output, and its buffer; and
+//! MIDI: each controller read as MPE or not, and how far its notes' own bends reach.
 
 use std::path::PathBuf;
 
 use gpui::{Context, Div, FontWeight, MouseButton, div, prelude::*, px, rgb};
-use pina_engine::audio::engine::{AudioSetup, buffer_sizes, output_devices};
+use pina_engine::audio::{
+    engine::{AudioSetup, buffer_sizes, output_devices},
+    midi::InputSetup,
+    player::Player,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -62,7 +67,47 @@ pub struct Settings {
     pub audio: AudioSetup,
     /// The synth's sounds liked, by name.
     pub liked_sounds: Vec<String>,
+    /// The synth's effects added lately, by the names they're offered under, newest first.
+    pub recent_effects: Vec<String>,
+    /// The synth's sounds played lately (by their keys, newest first); whether a click in the
+    /// library loads; the name on sounds and packs made here; the pack Save last put one in.
+    pub recent_sounds: Vec<String>,
+    /// Recording: how deep its samples, how far its takes move back for the input's lateness
+    /// (ms), how many bars it counts in; the click, and whether it's heard only while recording;
+    /// a late buffer said in the status bar.
+    pub record_depth: pina_engine::audio::record::Depth,
+    pub record_offset_ms: f32,
+    pub count_in: u8,
+    pub click: pina_engine::audio::engine::ClickStyle,
+    pub click_only_recording: bool,
+    pub late_warning: bool,
+    /// Seconds between the song's recovery copies.
+    pub keep_every: u32,
+    /// Folders of plugins besides the system's.
+    pub plugin_folders: Vec<PathBuf>,
+    pub load_as_step: bool,
+    pub maker: String,
+    pub last_pack: Option<String>,
+    /// How each MIDI input set apart from the rest is read, by name.
+    pub midi_inputs: Vec<MidiInput>,
+    /// How much later than it says each output is really heard (ms), by output.
+    pub heard_later: std::collections::BTreeMap<String, f32>,
+    /// The octave middle C (MIDI 60) is named in: 4 as most learn it, 3 or 5 as some apps have it.
+    pub middle_c: i8,
+    /// The Songs page as a grid of covers (or a list).
+    pub songs_grid: bool,
 }
+
+/// A MIDI input, by name, and how it's read.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MidiInput {
+    pub name: String,
+    #[serde(flatten)]
+    pub setup: InputSetup,
+}
+
+/// The bend ranges MPE controllers usually have, in semitones.
+const NOTE_BENDS: [u8; 4] = [12, 24, 48, 96];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -92,6 +137,23 @@ impl Default for Settings {
             carry_automation: false,
             audio: AudioSetup::default(),
             liked_sounds: Vec::new(),
+            recent_effects: Vec::new(),
+            recent_sounds: Vec::new(),
+            record_depth: Default::default(),
+            record_offset_ms: 0.0,
+            count_in: 0,
+            click: Default::default(),
+            click_only_recording: false,
+            late_warning: true,
+            keep_every: 30,
+            plugin_folders: Vec::new(),
+            load_as_step: false,
+            maker: String::new(),
+            last_pack: None,
+            midi_inputs: Vec::new(),
+            heard_later: Default::default(),
+            middle_c: 4,
+            songs_grid: false,
         }
     }
 }
@@ -139,20 +201,57 @@ pub enum Section {
     Editing,
     Transport,
     Audio,
+    Midi,
     Automation,
     Tabs,
+    Recording,
+    Plugins,
+    Sounds,
+    Saving,
 }
 
 impl Section {
-    const ALL: [Section; 7] = [
+    /// Down the rail, by group: the studio, working, the library.
+    const ALL: [Section; 12] = [
+        Section::Audio,
+        Section::Midi,
+        Section::Recording,
         Section::Tracks,
         Section::Regions,
         Section::Editing,
         Section::Transport,
-        Section::Audio,
         Section::Automation,
         Section::Tabs,
+        Section::Plugins,
+        Section::Sounds,
+        Section::Saving,
     ];
+
+    /// The group it's under on the rail.
+    fn group(self) -> &'static str {
+        match self {
+            Section::Audio | Section::Midi | Section::Recording => "STUDIO",
+            Section::Plugins | Section::Sounds | Section::Saving => "LIBRARY",
+            _ => "WORKING",
+        }
+    }
+
+    /// What search finds it by, besides its name and its line.
+    fn words(self) -> &'static str {
+        match self {
+            Section::Audio => {
+                "output input device speakers headphones interface sample rate buffer latency test tone cores late dropout bluetooth playhead delay calibrate tap"
+            }
+            Section::Midi => "keyboard controller mpe bend",
+            Section::Recording => "bit depth wav count in click metronome takes",
+            Section::Plugins => "vst vst3 clap audio units folders scan",
+            Section::Sounds => "synth presets packs maker",
+            Section::Saving => "recovery backup songs folder autosave",
+            Section::Transport => "play stop follow playhead",
+            Section::Editing => "middle c octave note names c3 c4 c5",
+            _ => "",
+        }
+    }
 
     fn name(self) -> &'static str {
         match self {
@@ -161,8 +260,13 @@ impl Section {
             Section::Editing => "Editing",
             Section::Transport => "Transport",
             Section::Audio => "Audio",
+            Section::Midi => "MIDI",
             Section::Automation => "Automation",
             Section::Tabs => "Editor tabs",
+            Section::Recording => "Recording",
+            Section::Plugins => "Plugins",
+            Section::Sounds => "Sounds & packs",
+            Section::Saving => "Saving & files",
         }
     }
 
@@ -173,8 +277,13 @@ impl Section {
             Section::Editing => Icon::Pointer,
             Section::Transport => Icon::Play,
             Section::Audio => Icon::Speaker,
+            Section::Midi => Icon::MidiIn,
             Section::Automation => Icon::Fade,
             Section::Tabs => Icon::PanelBottom,
+            Section::Recording => Icon::Record,
+            Section::Plugins => Icon::Plug,
+            Section::Sounds => Icon::Samples,
+            Section::Saving => Icon::Folder,
         }
     }
 
@@ -184,10 +293,13 @@ impl Section {
                 "What each track's header shows, and how tall a track is until you drag it."
             }
             Section::Regions => "How regions and the grid behind them look.",
-            Section::Editing => "What the mouse does in the tracks.",
+            Section::Editing => "What the mouse does in the tracks, and what notes are called.",
             Section::Transport => "Playing and stopping.",
             Section::Audio => {
-                "Where the sound goes, and how much room the computer has to make it."
+                "Where the sound goes and comes from, how fast, and how much room the computer has to make it."
+            }
+            Section::Midi => {
+                "Your MIDI keyboards and controllers. An MPE controller's notes each bend, slide and press on their own; Pina finds out it's one from how it plays."
             }
             Section::Automation => {
                 "Volume, pan, mute, sends and plugin parameters over time: the lanes under each track (A), and what moving an automated control does."
@@ -195,6 +307,10 @@ impl Section {
             Section::Tabs => {
                 "The tabs under the tracks. A hidden one's shortcut still opens it, its tab showing while it's open."
             }
+            Section::Recording => "What recording writes, counting you in, and the click.",
+            Section::Plugins => "Where Pina looks for plugins, and what it found.",
+            Section::Sounds => "The synth's sounds and packs: who makes them, where they're kept.",
+            Section::Saving => "Your songs, and getting back what you lost.",
         }
     }
 }
@@ -238,6 +354,16 @@ impl Bottom {
         }
     }
 
+    /// Its name on the editor's own tab, short so they all fit.
+    pub fn short(self) -> &'static str {
+        match self {
+            Bottom::Steps => "Steps",
+            Bottom::Drums => "Drums",
+            Bottom::Loops => "Loops",
+            b => b.name(),
+        }
+    }
+
     fn what(self) -> &'static str {
         match self {
             Bottom::PianoRoll => "A MIDI region's notes against a keyboard · P",
@@ -268,6 +394,17 @@ const HEIGHTS: [(&str, f32); 4] = [
 
 impl Workspace {
     pub fn open_settings(&mut self, cx: &mut Context<Self>) {
+        if self.settings_find.is_none() {
+            let find = cx.new(|cx| crate::ui::text::TextInput::search("Search settings", cx));
+            self._settings_typed = Some(cx.observe(&find, |ws, input, cx| {
+                ws.settings_query = input.read(cx).text().trim().to_lowercase();
+                cx.notify();
+            }));
+            self.settings_find = Some(find);
+        }
+        if self.settings_section == Section::Audio {
+            self.read_outputs();
+        }
         self.view = match self.view {
             View::Settings => View::Arrange,
             _ => View::Settings,
@@ -295,30 +432,124 @@ impl Workspace {
 
     /// What can be played through, as of now: asking the system is too slow to do every frame.
     fn read_outputs(&mut self) {
+        self.read_devices();
         self.outputs = output_devices();
         self.buffers = buffer_sizes(self.settings.audio.device.as_deref());
     }
 
     /// Plays through `audio` from now on. If it can't, what was playing goes on, and says why.
-    fn set_audio(&mut self, audio: AudioSetup, cx: &mut Context<Self>) {
-        match self.player.set_output(&audio) {
+    pub(crate) fn set_audio(&mut self, audio: AudioSetup, cx: &mut Context<Self>) {
+        let done = self.play_through(&audio);
+        match done {
             Ok(()) => {
                 self.settings.audio = audio;
                 self.settings.save();
                 self.read_outputs();
+                self.audio_error = None;
+                self.apply_heard_later();
             }
-            Err(e) => self.status = Some(format!("Couldn't change the audio output: {e}")),
+            Err(e) => {
+                self.audio_error = Some(e.clone());
+                self.status = Some(format!("Couldn't change the audio output: {e}"));
+            }
         }
         cx.notify();
     }
 
+    /// The sound moved to `audio`'s output. One that can't run at the engine's rate (Bluetooth
+    /// headphones, often only 44.1 kHz) gets the engine started again at one it can, the song
+    /// and the playhead as they were.
+    fn play_through(&mut self, audio: &AudioSetup) -> Result<(), String> {
+        let silent = self.player.output_device().is_none();
+        let rate =
+            pina_engine::audio::engine::output_rate(self.session.project.sample_rate, audio)?;
+        if silent || rate as f64 == self.player.rate() {
+            return self.player.set_output(audio);
+        }
+        if self.recording.is_some() {
+            return Err("it plays at another rate: stop recording first".to_string());
+        }
+        let at = self.player.position();
+        let mut player = Player::start(&self.session.project, &self.session.dir, audio)?;
+        // The playhead in seconds, at the new rate.
+        player.locate((at as f64 * rate as f64 / self.player.rate()) as u64);
+        self.player = player;
+        self.apply_midi_inputs();
+        let project = self.engine_project().into_owned();
+        self.player.sync(&project)
+    }
+
+    /// Once a second: when the output it should play through isn't the one it does (the system's
+    /// output changed, or the one picked was plugged in or pulled out), it moves there.
+    pub fn follow_output(&mut self, now: Option<String>, cx: &mut Context<Self>) {
+        let Some(playing) = self.player.output_device() else {
+            return;
+        };
+        // The same output, a headset's call over: back to the rate it can play again.
+        if now.as_ref() == Some(&playing) {
+            let back = pina_engine::audio::engine::output_rate(
+                self.session.project.sample_rate,
+                &self.settings.audio,
+            );
+            if self.player.rate() < 32_000.0
+                && self.recording.is_none()
+                && back.is_ok_and(|r| r as f64 != self.player.rate())
+            {
+                self.set_audio(self.settings.audio.clone(), cx);
+            }
+            return;
+        }
+        // Tried and failed: not again every second, only once it's somewhere else.
+        if now.is_none() || now.as_ref() == Some(&playing) || now == self.output_tried {
+            return;
+        }
+        self.output_tried = now;
+        self.set_audio(self.settings.audio.clone(), cx);
+        if self.audio_error.is_none() {
+            self.output_tried = None;
+        }
+    }
+
     /// `device` from now on, on a buffer it can do.
-    fn set_output_device(&mut self, device: Option<String>, cx: &mut Context<Self>) {
+    pub(crate) fn set_output_device(&mut self, device: Option<String>, cx: &mut Context<Self>) {
         let mut audio = self.settings.audio.clone();
         let can = buffer_sizes(device.as_deref());
         audio.buffer = audio.buffer.filter(|b| can.contains(b));
         audio.device = device;
         self.set_audio(audio, cx);
+    }
+
+    /// How the MIDI input named `name` is read, from now on and next time.
+    fn set_midi_input(&mut self, name: &str, setup: InputSetup, cx: &mut Context<Self>) {
+        let inputs = &mut self.settings.midi_inputs;
+        match inputs.iter_mut().find(|i| i.name == name) {
+            Some(i) => i.setup = setup,
+            None => inputs.push(MidiInput {
+                name: name.to_string(),
+                setup,
+            }),
+        }
+        self.settings.save();
+        self.player.set_midi_input(name, setup);
+        cx.notify();
+    }
+
+    /// Each MIDI input read as it was set to be, and the click as it was: when Pina Studio
+    /// starts, a song opens, or the engine starts again.
+    pub fn apply_midi_inputs(&self) {
+        for i in &self.settings.midi_inputs {
+            self.player.set_midi_input(&i.name, i.setup);
+        }
+        self.player.set_click(self.settings.click);
+        self.gate_click();
+        self.apply_heard_later();
+        crate::editors::pianoroll::set_middle_c(self.settings.middle_c);
+    }
+
+    /// The click let sound: always, or (set to click only while recording) while recording.
+    pub fn gate_click(&self) {
+        self.player
+            .set_click_gate(!self.settings.click_only_recording || self.recording.is_some());
     }
 
     fn flip(&mut self, field: Field, cx: &mut Context<Self>) {
@@ -328,7 +559,40 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A section on the rail.
+    fn rail_item(&self, s: Section, section: Section, cx: &mut Context<Self>) -> Div {
+        let on = s == section;
+        div()
+            .h(px(32.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(9.))
+            .rounded(px(8.))
+            .text_size(px(12.5))
+            .cursor_pointer()
+            .when(on, |d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+            .when(!on, |d| d.text_color(rgb(TEXT_2)).hover(|d| d.bg(rgb(OFF))))
+            .debug_selector(move || format!("settings-{}", s.name()))
+            .child(icon(s.icon(), 14.).text_color(rgb(if on { TEXT } else { TEXT_3 })))
+            .child(s.name())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |ws, _, _, cx| {
+                    ws.settings_section = s;
+                    if s == Section::Audio {
+                        ws.read_outputs();
+                    }
+                    cx.notify();
+                }),
+            )
+    }
+
     pub fn settings_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        // The input's listened to only while Audio shows.
+        if self.settings_section != Section::Audio {
+            self.input_meter = None;
+        }
         let section = self.settings_section;
         let row = |title: &'static str,
                    what: &'static str,
@@ -562,22 +826,45 @@ impl Workspace {
                     cx,
                 ),
             ])],
-            Section::Editing => vec![card(vec![
-                flag(
-                    "Loop zone",
-                    "The top half of a region's end loops it; off, the whole end trims",
-                    "loop_zone",
-                    |s| &mut s.loop_zone,
-                    cx,
-                ),
-                flag(
-                    "Double-click writes",
-                    "A double-click in an empty lane makes a MIDI region and opens it in the piano roll",
-                    "double_click_writes",
-                    |s| &mut s.double_click_writes,
-                    cx,
-                ),
-            ])],
+            Section::Editing => vec![
+                {
+                    let middle = self.settings.middle_c;
+                    let names = [3i8, 4, 5].map(|o| {
+                        seg(format!("C{o}"), middle == o, 26.)
+                            .debug_selector(move || format!("setting-middle-c-{o}"))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    ws.settings.middle_c = o;
+                                    ws.settings.save();
+                                    crate::editors::pianoroll::set_middle_c(o);
+                                    cx.notify();
+                                }),
+                            )
+                    });
+                    choose(
+                        "Middle C is called",
+                        "MIDI note 60, 262 Hz: C4 as most learn it; C3 or C5 as some apps name it",
+                        names.into(),
+                    )
+                },
+                card(vec![
+                    flag(
+                        "Loop zone",
+                        "The top half of a region's end loops it; off, the whole end trims",
+                        "loop_zone",
+                        |s| &mut s.loop_zone,
+                        cx,
+                    ),
+                    flag(
+                        "Double-click writes",
+                        "A double-click in an empty lane makes a MIDI region and opens it in the piano roll",
+                        "double_click_writes",
+                        |s| &mut s.double_click_writes,
+                        cx,
+                    ),
+                ]),
+            ],
             Section::Transport => vec![card(vec![
                 flag(
                     "Follow the playhead",
@@ -594,70 +881,112 @@ impl Workspace {
                     cx,
                 ),
             ])],
-            Section::Audio => {
-                let audio = self.settings.audio.clone();
-                let output = |name: Option<String>, cx: &mut Context<Self>| {
-                    let (on, shown) = (name == audio.device, name.clone());
-                    let shown = shown.unwrap_or_else(|| "System output".to_string());
-                    let selector = format!("setting-output-{shown}");
+            Section::Audio => self.audio_page(cx),
+            Section::Recording => self.recording_page(cx),
+            Section::Plugins => self.plugin_settings(cx),
+            Section::Sounds => self.sound_settings(cx),
+            Section::Saving => self.saving_page(cx),
+            Section::Midi => {
+                let inputs = self.player.midi_inputs();
+                let input = |i: pina_engine::audio::midi::InputState, cx: &mut Context<Self>| {
+                    let name = i.name.clone();
+                    let status = match (i.setup.mpe, i.found) {
+                        (false, _) => {
+                            "MPE off: every channel's bend and pressure are everyone's".to_string()
+                        }
+                        (true, true) => format!(
+                            "MPE: each note bends, slides and presses on its own, up to {} semitones",
+                            i.setup.bend
+                        ),
+                        (true, false) => {
+                            "MPE when it plays like it: notes on their own channels".to_string()
+                        }
+                    };
+                    let bends: Vec<Div> = NOTE_BENDS
+                        .into_iter()
+                        .map(|st| {
+                            let (n, setup) = (
+                                name.clone(),
+                                InputSetup {
+                                    bend: st,
+                                    ..i.setup
+                                },
+                            );
+                            seg(format!("{st}"), i.setup.bend == st, 24.)
+                                .debug_selector(move || format!("setting-midi-bend-{st}"))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, _, _, cx| {
+                                        ws.set_midi_input(&n, setup, cx)
+                                    }),
+                                )
+                        })
+                        .collect();
+                    let flipped = InputSetup {
+                        mpe: !i.setup.mpe,
+                        ..i.setup
+                    };
                     div()
                         .flex()
-                        .items_center()
-                        .gap(px(14.))
+                        .flex_col()
+                        .gap(px(10.))
                         .px(px(14.))
-                        .py(px(11.))
+                        .py(px(12.))
                         .border_b_1()
                         .border_color(rgb(LINE_SOFT))
-                        .cursor_pointer()
-                        .hover(|d| d.bg(rgb(OFF)))
-                        .debug_selector(move || selector)
                         .child(
                             div()
-                                .flex_1()
-                                .min_w(px(0.))
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(shown),
+                                .flex()
+                                .items_center()
+                                .gap(px(14.))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.))
+                                        .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(i.name.clone()))
+                                        .child(div().text_size(px(11.5)).text_color(rgb(TEXT_3)).child(status)),
+                                )
+                                .child(div().text_size(px(11.5)).text_color(rgb(TEXT_3)).child("MPE"))
+                                .child(
+                                    switch(i.setup.mpe)
+                                        .debug_selector(|| "setting-midi-mpe".into())
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |ws, _, _, cx| ws.set_midi_input(&name, flipped, cx)),
+                                        ),
+                                ),
                         )
-                        .when(on, |d| {
-                            d.child(icon(Icon::Check, 15.).text_color(rgb(TEXT)))
-                        })
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |ws, _, _, cx| {
-                                ws.set_output_device(name.clone(), cx);
-                            }),
-                        )
-                };
-                let mut outputs = vec![output(None, cx)];
-                for name in self.outputs.clone() {
-                    outputs.push(output(Some(name), cx));
-                }
-                let buffers = std::iter::once(None)
-                    .chain(self.buffers.iter().copied().map(Some))
-                    .map(|size| {
-                        let label = size.map_or("Auto".to_string(), |b| b.to_string());
-                        let selector = format!("setting-buffer-{label}");
-                        seg(label, size == audio.buffer, 26.)
-                            .debug_selector(move || selector)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |ws, _, _, cx| {
-                                    let mut audio = ws.settings.audio.clone();
-                                    audio.buffer = size;
-                                    ws.set_audio(audio, cx);
-                                }),
+                        .when(i.setup.mpe, |d| {
+                            d.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(14.))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_size(px(11.5))
+                                            .text_color(rgb(TEXT_3))
+                                            .child("How far a note bends, in semitones, until the controller says"),
+                                    )
+                                    .child(tray().p(px(2.)).rounded(px(8.)).children(bends)),
                             )
-                    })
-                    .collect();
-                vec![
-                    card(outputs),
-                    choose(
-                        "Buffer size",
-                        "Bigger gives a heavy song more room, smaller answers your keyboard sooner: 512 suits mixing, 128 playing live",
-                        buffers,
-                    ),
-                ]
+                        })
+                };
+                match inputs.is_empty() {
+                    true => vec![card(vec![
+                        div()
+                            .px(px(14.))
+                            .py(px(14.))
+                            .text_size(px(12.5))
+                            .text_color(rgb(TEXT_3))
+                            .child("No MIDI inputs. Plug a keyboard or controller in, then open Pina Studio again."),
+                    ])],
+                    false => vec![card(inputs.into_iter().map(|i| input(i, cx)).collect())],
+                }
             }
             Section::Automation => {
                 let height = self.settings.auto_height;
@@ -752,33 +1081,39 @@ impl Workspace {
                     .collect(),
             )],
         };
-        let rail = Section::ALL.map(|s| {
-            let on = s == section;
-            div()
-                .h(px(32.))
-                .px(px(10.))
-                .flex()
-                .items_center()
-                .gap(px(9.))
-                .rounded(px(8.))
-                .text_size(px(12.5))
-                .cursor_pointer()
-                .when(on, |d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
-                .when(!on, |d| d.text_color(rgb(TEXT_2)).hover(|d| d.bg(rgb(OFF))))
-                .debug_selector(move || format!("settings-{}", s.name()))
-                .child(icon(s.icon(), 14.).text_color(rgb(if on { TEXT } else { TEXT_3 })))
-                .child(s.name())
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |ws, _, _, cx| {
-                        ws.settings_section = s;
-                        if s == Section::Audio {
-                            ws.read_outputs();
-                        }
-                        cx.notify();
-                    }),
-                )
-        });
+        // Narrowed by what's typed: a section's name, its line, or what it holds.
+        let words: Vec<String> = self
+            .settings_query
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        let shown: Vec<Section> = Section::ALL
+            .into_iter()
+            .filter(|s| {
+                let all = format!("{} {} {}", s.name(), s.note(), s.words()).to_lowercase();
+                words.iter().all(|w| all.contains(w))
+            })
+            .collect();
+        let mut last_group = "";
+        let mut rail: Vec<Div> = Vec::new();
+        for s in shown {
+            if s.group() != last_group {
+                last_group = s.group();
+                rail.push(
+                    div()
+                        .px(px(10.))
+                        .pt(px(12.))
+                        .pb(px(4.))
+                        .text_size(px(10.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(TEXT_4))
+                        .child(last_group),
+                );
+            }
+            rail.push(self.rail_item(s, section, cx));
+        }
+        let search = self.settings_find.clone();
+
         div()
             .flex_1()
             .min_w(px(0.))
@@ -812,6 +1147,11 @@ impl Workspace {
                                     .child("Settings"),
                             ),
                     )
+                    .children(search.map(|f| {
+                        div()
+                            .pb(px(4.))
+                            .child(crate::pages::genres::field_box(Some(f), "settings-search"))
+                    }))
                     .children(rail),
             )
             .child(
@@ -823,9 +1163,15 @@ impl Workspace {
                     .overflow_y_scroll()
                     .flex()
                     .justify_center()
+                    // The page as tall as what's on it, so it scrolls (stretched, it never did).
+                    .items_start()
                     .child(
                         div()
-                            .w(px(620.))
+                            .w(px(if section == Section::Audio {
+                                1080.
+                            } else {
+                                660.
+                            }))
                             .py(px(30.))
                             .flex()
                             .flex_col()

@@ -61,14 +61,17 @@ impl Workspace {
                 "Click a sound to hear it · ↑ ↓ for the next · drag it onto a track, or double-click to add it · F hides it"
             }
             (_, t, _) if t != Tool::Pointer => t.hint(),
-            (_, _, Some(Bottom::PianoRoll)) => {
-                "Double-click writes · drag a band to pick · ⌥-drag copies · ↑↓ ⇧↑↓ ←→ move · ⌘C ⌘V ⌘D · Q quantize · right-click for more"
+            (_, _, Some(Bottom::PianoRoll)) if !self.tracks_keys => {
+                "Double-click writes · ← → pick notes (⇧ adds) · ⌥← ⌥→ move · ⌥↑ ⌥↓ transpose · ⌥⇧← ⌥⇧→ length · ⌘T split · ⌘J join · Q quantize · Tab: keys to the tracks"
+            }
+            _ if self.show_automation && self.picked_lane().is_some_and(|p| p.2.len() > 1) => {
+                "Drag the box's edges to stretch the points (⌥ about the middle) · ←→ move (⌥ finely) · ↑↓ change (⇧ more) · ⌘D duplicates · ⌘X ⌘C ⌘V · ⌫ deletes · Esc lets go"
             }
             _ if self.show_automation => {
-                "Click for a point · drag to select · drag a line or its ◇ to move or bend it · ⌥-click deletes · ⌘C ⌘V · right-click for shapes · the pencil draws"
+                "Click for a point · drag to select · drag a line or its ◇ to move or bend it · ⌥-click deletes · ⌘A picks the lane · ⌘C ⌘V · right-click for shapes · the pencil draws"
             }
             _ => {
-                "Drag to move · ⌥-drag to copy · ⌥⇧-drag for an alias · drag an edge to trim · drag the top of its end to loop · ⌥-drag its end to time-stretch · ⇧T stretches audio to the tempo"
+                "Drag to move · ⌥-drag to copy · ⌥⇧-drag for an alias · drag an edge to trim · drag the top of its end to loop · ⌥-drag its end to time-stretch · ⇧T stretches audio to the tempo · ? every shortcut"
             }
         };
         // How to work the arrangement, only over the arrangement.
@@ -92,9 +95,10 @@ impl Workspace {
             format!("{khz} kHz")
         };
         // Red for a few seconds after a buffer came too late, which is a dropout.
-        let late = self
-            .load_late
-            .is_some_and(|t| t.elapsed() < Duration::from_secs(3));
+        let late = self.settings.late_warning
+            && self
+                .load_late
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(3));
         let agent = self
             .agent
             .last()
@@ -117,8 +121,10 @@ impl Workspace {
                     .min_w(px(0.))
                     .whitespace_nowrap()
                     .overflow_hidden()
+                    .text_ellipsis()
                     .text_color(rgb(color))
-                    .child(text),
+                    // One line however long: an error's path or a second line never spills.
+                    .child(text.lines().map(str::trim).collect::<Vec<_>>().join(" ")),
             )
             .when_some(agent, |d, a| {
                 d.child(

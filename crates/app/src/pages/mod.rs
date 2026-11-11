@@ -3,4 +3,5 @@
 pub mod genres;
 pub mod projects;
 pub mod settings;
+pub mod studio;
 pub mod study;

@@ -129,7 +129,7 @@ pub(crate) fn decode(path: &Path) -> Result<(Vec<Vec<f32>>, f64), String> {
 /// Audio at `from` Hz, at `to` Hz, band-limited: a Blackman-windowed sinc, 32 taps a side, its
 /// cutoff a little under the lower Nyquist, so going down doesn't alias and going up doesn't
 /// image. The filter is worked out once, at 512 points between samples, and read between them.
-pub(crate) fn resample(samples: &[f32], from: f64, to: f64) -> Vec<f32> {
+pub fn resample(samples: &[f32], from: f64, to: f64) -> Vec<f32> {
     if from == to || samples.is_empty() {
         return samples.to_vec();
     }

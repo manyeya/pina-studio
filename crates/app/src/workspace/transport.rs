@@ -7,7 +7,10 @@ const LOAD_SHOWN: Duration = Duration::from_millis(500);
 
 impl Workspace {
     pub fn playhead(&self) -> u64 {
-        self.session.project.ticks(self.player.position())
+        // The player's samples, counted at its rate: not the song's when they differ.
+        self.session
+            .project
+            .ticks(self.player.position(), self.player.rate())
     }
 
     /// Moves the playhead to the grid line nearest a window x position.
@@ -206,6 +209,14 @@ impl Workspace {
         }
         if load >= 1.0 {
             self.load_late = Some(Instant::now());
+            self.lates.push_back(Instant::now());
+            while self
+                .lates
+                .front()
+                .is_some_and(|t| t.elapsed() > Duration::from_secs(600))
+            {
+                self.lates.pop_front();
+            }
         }
         if self.load_read.elapsed() >= LOAD_SHOWN && self.load_reads > 0 {
             self.load = self.load_sum / self.load_reads as f32;

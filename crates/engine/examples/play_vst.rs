@@ -109,12 +109,14 @@ fn main() {
                 offset: 0,
                 pitch,
                 velocity: 0.8,
+                release: 0.0,
             });
             thread::sleep(Duration::from_millis(180));
             let _ = notes_tx.push(Note {
                 offset: 0,
                 pitch,
                 velocity: 0.0,
+                release: 0.0,
             });
             thread::sleep(Duration::from_millis(20));
             println!(

@@ -533,7 +533,15 @@ fn open(dir: &Path) -> Result<(), String> {
         pages::projects::opened(dir);
     }
     let setup = pages::settings::Settings::load().audio;
-    let player = Player::start(&session.project, dir, &setup)?;
+    // Audio as it was set, else as the system has it: settings for a device that's gone, or
+    // can't do what was picked, never stop Pina opening.
+    let player = match Player::start(&session.project, dir, &setup) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("audio as set: {e}; the system's output instead");
+            Player::start(&session.project, dir, &Default::default())?
+        }
+    };
     gpui_platform::application().run(move |cx: &mut App| {
         if let Err(e) = cx.text_system().add_fonts(ui::theme::fonts()) {
             eprintln!("fonts: {e}");

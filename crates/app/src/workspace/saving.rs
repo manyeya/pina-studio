@@ -129,8 +129,12 @@ impl Workspace {
             self.plugins = Some(Vec::new());
             return;
         };
+        // The system's folders, and any Settings adds.
+        let extra = self.settings.plugin_folders.clone();
         let found = cx.background_spawn(async move {
-            scan::scan(&exe, &scan::everything(), &scan::cache_file())
+            let mut bundles = scan::everything();
+            bundles.extend(scan::bundles(&extra));
+            scan::scan(&exe, &bundles, &scan::cache_file())
         });
         cx.spawn(async move |this, cx| {
             let plugins = found.await;
