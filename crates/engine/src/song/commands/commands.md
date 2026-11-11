@@ -15,7 +15,13 @@ order `pina show` lists them. Levels are in dB (0 is unity, -144 silent); pan is
 (right). A note is `{"start": ticks from the region's start, "length": ticks, "pitch": 0-127,
 "velocity": 1-127}`; middle C is 60. A note may also have `"chance"` (1-100, the percent of times
 it plays; 100 if left out), `"spread"` (0-127, how far its velocity strays either way each time)
-and `"muted": true` (kept but not played). An instrument is `"synth"` (the built-in sine) or
+and `"muted": true` (kept but not played), `"release"` (1-127, how fast it's let go; 64 if left
+out), and `"expression"`, its own MPE over its length: `{"pitch": [{"at": 0, "value": -2,
+"curve": -0.5}, {"at": 240, "value": 0}], "slide": [...], "press": [...]}`, each a line of
+points `at` ticks into the note: `pitch` in semitones off the note (-48 to 48), `slide` and
+`press` 0-1; `curve` (-1 to 1, 0 straight) bows the line on to the next point, below 0 quick
+then slow. Before its first point a line holds that point's value, after its last the last's.
+It goes with the note: moved, copied, transposed. An instrument is `"synth"` (the built-in sine) or
 `"drums"` (the built-in kit, on the General MIDI drum notes) or a plugin,
 `{"plugin": {"format": "clap", "path": "/path/to/Plugin.clap", "class": "Plugin Name", "uid": "…"}}`,
 exactly as `pina plugins` lists it (`format` is `vst3`, the default, `clap`, `vst2` or `au`;
@@ -97,7 +103,11 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   `transposer` (`semitones`), `velocity` (`scale` percent, `add`, `min`, `max`),
   `note_repeater` (`count`, `rate`, `decay` 0-1, `transpose` per repeat), `randomizer` (`pitch`
   and `velocity` ranges either way, `chance` percent), `modifier` (controller `from` sent as
-  `to`, 0 drops it, `scale` percent).
+  `to`, 0 drops it, `scale` percent), `mpe_shaper` (each note's own expression reshaped: `bend`
+  percent, `round` 0-100 drawing bends to the nearest semitone, `slide` and `press` each
+  `{"curve": -100 late to 100 early, "low": 0-100, "high": 0-100}`, `swap` playing slide as
+  pressure and pressure as slide). A note's own expression follows it through the effects that
+  move it (transposed, quantized, made a chord).
 - `set_track` `{"track": 1, "name": "Sub", "volume_db": -6, "pan": -0.3, "mute": false, "solo": false}`:
   any of them. `"pan_mode"`: `"balance"` (the default: turns one side down),
   `"stereo"` (places each side, `"spread"` -1 to 1 apart: 1 as recorded, 0 both in the middle,
@@ -108,6 +118,31 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   goes back to what it plays saying: drums warm, bass violet, keys teal, vocals pink, each track a
   shade of its family). Icons: kick, snare, clap, hihat, cymbal, tom, drums, sticks, conga, shaker, tambourine, cowbell, 808, bass, synth-bass, piano, keys, organ, chords, guitar, guitar-electric, strings, harp, brass, sax, flute, synth, lead, arp, pluck, pad, bells, mallets, vocals, mic, choir, chop, fx, riser, impact, reverse, vinyl, texture, foley, audio, midi, sampler, loop, reference, click, star, heart, flame, bolt.
 - `set_instrument` `{"track": 1, "instrument": {"plugin": {"path": "…", "class": "…"}}}`
+- `set_bloom` `{"track": 2, "plant": "pluck", "luck": 7, "settings": {"keys": "octave", "params": {"growth": 0.2, "branch5_length": 0.8, "gene_cutoff": 0.6}}}`:
+  Bloom, Pina Studio's grown synth, on a track: a seed of 48 genes and twelve branches growing out
+  of it, each its own variation of the seed, further from it the longer it grows. `plant` draws a
+  new seed of a kind (any; bass, sub, reese, acid; keys, organ, bell, mallet; pluck, harp,
+  strings, stab; lead, brass, flute, choir; pad, drone, atmosphere, swell; kick, snare, hat, perc;
+  texture, riser, zap, glitch; `luck` picks which); `replant: true` makes the `chosen` branch the seed. `settings` is laid over it, field by
+  field:
+  - `params`, 0 to 1 unless said: `growth` (every branch grown further), `wildness` (how far they
+    stray), `atonality` (whether tuning genes keep to musical steps), `effect` (its echo and space),
+    `tune` (semitones), `volume` (dB), `release` (-1 to 1, every branch's), `glide` (ms),
+    `wheel_growth`, `slide_growth` (how far the mod wheel and each note's slide grow it),
+    `branch1_length` to `branch12_length`, `branch1_bend` to `branch12_bend` (-1 to 1), and
+    `gene_<id>` for each gene of the seed: attack, decay, sustain, release, contour_attack,
+    contour_decay, contour_pitch, contour_filter, contour_fm, lfo_rate, lfo_shape, lfo_pitch,
+    lfo_filter, lfo_amp, lfo_pan, lfo_rise, a_wave, a_table, b_wave, b_table, b_ratio, b_detune,
+    balance, fm, feedback, noise, noise_color, pitch, unison, fold, ring, sub, cutoff, resonance,
+    filter_mode, key_track, velocity_filter, velocity_level, drive, resonator, pan, width, tilt,
+    crush, echo, space, echo_time, space_size.
+  - `keys`: which branch a note plays: octave (C plays branch 1, C♯ branch 2…), spread (twelve
+    zones up the keyboard), velocity, layer (the branches in `layer`, bits, at once), cycle (each
+    note the next grown branch), one (the `chosen` branch everywhere).
+  - `locks` (bits: genes no branch changes), `voicing` (`polyphony`, `mono`, `legato`), `sync` (its
+    LFO in time), `quality` (draft, good, best).
+  Automate it with `set_automation`, `param` "synth" and `knob` a param's id or name: growth over
+  a section makes a sound evolve as it plays.
 - `set_synth` `{"track": 1, "patch": "Warm Pad", "settings": {"params": {"filter1_cutoff": 1800, "env1_attack": 600}, "filters": ["ladder", "none"]}}`:
   Synth-0, Pina Studio's synth, on a track. `patch` is one of Init, Sub Bass, Saw Bass, Analog Bass, Reese,
   Acid, Growl, Wobble, Supersaw, Trance Lead, Square Lead, Soft Lead, Ladder Lead, Sync Lead, Warm
@@ -135,8 +170,15 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   - `routes`, the matrix, each `{"source": {"env": 1}, "dest": {"param": 75}, "depth": 0.4}`:
     `source` is `{"env": 0-3}`, `{"lfo": 0-7}`, `{"macro": 0-7}`, `velocity`, `note`, `wheel`,
     `pressure`, `bend` or `random`; `depth` is a share of the knob's travel, -1 to 1; `by` another
-    source that scales it. `dest` is `{"param": n}`, or `{"effect": [place, knob]}` to ride an effect
-    on the track, so its LFO can move the reverb.
+    source that scales it. `dest` is `{"param": n}`, `{"rack": [place, knob]}` to ride one of its
+    own effects' knobs, or `{"effect": [place, knob]}` to ride an effect on the track, so its LFO
+    can move the reverb.
+  - `fx`, its own effects rack, up to 8, in the order they run (after its voices, before the
+    track's own effects); part of its sound, so a patch brings its own (a pad its ensemble and
+    hall). Each is an effect as `set_track` stacks it (`{"reverb": {...}}`, `{"sat": {...}}`,
+    `{"motion": {...}}`, `{"delay": {...}}`, `{"filter": {...}}`, `{"eq": {...}}`, ...); the
+    list given takes the place of the rack. A knob of one is automated as `{"rack": [place,
+    knob]}`, its knob by its place in the effect's table.
   - `lfos`: eight, each `{"wave": "sine", "beats": 1, "retrigger": true, "one_shot": false}`; `wave`
     is `sine`, `triangle`, `saw_up`, `saw_down`, `square`, `hold`, `smooth`, `lorenz`, `rossler` or
     `{"drawn": [[0, 0], [0.5, 1], [1, 0]]}`; `beats` a cycle in time with the song.
@@ -188,8 +230,11 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   is the instrument's range), `aftertouch` (`value` 0-127), `poly_pressure` (`pitch`, `value`
   0-127), and `expression` for one sounding note (`pitch`, `kind`, `value`): `tuning` in
   semitones (an 808 glide), `volume` (gain, 1 as played), `pan` (-1 to 1), `brightness`,
-  `vibrato`, `expression` (0 to 1). Plugins get them all (VST3 through the plugin's MIDI mapping;
-  Audio Units and VST2 have no per-note expression); the built-in sampler follows pitch bend
+  `vibrato`, `expression` (0 to 1). A note's own `tuning`, `brightness` and `poly_pressure` go
+  onto the note sounding at that pitch then (as its `expression`); better to write them there.
+  Plugins get them all (VST3 and CLAP as note expression; an Audio Unit or VST2 with `"mpe":
+  true` on its plugin, each note on a channel of its own, `"mpe_zone": {"upper": false,
+  "channels": 15, "bend": 48}` the zone it hears); the built-in sampler follows pitch bend
   (two semitones either way) and each note's `tuning` and `volume`, gliding smoothly, so a few
   tuning moves make an 808 slide. A region starting part-way, or looping, starts with each
   controller where it stood.
@@ -526,7 +571,11 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
   `legato`, `chop` (`grid`), `arpeggiate` (`grid`), `strum` (`ticks` between strings), `reverse`,
   `flip` (pitches upside down), `glue` (touching notes of a pitch made one), `transpose`
   (`semitones`), `velocity` (`by`) or `dynamics` (`percent` of their spread, 100 as they are, and
-  `by`).
+  `by`), `express` (a shape of MPE on each note in place of what it had of that kind:
+  `gesture` scoop, fall, bend_up, bend_down, vibrato, glide (into the next note's pitch), open,
+  close, wobble (slide), swell, fade, accent, tremolo (pressure); `amount` percent, 100 as it
+  usually goes; `rate` times a beat for the waves) or `unexpress` (`dim` pitch, slide or press,
+  or left out for all of a note's own expression).
 - `add_marker` `{"tick": 15360, "name": "Chorus"}`: names a place in the song; answers with its
   index, markers being numbered in time order.
 - `set_marker` `{"marker": 0, "name": "Verse 2", "tick": 7680}`, `delete_marker` `{"marker": 0}`

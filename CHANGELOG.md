@@ -11,6 +11,89 @@ first for changes that break songs or commands made before.
 
 ### Changed
 
+- Opening a song shows a loading screen while it takes more than a moment: Pina's mark with its
+  steps playing, the song's name, a bar filling as each track's instrument and plugins load (and
+  what's loading now), and a cell for every track, in its colour, lighting up as it's ready. Its
+  audio files are read on a thread of their own while the plugins load, and the window keeps
+  drawing between tracks rather than freezing till the whole song is in. The screen fades out
+  over the song once it's open; a song that opens quickly never shows it.
+- An audio region's end drags no further than its audio goes, as in Logic: dragging its bottom
+  right corner on stops where the file ends instead of leaving an empty region after it (loop it
+  from the top of its end for more).
+
+- Plugins as MIDI FX: Scaler, MIDI-processing Audio Units, CLAP note effects and VST3 event
+  effects go in a track's MIDI FX chain, before, after or between the built-in ones; what each
+  hears is what's above it, and the notes it plays go on down the chain to the instrument (live
+  and in a bounce). The MIDI FX window lists the MIDI effects found, and Any Plugin… searches
+  every instrument too, for those (as Scaler is) that play notes out. A plugin slot opens its
+  own window from the chain, keeps its settings when the chain changes, and saves them with the
+  song. MIDI effect Audio Units no longer show among audio effects. The window's kind tiles grow to
+  fit what they say.
+- Tracks move by dragging their header up or down: a line shows where it goes, a stack's tracks
+  stay in their stack and others stay out of it; one undo puts it back.
+- The snap has every grid Logic has: Bar, Beat, 1/2 to 1/64 notes, 1/4 to 1/32 triplets, dotted
+  1/8 and 1/16, and Off (ticks); Smart reaches 1/8 and 1/32 as you zoom in. Snap Relative moves
+  regions by the grid while keeping how far off it they were. The lanes draw the snap's division
+  (finer than the beats) where there's room.
+- Automation: a click on the line puts a point on it there (it used to grab the line, so points
+  needed the pencil); a drag still moves the line. ⌃⇧-drag bends a line, as Logic's does, and each
+  line's bend handle shows faintly without hovering. Every lane has a Curves button: S-curves to
+  smooth every line, slow or fast starts, straight lines, steps, smoothing out bumps and thinning,
+  on the points picked or, with none, the whole lane (its right-click menu has S-curves and
+  straightening too).
+- Convert to Pattern Region keeps the region as it plays: the step its notes sit on (1/16, 1/16
+  triplets, 1/32 or 1/32 triplets), all of its length (up to sixteen bars), or the fewest bars
+  that loop through it unchanged; before, it took four bars at most and looped them, losing the
+  rest. Pattern regions draw as steps in the arrangement: a row a sound, a cell a step, lit by
+  velocity, held steps joined.
+- MIDI FX open in a window of their own, built like the compressor's and the delay's: the chain
+  down the left (each with its switch, what it's set to, moved up or down, taken out), the one
+  picked on the right, drawn as it plays (the arpeggio over two bars, the chord on a keyboard, the
+  scale's notes on an octave whose keys pick its root, the chord before and after transposing, the
+  velocity curve, the repeats fading, sixteen randomized notes, the controller sent on, the MPE
+  shapes), its numbers as dials (drag, ⌘-click to reset) and its choices as button grids. Adding
+  one picks from tiles saying what each does. Hear It plays the song key's chord through them for
+  two bars. The window moves by its top and stays open while you work. The strip's MIDI FX "+"
+  sits in the middle, as the effects' does.
+- Pina takes Logic Pro's default keys, wherever it does the same thing, so Logic's hands work
+  here. Keys go to the area clicked last, the tracks or the editor (whose frame lights while it
+  has them), and Tab passes them across, as Logic's key focus does; before, the piano roll took
+  every arrow while it was open. In the piano roll: ← → pick the note before or after (⇧ adds
+  it), ⌥← ⌥→ move notes by the nudge value (⌃⌥← ⌃⌥→ a quarter step, as ⌥ did), ⌥⇧← ⌥⇧→ change
+  their length, ⌥↑ ⌥↓ and ⌥⇧↑ ⌥⇧↓ transpose, = and - change velocity by 1 (⇧ by 10), ⌘T splits
+  at the playhead, ⌘J joins, ⌘R repeats, ⌘[ ⌘] trim to the playhead, ; and ⇧; move to it, ⌥D
+  takes out doubled notes, ⌃M mutes, ⇧Home ⇧End pick the first and last. In the tracks: ⇧← ⇧→
+  add the region before or after, ⇧Home ⇧End the first and last, ⌥⇧← ⌥⇧→ resize, ⇧; to the
+  playhead then the next, ⌥⌘T split at the cycle, \ remove overlaps, ⇧\ trim to the next, ⌘\
+  crop to the cycle, ⌃\ fit MIDI to its notes in bars, ⌥⌘Q dequantize, ⇧N rename, ⌥⇧N name
+  after the track, ⌃A alias to copy, ⌥⇧A pick its aliases, ⌃⇧T move to the selected track, J
+  and ⌃L for join and loop, ⌥⌘A ⌥⌘S new audio and instrument tracks, ⌃⌘→ ⌃⌘← open and close a
+  stack, ⌥⌘↓ ⌥⌘↑ ⌥⌘Z ⌥⌘⌫ the track's own height, ⌃⇧M unmute all, ⌥S unsolo all, and ⌃⌘X ⌃⌘I
+  ⌃⌘R cut, insert silence or repeat between the locators. Both: Logic's Select keys (⇧F, ⌃⇧F,
+  ⇧L, ⇧O, ⇧E, ⇧S, ⇧P, ⇧M, ⇧I, ⇧D). Everywhere: ⌘U, ⌃⇧, ⌃⇧. ⌃Home ⌃End, ⇧⌘, ⇧⌘. ⌥⇧⌘, ⌥⇧⌘.
+  for the cycle and selection, ⌥⇧' ⇧' ⌥⌫ for markers, ⇧K count-in, ⌘. throws a recording away,
+  ` follows the playhead, ⇧` scrolls to the selection, ⌃⇧Z zooms to the cycle, ⌥⇟ ⌥⇞ the next
+  tool, ⌃⌥D ⌃⌥B ⌃⌥M ⌃⌥T the nudge value, B the Browser, ⌥K the shortcuts, ⌘2 ⌘4 ⌘5, ⌃⌘F full
+  screen, ⌘M, ⌃⌘M, ⌘H, ⌥⌘H, ⇧⌘N a new empty song and ⇧⌘E stems. ⌘D now adds a track with the
+  selected one's settings and no regions (as Logic's); ⌥⇧⌘D duplicates it with them. The
+  Plugins page moved to ⌃⌘P (Logic's plug-in search) and the sample library's page to ⇧B, their
+  old keys now Logic's. With the mouse, as Logic: ⌃-drag notes or regions finely (⌃⇧ or ⌃⌥ by
+  the tick), ⇧ lines up the dragged notes' ends and ⌥⇧ makes them as long, ⌃⌘-drag a note for
+  velocity, ⌃⇧-click writes off the grid, ⇧-click the roll's keys adds their notes, ⌥-click Mute
+  or Solo for that track alone and ⌘-click for every track, ⇧-click a lane for the playhead,
+  ⇧-double-click a region for every region on its track, ⇧-click the cycle to stretch it. The
+  shortcut sheet lists them all.
+- The Songs page is redesigned. A new song's name, tempo, key and time sit in one row along the
+  top, with Open folder, Study a song and Back to the open song beside them, and the templates
+  below as tiles that show their tracks, each with a Create button. Under them, every song as a
+  list (cover, name, tempo, key, time, tracks, length, when edited, grouped Today, This week,
+  This month, Earlier) or as a grid of covers; Pina remembers which. Songs can be searched,
+  filtered by tempo, key and time, and sorted by when they were edited, name, tempo or length
+  (or by clicking a column's name). Each song's ⋯ and Trash are always shown, and its box picks
+  it. Covers draw the arrangement across their whole height, painted at once, so a long library
+  stays quick.
+- A long message in the status bar stays on one line and ends in "…" instead of running across
+  the bar.
 - The Synth is now called Synth-0. Songs that use it open as they did, and the `set_synth` command
   and its settings are unchanged; it takes macro names now too.
 - Song Study knows what a file is before it says anything about it: a full song, a loop or a
@@ -44,12 +127,68 @@ first for changes that break songs or commands made before.
 
 ### Fixed
 
+- Audio regions drew their waveforms squeezed and cut short (to 92% of where they play, at 44.1
+  kHz against a 48 kHz song) whenever the sound output ran at another rate than the song, as
+  Bluetooth headphones can: a loop looked to end early, an empty gap before its next repeat. It
+  played right all along; it now draws as it plays.
+- Time-stretching an audio loop that follows the song's tempo (⌥-dragging its end) stretched it
+  the wrong way: dragged to twice as long, the region doubled but its audio played twice as fast,
+  filling a quarter of it. It now slows to fill the region (and speeds up to fit a shorter one).
+- A loop that follows the song's tempo no longer says "Stretched ×1.01" (a stretch it kept from
+  before, which it doesn't use).
+- A menu opened from a window (the MIDI FX window's Any Plugin…, a plugin window's, the MPE
+  window's) showed behind it; menus now show over every window.
+
+- The sound can be moved off the speakers to Bluetooth headphones: an output that can't play the
+  engine's rate gets the engine started again at one it can, the song and playhead as they were.
+  With the system output picked, Pina follows macOS when it moves to another output, and goes back
+  to an output that was picked when it's plugged in again.
+- Recording from an input that can't run at the song's rate (a headset's microphone) records at the
+  input's own rate instead of failing, and the take is placed at the right length.
+
+- A click on one of several notes picked picks it alone (⇧ still adds, a drag still moves them
+  all), so a tool or shape goes on that note; before, it stayed one of the group, and after
+  Generate or Chords had written (which picks what it wrote) a shape went on everything.
+- The editor's tabs fit beside its controls: Steps, Drums and Loops on their tabs (their full
+  names in Settings).
+- The mixer's channel panel names a plugin instrument's real format (Audio Unit, VST2, CLAP); it
+  called every one VST3.
 - Every effect stacked on a channel shows on its mixer strip. The strips' effect rows grow to fit
   the busiest channel (up to twelve), and past that a strip scrolls them; before, anything past
   six hid behind a small "more" label, so a second or third reverb looked as if it hadn't gone on.
-- The built-in effects' windows (Compressor, Saturator, Limiter, Reverb, Delay and the rest) and
-  Synth-0's window can be made bigger or smaller by their corner, which now shows a grip; the
-  Channel EQ's corner, which already worked, shows it too.
+- The built-in effects' windows (Compressor, Saturator, Limiter, Reverb, Delay and the rest), the
+  Channel EQ and Synth-0's window grow and shrink as a whole by their corner, which shows a grip:
+  everything in them (type, knobs, pictures, gaps) scales together and nothing moves about inside.
+  Before, a bigger window spread its controls apart or cut them off.
+- The playhead is on the right bar when Pina runs at another rate than the song (Bluetooth
+  headphones at 44.1 kHz playing a 48 kHz song, or 96 kHz picked in Settings). It counted the
+  engine's samples at the song's rate, so it ran 8% behind at 44.1 kHz, falling further back every
+  bar and badly out of place after each loop, and twice as fast at 96 kHz. Notes recorded and
+  automation written while playing land where they were played for the same reason, and the EQ's
+  analyzer and Synth-0's spectrum show each frequency where it is (they were 8% off).
+- The playhead shows what's being heard. It used to run ahead of the sound by the output's delay
+  and move in buffer-sized jumps; it now follows when each block reaches the speakers, so it sits
+  on the beat at any buffer size, counting the stream's own latency too (about 12 ms on a
+  MacBook's speakers, left out before). Pressing Play or clicking somewhere while playing no longer
+  flashes the playhead back to where the last play was: it waits where play starts until that's
+  heard. Looping the cycle no longer runs it past the cycle's end. Stop leaves it where the sound
+  stopped.
+- Bluetooth headphones say they're less late than they are, so Settings › Audio has Playhead in
+  time: how much later than it says the output's really heard, picked, typed, or measured by
+  tapping along to the click (Space or the pad, ten taps; taps that don't agree are asked for
+  again). It's kept for each output, a headset on a call apart from it off one.
+- Settings › Audio scrolls: anything below the window was out of reach. Device rows sit inside
+  their cards' rounded corners.
+- Settings › Audio no longer opens a Bluetooth headset's microphone for its level meter. Opening it
+  turns the headphones down to call quality (16 kHz, one channel, no highs or lows) for everything,
+  which made notes sound thin and high ones vanish, and made Pina refuse the headphones ("can't run
+  at 16000 Hz"). A headset on a call can now be played through (an output of one channel gets both
+  sides), the page says it's on a call and why, and Pina goes back to the headphones' full rate by
+  itself when the microphone's let go.
+- Typing a name (a sound saved in Synth-0, a pack, any field) types it. Before, the letters played
+  notes or toggled views while the field had the keyboard.
+- ⌘W closes the window in front (an effect's, the EQ, Synth-0's, the shortcuts) instead of
+  quitting Pina; with none open it quits as before.
 - Synth-0's close button and the arrows either side of its patch's name show again.
 - A slot's picker offers a second Channel EQ, Compressor, Saturator or Limiter on a channel that
   has one, and the other built-ins on buses and the master too; it used to hide them.
@@ -197,34 +336,151 @@ first for changes that break songs or commands made before.
 
 ### Added
 
-- The piano roll is rebuilt around a panel of four tabs. Notes shows the picked notes' pitch,
-  start, length, velocity, velocity range and chance (drag a value, or step it), with mute (0)
+- Bloom, a new built-in instrument: sounds grown from a seed. A seed is 48 genes, each made to
+  sound good however it's changed (envelopes, a contour, an LFO, two wavetable oscillators with
+  FM, feedback, ring, fold, sub and noise, a filter swept from low- to high-pass, a resonator tuned
+  to the note, crush, tilt, and an echo and a space the whole plant shares). Twelve branches grow
+  out of it, one for each note of the octave: drag a flower out and its sound strays from the
+  seed, sideways and it strays another way at the same distance, and the branch's note plays
+  while you drag. The Growth knob, the mod wheel and each MPE note's own slide grow every branch
+  further, live under a held note. Keys can play a branch per note, per zone, per velocity, a
+  layer of branches at once, the next branch each note, or one branch everywhere.
+  Make any branch the seed, clone it to all, cross two branches into a child, nudge the seed, lock
+  genes so they never stray, or steer what one branch grows a gene to. Every seed it grew from is
+  kept, to go back to. The Strand page shows every gene down a turning double helix, with knobs
+  for the seed's genes and for a branch's own steering. Grow makes a seed sound like a recording:
+  pick up to two seconds, and four strands, each breeding seeds of its own kind on a core of its
+  own, find closer and closer ones (about 80% alike, in a few seconds, on sounds it can make); click
+  one to hear it, plant the one you like. Everything is on this machine. Forty factory seeds and
+  every plant you save are on its Sounds page, searched and filtered by kind. The garden is drawn
+  from the plant's own genes: each flower's petals from its brightness and attack, its breathing
+  from its LFO, sap running up the branches that play; it rests when nothing's happening. Every
+  control, branch and gene of the seed is automatable and modulatable. Agents plant and shape it
+  with `set_bloom`.
+  Seeds come in 29 kinds in seven families (low end, keys and bells, plucked and bowed, leads and
+  voices, pads and spaces, drums, effects), picked from one panel over the garden. Its Sounds
+  page has 232 factory seeds, eight of each kind, each card a flower drawn from its genes and a
+  line saying what it's like (worked out from its genes, so it's true), sorted newest or by
+  name, narrowed by where they're from, a family or a kind, or one picked at random. Grow takes
+  up to four recordings at once (dropped from the Finder or the Browser, or chosen): different
+  notes, or the same played softer and harder, and the seed grown to match them all. Bloom's
+  window draws its own frames: while the garden moves, nothing else in Pina Studio is drawn
+  again.
+- Synth-0 has effects of its own, up to eight, part of its sound and kept with it. The Effects page
+  shows them as a chain across the top (its voices, each effect, the track): each a tile with its
+  switch, a little picture of what it does, what it's set to, what rides it and its mix, dragged
+  to change the order, and a switch for the whole rack. Under it the effect picked is shown as the
+  mixer's own editor shows it, its picture to drag, every control and its meters (the EQ is the
+  whole EQ, a click on it makes a band), with the sources that can ride its knobs and those that
+  do. Racks can be saved and loaded by name, a factory sound's too.
+- Add an effect opens a browser of all 37: searched by name or what they sound like (warm, wide,
+  shimmer), narrowed to drive, motion, space, shape or those added lately, each drawn and said in
+  a line, and heard in the sound as it plays when pointed at.
+- An LFO's rate can be any length from a sixty-fourth to 32 bars, straight, triplet or dotted, or
+  free from 0.01 to 200 Hz, or any length typed (3/16, 1/8 t, 2 bars, 4 hz). Switching between in
+  time and free keeps its speed.
+- Notes are named with middle C (MIDI 60) as C4, as most people learn it: the C3 below it now
+  sounds as low as a C3 should, and the top note is G9. Settings › Editing names it C3 or C5
+  instead, as some apps do.
+- Picked automation points edit as a group. Two or more get a box round them: drag its left or
+  right edge to stretch or squeeze them in time (on the grid unless ⇧, none passing a point not
+  picked), its top or bottom to spread or flatten their values, with ⌥ about the middle. ← →
+  move them a grid step (⌥ a quarter of one), ↑ ↓ raise or lower them (⇧ ten times as far), ⌘D
+  puts them again straight after themselves, ⌘A picks the whole lane, Escape lets go. Paste and
+  duplicate pick only what they put, not the points that keep the line either side.
+- A sheet of every keyboard shortcut (⌘/ or ?), grouped by what they work on and searched by
+  what they do or by their keys ("⌘D" finds every duplicate). It reads the keys from the app
+  itself, so it's never out of date. New keys: Home and End to the start and end, ⌘= and ⌘- to
+  zoom, ⌘A for every region (or a lane's points), Escape back to the pointer and then nothing
+  picked, and T then a letter for a tool (T T pointer, T P pencil, T I scissors, T E eraser, T X
+  text, T G glue, T S solo, T M mute, T Z zoom, T F fade, T R stretch). A menu item showing a
+  letter is picked by that letter.
+- The Studio Agent works Synth-0's sounds with `synth_sounds`: lists and searches the library (by
+  words, part or pack), saves a track's sound into it with a name, part, words, a line and a pack,
+  loads one onto a track, makes packs and moves sounds between them. With the song open in Pina
+  the window and its library follow at once.
+- Synth-0's sounds are a library, a page of the window: the factory's, those saved and packs of
+  them, searched and narrowed by part and by what they sound like, liked and played lately, the one
+  picked shown whole. Save keeps a sound with its name, part, words, a line about it and its pack
+  (the factory's stay as they are); the title says when it's changed, compares it with how it was
+  saved and takes it back. Packs are made, named, given a cover, shared as one `.pinapack` file and
+  brought in (or dropped anywhere in Pina) as packs of their own. A sound taken out can be brought
+  back.
+- Settings is grouped (studio, working, library) and searched. Audio shows what's playing (through
+  what, the rate, the buffer in ms, the engine's load, buffers late in the last ten minutes), a
+  test tone each side, every output and input with the channels and rates it has and the inputs'
+  levels live, the rate to run at, the buffer with its latency, how far takes move back for the
+  input's lateness, which output pair the song plays out of, and the cores making sound.
+- Recording has a page: 16, 24 or 32-bit float takes, a count in of 1, 2 or 4 bars, and the click's
+  sound (click, wood, beep, tick), level, beats, eighths or sixteenths, the bar louder, and heard
+  only while recording. Plugins has a page of its folders, what's found and any folder to add;
+  Sounds & packs the name on what's shared; Saving & files how often a recovery copy's kept.
+
+- The piano roll is rebuilt around a panel of five tabs. Notes shows the picked notes' pitch,
+  start, length, velocity, velocity range, chance and release (drag a value, or step it), with mute (0)
   and picking the top or bottom note of each chord, or the rest. Transform has its tools and
   more: staccato, flam, grace note, connect (passing notes between notes), twice and half speed,
   crescendo and fade, recombine (pitches, velocities or lengths rotated in time order, or
-  shuffled) and into the key. Generate writes a rhythm spread evenly (3 hits in 8, and so on), a
-  melody grown from a seed in the key, or one following a shape (rise, fall, arch, valley, wave).
-  Harmony shows the key's chords and those it borrows (a click plays one and adds it), and
-  progressions by mood; the chords picked are voiced (voice-led, close, open or spread) and
-  played (held, strummed, arpeggiated, pulsed, on the off-beats, in a rhythm or broken), a bass
-  under them if asked, and written into the region.
+  shuffled) and into the key. Generate shows one writer at a time: a rhythm spread evenly (3
+  hits in 8, and so on, its steps drawn, named when it's a known one: tresillo, cinquillo, bossa
+  nova, samba, bell, four on the floor), a melody grown from a seed in the key, or one following
+  a shape (rise, fall, arch, valley, wave, each drawn). Chords shows the key's chords, coloured
+  by what they do (at rest, leaning away, pulling home), and those it borrows (a click plays one
+  and adds it); or progressions by mood, each to hear before taking. The chords picked stay at
+  the tab's foot with how they're voiced (voice-led, close, open or spread) and played (held,
+  strummed, arpeggiated, pulsed, on the off-beats, in a rhythm or broken), a bass under them if
+  asked, and the button that writes them; each writing tab says what it writes over, and keeps
+  replace or add and its button in sight. The panel's tabs never spill past it: shorter names
+  when it's narrow.
 - Each note has a chance of playing (rolled every time it comes round, so a loop varies), a
   velocity range it strays within, and can be muted (drawn hollow, kept, not played). The lane
   under the notes has Chance as well as Velocity, and shows each note's range. The agent writes
   them too (`chance`, `spread`, `muted`).
 - The ruler names the chords the notes play, beat by beat.
-- MPE: each note's own pitch, slide and pressure. Pitch, Slide and Press lanes draw them on the
-  notes they cross (the picked ones, if any), and a note bent shows its bend as a line over it.
-  An MPE controller plays and records them: each note's channel read as that note's. Synth-0
-  follows them voice by voice (its matrix has Slide as a source); VST3 and CLAP instruments hear
-  them as note expression; an Audio Unit or VST2 hears them with "MPE: a channel per note" on
-  (its slot's menu, or the roll's More), each note on a MIDI channel of its own.
+- MPE: each note's own pitch, slide and pressure, kept on the note as lines of points, so they go
+  wherever it goes: moved, copied, pasted, transposed, split, stretched. The Pitch, Slide and
+  Press lanes edit them: a click adds a point, a drag draws (thinned to the points that shape it
+  when let go, over every note it crosses, or the picked ones), a point drags, a double-click
+  takes it out, ⌥ on a line bows it into a curve, ⌥-drag rubs out, ⇧-drag scales the notes'
+  lines; the lane shows a scale and every note's line, the picked ones bright. With Pitch
+  showing, a note bends right where it is in the grid, dragged up or down from its middle, its
+  points there to take hold of; bends land on whole semitones (⌘ for between) and a readout
+  says how far. The roll's new MPE tab writes shapes on the picked notes (or all) with a click:
+  scoop, fall, bend up or down, vibrato, glide into the next note, a slide opening, closing or
+  wobbling, a pressure swell, fade, accent or tremolo, as far and as fast as asked; copies one
+  note's expression to others (stretched to each one's length), clears it, and says whether the
+  track's instrument hears it, with a button to make it if not. The agent writes it on notes
+  (`expression`) and shapes it (`edit_notes` `express`, `unexpress`).
+- An MPE controller plays and records each note's own pitch, slide and pressure, and Settings
+  has a MIDI page: each controller's MPE on (found from how it plays, or its own MPE message,
+  lower or upper zone) or off, and how far its notes bend until it says. Synth-0 follows them
+  voice by voice (its matrix has Slide as a source); VST3 and CLAP instruments hear them as note
+  expression; an Audio Unit or VST2 with MPE on (its slot's menu, the roll's More, or the MPE
+  tab) hears each note on a channel of its own, its MPE card setting the zone, how many note
+  channels and the bend range to match the instrument's.
+- Release velocity: how fast each note is let go, recorded from a keyboard that sends it, drawn
+  in its own lane (Rel), set in the Notes tab, and heard by plugins.
 - MIDI FX, on every instrument track before its instrument, for the song and live playing alike:
   Arpeggiator (rate, order, octaves, gate, latch), Chord Trigger (eleven shapes, in key or not),
   Scale Quantizer (the song's key or its own), Transposer, Velocity Processor, Note Repeater,
-  Randomizer and Modifier (one controller sent as another). The mixer has a MIDI FX row; its slot
+  Randomizer, Modifier (one controller sent as another) and MPE Shaper (each note's bend scaled
+  and drawn toward the nearest semitone, its slide and pressure curved into a range, or swapped).
+  A note's own expression follows it through what transposes, quantizes or chords it. The mixer
+  has a MIDI FX row; its slot
   opens a card for each, to set, bypass, reorder and take out. The agent sets them with
   `set_track` `midi_fx`.
+- Synth-0 has effects of its own: a rack of up to eight, after its voices and before the
+  track's own effects, kept with its sound, so every patch comes with its own (pads their
+  ensemble and hall, plucks their ping-pong delay and plate, acid its tube drive and tape echo).
+  The window's Effects page is the rack: the effects in the order they run, each with its
+  switch, moved earlier or later or taken out; the one picked open with its knobs large. Add
+  them by name: drives (tape, tube, transformer, crunch, heavy, rectify, foldback, lo-fi),
+  motion (chorus, ensemble, flanger, phaser, vibrato, tremolo), space (room to cathedral and
+  shimmer, digital, tape, analog, ping-pong, dub and slapback delays) and shaping (filter, EQ,
+  compressor, multiband, width, transient shaper, gate, limiter, pitch, tape stop). Its LFOs,
+  envelopes and macros ride any of their knobs (drop one on a knob, or pick it in the matrix),
+  so do the track's modulators, and every knob automates; moved or taken out, an effect takes
+  what rides it along. The agent sets them with `set_synth` `fx`.
 - Synth-0 has a new window, laid out the way sound flows: its sources down the left (each with
   its level and which filter it goes to), the one picked open in the middle with its wavetable in
   depth and its warps drawn into it, both filters on one curve over a live spectrum of what's

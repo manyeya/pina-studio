@@ -236,11 +236,33 @@ In the app:
 - ⌘T splits the selected region at the playhead, delete deletes it, ⌘C ⌘X ⌘V copy, cut and paste
   regions (at the playhead, on the selected track), ⌘R repeats one after itself and ⌃M mutes it,
   ⌘Z and ⇧⌘Z undo and redo, ⌥⌘N adds a track and ⌘⌫ deletes the selected one, ⌘S saves.
+- ⌘/ (or ?) shows every shortcut, grouped and searchable by what it does or its keys. Home and End
+  go to the start and end, ⌘= and ⌘- zoom, ⌘A picks every region, Escape goes back to the pointer
+  and then lets go of what's picked, T then a letter picks a tool, and ⌘W closes the window in
+  front (with none, Pina quits).
+- Logic Pro's keys work the same here (its default U.S. set, wherever Pina does the same thing).
+  Keys go where you last clicked, the tracks or the editor (the editor's frame lights while it
+  has them), and Tab passes them across. In the piano roll ← → walk the notes (⇧ adds), ⌥← ⌥→
+  nudge them, ⌥⇧← ⌥⇧→ change their length, ⌥↑ ⌥↓ transpose (⌥⇧ an octave), = and - change
+  velocity (⇧ by 10), ⌘T splits at the playhead, ⌘J joins, ⌘R repeats, ; moves to the playhead,
+  ⌘[ ⌘] trim to it, ⌥D takes out doubled notes and ⌃M mutes. In the tracks ⇧← ⇧→ add regions,
+  ⌥⇧← ⌥⇧→ resize, \ removes overlaps, ⇧\ trims to the next, ⌘\ crops to the cycle, ⌥⌘T splits at
+  it, ⇧N renames, ⌃A turns an alias into a copy, ⌘D adds a track with the same settings (⌥⇧⌘D
+  with its regions too), ⌥⌘A and ⌥⌘S add audio and instrument tracks, ⌃⌘X ⌃⌘I ⌃⌘R cut, insert
+  or repeat the time between the locators. Everywhere: Logic's Select keys (⇧F following, ⇧L
+  inside the cycle, ⇧E equal, ⇧S similar, ⇧M muted, ⇧I invert, ⇧D none), the nudge value (⌃⌥D
+  grid, ⌃⌥B beat, ⌃⌥M bar, ⌃⌥T tick), ⌘U, ⌃⇧, ⌃⇧. and ⇧⌘, ⇧⌘. for the cycle, ⌥⇧' a marker round
+  the selection, ` to follow the playhead, ⌥K for this list, ⌃⌘F full screen. With the mouse,
+  as in Logic: ⌃-drag moves finely (⌃⇧ by the tick), ⇧ lines up the ends of the notes dragged and
+  ⌥⇧ makes them all as long, ⌃⌘-drag changes velocity, ⌃⇧-click writes off the grid, ⇧-click
+  the roll's keys picks their notes, ⌥-click Mute or Solo for that track alone and ⌘-click for
+  every track, ⇧-click a lane moves the playhead, ⇧-double-click a region picks its track's,
+  ⇧-click the cycle stretches it.
 - X shows the mixer, P the piano roll (or double-click a MIDI region), A automation lanes, I the
   Inspector, F the Browser beside the tracks (on Sounds: click a sound to hear it, ↑ ↓ for the
   next, drag it onto a track or double-click it to add it, More Like It for what sounds like it)
-  and ⇧F the sample library's page (filters, the sound map, kits, the details; drag a sound out of it and the tracks come
-  back to drop it on); ⌘K turns on musical typing (A to K play a C major scale from C3, W E T Y U the
+  and ⇧B the sample library's page (filters, the sound map, kits, the details; drag a sound out of it and the tracks come
+  back to drop it on); ⌘K turns on musical typing (A to K play a C major scale from middle C (C4), W E T Y U the
   sharps, Z and X change octave). ⌘B exports the song to `Bounces/` in the project.
 - The Inspector, left of the tracks, shows the selected region with its playback settings:
   Loop (it plays over and over until the next region on its track, its repeats drawn after it),
@@ -282,14 +304,26 @@ In the app:
   row, and it studies them. Ask for one like them and it writes its own, checks how close it came,
   and leaves it as a card to hear and drag onto the tracks. It doesn't touch the song until you
   do. Everything it writes stays on the panel's MIDI page, in the song's MIDI folder.
+- Bloom, a synth you grow: a seed in the middle, twelve branches out of it, each a variation of
+  the seed that strays further the longer it grows and plays on its own note. Drag flowers out,
+  bend them, make one the seed, cross two, lock genes, steer a branch, go back to any seed it
+  came from, or grow a seed to sound like a recording. Its genes are on a double helix you can
+  edit, and growth, every branch and every gene can be automated.
 - Synth-0, Pina Studio's own synth, in the Browser, with its own window: three wavetable oscillators (24
   tables, two warps each, up to sixteen voices of unison), a sub and noise; two filters of twenty
   kinds, the ladder, cascade, diode and snarl solved as circuits; four envelopes, eight LFOs, eight
-  named macros that each do something on every patch, and a 64-line matrix; an arpeggiator; thirty
-  patches to search, like and hear. The window reads left to right as sound flows, and plays from
-  its own keys and wheels. Drag any source's chip onto any knob, including the knobs of the track's
-  effects, which its Effects page shows; colour on a knob always means what moves it. Every
-  parameter can be automated. Agents use `set_synth`, and its patches come up in `sounds`.
+  named macros that each do something on every patch, and a 64-line matrix; an arpeggiator; a rack
+  of up to eight effects of its own (drives, chorus, ensemble, flanger, phaser, reverbs, delays,
+  filter, EQ, compressor, multiband, width and more), kept with its sound, laid out as a chain
+  with the effect picked in the mixer's own editor for it, racks saved and loaded by name; LFOs
+  from a sixty-fourth to 32 bars (straight, triplet or dotted) or free to 200 Hz. Its sounds are a
+  library: thirty factory sounds and yours, saved with a part, words and a line, in packs with
+  covers, shared as one `.pinapack` file and brought in; the title says when a sound's changed,
+  compares it with how it was saved, and takes it back. The window reads left to right as sound
+  flows, and plays from its own keys and wheels. Drag any source's chip onto any knob, its rack's
+  and the track's effects' included; colour on a knob always means what moves it. Every parameter
+  and every rack knob can be automated. Agents use `set_synth`, and its patches come up in
+  `sounds`.
 - Pina Studio's own Reverb and Delay, in the Browser.
   - **Reverb:** Room, Chamber, Hall, Plate, Ambience, Cathedral and Shimmer; pre-delay in ms or
     in time with the song, size, decay, early reflections, diffusion, damping, bass, modulation,
@@ -357,7 +391,7 @@ In the app:
   Beat in the new-track palette) makes a kit of the library's drums fitted
   to the song, a pack in the palette a kit of the pack; with no drums in the library, the
   synthesized kit. A sample dropped on a kit's track becomes a new pad in it.
-- The Plugins page (the Browser's Expand, or ⌃⌥D): its instruments and effects as a page, laid
+- The Plugins page (the Browser's Expand, or ⌃⌘P): its instruments and effects as a page, laid
   out as the sample library's. Filters on the left (search, kind, starred, source, formats,
   order; chips for categories and the kinds in them, makers, collections and what Health found;
   the library's size, spare files and pictures), what's found in the middle as pictures of each
@@ -446,17 +480,23 @@ In the app:
   picked notes (or all): quantize (grid, strength, swing), humanize, legato, chop, arpeggiate,
   strum, glue, reverse, flip, softer and harder. More (in the bar, with chords, velocity colours and Fit) has Ghost, which shows another track's notes behind; Fit
   fits the notes' range; ⌥-scroll makes rows taller or shorter.
-  Its panel has four tabs. Notes: the picked notes' pitch, start, length, velocity, velocity
-  range and chance, mute (0), and picking each chord's top or bottom note. Transform: the tools
+  A click on one of several picked notes picks it alone. Its panel has five tabs. Notes: the picked notes' pitch, start, length, velocity, velocity
+  range, chance and release, mute (0), and picking each chord's top or bottom note. Transform: the tools
   above, and staccato, flam, grace, connect, 2× and ½ speed, crescendo, fade, recombine and into
-  the key. Generate: Euclidean rhythms, melodies grown from a seed, melodies following a shape.
-  Harmony: the key's chords and borrowed ones, progressions by mood, voiced and played as picked,
-  written in. The ruler names the chords the notes play. Lanes for Chance, and for each note's
-  own Pitch, Slide and Press (MPE): played and recorded from an MPE controller, heard by Synth-0,
-  VST3 and CLAP, and by an Audio Unit or VST2 with MPE on.
+  the key. Generate: one writer at a time, Euclidean rhythms (known ones by name), melodies grown
+  from a seed, melodies following a drawn shape. Chords: the key's chords coloured by what they
+  do, borrowed ones, progressions by mood to hear first; the chords picked, how they're voiced and
+  played and the button to write them stay at the foot. MPE: shapes of expression with a click (scoop, fall, bends, vibrato, glide into the
+  next note, slide and pressure swells and wobbles), copied from note to note, and whether the
+  instrument hears them. The ruler names the chords the notes play. Lanes for Release, Chance,
+  and each note's own Pitch, Slide and Press (MPE), kept on the note so they go where it goes:
+  click to add a point, drag to draw (thinned to the points that shape it), drag a point, ⌥ to
+  bow a line or rub out, ⇧ to scale; with Pitch showing, bend a note right on the grid, on whole
+  semitones (⌘ between). Played and recorded from an MPE controller (Settings › MIDI), heard by
+  Synth-0, VST3 and CLAP, and by an Audio Unit or VST2 with MPE on, in the zone its MPE card sets.
 - MIDI FX on instrument tracks, before the instrument: Arpeggiator, Chord Trigger, Scale
-  Quantizer, Transposer, Velocity Processor, Note Repeater, Randomizer, Modifier. The mixer's
-  MIDI FX row opens them.
+  Quantizer, Transposer, Velocity Processor, Note Repeater, Randomizer, Modifier, MPE Shaper.
+  The mixer's MIDI FX row opens them.
 - Recording over a region of the same kind makes a take folder. Double-click it to
   see its takes; swipe across a take to comp that stretch from it, click one to use all of it,
   and Flatten to turn the comp back into plain regions.
@@ -490,7 +530,10 @@ In the app:
   point (on the line if near it), drag points (selected ones together, on the grid unless ⌘),
   drag the line between two points to move both, drag the ◇ halfway along a line to bend it
   (double-click it straight), drag across a lane to select (⇧ adds), ⌥-click or double-click a
-  point to delete it, Delete takes out the selection, ⌘C ⌘V copy and paste it. The pencil draws
+  point to delete it, Delete takes out the selection, ⌘C ⌘X ⌘V copy, cut and paste it. Two or
+  more picked get a box: drag its side edges to stretch them in time, its top or bottom to spread
+  their values (⌥ about the middle); ← → move them by the grid (⌥ finely), ↑ ↓ change them (⇧
+  more), ⌘D duplicates them after themselves, ⌘A picks the lane, Escape lets go. The pencil draws
   a lane freehand; the eraser takes out what it's dragged across. Right-click a point for its
   line's shape (straight, an S that eases out and in, slow or fast start, a step), or a lane for
   shapes drawn over the selection, the cycle or that bar, a cycle every grid step (sine,
@@ -558,13 +601,22 @@ In the app:
   for how far (⇧ finer), ✕ to take it off; click a card to pick it, and dragging any knob it moves
   sets its depth instead. Modulation plays in bounces too, and agents use it as well
   (`add_modulator`, `modulate`).
-- Settings (⌘,, the Pina Studio menu, or the top bar's sliders), a section at a time: Track
-  headers (numbers, icons, what each plays, level meters, fader and pan, record buttons;
-  and how tall tracks are, Small to Huge), Regions & grid (names,
-  contents, bright colours, bar shading, beat lines), Editing (the loop zone at a region's end;
-  writing a region with a double-click), Transport (following the playhead; going back where play
-  started on stop) and Editor tabs (which show; a hidden
-  one's shortcut still opens it). Kept for every song in
+- Settings (⌘,, the Pina Studio menu, or the top bar's sliders), a section at a time, grouped and
+  searched. Studio: Audio (what's playing and how loaded, buffers late lately, a test tone each
+  side; every output and input with its channels and rates and the inputs' levels live; following
+  the system's output or one picked, which pair of its outputs the song plays out of; the rate,
+  the buffer and its latency; how much later than it says the output's really heard, for the
+  playhead, picked, typed or measured by tapping along to the click, kept for each output (Bluetooth
+  says less than it is); how far takes move back for the input's lateness; the cores making sound;
+  a Bluetooth headset's microphone never opened just to show its level, as that turns its
+  headphones down to call quality), MIDI and Recording (bit depth; a count in; the click's sound, level, subdivision, accent,
+  and only while recording). Working: Track headers (numbers, icons, what each plays, level
+  meters, fader and pan, record buttons; and how tall tracks are, Small to Huge), Regions & grid
+  (names, contents, bright colours, bar shading, beat lines), Editing (what middle C is called: C4,
+  or C3 or C5; the loop zone at a region's end; writing a region with a double-click), Transport (following the playhead; going back where
+  play started on stop), Automation and Editor tabs (which show; a hidden one's shortcut still
+  opens it). Library: Plugins (its folders, what's found, folders added), Sounds & packs (the name
+  on what you share) and Saving & files (how often a recovery copy's kept). Kept for every song in
   `~/Library/Application Support/Pina Studio/settings.json`.
 - N shows the score: the selected MIDI region as notation on a grand staff, in time with the
   tracks; click a note to select and hear it, delete to delete it.
@@ -893,7 +945,8 @@ pack's names (held out from the fit) and, with `--fit`, fits the models again.
 claude.ai and the like): its tools list themselves with typed inputs, and a user can allow them
 without allowing a shell. Its tools are `describe`, `show`, `edit`, `analyze`, `render`,
 `critique`, `playbook`, `theory`, `reference`, `sounds`, `mix`, `learn`, `master`, `transport`,
-`plugins`, `params`, `presets`, `samples_find`, `samples_similar`, `samples_kit`, `samples_put`,
+`plugins`, `params`, `presets`, `synth_sounds` (Synth-0's library: list, save, load, make
+a pack, move a sound), `samples_find`, `samples_similar`, `samples_kit`, `samples_put`,
 `palette`, `samples_library`, `midi_find`, `midi_study`, `reference_study`, `reference_create`
 and `reference_compare`. For Claude Code:
 
