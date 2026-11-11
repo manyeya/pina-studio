@@ -78,3 +78,78 @@ fn running_plugins_are_matched_to_where_they_are_now() {
         [Some(0), None, Some(1)]
     );
 }
+
+#[test]
+fn a_song_opens_a_channel_at_a_time_and_its_files_read_off_the_main_thread() {
+    use crate::song::project::{Content, Follow, PPQ, Region, StretchMode};
+    let dir = std::env::temp_dir().join(format!("pina-test-opening-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 48_000,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    for name in ["a.wav", "b.wav"] {
+        let mut w = hound::WavWriter::create(dir.join(name), spec).unwrap();
+        (0..4800).for_each(|i| w.write_sample((i as f32 * 0.01).sin()).unwrap());
+        w.finalize().unwrap();
+    }
+    let audio = |file: &str| Region {
+        length: PPQ,
+        content: Content::Audio {
+            file: file.into(),
+            offset: 0,
+            stretch: 1.0,
+            stretch_mode: StretchMode::default(),
+            follow: Follow::Off,
+            tempo: None,
+            grid: None,
+            formants: false,
+            warps: Vec::new(),
+        },
+        ..Default::default()
+    };
+    let mut project = Project::new(48_000);
+    for files in [&["a.wav", "b.wav"][..], &["a.wav"]] {
+        project.add_track(
+            project.tracks.len(),
+            Track {
+                regions: files.iter().map(|f| audio(f)).collect(),
+                ..Default::default()
+            },
+        );
+    }
+    let mut player = Player::silent(&project, &dir);
+    // Each track, then the master, then done.
+    let ids: Vec<u64> = std::iter::from_fn(|| player.load_next(&project)).collect();
+    let want: Vec<u64> = project
+        .tracks
+        .iter()
+        .map(|t| t.id)
+        .chain([MASTER_ID])
+        .collect();
+    assert_eq!(ids, want);
+    // Each file once, read elsewhere and kept: none left to read, nothing missing.
+    let files = player.unread_files(&project);
+    assert_eq!(files, [PathBuf::from("a.wav"), PathBuf::from("b.wav")]);
+    let reader = player.file_reader();
+    let read = std::thread::spawn(move || {
+        files
+            .into_iter()
+            .map(|f| {
+                let r = reader.read(&f).unwrap();
+                (f, r)
+            })
+            .collect::<Vec<_>>()
+    })
+    .join()
+    .unwrap();
+    for (f, r) in read {
+        player.keep_file(f, r);
+    }
+    assert!(player.unread_files(&project).is_empty());
+    assert!(player.peaks(Path::new("b.wav")).is_some());
+    player.sync(&project).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}

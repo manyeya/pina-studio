@@ -103,23 +103,49 @@ impl Workspace {
         };
         let player = match cfg!(test) {
             true => pina_engine::audio::player::Player::silent(&session.project, &dir),
-            false => match pina_engine::audio::player::Player::start(
-                &session.project,
-                &dir,
-                &self.settings.audio,
-            ) {
-                Ok(p) => p,
-                Err(e) => {
-                    self.status = Some(e);
-                    cx.notify();
-                    return;
+            false => {
+                use pina_engine::audio::player::Player;
+                // As set, else as the system has it: audio settings never stop a song opening.
+                match Player::start(&session.project, &dir, &self.settings.audio)
+                    .or_else(|_| Player::start(&session.project, &dir, &Default::default()))
+                {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.status = Some(e);
+                        cx.notify();
+                        return;
+                    }
                 }
-            },
+            }
         };
+        // The song playing stops; the new one loads a piece at a time, the loading screen
+        // drawn between, then takes over (`finish_opening`).
+        self.stop(cx);
+        self.loading = Some(super::opening::Opening::new(self, session, player));
+        // Tests: all at once.
+        if cfg!(test) {
+            while self.loading.is_some() {
+                self.open_step(window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// The song loaded in the background goes in: its session, engine, socket and agent; the
+    /// view of the tracks from the top.
+    pub(crate) fn finish_opening(
+        &mut self,
+        session: Session,
+        player: pina_engine::audio::player::Player,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let dir = session.dir.clone();
         self.keep_chat();
         let old = std::mem::replace(&mut self.session, session);
         let _ = std::fs::remove_file(crate::cli::server::socket_path(&old.dir));
         self.player = player;
+        self.apply_midi_inputs();
         self.reset_for_song();
         self.status = None;
         self.changed(cx);

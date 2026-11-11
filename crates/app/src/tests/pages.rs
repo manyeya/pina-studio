@@ -177,10 +177,15 @@ fn songs_start_from_the_songs_page_open_here_and_go_to_the_trash(cx: &mut TestAp
             (96.0, Some("D minor"), 5)
         );
         assert_eq!(ws.view, View::Arrange);
+        // Loaded a piece at a time, all of it: nothing left loading.
+        assert!(ws.loading.is_none());
+        assert!(ws.player.unread_files(&ws.session.project).is_empty());
         // A band's tracks look like what they are.
         let icons: Vec<&str> = (0..5).map(|i| ws.shown(i).look.icon).collect();
         assert_eq!(icons, ["drums", "bass", "keys", "guitar", "vocals"]);
     });
+    let left = ws.update(cx, |ws, _| ws.player.load_next(&ws.session.project));
+    assert_eq!(left, None, "every track has its instrument");
     // ⌘N: the Songs page, a new song's name ready to type. A name, then a template's click:
     // the song is made where songs are kept (here a scratch folder) and opens.
     // SAFETY: no other test reads PINA_SONGS.
@@ -232,10 +237,41 @@ fn songs_start_from_the_songs_page_open_here_and_go_to_the_trash(cx: &mut TestAp
         cx.notify();
     });
     cx.run_until_parked();
+    // Each song's menu and Trash are always there; its box picks it, and lets it go.
+    assert!(cx.debug_bounds("song-more-Other").is_some());
+    assert!(cx.debug_bounds("song-trash-Third").is_some());
+    let picks = |cx: &mut gpui::VisualTestContext| {
+        ws.read_with(cx, |ws, _| ws.home.as_ref().unwrap().picks.len())
+    };
+    click_on(cx, "song-pick-Other", Modifiers::none(), MouseButton::Left);
+    assert_eq!(picks(cx), 1);
+    click_on(cx, "song-pick-Other", Modifiers::none(), MouseButton::Left);
+    assert_eq!(picks(cx), 0);
+    // A filter by time: only the song in 3/4; cleared, both again.
+    ws.update(cx, |ws, cx| {
+        let time = crate::pages::projects::Shelf::Time(Some([3, 4]));
+        ws.choose(crate::ui::menu::MenuAction::Songs(time), cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("song-Other").is_some());
+    assert!(cx.debug_bounds("song-Third").is_none());
+    click_on(
+        cx,
+        "songs-filter-clear",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert!(cx.debug_bounds("song-Third").is_some());
+    // As a grid, and back to the list.
+    click_on(cx, "songs-view-grid", Modifiers::none(), MouseButton::Left);
+    assert!(ws.read_with(cx, |ws, _| ws.settings.songs_grid));
+    assert!(cx.debug_bounds("song-Other").is_some());
+    assert!(cx.debug_bounds("song-trash-Other").is_some());
+    click_on(cx, "songs-view-list", Modifiers::none(), MouseButton::Left);
+    assert!(!ws.read_with(cx, |ws, _| ws.settings.songs_grid));
     click_on(cx, "song-Other", Modifiers::command(), MouseButton::Left);
     click_on(cx, "song-Third", Modifiers::command(), MouseButton::Left);
-    let picks = ws.read_with(cx, |ws, _| ws.home.as_ref().unwrap().picks.len());
-    assert_eq!(picks, 2);
+    assert_eq!(picks(cx), 2);
     cx.simulate_keystrokes("backspace");
     cx.run_until_parked();
     cx.simulate_prompt_answer("Move to Trash");
@@ -483,6 +519,66 @@ fn a_loop_shows_only_what_it_has_and_plays_from_where_its_clicked(cx: &mut TestA
 }
 
 #[gpui::test]
+fn settings_count_in_set_the_click_move_takes_back_and_are_found_by_search(
+    cx: &mut TestAppContext,
+) {
+    let (ws, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    let click = |cx: &mut VisualTestContext, sel: &'static str| {
+        click_on(cx, sel, Modifiers::none(), MouseButton::Left);
+        cx.run_until_parked();
+    };
+    let settings = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.settings.clone());
+    // Recording: a count in, the click's sound, how often, only while recording.
+    click(cx, "settings-Recording");
+    click(cx, "setting-count-2");
+    click(cx, "setting-click-wood");
+    click(cx, "setting-click-every-2");
+    click(cx, "setting-click-level--6");
+    click(cx, "setting-click-only-recording");
+    click(cx, "setting-depth-24");
+    let s = settings(cx);
+    assert_eq!(
+        (s.count_in, s.click.sound, s.click.every, s.click.level_db),
+        (2, 1, 2, -6.0)
+    );
+    assert!(s.click_only_recording);
+    assert_eq!(s.record_depth, pina_engine::audio::record::Depth::Int24);
+    // Audio: takes moved back, picked or typed; a late buffer not said.
+    click(cx, "settings-Audio");
+    click(cx, "setting-offset-12");
+    assert_eq!(settings(cx).record_offset_ms, 12.0);
+    click(cx, "setting-offset");
+    ws.update(cx, |ws, cx| ws.finish_naming(Some("7.5 ms".into()), cx));
+    assert_eq!(settings(cx).record_offset_ms, 7.5);
+    // Further down the page: scrolled to.
+    let at = cx.debug_bounds("setting-offset").unwrap().center();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: at,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-2000.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    click(cx, "setting-late");
+    assert!(!settings(cx).late_warning);
+    // Sounds & packs: the name on what's shared. Saving: how often a copy's kept.
+    click(cx, "settings-Sounds & packs");
+    click(cx, "setting-maker");
+    ws.update(cx, |ws, cx| ws.finish_naming(Some("Night Owl".into()), cx));
+    assert_eq!(settings(cx).maker, "Night Owl");
+    click(cx, "settings-Saving & files");
+    click(cx, "setting-keep-60");
+    assert_eq!(settings(cx).keep_every, 60);
+    // Searched: only what holds it.
+    let search = cx.debug_bounds("settings-search").unwrap().center();
+    cx.simulate_click(search, Modifiers::none());
+    cx.simulate_input("count in");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("settings-Recording").is_some());
+    assert!(cx.debug_bounds("settings-Track headers").is_none());
+}
+
+#[gpui::test]
 fn settings_choose_the_buffer_and_the_cpu_number_holds_still(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx);
     cx.simulate_keystrokes("cmd-,");
@@ -516,4 +612,28 @@ fn settings_choose_the_buffer_and_the_cpu_number_holds_still(cx: &mut TestAppCon
         ws.read_with(cx, |ws, _| ws.settings.audio.device.clone()),
         None
     );
+}
+
+#[gpui::test]
+fn the_audio_page_scrolls_to_its_end(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    // A laptop's window: the page is taller than it.
+    cx.simulate_resize(gpui::size(px(1390.), px(860.)));
+    ws.update(cx, |ws, cx| {
+        ws.settings_section = crate::pages::settings::Section::Audio;
+        ws.open_settings(cx);
+    });
+    cx.run_until_parked();
+    let before = cx
+        .debug_bounds("setting-devices-rescan")
+        .expect("Look again shows");
+    let at = point(before.center().x, px(400.));
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: at,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-3000.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    let after = cx.debug_bounds("setting-devices-rescan").unwrap();
+    assert!(after.origin.y < before.origin.y, "{before:?} {after:?}");
 }

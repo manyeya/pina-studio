@@ -117,11 +117,71 @@ pub(super) fn set_up(
             ws.scroll_x = 1200.0;
             cx.notify();
         }
+        // The shortcuts sheet, whole and searched.
+        "shortcuts" | "shortcuts-search" => {
+            ws.toggle_shortcuts(window, cx);
+            if page == "shortcuts-search" {
+                let find = ws.shortcuts.as_ref().unwrap().find.clone();
+                find.update(cx, |f, cx| f.set_text("dup", cx));
+            }
+        }
         "settings-audio" => {
             ws.settings_section = crate::pages::settings::Section::Audio;
             ws.outputs = vec!["MacBook Pro Speakers".into(), "Scarlett 2i2 USB".into()];
             ws.buffers = vec![64, 128, 256, 512, 1024, 2048];
             ws.settings.audio.buffer = Some(512);
+            ws.open_settings(cx);
+            // A laptop with Bluetooth headphones on, as it would read.
+            use pina_engine::audio::engine::DeviceInfo;
+            let d = |name: &str, channels, rates: &[u32], own| DeviceInfo {
+                name: name.into(),
+                channels,
+                rates: rates.to_vec(),
+                own_rate: Some(own),
+                bluetooth: name == "Headphones",
+            };
+            // PINA_SHOT_CALL: the headphones on a call, their microphone open.
+            let on_call = std::env::var("PINA_SHOT_CALL").is_ok();
+            ws.outputs_info = vec![
+                match on_call {
+                    true => d("Headphones", 1, &[], 16_000),
+                    false => d("Headphones", 2, &[44_100], 44_100),
+                },
+                d(
+                    "Laptop Speakers",
+                    2,
+                    &[44_100, 48_000, 88_200, 96_000],
+                    48_000,
+                ),
+                d(
+                    "Audio Interface",
+                    8,
+                    &[44_100, 48_000, 88_200, 96_000, 176_400, 192_000],
+                    48_000,
+                ),
+            ];
+            ws.inputs_info = vec![
+                d("Laptop Microphone", 1, &[44_100, 48_000, 96_000], 48_000),
+                d("Headphones", 1, &[], 16_000),
+            ];
+            ws.in_levels = vec![0.12];
+        }
+        "settings-recording" | "settings-plugins" | "settings-sounds" | "settings-saving" => {
+            use crate::pages::settings::Section;
+            ws.settings_section = match page {
+                "settings-recording" => Section::Recording,
+                "settings-plugins" => Section::Plugins,
+                "settings-sounds" => Section::Sounds,
+                _ => Section::Saving,
+            };
+            ws.settings.count_in = 1;
+            ws.settings.click.sound = 1;
+            ws.open_settings(cx);
+        }
+        "settings-midi" => {
+            ws.settings_section = crate::pages::settings::Section::Midi;
+            ws.player.list_midi_input("MPE Controller");
+            ws.player.list_midi_input("USB Keyboard");
             ws.open_settings(cx);
         }
         "settings-auto" => {
@@ -195,27 +255,170 @@ pub(super) fn set_up(
         }
         // Modulation: an LFO, steps, an envelope, a follower and random on the keys,
         // mapped to its pan, volume, low cut and presence; values as if playing.
-        "home" | "songs" => {
-            let demo = crate::pages::projects::summary(&demo()).unwrap();
+        // The loading screen, a third of the way through opening the song shown (with
+        // PINA_SHOT_PROJECT, a big one of your own); "opening-start" before anything's in.
+        "opening" | "opening-start" => {
+            let session = Session::open(&ws.session.dir).unwrap();
+            let player = Player::silent(&session.project, &session.dir);
+            let mut o = crate::pages::projects::opening::Opening::new(ws, session, player);
+            if page == "opening" {
+                o.steps_for_shot(ws.session.project.tracks.len() / 3 + 1);
+            }
+            o.began(std::time::Duration::from_millis(1700));
+            ws.loading = Some(o);
+            cx.notify();
+        }
+        "home" | "songs" | "songs-grid" | "songs-picked" => {
+            // A library's worth: tempos, keys, times and arrangements of every size.
             let names = [
-                ("Night Drive", 92.0, 0),
-                ("Rain on Glass", 74.0, 3_600),
-                ("Untitled 9", 120.0, 7_200),
-                ("Lo-fi Sketch", 84.0, 90_000),
-                ("Warehouse", 128.0, 200_000),
-                ("Morning Pages", 100.0, 400_000),
+                ("Night Drive", 92.0, 0, Some("A minor"), [4, 4], 7, 192.0),
+                (
+                    "Rain on Glass",
+                    74.0,
+                    3_600,
+                    Some("Db major"),
+                    [6, 8],
+                    5,
+                    168.0,
+                ),
+                ("Untitled 9", 120.0, 7_200, None, [4, 4], 2, 16.0),
+                (
+                    "Lo-fi Sketch",
+                    84.0,
+                    90_000,
+                    Some("F major"),
+                    [4, 4],
+                    4,
+                    90.0,
+                ),
+                (
+                    "Warehouse",
+                    128.0,
+                    200_000,
+                    Some("G minor"),
+                    [4, 4],
+                    9,
+                    364.0,
+                ),
+                (
+                    "Morning Pages",
+                    100.0,
+                    400_000,
+                    Some("C major"),
+                    [3, 4],
+                    6,
+                    220.0,
+                ),
+                (
+                    "Glass Harbour",
+                    110.0,
+                    800_000,
+                    Some("E minor"),
+                    [4, 4],
+                    8,
+                    262.0,
+                ),
+                (
+                    "Paper Lanterns",
+                    68.0,
+                    1_100_000,
+                    Some("Bb major"),
+                    [6, 8],
+                    5,
+                    185.0,
+                ),
+                (
+                    "Second Wind",
+                    140.0,
+                    1_500_000,
+                    Some("F# minor"),
+                    [4, 4],
+                    7,
+                    176.0,
+                ),
+                (
+                    "Tidepool",
+                    96.0,
+                    2_900_000,
+                    Some("Ab major"),
+                    [7, 8],
+                    6,
+                    213.0,
+                ),
+                (
+                    "Copper Sky",
+                    118.0,
+                    3_500_000,
+                    Some("D minor"),
+                    [4, 4],
+                    8,
+                    310.0,
+                ),
+                (
+                    "Slow Bloom",
+                    80.0,
+                    4_100_000,
+                    Some("C# minor"),
+                    [4, 4],
+                    5,
+                    140.0,
+                ),
+            ];
+            let colors = [
+                0xff7a59, 0xa78bfa, 0x3ddc97, 0x38bdf8, 0x2dd4bf, 0xf472b6, 0xffc53d, 0xfb923c,
+                0x94a3b8,
             ];
             ws.songs = names
                 .iter()
-                .map(|&(name, tempo, ago)| crate::pages::projects::Song {
-                    dir: std::path::PathBuf::from(format!("/songs/{name}")),
-                    name: name.to_string(),
-                    modified: std::time::SystemTime::now() - std::time::Duration::from_secs(ago),
-                    tempo,
-                    ..demo.clone()
-                })
+                .enumerate()
+                .map(
+                    |(n, &(name, tempo, ago, key, signature, tracks, seconds))| {
+                        let mut seed = 0x9e37_79b9u32.wrapping_mul(n as u32 + 7);
+                        let mut next = move || {
+                            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                            (seed >> 8) as f32 / (1u32 << 24) as f32
+                        };
+                        let lanes = (0..tracks)
+                            .map(|i| {
+                                let mut spans = Vec::new();
+                                let mut at = if i < 2 { 0 } else { (next() * 4.0) as usize };
+                                while at < 16 {
+                                    if next() < 0.8 {
+                                        let len = (2 + (next() * 4.0) as usize).min(16 - at);
+                                        spans.push((at as f32 / 16.0, (at + len) as f32 / 16.0));
+                                        at += len;
+                                    } else {
+                                        at += 1 + (next() * 2.0) as usize;
+                                    }
+                                }
+                                (colors[i % colors.len()], spans)
+                            })
+                            .collect();
+                        crate::pages::projects::Song {
+                            dir: std::path::PathBuf::from(format!("/songs/{name}")),
+                            name: name.to_string(),
+                            modified: std::time::SystemTime::now()
+                                - std::time::Duration::from_secs(ago),
+                            tempo,
+                            key: key.map(String::from),
+                            signature,
+                            tracks,
+                            seconds,
+                            lanes,
+                        }
+                    },
+                )
                 .collect();
-            ws.session.on_disk = page == "songs";
+            if page.ends_with("-grid") {
+                ws.settings.songs_grid = true;
+            }
+            if page.ends_with("-picked") {
+                ws.show_home(false, window, cx);
+                if let Some(h) = ws.home.as_mut() {
+                    h.picks = vec!["/songs/Warehouse".into(), "/songs/Tidepool".into()];
+                }
+            }
+            ws.session.on_disk = page.starts_with("songs");
             ws.view = View::Songs;
             cx.notify();
         }

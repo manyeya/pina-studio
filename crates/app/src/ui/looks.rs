@@ -341,26 +341,25 @@ impl Workspace {
     /// Works out every track's look again: after an edit, or when the analysis of its audio
     /// comes in. Files not yet heard are analysed in the background.
     pub fn refresh_looks(&mut self, cx: &mut Context<Self>) {
-        let dir = self.session.dir.clone();
+        self.looks = self.looks_of(&self.session.project.tracks, &self.session.dir);
+        self.hear_new_files(cx);
+    }
+
+    /// Tracks' looks and colours, those of a song in `dir`: each its family's, shaded by how
+    /// many of its family came before it.
+    pub(crate) fn looks_of(
+        &self,
+        tracks: &[pina_engine::song::project::Track],
+        dir: &std::path::Path,
+    ) -> Vec<Shown> {
         let heard = &self.heard.categories;
         let category = |p: &std::path::Path| heard.get(&dir.join(p)).copied().flatten();
-        let looks: Vec<Look> = self
-            .session
-            .project
-            .tracks
-            .iter()
-            .map(|t| look::look(t, &category))
-            .collect();
-        // Each track's shade: how many of its family came before it.
         let mut seen: HashMap<Family, usize> = HashMap::new();
-        self.looks = self
-            .session
-            .project
-            .tracks
+        tracks
             .iter()
-            .zip(looks)
             .enumerate()
-            .map(|(i, (t, look))| {
+            .map(|(i, t)| {
+                let look = look::look(t, &category);
                 let n = seen.entry(look.family).or_default();
                 let base = match look.family {
                     // Tracks nothing says the role of take turns round the palette.
@@ -378,8 +377,7 @@ impl Workspace {
                 *n += 1;
                 Shown { look, color }
             })
-            .collect();
-        self.hear_new_files(cx);
+            .collect()
     }
 
     /// Analyses the song's audio and samples not heard yet, then works the looks out again.
@@ -848,7 +846,7 @@ impl Workspace {
             )
             .on_mouse_down_out(cx.listener(|ws, _, _, cx| ws.close_picker(cx)));
         let at = p.at;
-        Some(deferred(anchored().position(at).snap_to_window().child(panel)).with_priority(1))
+        Some(deferred(anchored().position(at).snap_to_window().child(panel)).with_priority(4))
     }
 }
 

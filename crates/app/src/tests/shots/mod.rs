@@ -29,6 +29,10 @@ fn shots() {
     let books = std::env::temp_dir().join(format!("pina-shot-books-{}", std::process::id()));
     test_playbooks(&books);
     let page = std::env::var("PINA_SHOT_PAGE").unwrap_or_else(|_| "study".into());
+    let wide: f32 = std::env::var("PINA_SHOT_W")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1440.0);
     let tall: f32 = std::env::var("PINA_SHOT_H")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -53,7 +57,7 @@ fn shots() {
     let session = Session::open(&project).unwrap();
     let player = Player::silent(&session.project, &session.dir);
     let window = cx
-        .open_window(gpui::size(px(1440.), px(tall)), |window, cx| {
+        .open_window(gpui::size(px(wide), px(tall)), |window, cx| {
             gpui::AppContext::new(cx, |cx| Workspace::new(session, player, window, cx))
         })
         .unwrap();
@@ -107,6 +111,22 @@ fn shots() {
                     out: &out,
                 };
                 agent::after_drawn(&shot, ws, cx);
+                // PINA_SHOT_SCALE: the plugin windows open, made that much bigger as a whole.
+                if let Some(k) = std::env::var("PINA_SHOT_SCALE")
+                    .ok()
+                    .and_then(|v| v.parse::<f32>().ok())
+                {
+                    if let Some(v) = ws.fx_view.as_mut() {
+                        v.scale = k;
+                    }
+                    if let Some(v) = ws.eq_view.as_mut() {
+                        v.scale = k;
+                    }
+                    if let Some(v) = ws.poly_view.as_mut() {
+                        v.scale = Some(k);
+                    }
+                    cx.notify();
+                }
             })
             .unwrap()
     });
@@ -131,6 +151,10 @@ fn shots() {
         cx.run_until_parked();
         thread::sleep(Duration::from_millis(5));
     }
+    // Drawn once first: what's placed by where something was drawn (a popover under its button)
+    // is where it would be on screen.
+    cx.capture_screenshot(window.into()).unwrap();
+    cx.run_until_parked();
     let image = cx.capture_screenshot(window.into()).unwrap();
     let file = out.join(format!("{page}.png"));
     image.save(&file).unwrap();

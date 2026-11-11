@@ -26,6 +26,36 @@ impl AudioData {
     }
 }
 
+/// Reads a song's audio files at the engine's rate, off the main thread if wanted.
+#[derive(Clone)]
+pub struct FileReader {
+    dir: PathBuf,
+    rate: f64,
+}
+
+/// A file read, with its overview: for `Player::keep_file`.
+pub struct ReadFile {
+    data: Arc<AudioData>,
+    peaks: Arc<Peaks>,
+}
+
+impl FileReader {
+    pub(crate) fn new(dir: &Path, rate: f64) -> Self {
+        FileReader {
+            dir: dir.to_path_buf(),
+            rate,
+        }
+    }
+
+    /// Slow for a long file: decoded and resampled.
+    pub fn read(&self, file: &Path) -> Result<ReadFile, String> {
+        let data = Arc::new(load_wav(&self.dir.join(file), self.rate)?);
+        // ponytail: the overview shows the first channel.
+        let peaks = Arc::new(Peaks::from_samples(&data.channels[0]));
+        Ok(ReadFile { data, peaks })
+    }
+}
+
 /// A stretched copy of part of a file: the file, its frames from `from` to `to`, and how they're
 /// fitted.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -313,11 +343,19 @@ impl AudioFiles {
         if let Some((data, _)) = self.files.get(file) {
             return Ok(data.clone());
         }
-        let data = Arc::new(load_wav(&self.dir.join(file), self.rate)?);
-        // ponytail: the overview shows the first channel.
-        let peaks = Arc::new(Peaks::from_samples(&data.channels[0]));
-        self.files.insert(file.to_path_buf(), (data.clone(), peaks));
+        let read = FileReader::new(&self.dir, self.rate).read(file)?;
+        let data = read.data.clone();
+        self.keep(file.to_path_buf(), read);
         Ok(data)
+    }
+
+    /// A file read elsewhere (`FileReader`), kept as `get` would have.
+    pub(crate) fn keep(&mut self, file: PathBuf, read: ReadFile) {
+        self.files.insert(file, (read.data, read.peaks));
+    }
+
+    pub(crate) fn has(&self, file: &Path) -> bool {
+        self.files.contains_key(file)
     }
 
     /// The overview of a file the engine has loaded.

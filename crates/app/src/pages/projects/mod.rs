@@ -6,6 +6,7 @@
 
 mod cards;
 pub(crate) mod files;
+pub(crate) mod opening;
 mod page;
 mod songs;
 
@@ -30,7 +31,7 @@ use pina_engine::{
 use serde::Serialize;
 
 use crate::{
-    ui::looks::{family_shade, glyph},
+    ui::looks::family_shade,
     ui::menu::{Menu, MenuAction},
     ui::text::{TextEvent, TextInput},
     ui::theme::*,
@@ -139,8 +140,129 @@ impl Template {
     }
 }
 
+/// The order songs are listed in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sort {
+    #[default]
+    Edited,
+    Name,
+    Tempo,
+    Length,
+}
+
+impl Sort {
+    pub const ALL: [Sort; 4] = [Sort::Edited, Sort::Name, Sort::Tempo, Sort::Length];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Sort::Edited => "Last edited",
+            Sort::Name => "Name",
+            Sort::Tempo => "Tempo",
+            Sort::Length => "Length",
+        }
+    }
+}
+
+/// How fast the songs shown are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pace {
+    #[default]
+    Any,
+    Slow,
+    Mid,
+    Fast,
+}
+
+impl Pace {
+    pub const ALL: [Pace; 4] = [Pace::Any, Pace::Slow, Pace::Mid, Pace::Fast];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Pace::Any => "Any",
+            Pace::Slow => "Under 90",
+            Pace::Mid => "90–120",
+            Pace::Fast => "Over 120",
+        }
+    }
+
+    pub fn holds(self, bpm: f64) -> bool {
+        match self {
+            Pace::Any => true,
+            Pace::Slow => bpm < 90.0,
+            Pace::Mid => (90.0..=120.0).contains(&bpm),
+            Pace::Fast => bpm > 120.0,
+        }
+    }
+}
+
+/// A change to which songs the Songs page shows, and how.
+#[derive(Clone, Debug)]
+pub enum Shelf {
+    Sort(Sort),
+    Pace(Pace),
+    Key(Option<String>),
+    Time(Option<[u64; 2]>),
+    /// Every filter off.
+    Clear,
+}
+
+/// The order and filters the Songs page shows its songs with.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Shelving {
+    pub sort: Sort,
+    pub pace: Pace,
+    pub key: Option<String>,
+    pub time: Option<[u64; 2]>,
+}
+
+impl Shelving {
+    pub fn filtered(&self) -> bool {
+        self.pace != Pace::Any || self.key.is_some() || self.time.is_some()
+    }
+
+    pub fn change(&mut self, change: Shelf) {
+        match change {
+            Shelf::Sort(s) => self.sort = s,
+            Shelf::Pace(p) => self.pace = p,
+            Shelf::Key(k) => self.key = k,
+            Shelf::Time(t) => self.time = t,
+            Shelf::Clear => (self.pace, self.key, self.time) = (Pace::Any, None, None),
+        }
+    }
+
+    /// The songs to show: those whose name has `search` (lowercase) in it, of the pace, key
+    /// and time asked for, in the order asked for.
+    pub fn shown(&self, songs: &[Song], search: &str) -> Vec<Song> {
+        let mut out: Vec<Song> = songs
+            .iter()
+            .filter(|s| search.is_empty() || s.name.to_lowercase().contains(search))
+            .filter(|s| self.pace.holds(s.tempo))
+            .filter(|s| self.key.is_none() || s.key == self.key)
+            .filter(|s| self.time.is_none_or(|t| s.signature == t))
+            .cloned()
+            .collect();
+        match self.sort {
+            Sort::Edited => out.sort_by_key(|s| std::cmp::Reverse(s.modified)),
+            Sort::Name => out.sort_by_key(|s| s.name.to_lowercase()),
+            Sort::Tempo => out.sort_by(|a, b| a.tempo.total_cmp(&b.tempo)),
+            Sort::Length => out.sort_by(|a, b| b.seconds.total_cmp(&a.seconds)),
+        }
+        out
+    }
+}
+
+/// Which stretch of time a song was last edited in, for the list's headings.
+pub(crate) fn era(t: SystemTime) -> &'static str {
+    match t.elapsed().map_or(0, |d| d.as_secs() / 86_400) {
+        0 => "Today",
+        1..7 => "This week",
+        7..31 => "This month",
+        _ => "Earlier",
+    }
+}
+
 /// The Songs page's own: a new song's name, tempo, key and time (a template's click makes it),
-/// the search, and the songs picked to act on together.
+/// the search, the order and filters, and the songs picked to act on together.
 pub struct Home {
     pub name: Entity<TextInput>,
     pub tempo: Entity<TextInput>,
@@ -148,6 +270,7 @@ pub struct Home {
     pub signature: [u64; 2],
     pub search: Entity<TextInput>,
     pub picks: Vec<PathBuf>,
+    pub shelving: Shelving,
     _subs: Vec<Subscription>,
 }
 
@@ -184,6 +307,7 @@ impl Home {
             signature: [4, 4],
             search,
             picks: Vec::new(),
+            shelving: Shelving::default(),
             _subs: subs,
         }
     }
