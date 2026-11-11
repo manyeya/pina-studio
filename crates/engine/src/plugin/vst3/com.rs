@@ -182,6 +182,13 @@ impl EventList {
         self.events.borrow_mut().clear();
     }
 
+    /// Each event in it, in order.
+    pub fn each(&self, mut f: impl FnMut(&Event)) {
+        for e in self.events.borrow().iter() {
+            f(e);
+        }
+    }
+
     /// Adds an event, unless the list is full: it never grows on the audio thread.
     pub fn push(&self, e: Event) {
         let mut events = self.events.borrow_mut();

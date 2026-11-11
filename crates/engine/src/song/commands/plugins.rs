@@ -233,11 +233,11 @@ pub(crate) fn plugin_mut(
         ChannelRef::Track(i) => track(p, i)?.plugin_mut(which),
         ChannelRef::Aux(i) => match which {
             Which::Insert(n) => aux(p, i)?.inserts.get_mut(n),
-            Which::Instrument => None,
+            Which::Instrument | Which::MidiFx(_) => None,
         },
         ChannelRef::Master => match which {
             Which::Insert(n) => p.master_inserts.get_mut(n),
-            Which::Instrument => None,
+            Which::Instrument | Which::MidiFx(_) => None,
         },
     }
     .ok_or_else(|| "no plugin there".to_string())

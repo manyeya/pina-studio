@@ -25,6 +25,9 @@ pub struct AuProcessor {
     pub(crate) automation: [(u32, f64, f64); AUTOMATED],
     pub(crate) automated: usize,
     pub(crate) max_block: usize,
+    /// The notes it played last block (its MIDI out), for a MIDI FX slot; boxed, as the unit
+    /// keeps its address.
+    pub(crate) notes_out: Box<NotesOut>,
 }
 
 // The unit's handles are only used from the audio thread once the processor moves there.
@@ -208,6 +211,10 @@ pub(crate) struct ParameterEvent {
 }
 
 impl ProcessorApi for AuProcessor {
+    fn notes_out(&self) -> &[Note] {
+        &self.notes_out.list
+    }
+
     fn latency(&self) -> u32 {
         self.latency
     }
@@ -238,8 +245,8 @@ impl ProcessorApi for AuProcessor {
         false
     }
 
-    fn set_mpe(&mut self, on: bool) {
-        self.mpe.set(on);
+    fn set_mpe(&mut self, zone: Option<crate::song::project::MpeZone>) {
+        self.mpe.set(zone);
     }
 
     fn process(
@@ -278,8 +285,10 @@ impl ProcessorApi for AuProcessor {
 
         // Notes and controls, merged in time: with MPE on, the zone set up first.
         if self.midi {
-            for [status, a, b] in self.mpe.setup().into_iter().flatten() {
-                unsafe { MusicDeviceMIDIEvent(au, status as u32, a as u32, b as u32, 0) };
+            if let Some((setup, n)) = self.mpe.setup() {
+                for &[status, a, b] in &setup[..n] {
+                    unsafe { MusicDeviceMIDIEvent(au, status as u32, a as u32, b as u32, 0) };
+                }
             }
             let (mut n, mut c) = (notes.iter().peekable(), controls.iter().peekable());
             loop {
@@ -342,7 +351,10 @@ impl ProcessorApi for AuProcessor {
             };
         }
         list.count = self.out.len() as u32;
+        self.notes_out.list.clear();
+        self.notes_out.frames = frames as u32;
         let mut flags = AudioUnitRenderActionFlags::empty();
+        RENDERING.with(|r| r.set(true));
         let status = unsafe {
             AudioUnitRender(
                 au,
@@ -353,7 +365,11 @@ impl ProcessorApi for AuProcessor {
                 NonNull::from(&mut *self.list).cast(),
             )
         };
+        RENDERING.with(|r| r.set(false));
         self.time.mSampleTime += frames as f64;
+        self.notes_out
+            .list
+            .sort_by_key(|n| (n.offset, n.velocity > 0.0));
         // Mono output goes to both sides; a failed render is silence.
         let list = &*self.list;
         for (c, dst) in buf.into_iter().enumerate() {

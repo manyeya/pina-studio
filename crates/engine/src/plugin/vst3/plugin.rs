@@ -191,6 +191,7 @@ impl Vst3Plugin {
                 events: ComWrapper::new(EventList::with_capacity(512)),
                 params: ComWrapper::new(ParameterChanges::with_capacity(64)),
                 out_events: ComWrapper::new(EventList::with_capacity(512)),
+                notes_out: Vec::with_capacity(512),
                 out_params: ComWrapper::new(ParameterChanges::with_capacity(64)),
                 edits,
                 automation: [(0, 0.0, 0.0); AUTOMATED],

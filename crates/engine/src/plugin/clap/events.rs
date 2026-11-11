@@ -55,7 +55,7 @@ pub(crate) fn note_event(n: &Note, time: u32, midi: bool) -> Event {
     if midi {
         return match on {
             true => midi_event(time, [0x90, n.pitch & 0x7f, seven(n.velocity).max(1)]),
-            false => midi_event(time, [0x80, n.pitch & 0x7f, 0]),
+            false => midi_event(time, [0x80, n.pitch & 0x7f, seven(n.release)]),
         };
     }
     let kind = if on {
@@ -70,7 +70,11 @@ pub(crate) fn note_event(n: &Note, time: u32, midi: bool) -> Event {
             port_index: 0,
             channel: 0,
             key: n.pitch as i16,
-            velocity: n.velocity.clamp(0.0, 1.0) as f64,
+            velocity: match on {
+                true => n.velocity,
+                false => n.release,
+            }
+            .clamp(0.0, 1.0) as f64,
         },
     }
 }
@@ -211,18 +215,51 @@ pub(crate) unsafe extern "C" fn events_get(
 }
 
 /// Where the plugin reports its own changes (its editor's edits, MIDI it makes), as a host
-/// must give it.
-// ponytail: dropped; read them when something records plugin edits or MIDI out.
-pub(crate) fn output_events() -> clap_output_events {
+/// must give it: the notes it plays go into `into` (a `Vec<Note>` with room made for them, or
+/// none), the rest are let go.
+pub(crate) fn output_events(into: *mut Vec<crate::plugin::Note>) -> clap_output_events {
     clap_output_events {
-        ctx: ptr::null_mut(),
-        try_push: Some(drop_event),
+        ctx: into.cast(),
+        try_push: Some(take_event),
     }
 }
 
-pub(crate) unsafe extern "C" fn drop_event(
-    _: *const clap_output_events,
-    _: *const clap_event_header,
+/// A note it played (CLAP's own, or MIDI), kept; anything else let go.
+pub(crate) unsafe extern "C" fn take_event(
+    list: *const clap_output_events,
+    e: *const clap_event_header,
 ) -> bool {
+    let (Some(list), Some(h)) = (unsafe { list.as_ref() }, unsafe { e.as_ref() }) else {
+        return true;
+    };
+    let Some(into) = (unsafe { list.ctx.cast::<Vec<crate::plugin::Note>>().as_mut() }) else {
+        return true;
+    };
+    if h.space_id != CLAP_CORE_EVENT_SPACE_ID || into.len() == into.capacity() {
+        return true;
+    }
+    let note = |pitch: i32, velocity: f32| crate::plugin::Note {
+        offset: h.time,
+        pitch: pitch.clamp(0, 127) as u8,
+        velocity,
+        release: 0.0,
+    };
+    match h.type_ {
+        CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF => {
+            let n = unsafe { &*e.cast::<clap_event_note>() };
+            let on = h.type_ == CLAP_EVENT_NOTE_ON && n.velocity > 0.0;
+            into.push(note(n.key as i32, if on { n.velocity as f32 } else { 0.0 }));
+        }
+        CLAP_EVENT_MIDI => {
+            let m = unsafe { &*e.cast::<clap_event_midi>() };
+            let [status, data1, data2] = m.data;
+            match status & 0xf0 {
+                0x90 if data2 > 0 => into.push(note(data1 as i32, data2 as f32 / 127.0)),
+                0x80 | 0x90 => into.push(note(data1 as i32, 0.0)),
+                _ => {}
+            }
+        }
+        _ => {}
+    }
     true
 }

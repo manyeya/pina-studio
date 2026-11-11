@@ -177,7 +177,7 @@ fn the_browser_expands_into_the_plugins_page_and_back(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_plugin_picked_goes_on_a_track(cx: &mut TestAppContext) {
     let (ws, cx) = open_plugins(cx);
-    cx.simulate_keystrokes("ctrl-alt-d");
+    cx.simulate_keystrokes("ctrl-cmd-p");
     // A click picks it: its details, nothing added yet.
     press(cx, "plugin-card-plugin:apple/audelay");
     let picked = ws.read_with(cx, |ws, _| ws.plugin_page.picked.clone());
@@ -216,7 +216,7 @@ fn a_plugin_picked_goes_on_a_track(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_plugin_dragged_out_of_the_page_lands_on_a_track(cx: &mut TestAppContext) {
     let (ws, cx) = open_plugins(cx);
-    cx.simulate_keystrokes("ctrl-alt-d");
+    cx.simulate_keystrokes("ctrl-cmd-p");
     let card = cx
         .debug_bounds("plugin-card-plugin:apple/audelay")
         .unwrap()
@@ -241,7 +241,7 @@ fn a_plugin_dragged_out_of_the_page_lands_on_a_track(cx: &mut TestAppContext) {
 #[gpui::test]
 fn keys_put_plugins_on_the_track(cx: &mut TestAppContext) {
     let (ws, cx) = open_plugins(cx);
-    cx.simulate_keystrokes("ctrl-alt-d");
+    cx.simulate_keystrokes("ctrl-cmd-p");
     click_on(
         cx,
         "plugins-view-Keys",
@@ -280,7 +280,7 @@ fn keys_put_plugins_on_the_track(cx: &mut TestAppContext) {
         [("f15".into(), GRAPHIC.into()), ("f16".into(), DELAY.into())]
     );
     // Away from the page, the key puts it on the selected track; nothing went on while mapping.
-    cx.simulate_keystrokes("ctrl-alt-d");
+    cx.simulate_keystrokes("ctrl-cmd-p");
     assert!(inserts(&ws, cx, 1).is_empty());
     cx.simulate_keystrokes("f16");
     assert_eq!(inserts(&ws, cx, 1), ["AUDelay"]);
@@ -298,7 +298,7 @@ fn health_and_collections_narrow_the_page(cx: &mut TestAppContext) {
             .facts
             .insert("plugin:maker/broken".into(), failed);
     });
-    cx.simulate_keystrokes("ctrl-alt-d");
+    cx.simulate_keystrokes("ctrl-cmd-p");
     click_on(
         cx,
         "plugins-health-WontLoad",
@@ -681,12 +681,38 @@ fn an_audio_unit_instrument_is_switched_to_mpe_from_its_slot(cx: &mut TestAppCon
     assert!(mpe(cx));
     cx.simulate_keystrokes("cmd-z");
     assert!(!mpe(cx));
+    // Its card: on, an upper zone of 4 channels, each note bending 24 semitones.
+    click_on(
+        cx,
+        "slot-Track(0)-Instrument",
+        Modifiers::none(),
+        MouseButton::Right,
+    );
+    pick(cx, &ws, "MPE settings…");
+    click_on(cx, "mpe-on", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "mpe-Upper", Modifiers::none(), MouseButton::Left);
+    for _ in 0..11 {
+        click_on(cx, "mpe-channels-−", Modifiers::none(), MouseButton::Left);
+    }
+    click_on(cx, "mpe-24", Modifiers::none(), MouseButton::Left);
+    let zone = ws.read_with(cx, |ws, _| match &ws.session.project.tracks[0].instrument {
+        Some(Instrument::Plugin(r)) => r.mpe_heard(),
+        _ => None,
+    });
+    assert_eq!(
+        zone,
+        Some(pina_engine::song::project::MpeZone {
+            upper: true,
+            channels: 4,
+            bend: 24,
+        })
+    );
     // A VST3 hears each note's expression anyway: nothing to switch.
     ws.update(cx, |ws, cx| {
         ws.session.project.tracks[0].instrument = Some(instrument(Format::Vst3));
         cx.notify();
     });
     cx.run_until_parked();
-    let items = ws.read_with(cx, |ws, _| ws.mpe_item(0));
-    assert!(items.is_none());
+    let items = ws.read_with(cx, |ws, _| ws.mpe_items(0));
+    assert!(items.is_empty());
 }

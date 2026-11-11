@@ -478,7 +478,7 @@ impl Workspace {
 
         // The categories with something in them, and the one picked's kinds.
         let cats = match which {
-            Which::Instrument => INSTRUMENT_CATS.to_vec(),
+            Which::Instrument | Which::MidiFx(_) => INSTRUMENT_CATS.to_vec(),
             Which::Insert(_) => EFFECT_CATS.to_vec(),
         };
         let cat_chips: Vec<Div> = cats

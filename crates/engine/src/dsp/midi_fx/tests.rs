@@ -1,5 +1,5 @@
 use super::*;
-use crate::song::project::ChordShape;
+use crate::{plugin::ExpressionKind, song::project::ChordShape};
 
 const RATE: f64 = 48_000.0;
 /// A beat at 120: half a second.
@@ -11,6 +11,7 @@ fn on(offset: u32, pitch: u8) -> Note {
         offset,
         pitch,
         velocity: 0.8,
+        release: 0.0,
     }
 }
 
@@ -19,6 +20,7 @@ fn off(offset: u32, pitch: u8) -> Note {
         offset,
         pitch,
         velocity: 0.0,
+        release: 0.0,
     }
 }
 
@@ -255,4 +257,100 @@ fn a_modifier_sends_one_controller_as_another() {
     };
     let out = r.controls(&fx, &[wheel]);
     assert!(matches!(out[0].kind, ControlKind::Cc { number: 74, value } if value == 0.5));
+}
+
+/// What a note's own controls become once it's played through `fx`.
+fn expression_through(fx: &[MidiFx], kind: ControlKind) -> Vec<ControlKind> {
+    let mut r = MidiFxRunner::new();
+    let clock = Clock {
+        beats: Some(0.0),
+        tempo: 120.0,
+        rate: RATE,
+    };
+    let control = Control { offset: 10, kind };
+    let (_, out) = r.run_all(fx, None, (&[on(0, 60)], &[control]), BLOCK, clock);
+    out.iter().map(|c| c.kind).collect()
+}
+
+#[test]
+fn a_notes_own_expression_follows_it_to_what_it_became() {
+    let bend = |pitch| ControlKind::Expression {
+        pitch,
+        kind: ExpressionKind::Tuning,
+        value: 2.0,
+    };
+    // An octave up: its bend bends the note it became.
+    let up = [MidiFx::Transposer { semitones: 12 }];
+    assert_eq!(expression_through(&up, bend(60)), [bend(72)]);
+    // A chord: each of its notes.
+    let chord = [MidiFx::ChordTrigger {
+        shape: ChordShape::Major,
+    }];
+    assert_eq!(
+        expression_through(&chord, bend(60)),
+        [bend(60), bend(64), bend(67)]
+    );
+    // A note not playing: nothing to bend.
+    assert_eq!(expression_through(&up, bend(62)), []);
+}
+
+#[test]
+fn an_mpe_shaper_scales_and_rounds_bends_and_reshapes_slide_and_pressure() {
+    use crate::song::project::ExprShape;
+    let shaper = |swap| {
+        [MidiFx::MpeShaper {
+            bend: 200,
+            round: 100,
+            slide: ExprShape {
+                curve: 0,
+                low: 20,
+                high: 60,
+            },
+            press: ExprShape::PLAIN,
+            swap,
+        }]
+    };
+    // 0.7 of a semitone doubled is 1.4, drawn all the way to 1.
+    let bent = expression_through(
+        &shaper(false),
+        ControlKind::Expression {
+            pitch: 60,
+            kind: ExpressionKind::Tuning,
+            value: 0.7,
+        },
+    );
+    assert_eq!(
+        bent,
+        [ControlKind::Expression {
+            pitch: 60,
+            kind: ExpressionKind::Tuning,
+            value: 1.0
+        }]
+    );
+    // A full slide lands at the top of 20 to 60 percent.
+    let slid = ControlKind::Expression {
+        pitch: 60,
+        kind: ExpressionKind::Brightness,
+        value: 1.0,
+    };
+    let out = expression_through(&shaper(false), slid);
+    assert!(matches!(out[0], ControlKind::Expression { value, .. } if (value - 0.6).abs() < 1e-6));
+    // Swapped, a slide is played as pressure.
+    let out = expression_through(&shaper(true), slid);
+    assert!(matches!(out[0], ControlKind::PolyPressure { pitch: 60, value } if value == 1.0));
+}
+
+#[test]
+fn a_curve_brings_a_shape_in_early_or_late() {
+    use crate::song::project::ExprShape;
+    let early = ExprShape {
+        curve: 100,
+        ..ExprShape::PLAIN
+    };
+    let late = ExprShape {
+        curve: -100,
+        ..ExprShape::PLAIN
+    };
+    assert!(early.apply(0.25) > 0.6 && late.apply(0.25) < 0.05);
+    assert_eq!(ExprShape::PLAIN.apply(0.25), 0.25);
 }

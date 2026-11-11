@@ -114,6 +114,14 @@ pub fn devices(plugins: &[PluginInfo]) -> Vec<Device> {
              supersaw bass lead pad pluck reese acid growl brass strings organ bell choir arp \
              patches",
         ),
+        own(
+            "bloom",
+            pina_engine::song::project::BLOOM_NAME,
+            Cat::Synth,
+            Own::Bloom,
+            "grow genetic evolve mutate seed plant garden branches dna random sound design \
+             resynthesis match recording organic experimental fm pluck bell pad texture",
+        ),
         own("synth", "Sine Synth", Cat::Synth, Own::Synth, "sine simple"),
         own(
             "drums",
@@ -237,7 +245,8 @@ pub fn devices(plugins: &[PluginInfo]) -> Vec<Device> {
         ),
     ];
     let mut groups: Vec<(String, Vec<PluginInfo>)> = Vec::new();
-    for p in plugins {
+    // MIDI effects go in a track's MIDI FX, not among its instruments and audio effects.
+    for p in plugins.iter().filter(|p| !p.midi_effect()) {
         let key = format!(
             "plugin:{}/{}",
             p.vendor.to_lowercase(),
@@ -298,6 +307,7 @@ pub(crate) fn instrument_of(d: &Device) -> Option<Instrument> {
         Some(Own::Synth) => Some(Instrument::Synth),
         Some(Own::Drums) => Some(Instrument::Drums),
         Some(Own::Sampler) => Some(Instrument::Sampler(Default::default())),
+        Some(Own::Bloom) => Some(super::new_bloom()),
         Some(Own::Poly) => {
             pina_engine::song::project::poly_patch("Init").map(|p| Instrument::Poly(Box::new(p)))
         }

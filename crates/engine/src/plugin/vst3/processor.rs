@@ -14,6 +14,8 @@ pub struct Vst3Processor {
     /// Where the plugin reports its own changes (meters, MIDI it makes), as a host must give it.
     // ponytail: read by nothing; forward them when something shows plugin meters or MIDI out.
     pub(crate) out_events: ComWrapper<EventList>,
+    /// The notes it played last block (its output events'), for a MIDI FX slot.
+    pub(crate) notes_out: Vec<Note>,
     pub(crate) out_params: ComWrapper<ParameterChanges>,
     pub(crate) edits: EditReceiver,
     /// Automation for the next block: a parameter, and its value at the block's start and end.
@@ -52,6 +54,10 @@ impl Drop for Vst3Processor {
 }
 
 impl ProcessorApi for Vst3Processor {
+    fn notes_out(&self) -> &[Note] {
+        &self.notes_out
+    }
+
     fn latency(&self) -> u32 {
         unsafe { self.processor.getLatencySamples() }
     }
@@ -186,6 +192,37 @@ impl ProcessorApi for Vst3Processor {
             processContext: &mut self.context,
         };
         unsafe { self.processor.process(&mut data) };
+        // What it played itself: its note events, kept to the room made for them.
+        self.notes_out.clear();
+        let out = &mut self.notes_out;
+        self.out_events.each(|e| {
+            if out.len() == out.capacity() {
+                return;
+            }
+            let at = (e.sampleOffset.max(0) as u32).min(frames.saturating_sub(1) as u32);
+            match e.r#type as u32 {
+                t if t == kNoteOnEvent => {
+                    let on = unsafe { e.__field0.noteOn };
+                    out.push(Note {
+                        offset: at,
+                        pitch: on.pitch.clamp(0, 127) as u8,
+                        velocity: on.velocity.max(1e-3),
+                        release: 0.0,
+                    });
+                }
+                t if t == kNoteOffEvent => {
+                    let off = unsafe { e.__field0.noteOff };
+                    out.push(Note {
+                        offset: at,
+                        pitch: off.pitch.clamp(0, 127) as u8,
+                        velocity: 0.0,
+                        release: off.velocity,
+                    });
+                }
+                _ => {}
+            }
+        });
+        self.notes_out.sort_by_key(|n| (n.offset, n.velocity > 0.0));
         self.context.projectTimeSamples += frames as i64;
         self.context.continousTimeSamples += frames as i64;
         // Mono output goes to both sides.
@@ -228,7 +265,7 @@ pub(crate) fn note_event(n: &Note) -> Event {
         e.__field0.noteOff = NoteOffEvent {
             channel: 0,
             pitch: n.pitch as _,
-            velocity: 0.0,
+            velocity: n.release,
             noteId: n.pitch as _,
             tuning: 0.0,
         };

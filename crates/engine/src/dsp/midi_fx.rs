@@ -95,6 +95,7 @@ impl Notes {
                 offset,
                 pitch,
                 velocity,
+                release: 0.0,
             };
             self.n += 1;
         }
@@ -112,6 +113,7 @@ pub struct MidiFxRunner {
     a: Box<Notes>,
     b: Box<Notes>,
     controls: Box<[Control; NOTES]>,
+    spare: Box<[Control; NOTES]>,
     /// Samples since it started, for what waits; and beats counted while the song's stopped.
     now: u64,
     free: f64,
@@ -151,6 +153,12 @@ impl MidiFxRunner {
                 n: 0,
             }),
             controls: Box::new(
+                [Control {
+                    offset: 0,
+                    kind: ControlKind::Aftertouch(0.0),
+                }; NOTES],
+            ),
+            spare: Box::new(
                 [Control {
                     offset: 0,
                     kind: ControlKind::Aftertouch(0.0),
@@ -246,38 +254,192 @@ impl MidiFxRunner {
         self.free = beats + frames as f64 / spb;
     }
 
+    /// Notes into the chain, to go through it a stage at a time (a plugin can sit between two
+    /// built-ins): `through` a built-in, `set` to what a plugin played, `end` once a block.
+    pub fn set(&mut self, notes: &[Note]) {
+        let n = notes.len().min(NOTES);
+        self.a.list[..n].copy_from_slice(&notes[..n]);
+        self.a.n = n;
+        self.a.sort();
+    }
+
+    /// The notes as far down the chain as they've gone.
+    pub fn current(&self) -> &[Note] {
+        &self.a.list[..self.a.n]
+    }
+
+    /// The notes through built-in `f`, the chain's `k`th.
+    pub fn through(&mut self, k: usize, f: &MidiFx, key: Option<Key>, frames: usize, clock: Clock) {
+        if k >= MAX_MIDI_FX {
+            return;
+        }
+        let spb = clock.rate * 60.0 / clock.tempo.max(1.0);
+        let beats = clock.beats.unwrap_or(self.free);
+        self.b.n = 0;
+        let (from, into, s) = (&self.a, &mut self.b, &mut self.states[k]);
+        step(
+            f,
+            key,
+            s,
+            &from.list[..from.n],
+            into,
+            self.now,
+            frames,
+            beats,
+            spb,
+        );
+        into.sort();
+        std::mem::swap(&mut self.a, &mut self.b);
+    }
+
+    /// The block done, its notes and controls as they came out of the chain.
+    pub fn finish(
+        &mut self,
+        fx: &[MidiFx],
+        controls: &[Control],
+        frames: usize,
+        clock: Clock,
+    ) -> (&[Note], &[Control]) {
+        self.end(frames, clock);
+        let n = self.modify(fx, controls);
+        (&self.a.list[..self.a.n], &self.controls[..n])
+    }
+
+    /// The block done: the time moves on.
+    pub fn end(&mut self, frames: usize, clock: Clock) {
+        let spb = clock.rate * 60.0 / clock.tempo.max(1.0);
+        let beats = clock.beats.unwrap_or(self.free);
+        self.now += frames as u64;
+        self.free = beats + frames as f64 / spb;
+    }
+
     /// The controls through each Modifier: a controller sent as another, scaled, or dropped.
     pub fn controls(&mut self, fx: &[MidiFx], controls: &[Control]) -> &[Control] {
         let n = self.modify(fx, controls);
         &self.controls[..n]
     }
 
+    /// Controls through each effect in turn: a note's own (its bend, slide and pressure) going
+    /// to what the note became (transposed, quantized, a chord), reshaped by an MPE Shaper; a
+    /// controller sent as another by a Modifier.
     fn modify(&mut self, fx: &[MidiFx], controls: &[Control]) -> usize {
-        let mut n = 0;
-        for c in controls.iter().take(NOTES) {
-            let mut kind = Some(c.kind);
-            for f in fx {
-                if let (
-                    MidiFx::Modifier { from, to, scale },
-                    Some(ControlKind::Cc { number, value }),
-                ) = (f, kind)
-                    && number == *from
-                {
-                    kind = (*to > 0).then_some(ControlKind::Cc {
-                        number: *to,
-                        value: (value * *scale as f32 / 100.0).clamp(0.0, 1.0),
-                    });
+        let mut n = controls.len().min(NOTES);
+        self.controls[..n].copy_from_slice(&controls[..n]);
+        for (k, f) in fx.iter().take(MAX_MIDI_FX).enumerate() {
+            let s = &self.states[k];
+            let (from, into) = (&self.controls, &mut self.spare);
+            let mut m = 0;
+            for c in &from[..n] {
+                let mut put = |kind: ControlKind| {
+                    if m < NOTES {
+                        into[m] = Control {
+                            offset: c.offset,
+                            kind,
+                        };
+                        m += 1;
+                    }
+                };
+                match (*f, c.kind) {
+                    (MidiFx::Modifier { from, to, scale }, ControlKind::Cc { number, value })
+                        if number == from =>
+                    {
+                        if to > 0 {
+                            put(ControlKind::Cc {
+                                number: to,
+                                value: (value * scale as f32 / 100.0).clamp(0.0, 1.0),
+                            });
+                        }
+                    }
+                    (MidiFx::MpeShaper { .. }, kind) => put(shaped(*f, kind)),
+                    // What arpeggiates or repeats isn't one note's any more.
+                    (MidiFx::Arpeggiator { .. } | MidiFx::NoteRepeater { .. }, kind) => put(kind),
+                    (_, kind) => match note_of(kind) {
+                        Some(p) => {
+                            for &q in &s.became[p as usize][..s.count[p as usize] as usize] {
+                                put(with_pitch(kind, q));
+                            }
+                        }
+                        None => put(kind),
+                    },
                 }
             }
-            if let Some(kind) = kind {
-                self.controls[n] = Control {
-                    offset: c.offset,
-                    kind,
-                };
-                n += 1;
-            }
+            std::mem::swap(&mut self.controls, &mut self.spare);
+            n = m;
         }
         n
+    }
+}
+
+/// The note a control is about, if it's one note's own.
+fn note_of(kind: ControlKind) -> Option<u8> {
+    match kind {
+        ControlKind::PolyPressure { pitch, .. } | ControlKind::Expression { pitch, .. } => {
+            Some(pitch & 127)
+        }
+        _ => None,
+    }
+}
+
+fn with_pitch(kind: ControlKind, to: u8) -> ControlKind {
+    match kind {
+        ControlKind::PolyPressure { value, .. } => ControlKind::PolyPressure { pitch: to, value },
+        ControlKind::Expression { kind, value, .. } => ControlKind::Expression {
+            pitch: to,
+            kind,
+            value,
+        },
+        k => k,
+    }
+}
+
+/// A note's own expression through an MPE Shaper.
+fn shaped(f: MidiFx, kind: ControlKind) -> ControlKind {
+    use crate::plugin::ExpressionKind as E;
+    let MidiFx::MpeShaper {
+        bend,
+        round,
+        slide,
+        press,
+        swap,
+    } = f
+    else {
+        return kind;
+    };
+    let slid = |pitch, value| ControlKind::Expression {
+        pitch,
+        kind: E::Brightness,
+        value: slide.apply(value),
+    };
+    let pressed = |pitch, value| ControlKind::PolyPressure {
+        pitch,
+        value: press.apply(value),
+    };
+    match kind {
+        ControlKind::Expression {
+            pitch,
+            kind: E::Tuning,
+            value,
+        } => {
+            let v = value * bend.min(400) as f32 / 100.0;
+            ControlKind::Expression {
+                pitch,
+                kind: E::Tuning,
+                value: v + (v.round() - v) * round.min(100) as f32 / 100.0,
+            }
+        }
+        ControlKind::Expression {
+            pitch,
+            kind: E::Brightness,
+            value,
+        } => match swap {
+            true => pressed(pitch, value),
+            false => slid(pitch, value),
+        },
+        ControlKind::PolyPressure { pitch, value } => match swap {
+            true => slid(pitch, value),
+            false => pressed(pitch, value),
+        },
+        k => k,
     }
 }
 

@@ -14,6 +14,8 @@ pub struct ClapProcessor {
     pub(crate) automation: [(u32, f64, f64); AUTOMATED],
     pub(crate) automated: usize,
     pub(crate) events: Vec<Event>,
+    /// The notes it played last block, for a MIDI FX slot.
+    pub(crate) notes_out: Vec<Note>,
     /// Its notes are MIDI, not CLAP's own note events (and it has no note expression).
     pub(crate) midi_notes: bool,
     // Channel buffers, their pointers, and the port structs that point at those.
@@ -39,6 +41,10 @@ pub struct ClapProcessor {
 unsafe impl Send for ClapProcessor {}
 
 impl ProcessorApi for ClapProcessor {
+    fn notes_out(&self) -> &[Note] {
+        &self.notes_out
+    }
+
     fn latency(&self) -> u32 {
         self.latency
     }
@@ -152,7 +158,11 @@ impl ProcessorApi for ClapProcessor {
             self.tempo,
             self.rate,
         );
-        let (input, output) = (input_events(&self.events), output_events());
+        self.notes_out.clear();
+        let (input, output) = (
+            input_events(&self.events),
+            output_events(&mut self.notes_out),
+        );
         let data = clap_process {
             steady_time: self.steady,
             frames_count: frames as u32,
@@ -185,6 +195,11 @@ impl ProcessorApi for ClapProcessor {
                 .is_some_and(|process| process(plugin, &data) != CLAP_PROCESS_ERROR)
         });
         self.inst.leave();
+        let last = frames.saturating_sub(1) as u32;
+        for n in &mut self.notes_out {
+            n.offset = n.offset.min(last);
+        }
+        self.notes_out.sort_by_key(|n| (n.offset, n.velocity > 0.0));
         self.inst.processed.store(now(), SeqCst);
         self.inst.applied.fetch_add(edits, SeqCst);
         self.steady += frames as i64;

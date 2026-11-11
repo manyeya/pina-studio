@@ -10,6 +10,7 @@
 mod block;
 mod crew;
 mod decode;
+mod devices;
 mod files;
 mod lanes;
 mod notes;
@@ -20,6 +21,7 @@ mod render;
 mod shared;
 
 pub use decode::*;
+pub use devices::*;
 pub use files::*;
 pub use lanes::*;
 pub use notes::*;
@@ -103,8 +105,13 @@ pub struct Engine {
     moved: [(usize, ControlKind); LIVE_NOTES],
     moved_len: usize,
     master_strip: Box<Strip>,
-    /// The metronome's click sounding: samples left, and its pitch.
-    click: (u32, f32),
+    /// The metronome's click sounding; counting in (samples left of how many); a test tone
+    /// (samples left, sides, phase).
+    click: ClickVoice,
+    count_in: (u64, u64, bool),
+    /// When the buffer being made is heard (`clock` ns, 0 unknown) and how much of it's made.
+    heard_clock: (u64, u64),
+    tone: (u64, u8, f32),
     /// Where the next block reads from if playback carries on; reading anywhere else is a jump.
     next_read: u64,
     /// How much it has yet to read before the playhead moves: play starting (or a locate) reads
@@ -135,7 +142,10 @@ impl Engine {
             moved: [(0, ControlKind::Aftertouch(0.0)); LIVE_NOTES],
             moved_len: 0,
             master_strip: Box::new(Strip::new(rate)),
-            click: (0, 0.0),
+            click: ClickVoice::default(),
+            count_in: (0, 0, true),
+            heard_clock: (0, 0),
+            tone: (0, 0, 0.0),
             next_read: 0,
             preroll: 0,
             audition: None,
@@ -151,8 +161,11 @@ impl Engine {
         rate: f64,
     ) -> Result<(Engine, Vec<LanePlugins>), String> {
         let (mut modules, mut plugins, mut lanes) = (Modules::new(), Vec::new(), Vec::new());
-        let mut add = |instrument: Option<&Instrument>, inserts: &[PluginRef], more: &[Unit]| {
-            let (lane, p, latency) = make_lane(
+        let mut add = |instrument: Option<&Instrument>,
+                       inserts: &[PluginRef],
+                       more: &[Unit],
+                       midi: &[PluginRef]| {
+            let (lane, mut p, latency) = make_lane(
                 instrument,
                 inserts,
                 &mut Vec::new(),
@@ -180,10 +193,26 @@ impl Engine {
                 }
             }
             let mut lane = lane;
+            // Its MIDI FX plugins, what they play going on to its instrument.
+            let (midi_fx, processors, problems) =
+                load_midi_plugins(midi, &mut vec![None; midi.len()], rate, &mut modules, dir);
+            if let Some(problem) = problems.into_iter().next() {
+                return Err(problem);
+            }
+            lane.midi_plugins = processors;
+            p.midi_fx = midi_fx;
             lane.more = more
                 .iter()
                 .map(|u| Strip::for_kind(u.kind(), rate))
                 .collect();
+            // Its synth's own effects, likewise.
+            if let Some(Instrument::Poly(p)) = instrument {
+                lane.rack =
+                    p.fx.iter()
+                        .take(crate::song::project::RACK)
+                        .map(|u| Strip::for_kind(u.kind(), rate))
+                        .collect();
+            }
             lane.settle();
             lanes.push(Some(Box::new(lane)));
             plugins.push(p);
@@ -192,14 +221,18 @@ impl Engine {
         let tracks = project
             .tracks
             .iter()
-            .map(|t| add(t.instrument.as_ref(), &t.inserts, &t.more))
+            .map(|t| {
+                let midi: Vec<PluginRef> =
+                    t.midi_fx.iter().filter_map(|s| s.plugin.clone()).collect();
+                add(t.instrument.as_ref(), &t.inserts, &t.more, &midi)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let auxes = project
             .auxes
             .iter()
-            .map(|a| add(None, &a.inserts, &a.more))
+            .map(|a| add(None, &a.inserts, &a.more, &[]))
             .collect::<Result<Vec<_>, _>>()?;
-        let master = add(None, &project.master_inserts, &project.master_more)?.0;
+        let master = add(None, &project.master_inserts, &project.master_more, &[])?.0;
         let mut files = AudioFiles::new(dir, rate);
         let (arrangement, problems) =
             compile(project, rate, &tracks, &auxes, Some(master), &mut files);
@@ -226,6 +259,46 @@ impl Engine {
 
     pub fn position(&self) -> u64 {
         self.position
+    }
+
+    /// The buffer about to be made is heard from `at` (`clock` ns): each block of it is kept,
+    /// while playing, so the window shows what's heard rather than what's made.
+    pub(crate) fn note_heard(&mut self, at: u64) {
+        self.heard_clock = (at, 0);
+    }
+
+    /// A block made: from `start` to where the song is now, `frames` long. Kept with when it's
+    /// heard, after the blocks before it in this buffer.
+    fn heard_block(&mut self, start: u64, frames: usize, playing: bool) {
+        let (at, done) = self.heard_clock;
+        if at != 0
+            && playing
+            && let Some(link) = &self.link
+        {
+            let moves = self.position.saturating_sub(start);
+            link.shared
+                .note_heard(start, moves, at + (done as f64 * 1e9 / self.rate) as u64);
+        }
+        self.heard_clock.1 += frames as u64;
+    }
+
+    /// A beat, in samples, at the playhead's tempo.
+    fn beat_samples(&self) -> f64 {
+        let tempo = &self.arrangement.tempo;
+        let b = tempo.beats(self.position);
+        (tempo.sample(b + self.arrangement.beat) - tempo.sample(b)).max(1.0)
+    }
+
+    /// Counting in, as `Msg::CountIn` does: for tests, which drive the engine directly.
+    pub fn count_in(&mut self, bars: u32) {
+        let len =
+            (self.beat_samples() * (bars as u64 * self.arrangement.beats_per_bar) as f64) as u64;
+        self.count_in = (len, len, true);
+    }
+
+    /// Whether it's counting in.
+    pub fn counting(&self) -> bool {
+        self.count_in.0 > 0
     }
 
     pub fn play(&mut self) {
@@ -300,6 +373,12 @@ impl Engine {
                         trash(&mut link.garbage, Garbage::Lane(old));
                     }
                 }
+                Msg::MidiPlugins(mut m) => {
+                    if let Some(lane) = self.lanes[m.slot].as_deref_mut() {
+                        std::mem::swap(&mut lane.midi_plugins, &mut m.list);
+                    }
+                    trash(&mut link.garbage, Garbage::MidiPlugins(m));
+                }
                 Msg::Inserts(mut r) => {
                     if let Some(lane) = self.lanes[r.slot].as_deref_mut() {
                         r.apply(&mut lane.inserts);
@@ -309,6 +388,12 @@ impl Engine {
                 Msg::Strips(mut s) => {
                     if let Some(lane) = self.lanes[s.slot].as_deref_mut() {
                         s.apply(&mut lane.more);
+                    }
+                    trash(&mut link.garbage, Garbage::Strips(s));
+                }
+                Msg::Rack(mut s) => {
+                    if let Some(lane) = self.lanes[s.slot].as_deref_mut() {
+                        s.apply(&mut lane.rack);
                     }
                     trash(&mut link.garbage, Garbage::Strips(s));
                 }
@@ -322,18 +407,34 @@ impl Engine {
                         trash(&mut link.garbage, Garbage::Lane(old));
                     }
                 }
+                Msg::CountIn(bars, then) => {
+                    if !self.playing {
+                        // As `beat_samples`, here where the link's borrowed.
+                        let tempo = &self.arrangement.tempo;
+                        let b = tempo.beats(self.position);
+                        let beat =
+                            (tempo.sample(b + self.arrangement.beat) - tempo.sample(b)).max(1.0);
+                        let len =
+                            (beat * (bars as u64 * self.arrangement.beats_per_bar) as f64) as u64;
+                        self.count_in = (len, len, then);
+                    }
+                }
                 Msg::Play => {
                     if !self.playing {
                         self.playing = true;
                         self.preroll = self.arrangement.lookahead;
+                        link.shared.new_play();
                     }
                 }
                 Msg::Stop => {
+                    // Stopped while counting in: no more count, and no play after it.
+                    self.count_in.0 = 0;
                     self.playing = false;
                     self.release = true;
                 }
                 Msg::Locate(at) => {
                     self.position = at;
+                    link.shared.new_play();
                     self.release = true;
                     self.preroll = self.arrangement.lookahead;
                 }
@@ -360,16 +461,17 @@ impl Engine {
                                 offset: 0,
                                 pitch,
                                 velocity,
+                                release: 0.0,
                             },
                         );
                         self.pending_len += 1;
                     }
                 }
-                Msg::Mpe { slot, on } => {
+                Msg::Mpe { slot, zone } => {
                     if let Some(Some(lane)) = self.lanes.get_mut(slot)
                         && let Source::Plugin(p) = &mut lane.source
                     {
-                        p.set_mpe(on);
+                        p.set_mpe(zone);
                     }
                 }
                 Msg::Control { slot, kind } => {
@@ -404,6 +506,47 @@ impl Engine {
     /// run while stopped too, so tails ring out. Allocation-free: safe on the audio thread.
     pub fn process(&mut self, out: [&mut [f32]; 2], frames: usize) {
         let [l, r] = out;
+        // Counting in: everything as when stopped (what's played live heard), the click over it;
+        // then play, from the sample the count ends on.
+        if self.count_in.0 > 0 && !self.playing {
+            let n = (self.count_in.0 as usize).min(frames);
+            self.block([&mut l[..n], &mut r[..n]], n);
+            // Stopped in that block: no more count.
+            if self.count_in.0 == 0 {
+                if n < frames {
+                    self.process([&mut l[n..], &mut r[n..]], frames - n);
+                }
+                return;
+            }
+            let (left, len, then) = self.count_in;
+            let beat = self.beat_samples();
+            let every = self
+                .link
+                .as_ref()
+                .map_or(ClickStyle::default(), |k| k.shared.click_style());
+            let subs = every.every.clamp(1, 4) as u64;
+            let step = (beat / subs as f64).round() as u64;
+            count_click(
+                &mut self.click,
+                len - left,
+                (step, self.arrangement.beats_per_bar * subs, subs),
+                self.rate,
+                [&mut l[..n], &mut r[..n]],
+                every,
+            );
+            self.count_in.0 = left.saturating_sub(n as u64);
+            if self.count_in.0 == 0 && then {
+                self.playing = true;
+                self.preroll = self.arrangement.lookahead;
+                if let Some(link) = &self.link {
+                    link.shared.new_play();
+                }
+            }
+            if n < frames {
+                self.process([&mut l[n..], &mut r[n..]], frames - n);
+            }
+            return;
+        }
         // Past the cycle's end (it was drawn behind the playhead, or play began after it): back
         // to its start, so the cycle is what plays. Before it, play runs on into it.
         if let Some((start, end)) = self.arrangement.cycle

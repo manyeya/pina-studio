@@ -129,6 +129,36 @@ impl ChordShape {
     }
 }
 
+/// How an MPE Shaper reshapes a slide or a pressure: through a curve (`curve` from -100, coming
+/// in late, to 100, coming in early), into `low` to `high` percent.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct ExprShape {
+    pub curve: i8,
+    pub low: u8,
+    pub high: u8,
+}
+
+impl ExprShape {
+    /// As played.
+    pub const PLAIN: ExprShape = ExprShape {
+        curve: 0,
+        low: 0,
+        high: 100,
+    };
+
+    /// `v` (0 to 1) reshaped.
+    pub fn apply(self, v: f32) -> f32 {
+        let bent = v
+            .clamp(0.0, 1.0)
+            .powf(2f32.powf(-(self.curve as f32) / 50.0));
+        let (low, high) = (
+            self.low.min(100) as f32 / 100.0,
+            self.high.min(100) as f32 / 100.0,
+        );
+        low + (high - low) * bent
+    }
+}
+
 /// One MIDI effect and its settings. Rates are in beats (a quarter note is 1).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -182,10 +212,26 @@ pub enum MidiFx {
         to: u8,
         scale: u8,
     },
+    /// Each note's own expression as it's played (MPE), reshaped: its bend at `bend` percent,
+    /// drawn `round` percent of the way to the nearest semitone; its slide and pressure each
+    /// through its shape; with `swap`, the slide played as pressure and the pressure as slide.
+    MpeShaper {
+        bend: u16,
+        round: u8,
+        slide: ExprShape,
+        press: ExprShape,
+        swap: bool,
+    },
+    /// A plugin's (the slot's `plugin`): what it plays, from what it hears. `index` is its place
+    /// among the track's MIDI FX plugins, worked out as it plays.
+    Plugin {
+        #[serde(default)]
+        index: u8,
+    },
 }
 
 impl MidiFx {
-    pub const KINDS: [&'static str; 8] = [
+    pub const KINDS: [&'static str; 9] = [
         "Arpeggiator",
         "Chord Trigger",
         "Scale Quantizer",
@@ -194,6 +240,7 @@ impl MidiFx {
         "Note Repeater",
         "Randomizer",
         "Modifier",
+        "MPE Shaper",
     ];
 
     /// A fresh one of a kind, by its name in `KINDS`, set as it's most often wanted.
@@ -236,6 +283,13 @@ impl MidiFx {
                 to: 74,
                 scale: 100,
             },
+            "MPE Shaper" => MidiFx::MpeShaper {
+                bend: 100,
+                round: 0,
+                slide: ExprShape::PLAIN,
+                press: ExprShape::PLAIN,
+                swap: false,
+            },
             _ => return None,
         })
     }
@@ -250,17 +304,49 @@ impl MidiFx {
             MidiFx::NoteRepeater { .. } => "Note Repeater",
             MidiFx::Randomizer { .. } => "Randomizer",
             MidiFx::Modifier { .. } => "Modifier",
+            MidiFx::MpeShaper { .. } => "MPE Shaper",
+            MidiFx::Plugin { .. } => "Plugin",
         }
     }
 }
 
-/// A MIDI effect on a track, and whether it's bypassed.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+/// A MIDI effect on a track, and whether it's bypassed: a built-in one, or a plugin (Scaler,
+/// a MIDI-processing Audio Unit, a CLAP note effect) whose notes go on down the chain.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MidiFxSlot {
     #[serde(flatten)]
     pub fx: MidiFx,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub bypass: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<super::PluginRef>,
+}
+
+impl MidiFxSlot {
+    pub fn new(fx: MidiFx) -> MidiFxSlot {
+        MidiFxSlot {
+            fx,
+            bypass: false,
+            plugin: None,
+        }
+    }
+
+    /// A plugin's slot.
+    pub fn plugin(r: super::PluginRef) -> MidiFxSlot {
+        MidiFxSlot {
+            fx: MidiFx::Plugin { index: 0 },
+            bypass: false,
+            plugin: Some(r),
+        }
+    }
+
+    /// Its name: a plugin's own, else its kind's.
+    pub fn name(&self) -> &str {
+        match &self.plugin {
+            Some(r) => &r.class,
+            None => self.fx.name(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -287,6 +373,7 @@ mod tests {
         let slot = MidiFxSlot {
             fx: MidiFx::fresh("Transposer").unwrap(),
             bypass: false,
+            plugin: None,
         };
         let json = serde_json::to_string(&slot).unwrap();
         assert_eq!(json, r#"{"type":"transposer","semitones":12}"#);

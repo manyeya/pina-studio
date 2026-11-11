@@ -1470,27 +1470,56 @@ fn the_built_in_effects_windows_are_made_bigger_by_their_corner(cx: &mut TestApp
         cx.run_until_parked();
         let size =
             |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.fx_view.as_ref().unwrap().size);
+        // Where something in it is, as a share of the window: the same at any size.
+        let share = |cx: &mut VisualTestContext| {
+            let top = cx.debug_bounds("fx-title").unwrap();
+            let end = cx.debug_bounds("fx-resize").unwrap().center();
+            let on = cx.debug_bounds("fx-close").unwrap().center();
+            let (x0, y0) = (f32::from(top.origin.x), f32::from(top.origin.y));
+            (
+                (f32::from(on.x) - x0) / (f32::from(end.x) - x0),
+                (f32::from(on.y) - y0) / (f32::from(end.y) - y0),
+            )
+        };
         let was = size(cx);
+        let placed = share(cx);
         let grip = cx
             .debug_bounds("fx-resize")
             .expect("its corner is there")
             .center();
         drag(cx, grip, grip + point(px(60.), px(40.)));
         let now = size(cx);
+        // Bigger as a whole: its shape kept, drawn that size, nothing moved inside it.
         assert!(
             now.0 > was.0 && now.1 > was.1,
             "{}: {was:?} {now:?}",
             b.name()
         );
+        assert!(
+            (now.0 / was.0 - now.1 / was.1).abs() < 1e-3,
+            "{}: its shape",
+            b.name()
+        );
         let window = cx.debug_bounds("fx-resize").unwrap();
         assert!(
-            (f32::from(window.center().x) - f32::from(grip.x) - 60.0).abs() < 2.0,
+            (f32::from(window.center().x) - f32::from(grip.x) - (now.0 - was.0)).abs() < 2.0,
             "it's drawn that size"
         );
-        // Never smaller than it opens.
+        let moved = share(cx);
+        assert!(
+            (moved.0 - placed.0).abs() < 0.01 && (moved.1 - placed.1).abs() < 0.01,
+            "{}: inside it, nothing moved: {placed:?} {moved:?}",
+            b.name()
+        );
+        // As small as three quarters of how it opens, no smaller.
         let grip = window.center();
         drag(cx, grip, grip - point(px(600.), px(600.)));
-        assert_eq!(size(cx), was, "{}", b.name());
+        let least = size(cx);
+        assert!(
+            (least.0 - was.0 * 0.75).abs() < 0.5 && (least.1 - was.1 * 0.75).abs() < 0.5,
+            "{}",
+            b.name()
+        );
     }
 }
 
@@ -1507,26 +1536,99 @@ fn a_tracks_midi_fx_are_added_set_ordered_bypassed_and_taken_out(cx: &mut TestAp
         let name: &'static str = Box::leak(name.to_string().into_boxed_str());
         click_on(cx, name, Modifiers::none(), MouseButton::Left);
     };
+    // Empty: the window opens on the kinds to add.
     click(cx, "midi-fx-slot-0");
     assert!(ws.read_with(cx, |ws, _| ws.midi_fx_view.is_some()));
-    click(cx, "midi-fx-add-Arpeggiator");
-    click(cx, "midi-fx-0-Rate-1/8");
-    click(cx, "midi-fx-0-Order-Up & down");
+    click(cx, "midi-fx-pick-Arpeggiator");
+    click(cx, "midi-fx-0-rate-1/8");
+    click(cx, "midi-fx-0-order-up-&-down");
     let arp = list(cx)[0].fx;
     assert!(
         matches!(arp, MidiFx::Arpeggiator { rate, order: pina_engine::song::project::ArpOrder::UpDown, .. } if rate == 0.5),
         "{arp:?}"
     );
-    click(cx, "midi-fx-add-Transposer");
-    click(cx, "midi-fx-1-Semitones-+");
-    assert_eq!(list(cx)[1].fx, MidiFx::Transposer { semitones: 13 });
-    // Moved first, bypassed; the arpeggiator taken out.
-    click(cx, "midi-fx-1-↑");
+    // Another after it, picked as it's added; a jump, then its dial dragged up.
+    click(cx, "midi-fx-add-row");
+    click(cx, "midi-fx-pick-Transposer");
+    click(cx, "midi-fx-1-jump-+7");
+    assert_eq!(list(cx)[1].fx, MidiFx::Transposer { semitones: 7 });
+    let at = cx
+        .debug_bounds("midi-fx-1-dial-semitones")
+        .unwrap()
+        .center();
+    drag(cx, at, at + point(px(0.), px(-30.)));
+    assert!(matches!(list(cx)[1].fx, MidiFx::Transposer { semitones } if semitones > 7));
+    // ⌘-click: back as a fresh one has it.
+    click_on(
+        cx,
+        "midi-fx-1-dial-semitones",
+        Modifiers::command(),
+        MouseButton::Left,
+    );
+    assert_eq!(list(cx)[1].fx, MidiFx::Transposer { semitones: 12 });
+    // Moved first, switched off; the arpeggiator picked and taken out.
+    click(cx, "midi-fx-1-up");
     assert_eq!(list(cx)[0].fx.name(), "Transposer");
     click(cx, "midi-fx-0-on");
     assert!(list(cx)[0].bypass);
-    click(cx, "midi-fx-1-×");
+    click(cx, "midi-fx-row-1");
+    click(cx, "midi-fx-1-remove");
     assert_eq!(list(cx).len(), 1);
+    // A chord to hear them by.
+    click(cx, "midi-fx-hear");
+    assert!(ws.read_with(cx, |ws, _| ws.midi_fx_view.as_ref().unwrap().hearing));
     cx.simulate_keystrokes("cmd-z");
     assert_eq!(list(cx).len(), 2);
+}
+
+#[gpui::test]
+fn a_midi_effect_plugin_goes_in_a_tracks_midi_fx_and_opens_its_window(cx: &mut TestAppContext) {
+    use pina_engine::{plugin::scan::PluginInfo, song::project::Format};
+    let (ws, cx) = open(cx);
+    // A MIDI-processing Audio Unit, as Scaler's is: offered as a MIDI effect, not an audio one.
+    let scaler = PluginInfo {
+        format: Format::Au,
+        path: "/Library/Audio/Plug-Ins/Components/Scaler 2.component".into(),
+        class: "Scaler 2".into(),
+        uid: Some("aumi Scl2 PlgB".into()),
+        vendor: "Plugin Boutique".into(),
+        instrument: false,
+        categories: Vec::new(),
+    };
+    assert!(scaler.midi_effect());
+    ws.update(cx, |ws, _| ws.plugins = Some(vec![scaler]));
+    cx.simulate_keystrokes("x");
+    cx.run_until_parked();
+    click_on(cx, "midi-fx-slot-0", Modifiers::none(), MouseButton::Left);
+    click_on(
+        cx,
+        "midi-fx-plugin-Scaler 2",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    let slot = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].midi_fx[0].clone());
+    assert_eq!(slot.name(), "Scaler 2");
+    assert!(slot.plugin.is_some());
+    // Its panel: its own window a click away; the strip says its name.
+    assert!(cx.debug_bounds("midi-fx-open-plugin").is_some());
+    let shown = ws.read_with(cx, |ws, _| ws.midi_fx_view.as_ref().map(|v| v.picked));
+    assert_eq!(shown, Some(0));
+    // Saved and opened again, it's still a plugin, before a built-in added after it.
+    click_on(cx, "midi-fx-add-row", Modifiers::none(), MouseButton::Left);
+    click_on(
+        cx,
+        "midi-fx-pick-Transposer",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    let json = ws.read_with(cx, |ws, _| {
+        serde_json::to_string(&ws.session.project.tracks[0].midi_fx).unwrap()
+    });
+    let back: Vec<pina_engine::song::project::MidiFxSlot> = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.len(), 2);
+    assert_eq!(
+        back[0].plugin.as_ref().map(|r| r.class.as_str()),
+        Some("Scaler 2")
+    );
+    assert_eq!(back[1].fx.name(), "Transposer");
 }

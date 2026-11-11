@@ -93,6 +93,16 @@ impl AuPlugin {
             transportStateProc2: Some(transport_state2),
         };
         unit.set(kAudioUnitProperty_HostCallbacks, GLOBAL, 0, &host);
+        // What it plays, as a MIDI effect: its MIDI out, into notes (units without one say no).
+        let mut notes_out = Box::new(NotesOut {
+            list: Vec::with_capacity(512),
+            frames: 0,
+        });
+        let midi_out_to = MidiOutputCallback {
+            callback: Some(midi_out),
+            user: (&mut *notes_out as *mut NotesOut).cast(),
+        };
+        unit.set(MIDI_OUTPUT_CALLBACK, GLOBAL, 0, &midi_out_to);
 
         let status = one_at_a_time(|| unsafe { AudioUnitInitialize(au) });
         if status != 0 {
@@ -136,14 +146,17 @@ impl AuPlugin {
             list,
             in_channels,
             time,
-            midi: kind == kAudioUnitType_MusicDevice || kind == kAudioUnitType_MusicEffect,
-            mpe: crate::plugin::mpe::Mpe::new(false),
+            midi: kind == kAudioUnitType_MusicDevice
+                || kind == kAudioUnitType_MusicEffect
+                || kind == kAudioUnitType_MIDIProcessor,
+            mpe: crate::plugin::mpe::Mpe::new(None),
             latency: (seconds.max(0.0) * rate).round() as u32,
             sidechain,
             ranges,
             automation: [(0, 0.0, 0.0); AUTOMATED],
             automated: 0,
             max_block,
+            notes_out,
         };
         Ok((plugin, processor))
     }

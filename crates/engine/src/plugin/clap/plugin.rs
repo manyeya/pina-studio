@@ -147,6 +147,7 @@ impl ClapPlugin {
                 automation: [(0, 0.0, 0.0); AUTOMATED],
                 automated: 0,
                 events: Vec::with_capacity(EVENTS),
+                notes_out: Vec::with_capacity(EVENTS),
                 midi_notes,
                 _buffers: buffers,
                 _channels: pointers,
@@ -214,7 +215,13 @@ impl ClapPlugin {
             .filter_map(|&(id, v)| Some(param_event(0, id, self.range(id)?.plain(v))))
             .collect();
         // While active, a flush is for its audio thread, which isn't running it.
-        as_audio(|| unsafe { flush(self.plugin, &input_events(&events), &output_events()) });
+        as_audio(|| unsafe {
+            flush(
+                self.plugin,
+                &input_events(&events),
+                &output_events(std::ptr::null_mut()),
+            )
+        });
         self.inst.leave();
         true
     }

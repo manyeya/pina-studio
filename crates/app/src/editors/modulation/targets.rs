@@ -62,6 +62,7 @@ impl Workspace {
             ModTarget::CompMakeup => "Makeup".into(),
             ModTarget::Tool(k, i) => self.param_name(t, Param::Tool(k, i)),
             ModTarget::Poly(i) => self.param_name(t, Param::Poly(i)),
+            ModTarget::Rack(k, i) => self.rack_name(t, k, i),
             ModTarget::SatDrive => "Drive".into(),
             ModTarget::SatTone => "Tone".into(),
             ModTarget::SatMix => "Saturation mix".into(),
@@ -206,6 +207,15 @@ impl Workspace {
                 group(&mut items, &name, targets);
             }
         }
+        // Its synth's own effects.
+        if let Some(Instrument::Poly(p)) = &track.instrument {
+            for (k, u) in p.fx.iter().enumerate() {
+                let n = crate::mix::strip::knobs(u.kind()).len();
+                let targets = (0..n).map(|i| ModTarget::Rack(k as u8, i as u8)).collect();
+                let name = format!("Synth-0 {}", pina_engine::song::project::rack_name(u));
+                group(&mut items, &name, targets);
+            }
+        }
         if matches!(track.instrument, Some(Instrument::Sampler(_))) {
             group(
                 &mut items,
@@ -228,6 +238,10 @@ impl Workspace {
                         i + 1,
                         track.inserts.get(i).map_or("", |r| r.class.as_str())
                     ),
+                    Which::MidiFx(_) => format!(
+                        "MIDI FX: {}",
+                        track.plugin(which).map_or("", |r| r.class.as_str())
+                    ),
                 },
                 MenuAction::Nothing,
             ));
@@ -235,6 +249,7 @@ impl Workspace {
             // all); an effect's by its plugin too, as `target_name` says them.
             let class = match which {
                 Which::Insert(i) => track.inserts.get(i).map(|r| r.class.as_str()),
+                Which::MidiFx(_) => track.plugin(which).map(|r| r.class.as_str()),
                 Which::Instrument => None,
             };
             items.extend(names.iter().map(|(id, name)| {

@@ -1,6 +1,7 @@
 //! A song compiled into what plays: each track's events, clips, controls and automation in samples, its sends and output, delay compensation.
 
 use super::*;
+use crate::song::project::MidiFx;
 
 pub(crate) struct Clip {
     /// Timeline position and length, and where in the file it starts, all in samples.
@@ -36,6 +37,8 @@ pub(crate) struct Event {
     /// 127), both rolled as it comes due; 100 and 0 for anything else.
     pub(crate) chance: u8,
     pub(crate) spread: u8,
+    /// A note off's velocity, 0 to 1 (0: not said).
+    pub(crate) release: f32,
 }
 
 /// A controller move, pitch bend, pressure or note expression, at a sample.
@@ -155,6 +158,27 @@ pub(crate) struct StripDsp {
     pub(crate) more: Arc<Vec<StripDsp>>,
 }
 
+/// A stacked effect's settings as `u` has them, what it made ahead (an EQ's linear phase) kept.
+fn with_unit(d: &StripDsp, u: Unit) -> StripDsp {
+    let mut out = StripDsp {
+        eq: None,
+        made: d.made.clone(),
+        comp: None,
+        sat: None,
+        limit: None,
+        unit: None,
+        more: d.more.clone(),
+    };
+    match u {
+        Unit::Eq(e) => out.eq = Some(e),
+        Unit::Comp(c) => out.comp = Some(c),
+        Unit::Sat(s) => out.sat = Some(s),
+        Unit::Limit(l) => out.limit = Some(l),
+        other => out.unit = Some(other),
+    }
+    out
+}
+
 /// What a Live Loops cell plays, from 0, over `length` samples.
 pub(crate) struct CellPlan {
     pub(crate) events: Vec<Event>,
@@ -258,6 +282,8 @@ pub(crate) struct Plan {
     /// Its limiter's settings' automation, in samples.
     pub(crate) limit_auto: Vec<(LimitParam, Vec<AutoPoint>)>,
     pub(crate) tool_auto: Vec<(u8, u8, Vec<AutoPoint>)>,
+    /// Its synth's own effects' knobs' automation: (place in the rack, knob, points).
+    pub(crate) rack_auto: Vec<(u8, u8, Vec<AutoPoint>)>,
     pub(crate) voice_auto: Vec<(u8, Vec<AutoPoint>)>,
     pub(crate) poly_auto: Vec<(u16, Vec<AutoPoint>)>,
     /// Aux index, level, and whether it's taken before the fader.
@@ -275,6 +301,9 @@ pub(crate) struct Plan {
     /// The sampler's settings, which it follows as they change.
     pub(crate) sampler: Option<Arc<crate::song::project::Sampler>>,
     pub(crate) poly: Option<Arc<crate::dsp::poly::PolyPlan>>,
+    pub(crate) bloom: Option<Arc<crate::dsp::bloom::BloomPlan>>,
+    /// The synth's own effects, each alone, in its rack's order.
+    pub(crate) rack: Arc<Vec<StripDsp>>,
     /// Delay compensation before the sends, and on the direct path after them.
     pub(crate) delay: usize,
     pub(crate) direct: usize,
@@ -301,6 +330,37 @@ impl Plan {
         moved.tool(place, u);
     }
 
+    /// The synth's own effect at `k` with its knobs where their automation has them at `from`,
+    /// then moved by what modulates them; None if nothing does either.
+    pub(crate) fn moved_rack(
+        &self,
+        k: usize,
+        d: &StripDsp,
+        from: u64,
+        moved: &Offsets,
+    ) -> Option<StripDsp> {
+        let mut u = d
+            .unit
+            .or(d.eq.map(Unit::Eq))
+            .or(d.comp.map(Unit::Comp))
+            .or(d.sat.map(Unit::Sat))
+            .or(d.limit.map(Unit::Limit))?;
+        let mut any = false;
+        for (_, knob, points) in self.rack_auto.iter().filter(|a| a.0 as usize == k) {
+            if let (Some(q), Some(v)) = (
+                knobs(u.kind()).get(*knob as usize),
+                value_at(points, from as f64),
+            ) {
+                (q.set)(&mut u, v);
+                any = true;
+            }
+        }
+        match moved.racked(k as u8, &u) {
+            Some(now) => Some(with_unit(d, now)),
+            None => any.then(|| with_unit(d, u)),
+        }
+    }
+
     /// The stacked effect at `j`, its knobs moved, if anything's moving them.
     pub(crate) fn moved_more(
         &self,
@@ -320,23 +380,7 @@ impl Plan {
             .or(d.sat.map(Unit::Sat))
             .or(d.limit.map(Unit::Limit))?;
         self.move_tool(place, from, moved, &mut u);
-        let mut out = StripDsp {
-            eq: None,
-            made: d.made.clone(),
-            comp: None,
-            sat: None,
-            limit: None,
-            unit: None,
-            more: d.more.clone(),
-        };
-        match u {
-            Unit::Eq(e) => out.eq = Some(e),
-            Unit::Comp(c) => out.comp = Some(c),
-            Unit::Sat(s) => out.sat = Some(s),
-            Unit::Limit(l) => out.limit = Some(l),
-            other => out.unit = Some(other),
-        }
-        Some(out)
+        Some(with_unit(d, u))
     }
 
     /// Moves a plugin's automated parameters across a block, `from` to `to` (samples read), and
@@ -574,6 +618,7 @@ pub fn compile(
                         velocity: -1.0,
                         chance: 100,
                         spread: 0,
+                        release: 0.0,
                     }),
                     _ => {}
                 }
@@ -741,6 +786,13 @@ pub fn compile(
                 .filter(|a| !a.points.is_empty())
                 .map(|a| (a.place, a.knob, in_samples(&a.points)))
                 .collect(),
+            rack_auto: auto
+                .map(|a| &a.rack[..])
+                .unwrap_or_default()
+                .iter()
+                .filter(|a| !a.points.is_empty())
+                .map(|a| (a.place, a.knob, in_samples(&a.points)))
+                .collect(),
             poly_auto: auto
                 .map(|a| &a.poly[..])
                 .unwrap_or_default()
@@ -790,15 +842,49 @@ pub fn compile(
                 Some(Instrument::Poly(p)) => Some(Arc::new(crate::dsp::poly::PolyPlan::new(p))),
                 _ => None,
             },
+            bloom: match &t.instrument {
+                Some(Instrument::Bloom(b)) => Some(Arc::new(crate::dsp::bloom::BloomPlan::new(b))),
+                _ => None,
+            },
+            rack: match &t.instrument {
+                Some(Instrument::Poly(p)) => {
+                    // The rack off: every effect passed by, each one's own switch kept.
+                    let fx: Vec<Unit> =
+                        p.fx.iter()
+                            .take(crate::song::project::RACK)
+                            .map(|&u| {
+                                let mut u = u;
+                                *u.bypass_mut() |= p.rack_off;
+                                u
+                            })
+                            .collect();
+                    strip_dsp(None, None, None, None, &fx, rate).more
+                }
+                _ => Arc::default(),
+            },
             sampler: match &t.instrument {
                 Some(Instrument::Sampler(s)) => Some(Arc::new(s.clone())),
                 _ => None,
             },
+            // A plugin's place: its index among the track's MIDI FX plugins (all loaded, those
+            // bypassed too, so their settings run on).
             midi_fx: t
                 .midi_fx
                 .iter()
-                .filter(|s| !s.bypass)
-                .map(|s| s.fx)
+                .scan(0u8, |plugins, s| {
+                    let fx = match &s.plugin {
+                        Some(_) => {
+                            *plugins += 1;
+                            MidiFx::Plugin {
+                                index: *plugins - 1,
+                            }
+                        }
+                        None => s.fx,
+                    };
+                    Some((fx, s.bypass))
+                })
+                .filter(|(_, bypass)| !bypass)
+                .map(|(fx, _)| fx)
                 .collect(),
             key: project.song_key(),
         });
@@ -1053,6 +1139,7 @@ pub(crate) fn play_region(
                     velocity,
                     chance: n.chance,
                     spread: n.spread,
+                    release: 0.0,
                 });
                 let off = project.samples(on + n.length, rate);
                 events.push(Event {
@@ -1061,7 +1148,18 @@ pub(crate) fn play_region(
                     velocity: 0.0,
                     chance: 100,
                     spread: 0,
+                    release: n.release.min(127) as f32 / 127.0,
                 });
+                // Its own pitch, slide and pressure, along their lines in 64ths.
+                for (t, kind) in n
+                    .expression
+                    .moves(pitch, n.length, crate::song::project::PPQ / 64)
+                {
+                    controls.push(ControlEvent {
+                        at: project.samples(on + t, rate),
+                        kind,
+                    });
+                }
             }
             // A pattern's automation rows on MIDI controllers, pitch bend and pressure: a move
             // at each step that plays, or a slide to the next in 64ths.

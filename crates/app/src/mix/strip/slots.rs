@@ -225,7 +225,7 @@ pub fn eq_thumbnail(
     cx: &mut Context<Workspace>,
 ) -> Div {
     let eq = ws.strip_dsp(ch).0;
-    let rate = ws.session.project.sample_rate as f64;
+    let rate = ws.player.rate();
     let curve = eq.filter(|e| !e.bypass).map(|e| eq_curve(&e, rate, 48));
     div()
         .flex_none()

@@ -5,7 +5,7 @@
 //! Clicking a plugin opens its editor; clicking an empty slot, or right-clicking any, picks one.
 //! Sends drag up and down for level; right-click one to remove it.
 
-mod channel;
+pub(crate) mod channel;
 mod learn;
 mod menus;
 mod order;

@@ -17,6 +17,7 @@ fn a_real_instrument_plays_saves_restores_and_shuts_down() {
         offset: 0,
         pitch: 60,
         velocity: 1.0,
+        release: 0.0,
     };
     processor.process([&mut l, &mut r], 512, &[note], &[], None);
     let mut loudest = 0f32;

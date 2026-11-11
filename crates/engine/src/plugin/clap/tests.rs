@@ -395,6 +395,7 @@ fn notes_controls_and_automation_arrive_in_time_order() {
         offset,
         pitch: 60,
         velocity,
+        release: 0.0,
     };
     let at = |offset, kind| Control { offset, kind };
     let controls = [
@@ -482,6 +483,7 @@ fn a_plugin_that_only_takes_midi_hears_notes_as_midi() {
         offset: 3,
         pitch: 64,
         velocity: 0.5,
+        release: 0.0,
     };
     let on = note_event(&note, 3, true);
     assert_eq!(unsafe { on.midi.data }, [0x90, 64, 64]);
@@ -620,6 +622,7 @@ fn a_real_instrument_plays_saves_restores_and_shuts_down() {
         offset: 0,
         pitch: 60,
         velocity,
+        release: 0.0,
     };
     let played = run(&mut processor, 20, &[note(1.0)], &[]);
     assert!(loudest(&played) > 1e-3, "{}", loudest(&played));

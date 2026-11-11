@@ -247,6 +247,11 @@ impl Track {
         if !same {
             self.automation.forget(Which::Instrument);
         }
+        // The built-in synths' parameters share their lanes: another kind's mean other things.
+        let kind = |i: Option<&Instrument>| std::mem::discriminant(i.unwrap_or(&Instrument::Kit));
+        if kind(self.instrument.as_ref()) != kind(Some(&instrument)) {
+            self.automation.poly.clear();
+        }
         self.instrument = Some(instrument);
     }
 
@@ -258,6 +263,7 @@ impl Track {
                 _ => None,
             },
             Which::Insert(i) => self.inserts.get(i),
+            Which::MidiFx(i) => self.midi_fx.iter().filter_map(|s| s.plugin.as_ref()).nth(i),
         }
     }
 
@@ -268,6 +274,11 @@ impl Track {
                 _ => None,
             },
             Which::Insert(i) => self.inserts.get_mut(i),
+            Which::MidiFx(i) => self
+                .midi_fx
+                .iter_mut()
+                .filter_map(|s| s.plugin.as_mut())
+                .nth(i),
         }
     }
 }
@@ -346,6 +357,8 @@ pub enum Instrument {
     Sampler(Sampler),
     /// The built-in synth.
     Poly(Box<Poly>),
+    /// Bloom: sounds grown from a seed.
+    Bloom(Box<Bloom>),
     /// A kit: its notes play its pads, the tracks whose `pad` is it; it sounds nothing itself.
     Kit,
     /// A plugin of any format (once only VST3, which is still read as `"vst3"`).
@@ -379,6 +392,53 @@ impl Track {
 }
 
 impl Instrument {
+    /// Its built-in synth's parameters (Synth-0's or Bloom's), which `Param::Poly` and
+    /// `ModTarget::Poly` count through.
+    pub fn own_params(&self) -> Option<&'static [PolyParam]> {
+        match self {
+            Instrument::Poly(_) => Some(&POLY_PARAMS),
+            Instrument::Bloom(_) => Some(&BLOOM_PARAMS),
+            _ => None,
+        }
+    }
+
+    /// Those parameters' values, in their own units.
+    pub fn own_values(&self) -> Option<&[f32]> {
+        match self {
+            Instrument::Poly(p) => Some(&p.params.0),
+            Instrument::Bloom(b) => Some(&b.params.0),
+            _ => None,
+        }
+    }
+
+    pub fn own_values_mut(&mut self) -> Option<&mut [f32]> {
+        match self {
+            Instrument::Poly(p) => Some(&mut p.params.0),
+            Instrument::Bloom(b) => Some(&mut b.params.0),
+            _ => None,
+        }
+    }
+
+    /// A parameter's knob position, 0 to 1.
+    pub fn own_pos(&self, i: usize) -> Option<f32> {
+        let q = self.own_params()?.get(i)?;
+        Some(q.scale.pos(*self.own_values()?.get(i)?))
+    }
+
+    /// Sets a parameter by its knob position, 0 to 1 (a whole number's rounded).
+    pub fn set_own_pos(&mut self, i: usize, pos: f32) {
+        let Some(q) = self.own_params().and_then(|p| p.get(i)) else {
+            return;
+        };
+        let value = match q.reads {
+            Reads::Whole => q.scale.value(pos).round(),
+            _ => q.scale.value(pos),
+        };
+        if let Some(v) = self.own_values_mut().and_then(|v| v.get_mut(i)) {
+            *v = value;
+        }
+    }
+
     /// Whether its notes are sounds rather than pitches: a drum kit, or a sampler with a sample
     /// on each note. A key change leaves them be, and they don't count towards the key.
     pub fn is_kit(&self) -> bool {

@@ -10,6 +10,11 @@ impl Workspace {
         {
             return self.open_poly(t, cx);
         }
+        if let (Channel::Track(t), Which::Instrument) = (ch, which)
+            && self.bloom(t).is_some()
+        {
+            return self.open_bloom(t, cx);
+        }
         let id = self.owner_id(ch);
         match self.player.open_editor(id, which) {
             Ok(()) => self.picture_when_shown(ch, which, cx),
@@ -67,7 +72,12 @@ impl Workspace {
                         Instrument::Poly(Box::new(p)),
                     )
                 });
+                let bloom = (
+                    pina_engine::song::project::BLOOM_NAME,
+                    crate::sounds::catalog::new_bloom(),
+                );
                 for (name, instrument) in synth.into_iter().chain([
+                    bloom,
                     ("Sine Synth", Instrument::Synth),
                     ("Drum Kit", Instrument::Drums),
                 ]) {
@@ -107,7 +117,7 @@ impl Workspace {
             }
         }
         if let (Channel::Track(t), Which::Instrument) = (ch, which) {
-            items.extend(self.mpe_item(t));
+            items.extend(self.mpe_items(t));
         }
         // Every plugin and built-in, with pictures, in the picker.
         items.push((

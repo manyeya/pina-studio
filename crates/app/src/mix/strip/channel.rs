@@ -252,6 +252,9 @@ impl Workspace {
 
     /// The built-in the effect window shows (its channel's own, or a stacked one), to change.
     pub fn fx_unit_mut<T: Stackable>(&mut self, ch: Channel) -> Option<&mut T> {
+        if let Some((t, slot)) = self.fx_view.as_ref().and_then(|v| v.rack) {
+            return self.poly_mut(t)?.fx.get_mut(slot).and_then(T::of_mut);
+        }
         let at = self.fx_stacked();
         self.unit_mut(ch, at)
     }

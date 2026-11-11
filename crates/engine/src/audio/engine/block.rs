@@ -28,12 +28,14 @@ impl Engine {
                     offset: 0,
                     pitch: n.pitch,
                     velocity,
+                    release: n.release as f32 / 127.0,
                 };
                 live_len += 1;
                 let played = Played {
                     at: self.position,
                     pitch: n.pitch,
                     velocity: n.velocity,
+                    release: n.release,
                 };
                 let _ = link.played.push(played);
             }
@@ -370,7 +372,7 @@ impl Engine {
                 peak[side] = peak[side].max(s.abs());
             }
         }
-        let metronome = shared.is_some_and(Shared::metronome);
+        let metronome = shared.is_some_and(Shared::clicking);
         if playing && metronome && rolling < frames {
             click(
                 &mut self.click,
@@ -379,7 +381,35 @@ impl Engine {
                 (arrangement.beat, arrangement.beats_per_bar),
                 self.rate,
                 [&mut out_l[rolling..frames], &mut out_r[rolling..frames]],
+                shared.map_or(ClickStyle::default(), Shared::click_style),
             );
+        }
+        // A test tone asked for: 440 Hz at -18 dB a second and a half, the sides asked.
+        if let Some(s) = shared {
+            let asked = s.tone.swap(0, Ordering::Relaxed);
+            if asked != 0 {
+                self.tone = ((self.rate * 1.5) as u64, asked, 0.0);
+            }
+        }
+        if self.tone.0 > 0 {
+            let (left, sides, mut phase) = self.tone;
+            let total = (self.rate * 1.5) as u64;
+            let fade = (self.rate * 0.01) as u64;
+            let n = (left as usize).min(frames);
+            for i in 0..n {
+                let k = total - left + i as u64;
+                let edge = (k.min(total - k) as f32 / fade as f32).min(1.0);
+                let s = phase.sin() * 0.125 * edge;
+                phase = (phase + std::f32::consts::TAU * 440.0 / self.rate as f32)
+                    % std::f32::consts::TAU;
+                if sides & 1 != 0 {
+                    out_l[i] += s;
+                }
+                if sides & 2 != 0 {
+                    out_r[i] += s;
+                }
+            }
+            self.tone = (left - n as u64, sides, phase);
         }
         if playing {
             self.preroll -= rolling as u64;
@@ -390,6 +420,7 @@ impl Engine {
             s.position.store(self.position, Ordering::Relaxed);
             s.playing.store(self.playing, Ordering::Relaxed);
         }
+        self.heard_block(heard, frames, playing);
     }
 }
 
@@ -565,8 +596,45 @@ fn track(
                 tempo,
                 rate,
             };
-            lane.midi_fx
-                .run_all(&plan.midi_fx, plan.key, (notes, controls), frames, clock)
+            let plugged = plan
+                .midi_fx
+                .iter()
+                .any(|f| matches!(f, crate::song::project::MidiFx::Plugin { .. }));
+            match plugged {
+                false => {
+                    lane.midi_fx
+                        .run_all(&plan.midi_fx, plan.key, (notes, controls), frames, clock)
+                }
+                // A plugin in the chain: a stage at a time, each plugin playing from what
+                // reached it, what it plays going on down.
+                true => {
+                    let (runner, plugins) = (&mut lane.midi_fx, &mut lane.midi_plugins);
+                    runner.set(notes);
+                    for (k, f) in plan.midi_fx.iter().enumerate() {
+                        match f {
+                            crate::song::project::MidiFx::Plugin { index } => {
+                                let Some(p) = plugins.get_mut(*index as usize) else {
+                                    continue;
+                                };
+                                let [l, r] = &mut *lane.midi_scratch;
+                                l[..frames].fill(0.0);
+                                r[..frames].fill(0.0);
+                                p.set_transport(playing, from, beats, tempo);
+                                p.process(
+                                    [&mut l[..frames], &mut r[..frames]],
+                                    frames,
+                                    runner.current(),
+                                    controls,
+                                    None,
+                                );
+                                runner.set(p.notes_out());
+                            }
+                            f => runner.through(k, f, plan.key, frames, clock),
+                        }
+                    }
+                    runner.finish(&plan.midi_fx, controls, frames, clock)
+                }
+            }
         }
     };
     // Its modulators, this block: in time with the song while it plays, set off by its
@@ -649,10 +717,43 @@ fn track(
                 }
             }
         }
+        // Bloom's parameters ride the synth's automation and modulators: a track has one of
+        // them, and they're its built-in's own.
+        Source::Bloom(s) => {
+            if let Some(p) = &plan.bloom {
+                s.set_tempo(tempo as f32);
+                let auto = plan.poly_auto.iter().filter_map(|(i, points)| {
+                    let v = value_at(points, from as f64)?;
+                    Some((*i as usize, v - p.pos(*i as usize)))
+                });
+                s.begin(p, auto.chain(moved.polys()));
+                s.process(p, [&mut *l, &mut *r], frames, notes, controls);
+                if let Some(shared) = shared.filter(|sh| sh.watches_poly(slot)) {
+                    shared.write_poly_live(&s.live());
+                }
+            }
+        }
         Source::Plugin(p) => {
             plan.automate(Which::Instrument, p, (from, to), &moved);
             p.set_transport(playing, from, beats, tempo);
             p.process([&mut *l, &mut *r], frames, notes, controls, None);
+        }
+    }
+    // The synth's own effects, after its voices and before the track's, its modulators riding
+    // their knobs. The synth whose window is open meters the one it shows.
+    let watched = shared.filter(|sh| sh.watches_poly(plan.slot));
+    for (k, d) in plan.rack.iter().enumerate() {
+        if let Some(s) = lane.rack.get_mut(k) {
+            let held = plan.moved_rack(k, d, from, &moved);
+            s.run_alone(
+                held.as_ref().unwrap_or(d),
+                l,
+                r,
+                None,
+                watched,
+                (plan.slot, RACK_METERED + k),
+                Clock { bpm: tempo, beats },
+            );
         }
     }
     // What the EQ's dynamic bands can listen to: a track it names, as a plugin would.

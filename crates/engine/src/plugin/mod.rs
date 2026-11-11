@@ -31,6 +31,8 @@ pub struct Note {
     pub pitch: u8,
     /// 0 is a note off.
     pub velocity: f32,
+    /// A note off's velocity, how fast the key came up, 0 to 1: 0 when nothing says.
+    pub release: f32,
 }
 
 /// What an instrument hears besides notes, `offset` samples into the block.
@@ -124,9 +126,9 @@ pub trait ProcessorApi: Send {
     }
     /// Whether edits from the main thread are still waiting to be applied.
     fn pending(&self) -> bool;
-    /// For a plugin that takes only MIDI 1.0: each note on a channel of its own, so its
-    /// expression is heard (MPE). Others hear each note's expression anyway.
-    fn set_mpe(&mut self, _on: bool) {}
+    /// For a plugin that takes only MIDI 1.0: each note on a channel of its own in `zone` (or
+    /// none), so its expression is heard (MPE). Others hear each note's expression anyway.
+    fn set_mpe(&mut self, _zone: Option<crate::song::project::MpeZone>) {}
     /// Runs one block in place: `buf` goes to the main input (if it has one) and comes back
     /// holding the main output; `sidechain`, if given, goes to its sidechain input. Applies the
     /// notes and controls (each sorted by offset) and any edits. Allocation-free.
@@ -138,6 +140,11 @@ pub trait ProcessorApi: Send {
         controls: &[Control],
         sidechain: Option<[&[f32]; 2]>,
     );
+    /// The notes it played itself in the last `process`, in time: a MIDI effect's (Scaler, an
+    /// arpeggiator, a chord maker), as a MIDI FX slot passes them on. None, for most.
+    fn notes_out(&self) -> &[Note] {
+        &[]
+    }
 }
 
 pub type Plugin = Box<dyn PluginApi>;
@@ -234,6 +241,7 @@ pub fn load(p: &mut Processor, instrument: bool, rate: f64, max_block: usize) ->
             offset: 0,
             pitch,
             velocity: 0.8,
+            release: 0.0,
         })
         .collect();
     let mut time = std::time::Duration::ZERO;
@@ -304,7 +312,7 @@ pub fn instantiate(
         #[cfg(not(target_os = "macos"))]
         Format::Au => Err(format!("{}: Audio Units are macOS's", r.class)),
     }?;
-    processor.set_mpe(r.mpe);
+    processor.set_mpe(r.mpe_heard());
     Ok((plugin, processor))
 }
 

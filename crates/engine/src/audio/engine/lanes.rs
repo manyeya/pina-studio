@@ -129,6 +129,7 @@ pub(crate) enum Source {
     Drums(Box<Drums>),
     Sampler(Box<Sampler>),
     Poly(Box<crate::dsp::poly::PolySynth>),
+    Bloom(Box<crate::dsp::bloom::BloomSynth>),
     Plugin(Processor),
 }
 
@@ -142,6 +143,10 @@ pub struct Lane {
     pub(crate) live: Held,
     /// Its MIDI effects' memories: what they hold and have waiting.
     pub(crate) midi_fx: Box<crate::dsp::midi_fx::MidiFxRunner>,
+    /// Its MIDI FX plugins (a slot's), in the chain's order: what each plays goes on down it;
+    /// and the silence they render into.
+    pub(crate) midi_plugins: Vec<Processor>,
+    pub(crate) midi_scratch: Box<[[f32; MAX_BLOCK]; 2]>,
     /// Delay compensation: before a track's sends, and after them (or after an aux's inserts).
     pub(crate) pre: Delay,
     pub(crate) post: Delay,
@@ -153,6 +158,8 @@ pub struct Lane {
     /// Its other built-ins' running state, one each, in the order the chain takes them: made
     /// off the audio thread and handed over (`Msg::Strips`), never fewer than it has.
     pub(crate) more: Vec<Strip>,
+    /// Its synth's own effects' running state, likewise (`Msg::Rack`).
+    pub(crate) rack: Vec<Strip>,
     pub(crate) binaural: Box<Binaural>,
     /// Its modulators' memories, and what they moved its volume and pan by last block (to ramp
     /// from).
@@ -202,10 +209,32 @@ impl Lane {
 pub struct LanePlugins {
     pub instrument: Option<Plugin>,
     pub inserts: Vec<Plugin>,
+    /// Its MIDI FX plugins' main-thread halves.
+    pub midi_fx: Vec<Plugin>,
     pub latencies: Vec<u32>,
     pub problems: Vec<String>,
     /// Where its built-in sampler's voices are playing, if it has one.
     pub sampler: Option<Arc<crate::dsp::sampler::SamplerTap>>,
+}
+
+/// A track's MIDI FX plugins loaded, each with its `held` settings (a running one's) or its
+/// saved ones: the main-thread halves, the audio-thread ones, and what wouldn't load.
+pub fn load_midi_plugins(
+    refs: &[PluginRef],
+    held: &mut [Option<Vec<u8>>],
+    rate: f64,
+    modules: &mut Modules,
+    dir: &Path,
+) -> (Vec<Plugin>, Vec<Processor>, Vec<String>) {
+    let (mut plugins, mut processors, mut problems) = (Vec::new(), Vec::new(), Vec::new());
+    for (i, r) in refs.iter().enumerate() {
+        let state = held.get_mut(i).and_then(Option::take);
+        let (plugin, processor, problem) = load_running(r, state, rate, modules, dir);
+        problems.extend(problem);
+        plugins.push(plugin);
+        processors.push(processor);
+    }
+    (plugins, processors, problems)
 }
 
 /// Loads a plugin at `rate` with `held` settings (a running one's, so nothing since the song
@@ -258,6 +287,9 @@ pub fn make_lane(
             Source::Sampler(Box::new(sampler))
         }
         Some(Instrument::Poly(_)) => Source::Poly(Box::new(crate::dsp::poly::PolySynth::new(rate))),
+        Some(Instrument::Bloom(_)) => {
+            Source::Bloom(Box::new(crate::dsp::bloom::BloomSynth::new(rate)))
+        }
         Some(Instrument::Plugin(r)) => {
             let (plugin, processor, problem) = load_running(r, None, rate, modules, dir);
             plugins.problems.extend(problem);
@@ -284,12 +316,15 @@ pub fn make_lane(
         held: Held::new(),
         live: Held::new(),
         midi_fx: Box::default(),
+        midi_plugins: Vec::new(),
+        midi_scratch: Box::new([[0.0; MAX_BLOCK]; 2]),
         pre: Delay::new(),
         post: Delay::new(),
         cell: None,
         queued: None,
         strip: Box::new(Strip::new(rate)),
         more: Vec::new(),
+        rack: Vec::new(),
         binaural: Box::default(),
         mods: [ModState::default(); MAX_MODS],
         mod_last: (0.0, 0.0),

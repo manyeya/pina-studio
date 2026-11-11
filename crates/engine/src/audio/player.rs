@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+use crate::audio::engine::{MidiPlugins, load_midi_plugins};
 use crate::{
     audio::engine::{
         AudioData, AudioFiles, AudioSetup, Engine, Garbage, LanePlugins, Link, LiveNote, MASTER,
@@ -19,7 +20,7 @@ use crate::{
     audio::midi::{self, LiveInput},
     audio::peaks::Peaks,
     plugin::{Editor, Plugin, PluginParam, Processor},
-    song::project::{Fx, Instrument, PluginRef, Project, STATES_DIR},
+    song::project::{Fx, Instrument, PluginRef, Project, RACK, STATES_DIR},
 };
 
 /// A lane: which slot it's in, what it was built from, its latency, and its plugins'
@@ -28,11 +29,15 @@ struct Slot {
     slot: usize,
     sound: Sound,
     latency: u32,
-    /// Whether its plugin instrument hears MPE, as last told.
-    mpe: bool,
-    /// What each of the lane's stacked built-ins' running state was made for.
+    /// The MPE zone its plugin instrument hears, as last told.
+    mpe: Option<crate::song::project::MpeZone>,
+    /// What each of the lane's stacked built-ins' running state was made for; and its synth's
+    /// own effects'.
     strips: Vec<Fx>,
+    rack: Vec<Fx>,
     plugins: LanePlugins,
+    /// Its MIDI FX plugins, as loaded.
+    midi: Vec<MidiKey>,
     /// Parameters the project sets, as last applied; and what each was before Pina Studio first set
     /// it, to go back to when the project stops setting it (as when that edit is undone).
     applied: HashMap<(Which, u32), f64>,
@@ -48,6 +53,7 @@ impl Slot {
         match which {
             Which::Instrument => self.plugins.instrument.as_ref(),
             Which::Insert(i) => self.plugins.inserts.get(i),
+            Which::MidiFx(i) => self.plugins.midi_fx.get(i),
         }
     }
 
@@ -57,6 +63,7 @@ impl Slot {
         let Some(p) = (match which {
             Which::Instrument => plugins.instrument.as_ref(),
             Which::Insert(i) => plugins.inserts.get(i),
+            Which::MidiFx(i) => plugins.midi_fx.get(i),
         }) else {
             return Ok(());
         };
@@ -115,6 +122,21 @@ pub const MASTER_ID: u64 = u64::MAX;
 /// its inserts.
 type Sound = (Option<String>, Vec<(PathBuf, String, u64)>);
 
+/// A MIDI FX plugin as a lane knows it: its bundle, name and instance.
+type MidiKey = (PathBuf, String, u64);
+
+/// A lane's MIDI FX plugins as they ran, each with its settings, kept while it's made again.
+type HeldMidi = Vec<(MidiKey, Option<Vec<u8>>)>;
+
+fn midi_key(r: &PluginRef) -> MidiKey {
+    (r.path.clone(), r.class.clone(), r.instance)
+}
+
+/// A track's MIDI FX plugins, in the chain's order.
+fn midi_refs(t: &crate::song::project::Track) -> Vec<PluginRef> {
+    t.midi_fx.iter().filter_map(|s| s.plugin.clone()).collect()
+}
+
 fn sound(instrument: Option<&Instrument>, inserts: &[PluginRef]) -> Sound {
     let key = |r: &PluginRef| (r.path.clone(), r.class.clone(), r.instance);
     let instrument = instrument.map(|i| match i {
@@ -128,6 +150,7 @@ fn sound(instrument: Option<&Instrument>, inserts: &[PluginRef]) -> Sound {
         ),
         // A synth's one voice engine, whatever it's set to.
         Instrument::Poly(_) => "poly".to_string(),
+        Instrument::Bloom(_) => "bloom".to_string(),
         Instrument::Plugin(r) => format!("{}#{}", r.path.display(), r.class),
     });
     (instrument, inserts.iter().map(key).collect())
@@ -144,6 +167,20 @@ fn matching<K: PartialEq>(before: &[K], now: &[K]) -> Vec<Option<usize>> {
             used[i] = true;
             Some(i)
         })
+        .collect()
+}
+
+/// A channel as a lane is made for it: its id, instrument and inserts.
+type Channel<'a> = (u64, Option<&'a Instrument>, &'a [PluginRef]);
+
+/// The song's channels: its tracks, auxes and the master.
+fn channels(project: &Project) -> Vec<Channel<'_>> {
+    project
+        .tracks
+        .iter()
+        .map(|t| (t.id, t.instrument.as_ref(), &t.inserts[..]))
+        .chain(project.auxes.iter().map(|a| (a.id, None, &a.inserts[..])))
+        .chain([(MASTER_ID, None, &project.master_inserts[..])])
         .collect()
 }
 
@@ -165,6 +202,7 @@ pub struct Player {
     played: rtrb::Consumer<Played>,
     heard: rtrb::Consumer<(u64, crate::plugin::ControlKind)>,
     _midi: Vec<midir::MidiInputConnection<()>>,
+    inputs: midi::Inputs,
     dir: PathBuf,
     /// Open plugin editors, by track or aux id.
     editors: HashMap<(u64, Which), Editor>,
@@ -172,6 +210,34 @@ pub struct Player {
     /// their processors (by the rearrangement they went in), and its count.
     retired: Vec<(u64, Vec<Plugin>)>,
     rearranged: u64,
+    /// What wouldn't load as a song opened a piece at a time (`load_next`), for `sync` to say.
+    problems: Vec<String>,
+}
+
+/// Running state for effects of the kinds `want`, where `had` (what a lane's was made for, made
+/// to match) has none, or one of the wrong kind for an effect with lines of its own (a reverb, a
+/// delay): None if the lane has all it needs.
+fn fresh_strips(had: &mut Vec<Fx>, want: &[Fx], lane: usize, rate: f64) -> Option<Box<Strips>> {
+    // Those with state of their own need a strip made for them.
+    let long = |k: Fx| !matches!(k, Fx::Eq | Fx::Comp | Fx::Sat | Fx::Limit);
+    let new = |k: usize| match had.get(k) {
+        None => true,
+        Some(&was) => was != want[k] && long(want[k]),
+    };
+    if !(0..want.len()).any(new) {
+        return None;
+    }
+    let fresh: Vec<Option<crate::dsp::Strip>> = (0..want.len())
+        .map(|k| new(k).then(|| crate::dsp::Strip::for_kind(want[k], rate)))
+        .collect();
+    let count = had.len();
+    for (k, &kind) in want.iter().enumerate() {
+        match had.get_mut(k) {
+            Some(s) => *s = kind,
+            None => had.push(kind),
+        }
+    }
+    Some(Box::new(Strips::new(lane, fresh, count)))
 }
 
 impl Drop for Player {
@@ -217,6 +283,7 @@ impl Player {
             played,
             heard,
             _midi: Vec::new(),
+            inputs: Default::default(),
             lanes: HashMap::new(),
             kits: HashMap::new(),
             free: (0..SLOTS).rev().collect(),
@@ -227,6 +294,7 @@ impl Player {
             editors: HashMap::new(),
             retired: Vec::new(),
             rearranged: 0,
+            problems: Vec::new(),
         };
         (player, engine)
     }
@@ -237,11 +305,42 @@ impl Player {
         let rate = crate::audio::engine::output_rate(project.sample_rate, setup)?;
         let (mut player, engine) = Player::new(dir, rate as f64);
         player.output = Some(engine.start_output(setup)?);
-        player._midi = midi::connect(&player.live);
+        player._midi = midi::connect(&player.live, &player.inputs);
         Ok(player)
     }
 
+    /// The MIDI inputs connected, how each is read, and whether each has played as MPE.
+    pub fn midi_inputs(&self) -> Vec<midi::InputState> {
+        self.inputs.lock().map(|a| a.clone()).unwrap_or_default()
+    }
+
+    /// Lists an input by name as though it were connected, read as it's set: tests have no MIDI
+    /// ports.
+    pub fn list_midi_input(&self, name: &str) {
+        if let Ok(mut all) = self.inputs.lock() {
+            all.push(midi::InputState {
+                name: name.to_string(),
+                setup: Default::default(),
+                found: false,
+            });
+        }
+    }
+
+    /// How the MIDI input named `name` is read, from now on.
+    pub fn set_midi_input(&self, name: &str, setup: midi::InputSetup) {
+        if let Ok(mut all) = self.inputs.lock() {
+            for i in all.iter_mut().filter(|i| i.name == name) {
+                i.setup = setup;
+            }
+        }
+    }
+
     /// Moves the sound to `setup`'s output and buffer, the song staying as it is.
+    /// The device it plays through, by name: None when it plays to nobody (tests).
+    pub fn output_device(&self) -> Option<String> {
+        self.output.as_ref().map(|o| o.device().to_string())
+    }
+
     pub fn set_output(&mut self, setup: &AudioSetup) -> Result<(), String> {
         self.output.as_mut().map_or(Ok(()), |o| o.change(setup))
     }
@@ -272,18 +371,12 @@ impl Player {
                 self.kits.entry(pad.kit).or_default().push((pad.note, t.id));
             }
         }
-        let channels: Vec<(u64, Option<&Instrument>, &[PluginRef])> = project
-            .tracks
-            .iter()
-            .map(|t| (t.id, t.instrument.as_ref(), &t.inserts[..]))
-            .chain(project.auxes.iter().map(|a| (a.id, None, &a.inserts[..])))
-            .chain([(MASTER_ID, None, &project.master_inserts[..])])
-            .collect();
+        let channels = channels(project);
         let current: HashMap<u64, Sound> = channels
             .iter()
             .map(|&(id, instrument, inserts)| (id, sound(instrument, inserts)))
             .collect();
-        let mut problems = Vec::new();
+        let mut problems = std::mem::take(&mut self.problems);
         // The same instrument: its inserts change in place. Those kept run on as they are
         // (moved, if they've moved), new ones load, those taken out go: nothing that stays is
         // loaded again, so nothing done to it since the song was saved is lost.
@@ -316,6 +409,12 @@ impl Player {
             .map(|(id, _)| *id)
             .collect();
         let mut held: HashMap<u64, Vec<Option<Vec<u8>>>> = HashMap::new();
+        let mut held_midi: HashMap<u64, HeldMidi> = HashMap::new();
+        let wanted_midi: HashMap<u64, Vec<PluginRef>> = project
+            .tracks
+            .iter()
+            .map(|t| (t.id, midi_refs(t)))
+            .collect();
         for id in stale {
             if let (Some(s), Some(now)) = (self.lanes.get(&id), current.get(&id)) {
                 let states = matching(&s.sound.1, &now.1)
@@ -326,6 +425,9 @@ impl Player {
                     })
                     .collect();
                 held.insert(id, states);
+                let midi = s.midi.iter().cloned();
+                let running = s.plugins.midi_fx.iter().map(|p| p.state());
+                held_midi.insert(id, midi.zip(running).collect());
             }
             // Editors close before their plugins go; the engine lets the processors go after.
             self.editors.retain(|(of, _), _| *of != id);
@@ -337,66 +439,48 @@ impl Player {
             if self.lanes.contains_key(&id) {
                 continue;
             }
-            let slot = self.free.pop().ok_or("too many tracks")?;
-            let mut states = held.remove(&id).unwrap_or_default();
-            let running: Vec<bool> = (0..inserts.len())
-                .map(|i| states.get(i).is_some_and(Option::is_some))
-                .collect();
-            // A plugin that won't load is stood in for; samples that can't be read leave the
-            // track silent rather than stopping the rest.
-            let made = make_lane(
-                instrument,
-                inserts,
-                &mut states,
-                self.rate,
-                &mut self.modules,
-                &self.dir,
-            );
-            let (lane, mut plugins, latency) = made.unwrap_or_else(|e| {
-                problems.push(e);
-                let empty = make_lane(
-                    None,
-                    &[],
-                    &mut Vec::new(),
-                    self.rate,
-                    &mut self.modules,
-                    &self.dir,
-                );
-                empty.expect("a lane without plugins always builds")
-            });
-            problems.append(&mut plugins.problems);
-            self.send(Msg::Insert(slot, Box::new(lane)))?;
-            let sound = sound(instrument, inserts);
-            // A preset its saved (or running) settings hold is loaded already.
-            let refs = match instrument {
-                Some(Instrument::Plugin(r)) => vec![(Which::Instrument, r, false)],
-                _ => Vec::new(),
+            let states = held.remove(&id).unwrap_or_default();
+            let midi = wanted_midi.get(&id).cloned().unwrap_or_default();
+            problems.extend(self.add_lane(
+                (id, instrument, inserts),
+                states,
+                held_midi.remove(&id),
+                &midi,
+            )?);
+        }
+        // A track's MIDI FX plugins changed (and nothing else that rebuilds it): loaded anew,
+        // those kept with the settings they have now, and handed over.
+        let mut swaps = Vec::new();
+        for t in &project.tracks {
+            let Some(slot) = self.lanes.get_mut(&t.id) else {
+                continue;
             };
-            let all = refs.into_iter().chain(
-                inserts
-                    .iter()
-                    .enumerate()
-                    .map(|(i, r)| (Which::Insert(i), r, running[i])),
-            );
-            let presets = all
-                .filter(|(_, r, running)| r.state.is_some() || *running)
-                .map(|(w, r, _)| (w, r.preset.clone()))
+            let midi = midi_refs(t);
+            let keys: Vec<MidiKey> = midi.iter().map(midi_key).collect();
+            if keys == slot.midi {
+                continue;
+            }
+            let running: Vec<Option<Vec<u8>>> =
+                slot.plugins.midi_fx.iter().map(|p| p.state()).collect();
+            let mut states: Vec<Option<Vec<u8>>> = matching(&slot.midi, &keys)
+                .into_iter()
+                .map(|j| j.and_then(|j| running[j].clone()))
                 .collect();
-            self.lanes.insert(
-                id,
-                Slot {
-                    slot,
-                    sound,
-                    latency,
-                    mpe: matches!(instrument, Some(Instrument::Plugin(r)) if r.mpe),
-                    strips: Vec::new(),
-                    plugins,
-                    applied: HashMap::new(),
-                    original: HashMap::new(),
-                    presets,
-                    before_preset: HashMap::new(),
-                },
-            );
+            let (midi_fx, processors, midi_problems) =
+                load_midi_plugins(&midi, &mut states, self.rate, &mut self.modules, &self.dir);
+            problems.extend(midi_problems);
+            slot.plugins.midi_fx = midi_fx;
+            slot.midi = keys;
+            let id = t.id;
+            self.editors
+                .retain(|(of, w), _| !(*of == id && matches!(w, Which::MidiFx(_))));
+            swaps.push(Msg::MidiPlugins(Box::new(MidiPlugins {
+                slot: slot.slot,
+                list: processors,
+            })));
+        }
+        for msg in swaps {
+            self.send(msg)?;
         }
         let mut told = Vec::new();
         for &(id, instrument, inserts) in &channels {
@@ -408,12 +492,12 @@ impl Player {
             }
             // MPE switched: the running instrument told, not loaded again.
             if let Some(Instrument::Plugin(r)) = instrument
-                && r.mpe != slot.mpe
+                && r.mpe_heard() != slot.mpe
             {
-                slot.mpe = r.mpe;
+                slot.mpe = r.mpe_heard();
                 told.push(Msg::Mpe {
                     slot: slot.slot,
-                    on: r.mpe,
+                    zone: r.mpe_heard(),
                 });
             }
             for (i, r) in inserts.iter().enumerate() {
@@ -438,27 +522,21 @@ impl Player {
                 continue;
             };
             let want: Vec<Fx> = more.iter().map(|u| u.kind()).collect();
-            // Those with state of their own need a strip made for them.
-            let long = |k: Fx| !matches!(k, Fx::Eq | Fx::Comp | Fx::Sat | Fx::Limit);
-            let new = |k: usize| match slot.strips.get(k) {
-                None => true,
-                Some(&had) => had != want[k] && long(want[k]),
-            };
-            if !(0..want.len()).any(new) {
+            if let Some(strips) = fresh_strips(&mut slot.strips, &want, slot.slot, self.rate) {
+                self.send(Msg::Strips(strips))?;
+            }
+        }
+        // And each synth's own effects, likewise.
+        for t in &project.tracks {
+            let (Some(Instrument::Poly(p)), Some(slot)) =
+                (&t.instrument, self.lanes.get_mut(&t.id))
+            else {
                 continue;
+            };
+            let want: Vec<Fx> = p.fx.iter().take(RACK).map(|u| u.kind()).collect();
+            if let Some(strips) = fresh_strips(&mut slot.rack, &want, slot.slot, self.rate) {
+                self.send(Msg::Rack(strips))?;
             }
-            let fresh: Vec<Option<crate::dsp::Strip>> = (0..want.len())
-                .map(|k| new(k).then(|| crate::dsp::Strip::for_kind(want[k], self.rate)))
-                .collect();
-            let had = slot.strips.len();
-            for (k, &kind) in want.iter().enumerate() {
-                match slot.strips.get_mut(k) {
-                    Some(s) => *s = kind,
-                    None => slot.strips.push(kind),
-                }
-            }
-            let lane = slot.slot;
-            self.send(Msg::Strips(Box::new(Strips::new(lane, fresh, had))))?;
         }
         let lane = |id: &u64| (self.lanes[id].slot, self.lanes[id].latency);
         let tracks: Vec<_> = project.tracks.iter().map(|t| lane(&t.id)).collect();
@@ -472,6 +550,157 @@ impl Player {
             true => Ok(()),
             false => Err(problems.join("; ")),
         }
+    }
+
+    /// Makes a channel's lane and hands it to the engine: its instrument, its inserts (with the
+    /// settings in `states`) and its MIDI FX plugins `midi` (those running in `held` keep their
+    /// settings). What wouldn't load: a plugin that won't is stood in for, and samples that can't
+    /// be read leave the track silent rather than stopping the rest.
+    fn add_lane(
+        &mut self,
+        (id, instrument, inserts): Channel,
+        mut states: Vec<Option<Vec<u8>>>,
+        held: Option<HeldMidi>,
+        midi: &[PluginRef],
+    ) -> Result<Vec<String>, String> {
+        let mut problems = Vec::new();
+        let slot = self.free.pop().ok_or("too many tracks")?;
+        let running: Vec<bool> = (0..inserts.len())
+            .map(|i| states.get(i).is_some_and(Option::is_some))
+            .collect();
+        let made = make_lane(
+            instrument,
+            inserts,
+            &mut states,
+            self.rate,
+            &mut self.modules,
+            &self.dir,
+        );
+        let (mut lane, mut plugins, latency) = made.unwrap_or_else(|e| {
+            problems.push(e);
+            let empty = make_lane(
+                None,
+                &[],
+                &mut Vec::new(),
+                self.rate,
+                &mut self.modules,
+                &self.dir,
+            );
+            empty.expect("a lane without plugins always builds")
+        });
+        problems.append(&mut plugins.problems);
+        // Its MIDI FX plugins, with the settings any running ones had.
+        let keys: Vec<MidiKey> = midi.iter().map(midi_key).collect();
+        let mut midi_states: Vec<Option<Vec<u8>>> = match held {
+            Some(old) => {
+                let before: Vec<MidiKey> = old.iter().map(|o| o.0.clone()).collect();
+                matching(&before, &keys)
+                    .into_iter()
+                    .map(|j| j.and_then(|j| old[j].1.clone()))
+                    .collect()
+            }
+            None => vec![None; midi.len()],
+        };
+        let (midi_fx, processors, midi_problems) = load_midi_plugins(
+            midi,
+            &mut midi_states,
+            self.rate,
+            &mut self.modules,
+            &self.dir,
+        );
+        problems.extend(midi_problems);
+        lane.midi_plugins = processors;
+        plugins.midi_fx = midi_fx;
+        self.send(Msg::Insert(slot, Box::new(lane)))?;
+        let sound = sound(instrument, inserts);
+        // A preset its saved (or running) settings hold is loaded already.
+        let refs = match instrument {
+            Some(Instrument::Plugin(r)) => vec![(Which::Instrument, r, false)],
+            _ => Vec::new(),
+        };
+        let all = refs.into_iter().chain(
+            inserts
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (Which::Insert(i), r, running[i])),
+        );
+        let presets = all
+            .filter(|(_, r, running)| r.state.is_some() || *running)
+            .map(|(w, r, _)| (w, r.preset.clone()))
+            .collect();
+        self.lanes.insert(
+            id,
+            Slot {
+                slot,
+                sound,
+                latency,
+                mpe: match instrument {
+                    Some(Instrument::Plugin(r)) => r.mpe_heard(),
+                    _ => None,
+                },
+                strips: Vec::new(),
+                rack: Vec::new(),
+                plugins,
+                midi: keys,
+                applied: HashMap::new(),
+                original: HashMap::new(),
+                presets,
+                before_preset: HashMap::new(),
+            },
+        );
+        Ok(problems)
+    }
+
+    /// Opens a song a piece at a time, so a window can draw between: loads the next of
+    /// `project`'s channels that has no lane yet (its instrument and plugins) and says which,
+    /// by id. None once each has one: `sync` then only lays out what plays.
+    pub fn load_next(&mut self, project: &Project) -> Option<u64> {
+        let (id, instrument, inserts) = channels(project)
+            .into_iter()
+            .find(|c| !self.lanes.contains_key(&c.0))?;
+        let midi = project
+            .tracks
+            .iter()
+            .find(|t| t.id == id)
+            .map(midi_refs)
+            .unwrap_or_default();
+        match self.add_lane((id, instrument, inserts), Vec::new(), None, &midi) {
+            Ok(problems) => self.problems.extend(problems),
+            // Out of lanes: `sync` says so.
+            Err(_) => return None,
+        }
+        Some(id)
+    }
+
+    /// The audio files `project` plays that aren't read yet, each once.
+    pub fn unread_files(&self, project: &Project) -> Vec<PathBuf> {
+        use crate::song::project::Content;
+        fn files<'a>(c: &'a Content, out: &mut Vec<&'a Path>) {
+            match c {
+                Content::Audio { file, .. } => out.push(file),
+                Content::Takes { takes, .. } => takes.iter().for_each(|t| files(&t.content, out)),
+                _ => {}
+            }
+        }
+        let mut all = Vec::new();
+        for r in project.tracks.iter().flat_map(|t| &t.regions) {
+            files(&r.content, &mut all);
+        }
+        let mut seen = std::collections::HashSet::new();
+        all.into_iter()
+            .filter(|f| !self.files.has(f) && seen.insert(*f))
+            .map(Path::to_path_buf)
+            .collect()
+    }
+
+    /// Reads this song's audio files as the engine wants them, on any thread.
+    pub fn file_reader(&self) -> crate::audio::engine::FileReader {
+        crate::audio::engine::FileReader::new(&self.dir, self.rate)
+    }
+
+    /// A file `file_reader` read, kept for when the song plays it.
+    pub fn keep_file(&mut self, file: PathBuf, read: crate::audio::engine::ReadFile) {
+        self.files.keep(file, read);
     }
 
     /// The main-thread half of a track's or aux's plugin (the master's by `MASTER_ID`).
@@ -489,6 +718,7 @@ impl Player {
         for slot in self.lanes.values() {
             slot.plugins.instrument.iter().for_each(|p| p.idle());
             slot.plugins.inserts.iter().for_each(|p| p.idle());
+            slot.plugins.midi_fx.iter().for_each(|p| p.idle());
         }
     }
 
@@ -551,6 +781,10 @@ impl Player {
             }
             for (i, (r, p)) in t.inserts.iter_mut().zip(&slot.plugins.inserts).enumerate() {
                 save(r, p, format!("Track {} insert {}.state", n + 1, i + 1))?;
+            }
+            let midi = t.midi_fx.iter_mut().filter_map(|s| s.plugin.as_mut());
+            for (i, (r, p)) in midi.zip(&slot.plugins.midi_fx).enumerate() {
+                save(r, p, format!("Track {} midi fx {}.state", n + 1, i + 1))?;
             }
         }
         for a in &mut project.auxes {
@@ -759,7 +993,13 @@ impl Player {
     }
 
     pub fn stop(&mut self) {
+        // Stopped where it was heard to stop, not ahead where it was being made: play goes on
+        // from there.
+        let heard = self.shared.playing().then(|| self.position());
         let _ = self.send(Msg::Stop);
+        if let Some(at) = heard.filter(|&at| at < self.shared.position()) {
+            self.locate(at);
+        }
     }
 
     pub fn locate(&mut self, sample: u64) {
@@ -774,8 +1014,29 @@ impl Player {
         self.rate
     }
 
+    /// Where the song is as it's heard: while playing, the sample coming out of the speakers
+    /// now (what's been made plays later by the buffer and the device's delay), moving smoothly
+    /// between buffers; else where the playhead is.
     pub fn position(&self) -> u64 {
-        self.shared.position()
+        let made = self.shared.position();
+        match self.shared.playing() {
+            true => self.shared.heard_now(self.rate).unwrap_or(made),
+            false => made,
+        }
+    }
+
+    /// The sound really heard `ms` later than the device says (Bluetooth says less than it is):
+    /// the playhead later by as much.
+    pub fn set_heard_later(&self, ms: f32) {
+        self.shared.heard_later.store(
+            (ms as f64 * 1e6) as i64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// How far what's being made is ahead of what's heard, in samples.
+    pub fn heard_behind(&self) -> u64 {
+        self.shared.position().saturating_sub(self.position())
     }
 
     pub fn playing(&self) -> bool {
@@ -929,6 +1190,12 @@ impl Player {
         std::array::from_fn(|k| f32::from_bits(self.shared.poly_live[k].load(Ordering::Relaxed)))
     }
 
+    /// The watched Bloom's branches now, as `BloomSynth::live` gives them.
+    pub fn bloom_live(&self) -> [f32; crate::dsp::bloom::BLOOM_LIVE] {
+        use std::sync::atomic::Ordering;
+        std::array::from_fn(|k| f32::from_bits(self.shared.poly_live[k].load(Ordering::Relaxed)))
+    }
+
     /// What the watched synth just played: `out` filled, oldest first, if anything's gone in
     /// since `seen`; how many samples have, ever.
     pub fn poly_scope(&self, out: &mut Vec<f32>, seen: usize) -> usize {
@@ -948,7 +1215,15 @@ impl Player {
 
     /// Live notes the engine has played since the last call, at the playhead.
     pub fn played(&mut self) -> Vec<Played> {
-        std::iter::from_fn(|| self.played.pop().ok()).collect()
+        // Timed by what was heard as they were played: what's made is ahead of that, and the
+        // player played along with what they heard.
+        let behind = self.heard_behind();
+        std::iter::from_fn(|| self.played.pop().ok())
+            .map(|mut p| {
+                p.at = p.at.saturating_sub(behind);
+                p
+            })
+            .collect()
     }
 
     /// Live controller moves the engine has played since the last call, at the playhead.
@@ -1144,6 +1419,38 @@ impl Player {
 
     pub fn set_metronome(&self, on: bool) {
         self.shared.set_metronome(on);
+    }
+
+    /// How the click sounds from now on.
+    pub fn set_click(&self, style: crate::audio::engine::ClickStyle) {
+        self.shared.click_style.store(
+            crate::audio::engine::pack_click(style),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// Whether the click may sound now (off: it's to click only while recording, and nothing is).
+    pub fn set_click_gate(&self, on: bool) {
+        self.shared
+            .click_gate
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A test tone: 1 the left, 2 the right, 3 both.
+    pub fn test_tone(&self, sides: u8) {
+        self.shared
+            .tone
+            .store(sides, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Play after counting in `bars` bars.
+    pub fn play_counting(&mut self, bars: u32) {
+        let _ = self.send(Msg::CountIn(bars, true));
+    }
+
+    /// A bar of the click as it's set, to hear it, without playing.
+    pub fn hear_click(&mut self) {
+        let _ = self.send(Msg::CountIn(1, false));
     }
 
     pub fn metronome(&self) -> bool {

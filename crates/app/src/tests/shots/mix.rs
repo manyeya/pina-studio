@@ -12,6 +12,7 @@ pub(super) fn set_up(
     let Shot { page, song, out } = *shot;
     let _ = (song, out, &window);
     match page {
+        p if p.starts_with("bloom") => bloom_shot(p, ws, cx),
         "bounce" => {
             ws.open_export(cx);
             ws.choose(crate::ui::menu::MenuAction::Nothing, cx);
@@ -47,7 +48,16 @@ pub(super) fn set_up(
             }
             ws.start_export(cx);
         }
-        "mixer" | "mixer-drag" | "mixer-limit" | "mixer-stacked" | "mixer-midi-fx" => {
+        page if matches!(
+            page,
+            "mixer"
+                | "mixer-drag"
+                | "mixer-limit"
+                | "mixer-stacked"
+                | "mixer-midi-fx"
+                | "mixer-mpe"
+        ) || page.starts_with("midi-fx-") =>
+        {
             use crate::mix::strip::Channel;
             use crate::workspace::{Drag, View};
             use pina_engine::song::project::{Comp, Eq, Format, Limiter, PluginRef, Saturator};
@@ -87,6 +97,26 @@ pub(super) fn set_up(
                 }
             }
             // MIDI effects on the Keys, their panel open.
+            // Every kind on the Keys, the window on one (midi-fx-3: the fourth), or adding.
+            if let Some(k) = page.strip_prefix("midi-fx-") {
+                use pina_engine::song::project::{MidiFx, MidiFxSlot};
+                ws.session.project.tracks[0].midi_fx = MidiFx::KINDS
+                    .map(|k| MidiFxSlot {
+                        fx: MidiFx::fresh(k).unwrap(),
+                        bypass: false,
+                        plugin: None,
+                    })
+                    .to_vec();
+                let mut v = crate::mix::midi_fx::MidiFxView::new(
+                    0,
+                    gpui::point(gpui::px(150.), gpui::px(150.)),
+                );
+                match k {
+                    "add" => v.adding = true,
+                    k => v.picked = k.parse().unwrap_or(0),
+                }
+                ws.midi_fx_view = Some(v);
+            }
             if page == "mixer-midi-fx" {
                 use pina_engine::song::project::{MidiFx, MidiFxSlot};
                 ws.session.project.tracks[0].midi_fx =
@@ -94,12 +124,42 @@ pub(super) fn set_up(
                         .map(|k| MidiFxSlot {
                             fx: MidiFx::fresh(k).unwrap(),
                             bypass: k == "Velocity Processor",
+                            plugin: None,
                         })
                         .to_vec();
-                ws.midi_fx_view = Some(crate::mix::midi_fx::MidiFxView {
+                ws.midi_fx_view = Some(crate::mix::midi_fx::MidiFxView::new(
+                    0,
+                    gpui::point(gpui::px(150.), gpui::px(170.)),
+                ));
+            }
+            // An Audio Unit instrument hearing MPE, its card open; an MPE Shaper before it.
+            if page == "mixer-mpe" {
+                use pina_engine::song::project::{Instrument, MidiFx, MidiFxSlot, MpeZone};
+                let t = &mut ws.session.project.tracks[0];
+                t.instrument = Some(Instrument::Plugin(PluginRef {
+                    format: Format::Au,
+                    class: "Expressive Keys".into(),
+                    uid: Some("aumu exky pina".into()),
+                    mpe: true,
+                    mpe_zone: MpeZone {
+                        bend: 24,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }));
+                t.midi_fx = vec![MidiFxSlot {
+                    fx: MidiFx::fresh("MPE Shaper").unwrap(),
+                    bypass: false,
+                    plugin: None,
+                }];
+                ws.mpe_view = Some(crate::mix::mpe::MpeView {
                     track: 0,
                     at: gpui::point(gpui::px(150.), gpui::px(170.)),
                 });
+                ws.midi_fx_view = Some(crate::mix::midi_fx::MidiFxView::new(
+                    0,
+                    gpui::point(gpui::px(560.), gpui::px(170.)),
+                ));
             }
             if page == "mixer-limit" {
                 let t = &mut ws.session.project.tracks[0];
@@ -299,7 +359,22 @@ pub(super) fn set_up(
             }
         }
         // The synth, in its window, a patch on the first track.
-        "poly" | "poly-matrix" | "poly-effects" | "poly-lfo" | "poly-sounds" | "poly-tables"
+        "poly"
+        | "poly-matrix"
+        | "poly-effects"
+        | "poly-effects-empty"
+        | "poly-effects-eq"
+        | "poly-effects-comp"
+        | "poly-effects-drive"
+        | "poly-effects-delay"
+        | "poly-effects-motion"
+        | "poly-lfo"
+        | "poly-rates"
+        | "poly-add"
+        | "poly-save"
+        | "poly-pack"
+        | "poly-sounds"
+        | "poly-tables"
         | "poly-sub" => {
             use crate::editors::poly::PolyPage;
             use pina_engine::song::project::{
@@ -307,6 +382,44 @@ pub(super) fn set_up(
             };
             let mut p = poly_patch("Evolving Pad").unwrap();
             p.tables[1] = "FM 7:2".into();
+            // Its own rack: a drive, an ensemble, a delay and a hall, the hall's mix on its LFO.
+            if page != "poly-effects-empty" {
+                use pina_engine::song::project::{PolyDest, PolyRoute, PolySource, rack_effect};
+                p.fx = ["Tube", "Ensemble", "Tape Delay", "Hall", "EQ", "Compressor"]
+                    .map(|n| rack_effect(n).unwrap())
+                    .to_vec();
+                // PINA_SHOT_RACK: a rack of its own, by the names the rack offers.
+                if let Ok(names) = std::env::var("PINA_SHOT_RACK") {
+                    p.fx = names.split(',').filter_map(rack_effect).collect();
+                }
+                // The EQ with a low cut, a dip and an air shelf, as one would set it.
+                if let Some(Unit::Eq(e)) = p.fx.get_mut(4) {
+                    use pina_engine::song::project::{EqBand, Shape};
+                    for (shape, freq, gain_db, q) in [
+                        (Shape::LowCut, 90.0, 0.0, 0.7),
+                        (Shape::Bell, 380.0, -4.5, 1.4),
+                        (Shape::Bell, 2_400.0, 2.5, 0.9),
+                        (Shape::HighShelf, 9_000.0, 3.5, 0.7),
+                    ] {
+                        e.bands.push(EqBand {
+                            shape,
+                            freq,
+                            gain_db,
+                            q,
+                            ..Default::default()
+                        });
+                    }
+                }
+                p.routes.push(PolyRoute {
+                    source: PolySource::Lfo(1),
+                    dest: PolyDest::Rack(3, 0),
+                    depth: 0.3,
+                    by: None,
+                });
+            }
+            if page == "poly-rates" {
+                p.lfos[1].beats = 0.25 * 2.0 / 3.0;
+            }
             let t = &mut ws.session.project.tracks[0];
             t.instrument = Some(Instrument::Poly(Box::new(p)));
             t.more = vec![
@@ -314,13 +427,158 @@ pub(super) fn set_up(
                 Unit::Delay(DelayStyle::Tape.delay()),
             ];
             ws.session.project.assign_ids();
+            // A library as someone's would be: packs of their own and one brought in.
+            if matches!(page, "poly-sounds" | "poly-save" | "poly-pack") {
+                use crate::editors::poly::library::{PackInfo, SavedSound};
+                let lib = ws.library();
+                let base = pina_engine::song::project::poly_patch("Evolving Pad").unwrap();
+                let day = crate::editors::poly::library::now();
+                let packs = [
+                    (
+                        "Night Drive",
+                        false,
+                        "Synthwave at night: glassy arps, round basses and wide pads.",
+                        &[
+                            (
+                                "Neon Arp Glass",
+                                "Pluck",
+                                &["Glassy", "Bright"][..],
+                                "short glassy plucks into a ping-pong delay",
+                            ),
+                            (
+                                "Night Drive Bass",
+                                "Bass",
+                                &["Analog", "Warm"][..],
+                                "round and low, a slow filter",
+                            ),
+                            (
+                                "Sky Lead",
+                                "Lead",
+                                &["Bright", "Digital"][..],
+                                "a lead that cuts, a long delay",
+                            ),
+                            (
+                                "Chrome Pad",
+                                "Pad",
+                                &["Wide", "Evolving"][..],
+                                "a pad that turns slowly",
+                            ),
+                        ][..],
+                    ),
+                    (
+                        "Glass Keys",
+                        false,
+                        "Bells, mallets and glass.",
+                        &[
+                            (
+                                "Ice Harp",
+                                "Pluck",
+                                &["Glassy", "Wide"][..],
+                                "a bell table plucked, a long shimmer",
+                            ),
+                            (
+                                "Tape Keys",
+                                "Keys",
+                                &["Warm", "Lo-fi"][..],
+                                "keys through a worn tape",
+                            ),
+                        ][..],
+                    ),
+                    (
+                        "Neon Vol 2",
+                        true,
+                        "Bright, wide and digital.",
+                        &[
+                            (
+                                "Prism Pluck",
+                                "Pluck",
+                                &["Glassy", "Digital"][..],
+                                "three detuned glass partials",
+                            ),
+                            (
+                                "Shard",
+                                "Pluck",
+                                &["Glassy", "Aggressive"][..],
+                                "folded sine, metal on the top",
+                            ),
+                        ][..],
+                    ),
+                ];
+                for (k, (pack, imported, about, sounds)) in packs.iter().enumerate() {
+                    let name = lib
+                        .make_pack(PackInfo {
+                            name: pack.to_string(),
+                            by: if *imported {
+                                "Neon Labs".into()
+                            } else {
+                                String::new()
+                            },
+                            about: about.to_string(),
+                            imported: *imported,
+                            ..Default::default()
+                        })
+                        .unwrap();
+                    for (i, (n, part, words, line)) in sounds.iter().enumerate() {
+                        lib.save(
+                            SavedSound {
+                                name: n.to_string(),
+                                part: part.to_string(),
+                                words: words.iter().map(|w| w.to_string()).collect(),
+                                about: line.to_string(),
+                                by: String::new(),
+                                made: day - (k * 3 + i) as u64 * 86_400,
+                                poly: base.clone(),
+                            },
+                            Some(&name),
+                        )
+                        .unwrap();
+                    }
+                }
+                ws.settings.liked_sounds = vec!["Night Drive/Neon Arp Glass".into(), "Acid".into()];
+            }
             ws.open_poly(0, cx);
             if let Some(v) = ws.poly_view.as_mut() {
                 match page {
                     "poly-matrix" => v.page = PolyPage::Matrix,
-                    "poly-effects" => v.page = PolyPage::Effects,
+                    "poly-effects" => {
+                        v.page = PolyPage::Effects;
+                        // PINA_SHOT_OPEN: which of the rack is on the stage.
+                        v.fx_open = std::env::var("PINA_SHOT_OPEN")
+                            .ok()
+                            .and_then(|k| k.parse().ok())
+                            .unwrap_or(3);
+                    }
+                    "poly-effects-empty" => v.page = PolyPage::Effects,
+                    "poly-effects-eq"
+                    | "poly-effects-comp"
+                    | "poly-effects-drive"
+                    | "poly-effects-delay"
+                    | "poly-effects-motion" => {
+                        v.page = PolyPage::Effects;
+                        v.fx_open = match page {
+                            "poly-effects-eq" => 4,
+                            "poly-effects-comp" => 5,
+                            "poly-effects-delay" => 2,
+                            "poly-effects-motion" => 1,
+                            _ => 0,
+                        };
+                    }
                     "poly-lfo" => v.source = pina_engine::song::project::PolySource::Lfo(1),
-                    "poly-sounds" => v.browsing = true,
+                    "poly-add" => {
+                        v.page = PolyPage::Effects;
+                        v.adding = true;
+                        v.hearing = Some("Ensemble");
+                    }
+                    "poly-rates" => {
+                        v.source = pina_engine::song::project::PolySource::Lfo(1);
+                        v.rate_open = Some(1);
+                    }
+                    "poly-sounds" => v.page = PolyPage::Sounds,
+                    "poly-pack" => {
+                        v.page = PolyPage::Sounds;
+                        v.lib.place =
+                            crate::editors::poly::sounds::Place::Pack("Night Drive".into());
+                    }
                     "poly-tables" => v.tables = Some(0),
                     "poly-sub" => v.picked = 3,
                     _ => {}
@@ -357,6 +615,17 @@ pub(super) fn set_up(
                         -78.0 + 52.0 * near.min(1.0) - (hz / 2000.0).log2().max(0.0) * 6.0
                     })
                     .collect();
+            }
+            // Changed, then Save: its dialog over the synth.
+            if page == "poly-save" {
+                ws.edit(cx, |ws| ws.poly_mut(0).unwrap().params[0] += 0.1);
+                ws.save_sound(0, false, None, cx);
+                if let Some(crate::editors::poly::saving::Dialog::Save(f)) =
+                    ws.poly_view.as_mut().and_then(|v| v.lib.dialog.as_mut())
+                {
+                    f.words = vec!["Wide".into(), "Evolving".into(), "Glassy".into()];
+                    f.pack = Some("Night Drive".into());
+                }
             }
         }
         "comp" | "comp-bus" => {
@@ -619,4 +888,129 @@ pub(super) fn set_up(
         _ => return false,
     }
     true
+}
+
+/// Bloom's window on track 0: a pad seed grown out, branch E picked, chords sounding.
+fn bloom_shot(page: &str, ws: &mut Workspace, cx: &mut gpui::Context<Workspace>) {
+    use crate::editors::bloom::{BloomPage, grow::Grown};
+    use pina_engine::song::project::*;
+    let mut b = Bloom::default();
+    b.plant(SeedKind::Pad, 0x5eed_2026);
+    b.plant(SeedKind::Pluck, 0xb100_0003);
+    b.replant(7);
+    let lengths = [
+        0.62, 0.35, 0.8, 0.18, 0.95, 0.5, 0.28, 0.72, 0.0, 0.44, 0.58, 0.3,
+    ];
+    for (k, l) in lengths.iter().enumerate() {
+        b.params[branch_length(k)] = *l;
+        b.params[branch_bend(k)] = ((k as f32 * 1.7).sin() * 0.6).clamp(-1.0, 1.0);
+    }
+    b.chosen = 4;
+    b.sound = "Glasshouse Pluck".into();
+    b.locks = 1 << 32 | 1 << 33 | 1 << 46;
+    b.edits.push(BranchEdit {
+        branch: 4,
+        gene: 0,
+        tip: 0.05,
+    });
+    ws.session.project.tracks[0].set_instrument(Instrument::Bloom(Box::new(b.clone())));
+    ws.open_bloom(0, cx);
+    let Some(v) = ws.bloom_view.as_mut() else {
+        return;
+    };
+    v.shown = std::array::from_fn(|k| b.reach(k, 0.0));
+    v.hover = Some(7);
+    match page {
+        "bloom-strand" => {
+            v.page = BloomPage::Strand;
+            v.group = GeneGroup::Tone;
+            v.gene_hover = Some(23);
+        }
+        "bloom-steer" => {
+            v.page = BloomPage::Strand;
+            v.steer = true;
+            v.gene_hover = Some(0);
+        }
+        "bloom-sounds" => v.page = BloomPage::Sounds,
+        "bloom-sounds-low" => {
+            v.page = BloomPage::Sounds;
+            v.sounds.family = Some(SeedFamily::Low);
+        }
+        "bloom-kinds" => {
+            v.picking = true;
+            v.kind = SeedKind::Reese;
+        }
+        "bloom-grow" => {
+            v.page = BloomPage::Grow;
+            // A recording made by a seed, grown toward a while.
+            let mut made = Bloom::default();
+            made.plant(SeedKind::Bell, 77);
+            let r0 = pina_engine::dsp::bloom::grow::Recording {
+                audio: vec![0.0; 36_000],
+                note: 64,
+                hz: Some(329.6),
+                hold: 9000,
+                velocity: 0.9,
+            };
+            let audio = pina_engine::dsp::bloom::grow::render(&made.seed(), &r0);
+            let r = pina_engine::dsp::bloom::grow::recording(&audio, 0.0, 1.5);
+            v.grow.takes.push(crate::editors::bloom::grow::Take::new(
+                "Glass Bell E4.wav".into(),
+                audio.clone(),
+                1.5,
+            ));
+            let mut low = Bloom::default();
+            low.plant(SeedKind::Bell, 78);
+            let r1 = pina_engine::dsp::bloom::grow::Recording {
+                audio: vec![0.0; 36_000],
+                note: 52,
+                hz: Some(164.8),
+                hold: 9000,
+                velocity: 0.6,
+            };
+            let audio1 = pina_engine::dsp::bloom::grow::render(&made.seed(), &r1);
+            v.grow.takes.push(crate::editors::bloom::grow::Take::new(
+                "Glass Bell E3 soft.wav".into(),
+                audio1,
+                1.5,
+            ));
+            v.grow.take = 0;
+            let rs: Vec<_> = v.grow.takes.iter().map(|t| t.recording.clone()).collect();
+            let mut g = pina_engine::dsp::bloom::grow::Grower::new(rs, 11);
+            let mut ears: Vec<_> = (0..4)
+                .map(|_| pina_engine::dsp::bloom::grow::Ear::new())
+                .collect();
+            for _ in 0..40 {
+                g.step(&mut ears);
+            }
+            let mut ear = pina_engine::dsp::bloom::grow::Ear::new();
+            let best = g.strands[1].finds.len() - 1;
+            v.grow.picked_heard = Some(ear.hear(&pina_engine::dsp::bloom::grow::render(
+                &g.strands[1].finds[best].genes,
+                &r,
+            )));
+            v.grow.picked = Some((1, best));
+            v.grow.picked_each = vec![(64, 0.79), (52, 0.81)];
+            v.grow.grown = Some(std::sync::Arc::new(std::sync::Mutex::new(Grown {
+                generation: g.generation,
+                done: false,
+                strands: g
+                    .strands
+                    .iter()
+                    .map(|s| (s.kind, s.finds.clone()))
+                    .collect(),
+            })));
+        }
+        _ => {
+            // Playing: a chord on three branches, the sap up them.
+            v.held = vec![60, 64, 67];
+            for k in [0usize, 4, 7] {
+                v.glow[k] = 0.85;
+                v.live[k] = 0.85;
+                v.live[BRANCHES + k] = b.reach(k, 0.0);
+            }
+            v.wheel = 0.2;
+        }
+    }
+    cx.notify();
 }

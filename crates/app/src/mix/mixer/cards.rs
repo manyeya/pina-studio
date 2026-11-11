@@ -13,7 +13,7 @@ pub fn graph_y(db: f32) -> f32 {
 
 impl Workspace {
     pub(crate) fn eq_card(&self, ch: Channel, eq: Eq, cx: &mut Context<Self>) -> Div {
-        let rate = self.session.project.sample_rate as f64;
+        let rate = self.player.rate();
         let curve = strip::eq_curve(&eq, rate, 160);
         let color = self.channel_look(ch).1;
         let on = !eq.bypass;

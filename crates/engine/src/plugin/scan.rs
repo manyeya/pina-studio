@@ -38,6 +38,16 @@ pub struct PluginInfo {
 }
 
 impl PluginInfo {
+    /// A MIDI effect: notes in, notes out (an Audio Unit MIDI processor, a CLAP note effect, a
+    /// VST3 event effect). It goes in a track's MIDI FX, not among its audio effects.
+    pub fn midi_effect(&self) -> bool {
+        self.uid.as_deref().is_some_and(|u| u.starts_with("aumi"))
+            || self
+                .categories
+                .iter()
+                .any(|c| c == "note-effect" || c == "Event" || c.contains("|Event"))
+    }
+
     /// The reference a project keeps to it.
     pub fn plugin_ref(&self) -> crate::song::project::PluginRef {
         crate::song::project::PluginRef {

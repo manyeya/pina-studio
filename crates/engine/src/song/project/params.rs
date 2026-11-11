@@ -76,6 +76,8 @@ impl LimitParam {
 pub enum Which {
     Instrument,
     Insert(usize),
+    /// A plugin in the track's MIDI FX, by its place among them.
+    MidiFx(usize),
 }
 
 /// How a track uses its automation: Read plays it; Touch and Latch play it and
@@ -146,8 +148,12 @@ pub enum Param {
     Tool(u8, u8),
     /// A setting of the Sampler's voice, by its place in `VOICE`: where it sits, 0 to 1.
     Voice(u8),
-    /// One of the synth's parameters, by its place: where its knob sits, 0 to 1.
+    /// One of the built-in synth's parameters (Synth-0's or Bloom's, whichever the track
+    /// has), by its place: where its knob sits, 0 to 1.
     Poly(u16),
+    /// A knob of one of the synth's own effects (its place in the rack) by its place in the
+    /// effect's table: where the knob sits, 0 to 1.
+    Rack(u8, u8),
 }
 
 impl Param {
@@ -160,7 +166,8 @@ impl Param {
             | Param::Plugin(..)
             | Param::Tool(..)
             | Param::Voice(_)
-            | Param::Poly(_) => (0.0, 1.0),
+            | Param::Poly(_)
+            | Param::Rack(..) => (0.0, 1.0),
             Param::Eq(_, EqField::Freq) => (10.0, 30_000.0),
             Param::Eq(_, EqField::Gain) => (-30.0, 30.0),
             Param::Eq(_, EqField::Q) => (0.025, 40.0),

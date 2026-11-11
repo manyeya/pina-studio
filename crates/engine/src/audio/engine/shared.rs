@@ -24,7 +24,15 @@ pub enum Msg {
     Inserts(Box<Rearrange>),
     /// More running state for a lane's other built-ins.
     Strips(Box<Strips>),
+    /// More running state for a lane's synth's own effects.
+    Rack(Box<Strips>),
+    /// A lane's MIDI FX plugins, all of them anew (those kept carry their settings); the old ones
+    /// come back in it to be dropped off the audio thread.
+    MidiPlugins(Box<MidiPlugins>),
     Play,
+    /// Count in this many bars, the click heard and the playhead waiting; then play, or (false:
+    /// the click only, to hear it) not.
+    CountIn(u32, bool),
     Stop,
     Locate(u64),
     /// Start a lane's Live Loops cell (or stop it, with None) at a sample: its loop begins there.
@@ -49,7 +57,7 @@ pub enum Msg {
     /// A lane's plugin instrument to hear each note on a channel of its own (MPE), or not.
     Mpe {
         slot: usize,
-        on: bool,
+        zone: Option<crate::song::project::MpeZone>,
     },
 }
 
@@ -102,6 +110,13 @@ pub enum Garbage {
     Inserts(Box<Rearrange>),
     Strips(Box<Strips>),
     Audition(Box<Audition>),
+    MidiPlugins(Box<MidiPlugins>),
+}
+
+/// A lane's MIDI FX plugins, to swap in.
+pub struct MidiPlugins {
+    pub(crate) slot: usize,
+    pub(crate) list: Vec<crate::plugin::Processor>,
 }
 
 /// Running state for a lane's other built-ins as it's to be, made off the audio thread: for
@@ -230,8 +245,24 @@ pub struct Shared {
     pub(crate) load: AtomicU32,
     /// Frames the output device asks for at a time.
     pub(crate) buffer: AtomicU32,
-    /// Click on every beat while playing.
+    /// Click on every beat while playing; when it may (off while it's to click only while
+    /// recording and nothing is); how it sounds (`ClickStyle` packed); a test tone asked for
+    /// (1 left, 2 right, 3 both).
     pub(crate) metronome: AtomicBool,
+    pub(crate) click_gate: AtomicBool,
+    /// When each recent block is heard: the sample it starts on, how far the song moves in it,
+    /// the moment its first is heard (ns from `clock`) and the play it's part of, newest at
+    /// `heard_at`. What's heard now is read from these, not from what's just been made, which
+    /// plays later by the buffer and the device's own delay. A new play or a locate starts a new
+    /// one (`heard_play`), so what's left of the last is never taken for now.
+    pub(crate) heard: [[AtomicU64; 4]; HEARD_KEPT],
+    pub(crate) heard_at: AtomicUsize,
+    pub(crate) heard_play: AtomicU64,
+    /// How much later than the device says it's really heard (ns): the person's own measure, for
+    /// Bluetooth, which says less than it is.
+    pub(crate) heard_later: std::sync::atomic::AtomicI64,
+    pub(crate) click_style: AtomicU32,
+    pub(crate) tone: std::sync::atomic::AtomicU8,
     /// Each lane's modulators' latest values (f32 bits), `MAX_MODS` a lane.
     pub(crate) mods: Vec<AtomicU32>,
     /// The EQ the EQ window shows: what it hears and plays, for its analyzer.
@@ -253,6 +284,9 @@ pub struct Shared {
 }
 
 /// Samples of a stacked built-in's sound kept for its window.
+/// A synth's own effects, as the meters and the EQ's analyzer name them: the `k`th is this plus
+/// `k`, apart from a channel's stacked ones.
+pub const RACK_METERED: usize = 1 << 16;
 pub const SCOPE_LEN: usize = 1024;
 /// Samples of a synth's sound kept for its window: enough for a low note's wave, and a spectrum.
 pub const POLY_SCOPE_LEN: usize = 4096;
@@ -279,6 +313,13 @@ impl Shared {
             load: AtomicU32::new(0),
             buffer: AtomicU32::new(0),
             metronome: AtomicBool::new(false),
+            click_gate: AtomicBool::new(true),
+            heard: std::array::from_fn(|_| std::array::from_fn(|_| AtomicU64::new(0))),
+            heard_at: AtomicUsize::new(0),
+            heard_play: AtomicU64::new(0),
+            heard_later: std::sync::atomic::AtomicI64::new(0),
+            click_style: AtomicU32::new(pack_click(ClickStyle::default())),
+            tone: std::sync::atomic::AtomicU8::new(0),
             mods: (0..SLOTS * MAX_MODS).map(|_| AtomicU32::new(0)).collect(),
             eq_tap: crate::dsp::eq::Tap::new(),
             fx_more: AtomicUsize::new(usize::MAX),
@@ -286,7 +327,8 @@ impl Shared {
             scope: std::array::from_fn(|_| (0..SCOPE_LEN).map(|_| AtomicU32::new(0)).collect()),
             scope_written: AtomicUsize::new(0),
             poly_slot: AtomicUsize::new(usize::MAX),
-            poly_live: (0..crate::dsp::poly::POLY_LIVE)
+            // The synth's or Bloom's, whichever window is open.
+            poly_live: (0..crate::dsp::poly::POLY_LIVE.max(crate::dsp::bloom::BLOOM_LIVE))
                 .map(|_| AtomicU32::new(0))
                 .collect(),
             poly_scope: (0..POLY_SCOPE_LEN).map(|_| AtomicU32::new(0)).collect(),
@@ -433,8 +475,60 @@ impl Shared {
         self.metronome.load(Ordering::Relaxed)
     }
 
+    /// Whether the click's heard now: on, and let.
+    pub(crate) fn clicking(&self) -> bool {
+        self.metronome() && self.click_gate.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn click_style(&self) -> ClickStyle {
+        unpack_click(self.click_style.load(Ordering::Relaxed))
+    }
+
     pub fn position(&self) -> u64 {
         self.position.load(Ordering::Relaxed)
+    }
+
+    /// A block starting on `start`, the song moving `moves` samples in it, its first sample
+    /// heard at `at` (`clock` ns).
+    pub(crate) fn note_heard(&self, start: u64, moves: u64, at: u64) {
+        let k = (self.heard_at.load(Ordering::Relaxed) + 1) % HEARD_KEPT;
+        let play = self.heard_play.load(Ordering::Relaxed);
+        // Its moment last, cleared first: a reader never takes half of one for the other.
+        self.heard[k][2].store(0, Ordering::Relaxed);
+        self.heard[k][0].store(start, Ordering::Relaxed);
+        self.heard[k][1].store(moves, Ordering::Relaxed);
+        self.heard[k][3].store(play, Ordering::Relaxed);
+        self.heard[k][2].store(at, Ordering::Release);
+        self.heard_at.store(k, Ordering::Release);
+    }
+
+    /// Play started or the song moved: what's still to be heard of before isn't now.
+    pub(crate) fn new_play(&self) {
+        self.heard_play.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// The sample being heard now, at `rate`: in the newest block of this play that's started
+    /// playing, as far into it as the time since. Before any of this play's is heard, where it
+    /// starts; None with none of it made yet (or a player heard by nobody).
+    pub(crate) fn heard_now(&self, rate: f64) -> Option<u64> {
+        let now = clock() as i64 - self.heard_later.load(Ordering::Relaxed);
+        let play = self.heard_play.load(Ordering::Acquire);
+        let newest = self.heard_at.load(Ordering::Acquire);
+        let mut first = None;
+        for back in 0..HEARD_KEPT {
+            let k = (newest + HEARD_KEPT - back) % HEARD_KEPT;
+            let at = self.heard[k][2].load(Ordering::Acquire);
+            if at == 0 || self.heard[k][3].load(Ordering::Relaxed) != play {
+                break;
+            }
+            let start = self.heard[k][0].load(Ordering::Relaxed);
+            if at as i64 <= now {
+                let into = ((now - at as i64) as f64 / 1e9 * rate) as u64;
+                return Some(start + into.min(self.heard[k][1].load(Ordering::Relaxed)));
+            }
+            first = Some(start);
+        }
+        first
     }
 
     pub fn playing(&self) -> bool {
@@ -492,4 +586,35 @@ pub(crate) fn trash(q: &mut rtrb::Producer<Garbage>, g: Garbage) {
     if let Err(rtrb::PushError::Full(g)) = q.push(g) {
         std::mem::forget(g);
     }
+}
+
+/// A click's style in one atomic: its level (dB + 64, a byte), sound, how often, and accent.
+pub(crate) fn pack_click(c: ClickStyle) -> u32 {
+    let level = (c.level_db.clamp(-60.0, 12.0) + 64.0).round() as u32;
+    level
+        | (c.sound.min(3) as u32) << 8
+        | (c.every.clamp(1, 4) as u32) << 10
+        | (c.accent as u32) << 13
+}
+
+pub(crate) fn unpack_click(v: u32) -> ClickStyle {
+    ClickStyle {
+        level_db: (v & 0xff) as f32 - 64.0,
+        sound: (v >> 8 & 3) as u8,
+        every: (v >> 10 & 7) as u8,
+        accent: v >> 13 & 1 == 1,
+    }
+}
+
+/// How many buffers' timing are kept: enough to reach past a Bluetooth output's delay.
+pub(crate) const HEARD_KEPT: usize = 2048;
+
+/// Nanoseconds on one clock the audio thread and the window both read (never 0).
+pub(crate) fn clock() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_nanos() as u64
+        + 1
 }
