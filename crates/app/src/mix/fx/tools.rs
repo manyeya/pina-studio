@@ -475,8 +475,7 @@ impl Workspace {
         (ax, ay): (f32, f32),
         (bx, by): (f32, f32),
     ) {
-        let Some(k) = self.fx_stacked() else { return };
-        let Some(u) = self.chain_mut(ch).more.get_mut(k) else {
+        let Some(u) = self.fx_any_mut(ch) else {
             return;
         };
         match (u, i) {
@@ -534,7 +533,11 @@ impl Workspace {
         let plot = v.plot.clone();
         let heard = (v.spectrum.clone(), v.columns.clone());
         let levels: Vec<[f32; 4]> = v.history.iter().copied().collect();
-        let picture = well().h_full().w(px(TIME_W)).flex_none();
+        // As wide as there's room for: the window's, or the synth's stage.
+        let wide = v
+            .wide
+            .map_or(TIME_W, |s| (s - 2.0 - 28.0 - 8.0 - FREQ_W).max(TIME_W));
+        let picture = well().h_full().w(px(wide)).flex_none();
         match *u {
             Unit::Filter(f) => {
                 let curve = canvas(
@@ -586,7 +589,7 @@ impl Workspace {
                     .debug_selector(|| "filter-display".into())
                     .child(curve)
                     .child(handle(
-                        freq_x(f.cutoff_hz) * TIME_W,
+                        freq_x(f.cutoff_hz) * wide,
                         (1.0 - f.resonance) * DISPLAY_H,
                         MIDDLE,
                         "filter-handle",
@@ -611,7 +614,7 @@ impl Workspace {
                         MIDDLE,
                     ))
                     .child(handle(
-                        LFO_RATE.pos(m.rate_hz) * TIME_W,
+                        LFO_RATE.pos(m.rate_hz) * wide,
                         (0.5 - m.depth * CREST) * DISPLAY_H,
                         MIDDLE,
                         "motion-handle",
@@ -674,10 +677,10 @@ impl Workspace {
                 picture
                     .debug_selector(|| "shaper-display".into())
                     .child(hit)
-                    .child(chip_tag(TIME_W - 190.0, 8.0, "As it comes".into(), TEXT_2))
-                    .child(chip_tag(TIME_W - 100.0, 8.0, "As it leaves".into(), MIDDLE))
+                    .child(chip_tag(wide - 190.0, 8.0, "As it comes".into(), TEXT_2))
+                    .child(chip_tag(wide - 100.0, 8.0, "As it leaves".into(), MIDDLE))
                     .child(handle(
-                        TIME_W * 0.08,
+                        wide * 0.08,
                         (1.0 - s.attack) * 0.5 * DISPLAY_H,
                         HIGH,
                         "shaper-front",
@@ -686,7 +689,7 @@ impl Workspace {
                         cx,
                     ))
                     .child(handle(
-                        TIME_W * 0.6,
+                        wide * 0.6,
                         (1.0 - s.sustain) * 0.5 * DISPLAY_H,
                         LOW,
                         "shaper-tail",
@@ -713,7 +716,7 @@ impl Workspace {
                     .debug_selector(|| "gate-display".into())
                     .child(history)
                     .child(handle(
-                        TIME_W - 24.0,
+                        wide - 24.0,
                         (g.threshold_db / LEVEL_FLOOR).clamp(0.0, 1.0) * DISPLAY_H,
                         HIGH,
                         "gate-threshold",
@@ -755,7 +758,7 @@ impl Workspace {
                     .debug_selector(|| "de-esser-display".into())
                     .child(spectrum)
                     .child(handle(
-                        freq_x(d.freq_hz) * TIME_W,
+                        freq_x(d.freq_hz) * wide,
                         (d.threshold_db / LEVEL_FLOOR).clamp(0.0, 1.0) * DISPLAY_H,
                         HIGH,
                         "de-esser-handle",
@@ -799,7 +802,7 @@ impl Workspace {
                 .size_full();
                 let mid = |k: usize| {
                     let cuts = [0.0, freq_x(s.crossovers[0]), freq_x(s.crossovers[1]), 1.0];
-                    (cuts[k] + cuts[k + 1]) / 2.0 * TIME_W
+                    (cuts[k] + cuts[k + 1]) / 2.0 * wide
                 };
                 let width = |k: usize, sel, cx: &mut Context<Self>| {
                     handle(
@@ -814,7 +817,7 @@ impl Workspace {
                 };
                 let split = |k: usize, sel, cx: &mut Context<Self>| {
                     handle(
-                        freq_x(s.crossovers[k]) * TIME_W,
+                        freq_x(s.crossovers[k]) * wide,
                         DISPLAY_H - 18.0,
                         0xffffff,
                         sel,
@@ -832,7 +835,7 @@ impl Workspace {
                     .child(bands)
                     .child(chip_tag(8.0, 8.0, under, TEXT_2))
                     .child(handle(
-                        freq_x(s.mono_hz) * TIME_W,
+                        freq_x(s.mono_hz) * wide,
                         32.0,
                         0xffffff,
                         "stereo-mono-under",
@@ -880,7 +883,7 @@ impl Workspace {
                 .absolute()
                 .size_full();
                 let cuts = [0.0, freq_x(m.crossovers[0]), freq_x(m.crossovers[1]), 1.0];
-                let mid = |k: usize| (cuts[k] + cuts[k + 1]) / 2.0 * TIME_W;
+                let mid = |k: usize| (cuts[k] + cuts[k + 1]) / 2.0 * wide;
                 let bar = |k: usize, sel, cx: &mut Context<Self>| {
                     handle(
                         mid(k),
@@ -894,7 +897,7 @@ impl Workspace {
                 };
                 let split = |k: usize, sel, cx: &mut Context<Self>| {
                     handle(
-                        freq_x(m.crossovers[k]) * TIME_W,
+                        freq_x(m.crossovers[k]) * wide,
                         DISPLAY_H - 18.0,
                         0xffffff,
                         sel,
@@ -957,25 +960,25 @@ impl Workspace {
                     .child(ruler)
                     .child(chip_tag(8.0, 8.0, interval(p.semitones), MIDDLE))
                     .child(chip_tag(
-                        TIME_W / 2.0 - 6.0,
+                        wide / 2.0 - 6.0,
                         DISPLAY_H - 26.0,
                         "0".into(),
                         TEXT_3,
                     ))
                     .child(chip_tag(
-                        TIME_W * 0.75 - 9.0,
+                        wide * 0.75 - 9.0,
                         DISPLAY_H - 26.0,
                         "+12".into(),
                         TEXT_3,
                     ))
                     .child(chip_tag(
-                        TIME_W * 0.25 - 9.0,
+                        wide * 0.25 - 9.0,
                         DISPLAY_H - 26.0,
                         "-12".into(),
                         TEXT_3,
                     ))
                     .child(handle(
-                        (p.semitones + 24.0) / 48.0 * TIME_W,
+                        (p.semitones + 24.0) / 48.0 * wide,
                         DISPLAY_H / 2.0,
                         MIDDLE,
                         "pitch-handle",
@@ -1040,19 +1043,19 @@ impl Workspace {
                         HIGH,
                     ))
                     .child(chip_tag(
-                        TIME_W - 170.0,
+                        wide - 170.0,
                         8.0,
                         format!("Starts over {:.2} beats", t.start_beats),
                         LOW,
                     ))
                     .child(chip_tag(
-                        TIME_W / 2.0 - 28.0,
+                        wide / 2.0 - 28.0,
                         DISPLAY_H - 26.0,
                         format!("{:.0}% now", speed * 100.0),
                         MIDDLE,
                     ))
                     .child(handle(
-                        stop * TIME_W,
+                        stop * wide,
                         top,
                         HIGH,
                         "tape-stop-handle",
@@ -1061,7 +1064,7 @@ impl Workspace {
                         cx,
                     ))
                     .child(handle(
-                        start * TIME_W,
+                        start * wide,
                         top,
                         LOW,
                         "tape-start-handle",
@@ -1070,7 +1073,7 @@ impl Workspace {
                         cx,
                     ))
                     .child(handle(
-                        (stop + 0.5) / 2.0 * TIME_W,
+                        (stop + 0.5) / 2.0 * wide,
                         t.curve * DISPLAY_H,
                         MIDDLE,
                         "tape-curve-handle",
@@ -1143,7 +1146,7 @@ impl Workspace {
                     .children([60u8, 72].map(|c| {
                         let row = DISPLAY_H / TUNE_NOTES.len() as f32;
                         let y = (TUNE_NOTES.end - c) as f32 * row - 16.0;
-                        chip_tag(TIME_W - 28.0, y, format!("C{}", c / 12 - 1), TEXT_3)
+                        chip_tag(wide - 28.0, y, format!("C{}", c / 12 - 1), TEXT_3)
                     }))
             }
             _ => picture,

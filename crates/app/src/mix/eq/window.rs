@@ -49,6 +49,21 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A synth's own EQ, at `slot` in track `t`'s rack, on its Effects page: the whole EQ, its
+    /// analyzer hearing the synth.
+    pub fn open_rack_eq(&mut self, t: usize, slot: usize, cx: &mut Context<Self>) {
+        let ch = Channel::Track(t);
+        match &mut self.eq_view {
+            Some(v) if v.rack == Some((t, slot)) => {}
+            _ => {
+                let mut v = EqView::new(ch, None, (0.0, 0.0), (MIN_W, MIN_H));
+                v.rack = Some((t, slot));
+                self.eq_view = Some(v);
+            }
+        }
+        cx.notify();
+    }
+
     pub fn close_eq(&mut self, cx: &mut Context<Self>) {
         self.eq_view = None;
         self.player.watch_eq(None);
@@ -60,13 +75,23 @@ impl Workspace {
     /// The EQ the window shows.
     pub(crate) fn shown_eq(&self) -> Option<(Channel, Eq)> {
         let v = self.eq_view.as_ref()?;
+        if let Some((t, slot)) = v.rack {
+            let eq = self
+                .poly(t)?
+                .fx
+                .get(slot)
+                .and_then(<Eq as pina_engine::song::project::AsUnit>::of)?;
+            return Some((v.ch, eq));
+        }
         Some((v.ch, self.built_in(v.ch, v.stacked)?))
     }
 
     /// Whether the window shows a stacked EQ: its bands aren't automated (the channel's own
     /// EQ's are).
     pub(crate) fn eq_stacked(&self) -> bool {
-        self.eq_view.as_ref().is_some_and(|v| v.stacked.is_some())
+        self.eq_view
+            .as_ref()
+            .is_some_and(|v| v.stacked.is_some() || v.rack.is_some())
     }
 
     /// The shown EQ as it's heard now: its bands where their automation has them.
@@ -145,13 +170,20 @@ impl Workspace {
     }
 
     pub(crate) fn eq_geo(&self) -> Option<Geo> {
-        let rate = self.session.project.sample_rate as f64;
+        let rate = self.player.rate();
         Some(self.eq_view.as_ref()?.geo(rate))
     }
 
     /// The shown EQ, to change (no edit of its own: inside one, or a drag's).
     pub(crate) fn eq_mut(&mut self) -> Option<&mut Eq> {
         let v = self.eq_view.as_ref()?;
+        if let Some((t, slot)) = v.rack {
+            return self
+                .poly_mut(t)?
+                .fx
+                .get_mut(slot)
+                .and_then(<Eq as pina_engine::song::project::AsUnit>::of_mut);
+        }
         let (ch, stacked) = (v.ch, v.stacked);
         self.unit_mut(ch, stacked)
     }
@@ -177,7 +209,7 @@ impl Workspace {
     /// and moves the analyzer and meter on with what it's heard.
     pub fn eq_frame(&mut self) {
         self.list_frame();
-        let rate = self.session.project.sample_rate as f64;
+        let rate = self.player.rate();
         let Some(view) = self.eq_view.as_mut() else {
             return;
         };
@@ -188,7 +220,10 @@ impl Workspace {
             Channel::Master => Some(None),
         };
         self.player.watch_eq(id);
-        self.player.watch_eq_more(view.stacked);
+        let rack = view
+            .rack
+            .map(|(_, slot)| pina_engine::audio::engine::RACK_METERED + slot);
+        self.player.watch_eq_more(rack.or(view.stacked));
         self.player.solo_band(view.solo.map(|s| (s.id, s.level)));
         let geo = view.geo(rate);
         let n = (geo.w / 3.0) as usize;
@@ -342,13 +377,15 @@ impl Workspace {
         let (dx, dy) = (p.x - from.x, p.y - from.y);
         v.restore = None;
         if resize {
-            v.size = (
-                (start.0 + dx).clamp(MIN_W, vw.max(MIN_W)),
-                (start.1 + dy).clamp(MIN_H, vh.max(MIN_H)),
-            );
+            // Scaled as a whole, its shape kept (as the effects' windows are).
+            let (w, h) = v.size;
+            let most = (vw / w).min(vh / h).max(1.0);
+            v.scale = ((start.0 + dx) / w)
+                .max((start.1 + dy) / h)
+                .clamp(0.75, most);
         } else {
             v.at = (
-                (start.0 + dx).clamp(-v.size.0 + 80.0, vw - 80.0),
+                (start.0 + dx).clamp(-v.size.0 * v.scale + 80.0, vw - 80.0),
                 (start.1 + dy).clamp(0.0, vh - HEAD_H),
             );
         }
@@ -367,49 +404,80 @@ impl Workspace {
         };
         let eq = self.eq_as_heard(ch, eq);
         let view = self.eq_view.as_ref()?;
-        let (at, size) = (view.at, view.size);
+        if view.rack.is_some() {
+            return None;
+        }
+        let (at, size, s) = (view.at, view.size, view.scale);
+        // All of it built at its scale: the same layout, bigger or smaller.
+        crate::ui::scale::with_scale(s, || {
+            let head = self.eq_head(ch, &eq, cx);
+            let display = self.eq_display_area(&eq, cx);
+            let foot = self.eq_foot(&eq, cx);
+            let popup = self.eq_popup(&eq, cx);
+            let frame = div()
+                .id("eq-window")
+                .occlude()
+                .relative()
+                .w(px(size.0))
+                .h(px(size.1))
+                .flex()
+                .flex_col()
+                .rounded(px(12.))
+                .overflow_hidden()
+                .bg(rgb(0x101115))
+                .border_1()
+                .border_color(rgb(LINE_STRONG))
+                .shadow_lg()
+                .font_family(SANS)
+                .text_color(rgb(TEXT))
+                .text_size(px(12.))
+                .child(head)
+                .child(display)
+                .child(foot)
+                .children(popup)
+                .on_mouse_down_out(cx.listener(|ws, _, _, cx| {
+                    if let Some(v) = ws.eq_view.as_mut()
+                        && v.focused
+                        && ws.drag.is_none()
+                    {
+                        v.focused = false;
+                        cx.notify();
+                    }
+                }));
+            Some(
+                deferred(
+                    anchored()
+                        .position(point(gpui::px(at.0), gpui::px(at.1)))
+                        .snap_to_window()
+                        .child(crate::ui::scale::scaled(s, frame)),
+                )
+                .with_priority(1),
+            )
+        })
+    }
+
+    /// A synth's own EQ as its Effects page shows it, `size` big: the head, the display, the
+    /// foot and any popup, as the window has them.
+    pub(crate) fn eq_stage(
+        &mut self,
+        size: (f32, f32),
+        cx: &mut Context<Self>,
+    ) -> Option<Vec<gpui::AnyElement>> {
+        let (ch, eq) = self.shown_eq()?;
+        let view = self.eq_view.as_mut()?;
+        view.size = size;
+        // At the synth's scale: what the pointer's at is read back in the EQ's own units.
+        view.scale = crate::ui::scale::scale();
         let head = self.eq_head(ch, &eq, cx);
         let display = self.eq_display_area(&eq, cx);
         let foot = self.eq_foot(&eq, cx);
         let popup = self.eq_popup(&eq, cx);
-        let frame = div()
-            .id("eq-window")
-            .occlude()
-            .relative()
-            .w(px(size.0))
-            .h(px(size.1))
-            .flex()
-            .flex_col()
-            .rounded(px(12.))
-            .overflow_hidden()
-            .bg(rgb(0x101115))
-            .border_1()
-            .border_color(rgb(LINE_STRONG))
-            .shadow_lg()
-            .font_family(SANS)
-            .text_color(rgb(TEXT))
-            .text_size(px(12.))
-            .child(head)
-            .child(display)
-            .child(foot)
-            .children(popup)
-            .on_mouse_down_out(cx.listener(|ws, _, _, cx| {
-                if let Some(v) = ws.eq_view.as_mut()
-                    && v.focused
-                    && ws.drag.is_none()
-                {
-                    v.focused = false;
-                    cx.notify();
-                }
-            }));
-        Some(
-            deferred(
-                anchored()
-                    .position(point(px(at.0), px(at.1)))
-                    .snap_to_window()
-                    .child(frame),
-            )
-            .with_priority(1),
-        )
+        let mut all = vec![
+            head.into_any_element(),
+            display.into_any_element(),
+            foot.into_any_element(),
+        ];
+        all.extend(popup.map(|p| p.into_any_element()));
+        Some(all)
     }
 }

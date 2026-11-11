@@ -2,9 +2,8 @@
 //! undo, A/B and full screen; along the bottom, the piano, the processing, the analyzer and
 //! the output, whose settings open over it.
 
-use gpui::{
-    Context, Div, FontWeight, MouseButton, MouseDownEvent, Stateful, div, prelude::*, px, rgb,
-};
+use crate::ui::scale::px;
+use gpui::{Context, Div, FontWeight, MouseButton, MouseDownEvent, Stateful, div, prelude::*, rgb};
 use pina_engine::song::project::{Eq, Processing, RESOLUTIONS};
 
 use super::{EqKnob, EqOp, FOOT_H, HEAD_H, Popup, factory, saved_presets};
@@ -96,6 +95,18 @@ impl Workspace {
         let view = self.eq_view.as_ref().expect("the window's open");
         let on_b = view.on_b;
         let full = view.restore.is_some();
+        let rack = view.rack;
+        let title = match rack {
+            Some((t, slot)) => self
+                .poly(t)
+                .and_then(|p| p.fx.get(slot))
+                .map(pina_engine::song::project::rack_name),
+            None => view
+                .stacked
+                .and_then(|k| self.stacked(view.ch, k))
+                .map(|s| s.1),
+        }
+        .unwrap_or_else(|| "Channel EQ".to_string());
         div()
             .id("eq-head")
             .h(px(HEAD_H))
@@ -107,13 +118,16 @@ impl Workspace {
             .bg(rgb(0x14151a))
             .border_b_1()
             .border_color(rgb(LINE))
-            .cursor(gpui::CursorStyle::OpenHand)
+            .when(rack.is_none(), |d| d.cursor(gpui::CursorStyle::OpenHand))
             .debug_selector(|| "eq-title".into())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|ws, e: &MouseDownEvent, _, cx| {
                     let Some(v) = ws.eq_view.as_mut() else { return };
                     v.focused = true;
+                    if v.rack.is_some() {
+                        return;
+                    }
                     let start = v.at;
                     ws.begin_drag(
                         Drag::EqWindow {
@@ -130,48 +144,41 @@ impl Workspace {
                     .text_size(px(13.))
                     .font_weight(FontWeight::BOLD)
                     .debug_selector(|| "eq-title".into())
-                    .child(
-                        match self
-                            .eq_view
-                            .as_ref()
-                            .and_then(|v| self.stacked(v.ch, v.stacked?))
-                        {
-                            Some((_, name)) => name,
-                            None => "Channel EQ".to_string(),
-                        },
-                    ),
+                    .child(title),
             )
-            .child(
-                div()
-                    .h(px(26.))
-                    .px(px(8.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .rounded(px(6.))
-                    .bg(rgb(0x1c1d23))
-                    .cursor_pointer()
-                    .hover(|d| d.bg(rgb(RAISED)))
-                    .debug_selector(|| "eq-channel".into())
-                    .child(div().size(px(8.)).rounded(px(4.)).bg(rgb(color)))
-                    .child(
-                        div()
-                            .max_w(px(160.))
-                            .text_size(px(11.5))
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(name),
-                    )
-                    .child(icon(Icon::Chevron, 10.).text_color(rgb(TEXT_3)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            ws.eq_channel_menu(e.position, cx);
-                        }),
-                    ),
-            )
+            .when(rack.is_none(), |d| {
+                d.child(
+                    div()
+                        .h(px(26.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .rounded(px(6.))
+                        .bg(rgb(0x1c1d23))
+                        .cursor_pointer()
+                        .hover(|d| d.bg(rgb(RAISED)))
+                        .debug_selector(|| "eq-channel".into())
+                        .child(div().size(px(8.)).rounded(px(4.)).bg(rgb(color)))
+                        .child(
+                            div()
+                                .max_w(px(160.))
+                                .text_size(px(11.5))
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(name),
+                        )
+                        .child(icon(Icon::Chevron, 10.).text_color(rgb(TEXT_3)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                ws.eq_channel_menu(e.position, cx);
+                            }),
+                        ),
+                )
+            })
             .child(
                 div()
                     .text_size(px(11.))
@@ -252,23 +259,27 @@ impl Workspace {
                     ),
             )
             .child(div().w(px(1.)).h(px(18.)).bg(rgb(LINE_STRONG)))
-            .child(
-                icon_button(if full { Icon::Minus } else { Icon::Expand }, "eq-full")
-                    .on_mouse_down(
+            .map(|d| match rack {
+                Some((t, slot)) => d.child(self.rack_moves(t, slot, cx)),
+                None => d
+                    .child(
+                        icon_button(if full { Icon::Minus } else { Icon::Expand }, "eq-full")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|ws, _, _, cx| {
+                                    cx.stop_propagation();
+                                    ws.eq_op(EqOp::FullScreen, cx);
+                                }),
+                            ),
+                    )
+                    .child(icon_button(Icon::Close, "eq-close").on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|ws, _, _, cx| {
                             cx.stop_propagation();
-                            ws.eq_op(EqOp::FullScreen, cx);
+                            ws.close_eq(cx);
                         }),
-                    ),
-            )
-            .child(icon_button(Icon::Close, "eq-close").on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|ws, _, _, cx| {
-                    cx.stop_propagation();
-                    ws.close_eq(cx);
-                }),
-            ))
+                    )),
+            })
     }
 
     /// Every channel, to show its EQ instead (one added if it has none).
@@ -548,25 +559,31 @@ impl Workspace {
                     }),
                 ),
             )
-            .child(
-                resize_grip()
-                    .debug_selector(|| "eq-resize".into())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            let Some(v) = ws.eq_view.as_ref() else { return };
-                            let start = v.size;
-                            ws.begin_drag(
-                                Drag::EqWindow {
-                                    from: pt(e.position),
-                                    start,
-                                    resize: true,
-                                },
-                                cx,
-                            );
-                        }),
-                    ),
+            // On the synth's Effects page it fills the stage: nothing to resize.
+            .when(
+                self.eq_view.as_ref().is_some_and(|v| v.rack.is_none()),
+                |d| {
+                    d.child(
+                        resize_grip()
+                            .debug_selector(|| "eq-resize".into())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    let Some(v) = ws.eq_view.as_ref() else { return };
+                                    let start = (v.size.0 * v.scale, v.size.1 * v.scale);
+                                    ws.begin_drag(
+                                        Drag::EqWindow {
+                                            from: pt(e.position),
+                                            start,
+                                            resize: true,
+                                        },
+                                        cx,
+                                    );
+                                }),
+                            ),
+                    )
+                },
             )
     }
 

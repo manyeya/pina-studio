@@ -69,7 +69,7 @@ pub(crate) fn dial(
     color: u32,
     bipolar: bool,
 ) -> impl IntoElement {
-    canvas(
+    crate::ui::scale::scaled_canvas(
         |_, _, _| {},
         move |b, _, window, _| {
             let c = b.center();

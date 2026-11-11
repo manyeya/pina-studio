@@ -6,10 +6,11 @@
 
 use std::{cell::RefCell, rc::Rc};
 
+use crate::ui::scale::px;
 use gpui::{
     Bounds, Context, Div, Entity, FontWeight, MouseButton, MouseDownEvent, PathBuilder, Pixels,
     ScrollWheelEvent, Stateful, Subscription, canvas, div, fill, linear_color_stop,
-    linear_gradient, point, prelude::*, px, rgb, size,
+    linear_gradient, point, prelude::*, rgb, size,
 };
 use pina_engine::{
     dsp::eq::{LANE_LEN, eq_response, smooth_third, spectrum_db},
@@ -159,7 +160,7 @@ impl Workspace {
         if !open {
             return;
         }
-        let rate = self.session.project.sample_rate as f64;
+        let rate = self.player.rate();
         let rows: Vec<(Channel, Option<u64>)> =
             self.list_rows().iter().map(|r| (r.ch, r.id)).collect();
         let freqs = columns();
@@ -278,7 +279,7 @@ impl Workspace {
 
     /// The instance list, in the display's place, `w` by `h`.
     pub(super) fn eq_list(&self, w: f32, h: f32, cx: &mut Context<Self>) -> Stateful<Div> {
-        let rate = self.session.project.sample_rate as f64;
+        let rate = self.player.rate();
         let view = self.eq_view.as_ref().expect("the window's open");
         let (now, ext) = (view.ch, view.ext);
         let l = &view.listing;

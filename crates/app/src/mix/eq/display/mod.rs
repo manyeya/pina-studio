@@ -8,10 +8,11 @@ mod scale;
 
 pub(crate) use scale::*;
 
+use crate::ui::scale::px;
 use gpui::{
     Bounds, Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, PathBuilder, Point,
     ScrollWheelEvent, Stateful, canvas, div, fill, linear_color_stop, linear_gradient, point,
-    prelude::*, px, rgb, size,
+    prelude::*, rgb, size,
 };
 use pina_engine::{
     dsp::eq::{Section, band_sections, response_db},
@@ -70,7 +71,7 @@ impl Workspace {
     /// Each band as it's drawn, at `freqs`: its curve (with its dynamic move, while playing),
     /// where its dot sits and where it's heard.
     pub(super) fn eq_drawn(&self, eq: &Eq, geo: &Geo, freqs: &[f64]) -> Vec<Drawn> {
-        let rate = self.session.project.sample_rate as f64;
+        let rate = self.player.rate();
         let playing = self.player.playing();
         let tap = self.player.eq_tap();
         let curve = |s: &[Section]| -> Vec<f32> {
@@ -112,7 +113,7 @@ impl Workspace {
 
     /// The display: the plot with its scale under it, and the analyzer's scale and meter.
     pub(super) fn eq_display_area(&mut self, eq: &Eq, cx: &mut Context<Self>) -> Div {
-        let rate = self.session.project.sample_rate as f64;
+        let rate = self.player.rate();
         let Some(view) = self.eq_view.as_ref() else {
             return div();
         };

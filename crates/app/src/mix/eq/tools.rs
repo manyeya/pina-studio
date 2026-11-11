@@ -4,9 +4,9 @@
 
 use std::path::PathBuf;
 
+use crate::ui::scale::px;
 use gpui::{
-    Context, Div, FontWeight, MouseButton, MouseDownEvent, PathPromptOptions, div, prelude::*, px,
-    rgb,
+    Context, Div, FontWeight, MouseButton, MouseDownEvent, PathPromptOptions, div, prelude::*, rgb,
 };
 use pina_engine::{
     dsp::eq::{average_spectrum, fit_bands, smooth_third, spectrum_db},
@@ -243,7 +243,7 @@ pub fn peaks(spec: &[f32], floor: f32) -> Vec<usize> {
 
 impl Workspace {
     pub(super) fn match_op(&mut self, op: EqOp, cx: &mut Context<Self>) {
-        let rate = self.session.project.sample_rate as f64;
+        let rate = self.player.rate();
         let Some(v) = self.eq_view.as_mut() else {
             return;
         };
@@ -635,7 +635,10 @@ impl Workspace {
             return;
         };
         let o = v.display.get().origin;
-        let (x, y) = (p.x - f32::from(o.x), p.y - f32::from(o.y));
+        let (x, y) = (
+            (p.x - f32::from(o.x)) / v.scale,
+            (p.y - f32::from(o.y)) / v.scale,
+        );
         v.stroke.retain(|&(sx, _)| sx < x);
         v.stroke.push((x, y));
     }

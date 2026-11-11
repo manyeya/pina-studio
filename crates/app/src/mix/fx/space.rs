@@ -622,60 +622,75 @@ fn reverb_display(
     .absolute()
     .size_full();
     let label = |x: f32, y: f32, text: String, c: u32| tag(x, y, text, c);
-    let w = TIME_W;
-    let px_at = |t: f32| (t / span).clamp(0.0, 1.0) * w;
+    // Across as a fraction: the picture stretches to the room it has.
+    let px_at = |t: f32| (t / span).clamp(0.0, 1.0);
     // Where the middle's fall reaches the floor: dragged, its decay.
     let floor_at = tail_from + decay * (-DB_FLOOR - 6.0) / -DB_FLOOR;
     well()
         .h_full()
-        .w(px(TIME_W))
-        .flex_none()
+        .flex_1()
+        .min_w(px(TIME_W))
         .debug_selector(|| "reverb-display".into())
         .child(graph)
-        .child(handle(
-            px_at(pre),
-            DISPLAY_H - 18.0,
-            0xffffff,
-            "reverb-handle-predelay",
-            SpaceHandle::Predelay,
-            span,
-            cx,
-        ))
-        .when(!frozen, |d| {
-            d.child(handle(
-                px_at(floor_at),
+        .child(across(
+            handle(
+                0.0,
                 DISPLAY_H - 18.0,
-                MIDDLE,
-                "reverb-handle-decay",
-                SpaceHandle::Decay,
+                0xffffff,
+                "reverb-handle-predelay",
+                SpaceHandle::Predelay,
                 span,
                 cx,
+            ),
+            px_at(pre),
+            -7.0,
+        ))
+        .when(!frozen, |d| {
+            d.child(across(
+                handle(
+                    0.0,
+                    DISPLAY_H - 18.0,
+                    MIDDLE,
+                    "reverb-handle-decay",
+                    SpaceHandle::Decay,
+                    span,
+                    cx,
+                ),
+                px_at(floor_at),
+                -7.0,
             ))
         })
-        .child(label(
-            px_at(pre) + 6.0,
-            8.0,
-            match r.predelay_beats {
-                Some(b) => format!("Pre-delay {}", crate::mix::strip::note_name(b)),
-                None => format!("Pre-delay {:.0} ms", pre * 1000.0),
-            },
-            TEXT_3,
+        .child(across(
+            label(
+                0.0,
+                8.0,
+                match r.predelay_beats {
+                    Some(b) => format!("Pre-delay {}", crate::mix::strip::note_name(b)),
+                    None => format!("Pre-delay {:.0} ms", pre * 1000.0),
+                },
+                TEXT_3,
+            ),
+            px_at(pre),
+            6.0,
         ))
-        .child(label(
-            w - 150.0,
-            8.0,
-            match frozen {
-                true => "Frozen".to_string(),
-                false => format!("Falls 60 dB in {decay:.2} s"),
-            },
-            TEXT_2,
+        .child(across(
+            label(
+                0.0,
+                8.0,
+                match frozen {
+                    true => "Frozen".to_string(),
+                    false => format!("Falls 60 dB in {decay:.2} s"),
+                },
+                TEXT_2,
+            ),
+            1.0,
+            -150.0,
         ))
         .children(bands.iter().enumerate().map(|(i, &(rt, c, name))| {
-            label(
-                w - 150.0,
-                26.0 + i as f32 * 15.0,
-                format!("{name} {rt:.2} s"),
-                c,
+            across(
+                label(0.0, 26.0 + i as f32 * 15.0, format!("{name} {rt:.2} s"), c),
+                1.0,
+                -150.0,
             )
         }))
 }
@@ -1072,7 +1087,7 @@ fn delay_display(
         false => format!("{:.0} ms", times[s] * 1000.0),
     };
     // The first echo each side (its time) and the next on the left (the feedback), to drag.
-    let x_at = |t: f32| (t / span).clamp(0.0, 1.0) * TIME_W;
+    let x_at = |t: f32| (t / span).clamp(0.0, 1.0);
     let lane = DISPLAY_H / 2.0;
     let tall =
         |a: f32| (1.0 - (20.0 * a.max(1e-4).log10()) / DB_FLOOR).clamp(0.0, 1.0) * (lane - 14.0);
@@ -1084,60 +1099,84 @@ fn delay_display(
     };
     well()
         .h_full()
-        .w(px(TIME_W))
-        .flex_none()
+        .flex_1()
+        .min_w(px(TIME_W))
         .debug_selector(|| "delay-display".into())
         .child(graph)
-        .child(handle(
-            x_at(times[0]),
-            lane - 2.0 - tall(1.0),
-            MIDDLE,
-            "delay-handle-left",
-            SpaceHandle::Time(0),
-            span,
-            cx,
-        ))
-        .when(!ping, |el| {
-            el.child(handle(
-                x_at(times[1]),
-                lane + 2.0 + tall(1.0),
-                LOW,
-                "delay-handle-right",
-                SpaceHandle::Time(1),
+        .child(across(
+            handle(
+                0.0,
+                lane - 2.0 - tall(1.0),
+                MIDDLE,
+                "delay-handle-left",
+                SpaceHandle::Time(0),
                 span,
                 cx,
+            ),
+            x_at(times[0]),
+            -7.0,
+        ))
+        .when(!ping, |el| {
+            el.child(across(
+                handle(
+                    0.0,
+                    lane + 2.0 + tall(1.0),
+                    LOW,
+                    "delay-handle-right",
+                    SpaceHandle::Time(1),
+                    span,
+                    cx,
+                ),
+                x_at(times[1]),
+                -7.0,
             ))
         })
         .when(!d.freeze, |el| {
-            el.child(handle(
+            el.child(across(
+                handle(
+                    0.0,
+                    second.1,
+                    0xffffff,
+                    "delay-handle-feedback",
+                    SpaceHandle::Feedback,
+                    span,
+                    cx,
+                ),
                 x_at(second.0),
-                second.1,
-                0xffffff,
-                "delay-handle-feedback",
-                SpaceHandle::Feedback,
-                span,
-                cx,
+                -7.0,
             ))
         })
-        .child(chip_tag(
-            TIME_W - 190.0,
-            DISPLAY_H / 2.0 - 26.0,
-            format!("Left {}", text(0)),
-            MIDDLE,
+        .child(across(
+            chip_tag(
+                0.0,
+                DISPLAY_H / 2.0 - 26.0,
+                format!("Left {}", text(0)),
+                MIDDLE,
+            ),
+            1.0,
+            -190.0,
         ))
-        .child(chip_tag(
-            TIME_W - 190.0,
-            DISPLAY_H - 26.0,
-            format!("Right {}", text(1)),
-            LOW,
+        .child(across(
+            chip_tag(0.0, DISPLAY_H - 26.0, format!("Right {}", text(1)), LOW),
+            1.0,
+            -190.0,
         ))
-        .child(tag(
-            TIME_W - 190.0,
-            8.0,
-            match d.freeze {
-                true => "Frozen: going round".to_string(),
-                false => format!("{count} echoes over -60 dB"),
-            },
-            TEXT_3,
+        .child(across(
+            tag(
+                0.0,
+                8.0,
+                match d.freeze {
+                    true => "Frozen: going round".to_string(),
+                    false => format!("{count} echoes over -60 dB"),
+                },
+                TEXT_3,
+            ),
+            1.0,
+            -190.0,
         ))
+}
+
+/// `d` placed `frac` of the way across a picture that stretches, nudged `dx` (px).
+fn across(d: Div, frac: f32, dx: f32) -> Div {
+    d.left(gpui::relative(frac)).ml(px(dx))
 }

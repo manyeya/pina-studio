@@ -18,9 +18,10 @@ pub(crate) use landscape_view::*;
 pub(crate) use lanes::{BookTab, Shelf};
 pub(crate) use widgets::*;
 
+use crate::ui::scale::px;
 use gpui::{
     Bounds, Context, Div, Entity, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
-    ScrollHandle, Subscription, canvas, div, point, prelude::*, px, rgb,
+    ScrollHandle, Subscription, canvas, div, point, prelude::*, rgb,
 };
 use pina_engine::{
     music::Key,

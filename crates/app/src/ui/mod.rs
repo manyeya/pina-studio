@@ -2,5 +2,6 @@
 
 pub mod looks;
 pub mod menu;
+pub mod scale;
 pub mod text;
 pub mod theme;

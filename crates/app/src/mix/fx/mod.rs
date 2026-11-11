@@ -14,10 +14,11 @@ pub use space::SpaceHandle;
 
 use std::{cell::Cell, collections::VecDeque, rc::Rc};
 
+use crate::ui::scale::px;
 use gpui::{
     Animation, AnimationExt, Bounds, Context, Div, FontWeight, MouseButton, MouseDownEvent,
-    PathBuilder, Pixels, Stateful, anchored, canvas, deferred, div, fill, point, prelude::*, px,
-    rgb, size,
+    PathBuilder, Pixels, Stateful, anchored, canvas, deferred, div, fill, point, prelude::*, rgb,
+    size,
 };
 use pina_engine::{
     dsp::{
@@ -47,8 +48,15 @@ pub struct FxView {
     pub which: Builtin,
     /// Which of the channel's: its own (None), or one stacked, by its place among them.
     pub stacked: Option<usize>,
+    /// A synth's own effect instead, by its track and its place in the synth's rack (`stacked`
+    /// is that place too): drawn on the synth's Effects page, not as a window.
+    pub rack: Option<(usize, usize)>,
+    /// How wide the synth's stage gives it, its pictures stretched to fill.
+    pub wide: Option<f32>,
     pub at: (f32, f32),
-    /// How big it's been made: never smaller than it opens.
+    /// How big it's been made, as a whole (its corner dragged, all of it scales together: its
+    /// layout never changes), and so how big it is on screen.
+    pub scale: f32,
     pub size: (f32, f32),
     /// The compressor's (or limiter's) levels, a frame each, oldest first: in and out (dBFS),
     /// how far it turned down (dB), and (the limiter's) the short-term loudness (LUFS).
@@ -83,6 +91,9 @@ impl FxView {
             ch,
             which,
             stacked,
+            rack: None,
+            wide: None,
+            scale: 1.0,
             at,
             size: window_size(which),
             history: VecDeque::with_capacity(HISTORY),
@@ -183,6 +194,60 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A synth's own effect, at `slot` in track `t`'s rack, shown on its Effects page as the
+    /// mixer's window shows a channel's: its picture, every control, its meters.
+    pub fn open_rack_fx(&mut self, t: usize, slot: usize, cx: &mut Context<Self>) {
+        let Some(kind) = self.poly(t).and_then(|p| p.fx.get(slot)).map(|u| u.kind()) else {
+            return;
+        };
+        let metered = pina_engine::audio::engine::RACK_METERED + slot;
+        if kind == Fx::Eq {
+            self.fx_view = None;
+            return self.open_rack_eq(t, slot, cx);
+        }
+        let Some(which) = Builtin::of(kind) else {
+            return;
+        };
+        if self.eq_view.as_ref().is_some_and(|v| v.rack.is_some()) {
+            self.close_eq(cx);
+        }
+        let mut v = FxView::new(Channel::Track(t), which, Some(slot), (0.0, 0.0));
+        v.rack = Some((t, slot));
+        self.fx_view = Some(v);
+        self.player.watch_fx_more(Some(metered));
+        cx.notify();
+    }
+
+    /// The effect the window (or the synth's Effects page) shows, whatever it is, to change.
+    pub(crate) fn fx_any_mut(&mut self, ch: Channel) -> Option<&mut Unit> {
+        let v = self.fx_view.as_ref()?;
+        match v.rack {
+            Some((t, slot)) => self.poly_mut(t)?.fx.get_mut(slot),
+            None => {
+                let k = v.stacked?;
+                self.chain_mut(ch).more.get_mut(k)
+            }
+        }
+    }
+
+    /// The built-in the window shows, as it's heard now.
+    fn fx_shown<T: strip::channel::Stackable>(&self) -> Option<T> {
+        let v = self.fx_view.as_ref()?;
+        match v.rack {
+            Some((t, slot)) => T::of(self.poly(t)?.fx.get(slot)?),
+            None if v.which == Builtin::Limit && v.stacked.is_none() => T::of(
+                &pina_engine::song::project::AsUnit::unit(self.limiter_heard(v.ch)?),
+            ),
+            None => self.built_in(v.ch, v.stacked),
+        }
+    }
+
+    /// Whether an effect window floats over everything (not the synth's stage).
+    #[cfg(test)]
+    pub fn fx_window_open(&self) -> bool {
+        self.fx_view.as_ref().is_some_and(|v| v.rack.is_none())
+    }
+
     pub fn close_fx(&mut self, cx: &mut Context<Self>) {
         self.fx_view = None;
         self.player.watch_fx_more(None);
@@ -193,6 +258,20 @@ impl Workspace {
     /// stacked.
     fn fx_target(&self, t: Target) -> Target {
         use crate::workspace::Knob;
+        // A synth's own: every knob by its place in the effect's table.
+        if let Some((track, slot)) = self.fx_view.as_ref().and_then(|v| v.rack) {
+            let knob = match t {
+                Target::Comp(_, f) => Knob::Comp(f).table(),
+                Target::Sat(_, f) => Knob::Sat(f).table(),
+                Target::Limit(_, f) => Knob::Limit(f).table(),
+                Target::Stacked(_, _, k) => k.table(),
+                Target::Rack { knob, .. } => Some(knob),
+                _ => None,
+            };
+            // One with no place in the table turns nothing rather than the channel's.
+            let knob = knob.unwrap_or(usize::MAX);
+            return Target::Rack { track, slot, knob };
+        }
         match (self.fx_stacked(), t) {
             (Some(k), Target::Comp(ch, f)) => Target::Stacked(ch, k, Knob::Comp(f)),
             (Some(k), Target::Sat(ch, f)) => Target::Stacked(ch, k, Knob::Sat(f)),
@@ -216,19 +295,27 @@ impl Workspace {
         };
         let (ch, which) = (v.ch, v.which);
         let stacked = v.stacked;
-        let gone = match ch {
-            Channel::Track(i) => i >= self.session.project.tracks.len(),
-            Channel::Aux(i) => i >= self.session.project.auxes.len(),
-            Channel::Master => false,
-        } || stacked
-            .is_some_and(|k| self.more(ch).get(k).map(|u| u.kind()) != Some(which.fx()));
+        let racked = v.rack.map(|(t, slot)| {
+            self.poly(t).and_then(|p| p.fx.get(slot)).map(|u| u.kind()) == Some(which.fx())
+        });
+        let gone = match racked {
+            Some(here) => !here,
+            None => {
+                (match ch {
+                    Channel::Track(i) => i >= self.session.project.tracks.len(),
+                    Channel::Aux(i) => i >= self.session.project.auxes.len(),
+                    Channel::Master => false,
+                }) || stacked
+                    .is_some_and(|k| self.more(ch).get(k).map(|u| u.kind()) != Some(which.fx()))
+            }
+        };
         if gone {
             self.fx_view = None;
             return;
         }
         let id = self.channel_id(ch);
         let playing = self.player.playing();
-        let rate = self.session.project.sample_rate as f64;
+        let rate = self.player.rate();
         let db = |x: f32| (20.0 * x.max(1e-6).log10()).max(-90.0);
         if let (Builtin::Tool(_), Some(v)) = (which, self.fx_view.as_mut()) {
             let seen = self.player.scope(&mut v.scope, v.scope_seen);
@@ -338,11 +425,14 @@ impl Workspace {
         };
         let (dx, dy) = (p.x - from.x, p.y - from.y);
         if resize {
+            // Scaled as a whole, its shape kept: as far as the corner's gone either way, no
+            // smaller than three quarters, no bigger than the window.
             let (w, h) = window_size(v.which);
-            v.size = (
-                (start.0 + dx).clamp(w, vw.max(w)),
-                (start.1 + dy).clamp(h, vh.max(h)),
-            );
+            let most = (vw / w).min(vh / h).max(1.0);
+            v.scale = ((start.0 + dx) / w)
+                .max((start.1 + dy) / h)
+                .clamp(0.75, most);
+            v.size = (w * v.scale, h * v.scale);
             return;
         }
         v.at = (
@@ -354,65 +444,84 @@ impl Workspace {
     /// The compressor's or saturator's window, if one's open.
     pub fn fx_window(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let v = self.fx_view.as_ref()?;
-        let (ch, which, at, stacked, (w, h)) = (v.ch, v.which, v.at, v.stacked, v.size);
-        let body = match (which, stacked) {
-            (Builtin::Comp, _) => self.comp_window(ch, self.built_in(ch, stacked)?, cx),
-            (Builtin::Limit, None) => self.limit_window(ch, self.limiter_heard(ch)?, cx),
-            (Builtin::Limit, _) => self.limit_window(ch, self.built_in(ch, stacked)?, cx),
-            (Builtin::Tool(Fx::Reverb), _) => {
-                self.reverb_window(ch, self.built_in(ch, stacked)?, cx)
-            }
-            (Builtin::Tool(Fx::Delay), _) => self.delay_window(ch, self.built_in(ch, stacked)?, cx),
-            (Builtin::Tool(_), _) => self.tool_window(ch, self.tool_heard(ch, stacked?)?, cx),
-            _ => self.sat_window(ch, self.built_in(ch, stacked)?, cx),
-        };
-        let grip = resize_grip()
-            .debug_selector(|| "fx-resize".into())
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    let Some(start) = ws.fx_view.as_ref().map(|v| v.size) else {
-                        return;
-                    };
-                    ws.begin_drag(
-                        Drag::FxWindow {
-                            from: pt(e.position),
-                            start,
-                            resize: true,
-                        },
-                        cx,
-                    );
-                }),
-            );
-        let frame = div()
-            .id("fx-window")
-            .occlude()
-            .relative()
-            .w(px(w))
-            .h(px(h))
-            .flex()
-            .flex_col()
-            .rounded(px(12.))
-            .overflow_hidden()
-            .bg(rgb(0x101115))
-            .border_1()
-            .border_color(rgb(LINE_STRONG))
-            .shadow_lg()
-            .font_family(SANS)
-            .text_color(rgb(TEXT))
-            .text_size(px(12.))
-            .children(body)
-            .child(grip);
-        Some(
-            deferred(
-                anchored()
-                    .position(point(px(at.0), px(at.1)))
-                    .snap_to_window()
-                    .child(frame),
+        if v.rack.is_some() {
+            return None;
+        }
+        let (at, s) = (v.at, v.scale);
+        let (w, h) = window_size(v.which);
+        // All of it built at its scale: the same layout, bigger or smaller.
+        crate::ui::scale::with_scale(s, || {
+            let body = self.fx_body(cx)?;
+            let grip = resize_grip()
+                .debug_selector(|| "fx-resize".into())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        let Some(start) = ws.fx_view.as_ref().map(|v| v.size) else {
+                            return;
+                        };
+                        ws.begin_drag(
+                            Drag::FxWindow {
+                                from: pt(e.position),
+                                start,
+                                resize: true,
+                            },
+                            cx,
+                        );
+                    }),
+                );
+            let frame = div()
+                .id("fx-window")
+                .occlude()
+                .relative()
+                .w(px(w))
+                .h(px(h))
+                .flex()
+                .flex_col()
+                .rounded(px(12.))
+                .overflow_hidden()
+                .bg(rgb(0x101115))
+                .border_1()
+                .border_color(rgb(LINE_STRONG))
+                .shadow_lg()
+                .font_family(SANS)
+                .text_color(rgb(TEXT))
+                .text_size(px(12.))
+                .children(body)
+                .child(grip);
+            Some(
+                deferred(
+                    anchored()
+                        .position(point(gpui::px(at.0), gpui::px(at.1)))
+                        .snap_to_window()
+                        .child(crate::ui::scale::scaled(s, frame)),
+                )
+                .with_priority(1),
             )
-            .with_priority(1),
-        )
+        })
+    }
+
+    /// What the window (or the synth's Effects page) shows of its effect: its head, picture and
+    /// controls.
+    pub(crate) fn fx_body(&mut self, cx: &mut Context<Self>) -> Option<Vec<gpui::AnyElement>> {
+        use pina_engine::song::project::{Delay, Reverb};
+        let v = self.fx_view.as_ref()?;
+        let (ch, which, stacked, rack) = (v.ch, v.which, v.stacked, v.rack);
+        Some(match which {
+            Builtin::Comp => self.comp_window(ch, self.fx_shown::<Comp>()?, cx),
+            Builtin::Limit => self.limit_window(ch, self.fx_shown::<Limiter>()?, cx),
+            Builtin::Tool(Fx::Reverb) => self.reverb_window(ch, self.fx_shown::<Reverb>()?, cx),
+            Builtin::Tool(Fx::Delay) => self.delay_window(ch, self.fx_shown::<Delay>()?, cx),
+            Builtin::Tool(_) => {
+                let u = match rack {
+                    Some((t, slot)) => *self.poly(t)?.fx.get(slot)?,
+                    None => self.tool_heard(ch, stacked?)?,
+                };
+                self.tool_window(ch, u, cx)
+            }
+            _ => self.sat_window(ch, self.fx_shown::<Saturator>()?, cx),
+        })
     }
 
     /// Along the top: on/off, the name, whose it is, then `middle` and `right`, and close. Drag
@@ -429,6 +538,18 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let (name, color) = self.channel_look(ch);
+        let rack = self.fx_view.as_ref().and_then(|v| v.rack);
+        let title = match rack {
+            Some((t, slot)) => self
+                .poly(t)
+                .and_then(|p| p.fx.get(slot))
+                .map(pina_engine::song::project::rack_name),
+            None => self
+                .fx_stacked()
+                .and_then(|k| self.stacked(ch, k))
+                .map(|s| s.1),
+        }
+        .unwrap_or_else(|| title.to_string());
         div()
             .id("fx-head")
             .h(px(HEAD_H))
@@ -440,12 +561,17 @@ impl Workspace {
             .bg(rgb(0x14151a))
             .border_b_1()
             .border_color(rgb(LINE))
-            .cursor(gpui::CursorStyle::OpenHand)
+            .when(rack.is_none(), |d| d.cursor(gpui::CursorStyle::OpenHand))
             .debug_selector(|| "fx-title".into())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|ws, e: &MouseDownEvent, _, cx| {
-                    let Some(start) = ws.fx_view.as_ref().map(|v| v.at) else {
+                    let Some(start) = ws
+                        .fx_view
+                        .as_ref()
+                        .filter(|v| v.rack.is_none())
+                        .map(|v| v.at)
+                    else {
                         return;
                     };
                     ws.begin_drag(
@@ -463,8 +589,8 @@ impl Workspace {
                 cx.listener(move |ws, _, _, cx| {
                     cx.stop_propagation();
                     ws.edit(cx, |ws| match (ws.fx_stacked(), which) {
-                        (Some(k), _) => {
-                            if let Some(u) = ws.chain_mut(ch).more.get_mut(k) {
+                        (Some(_), _) => {
+                            if let Some(u) = ws.fx_any_mut(ch) {
                                 *u.bypass_mut() ^= true;
                             }
                         }
@@ -490,41 +616,43 @@ impl Workspace {
                 div()
                     .text_size(px(13.5))
                     .font_weight(FontWeight::BOLD)
-                    .child(match self.fx_stacked().and_then(|k| self.stacked(ch, k)) {
-                        Some((_, name)) => name,
-                        None => title.to_string(),
-                    }),
+                    .child(title),
             )
-            .child(
-                div()
-                    .h(px(26.))
-                    .px(px(8.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .rounded(px(6.))
-                    .bg(rgb(0x1c1d23))
-                    .child(div().size(px(8.)).rounded(px(4.)).bg(rgb(color)))
-                    .child(
-                        div()
-                            .max_w(px(160.))
-                            .text_size(px(11.5))
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(name),
-                    ),
-            )
+            .when(rack.is_none(), |d| {
+                d.child(
+                    div()
+                        .h(px(26.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .rounded(px(6.))
+                        .bg(rgb(0x1c1d23))
+                        .child(div().size(px(8.)).rounded(px(4.)).bg(rgb(color)))
+                        .child(
+                            div()
+                                .max_w(px(160.))
+                                .text_size(px(11.5))
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(name),
+                        ),
+                )
+            })
             .child(middle)
             .child(div().flex_1())
             .child(right)
-            .child(icon_button(Icon::Close, "fx-close").on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|ws, _, _, cx| {
-                    cx.stop_propagation();
-                    ws.close_fx(cx);
-                }),
-            ))
+            .map(|d| match rack {
+                Some((t, slot)) => d.child(self.rack_moves(t, slot, cx)),
+                None => d.child(icon_button(Icon::Close, "fx-close").on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|ws, _, _, cx| {
+                        cx.stop_propagation();
+                        ws.close_fx(cx);
+                    }),
+                )),
+            })
     }
 
     /// A knob of the window: its name over it, the dial, its value under it. Drag it up and
@@ -543,6 +671,11 @@ impl Workspace {
         let target = self.fx_target(target);
         let value = self.target(target);
         let shown = if bipolar { value * 2.0 - 1.0 } else { value };
+        // On the synth, the sound itself is white: colour is what moves it.
+        let color = match matches!(target, Target::Rack { .. }) && color != TEXT_4 {
+            true => TEXT,
+            false => color,
+        };
         let reset = match target {
             Target::Comp(_, f) => strip::comp_pos(f, &Comp::default()),
             Target::Sat(_, SatField::Band(_, k)) => {
@@ -550,6 +683,19 @@ impl Workspace {
             }
             Target::Sat(_, f) => strip::sat_pos(f, &Saturator::default()),
             Target::Limit(_, f) => strip::limit_pos(f, &Limiter::default()),
+            // A synth's own: as a fresh one of its kind (a reverb or delay, of its style).
+            Target::Rack { track, slot, knob } => self
+                .poly(track)
+                .and_then(|p| p.fx.get(slot))
+                .and_then(|u| {
+                    let fresh = match u {
+                        Unit::Reverb(r) => Unit::Reverb(r.style.reverb()),
+                        Unit::Delay(d) => Unit::Delay(d.style.delay()),
+                        u => strip::fresh_tool(u.kind(), false).unwrap_or(*u),
+                    };
+                    Some((strip::knobs(u.kind()).get(knob)?.pos)(&fresh))
+                })
+                .unwrap_or(value),
             Target::Stacked(_, _, knob) => match knob {
                 crate::workspace::Knob::Comp(f) => strip::comp_pos(f, &Comp::default()),
                 crate::workspace::Knob::Sat(SatField::Band(_, k)) => {

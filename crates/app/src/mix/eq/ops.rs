@@ -321,11 +321,16 @@ impl Workspace {
                 let (vw, vh) = (self.viewport_w, self.viewport_h);
                 if let Some(v) = self.eq_view.as_mut() {
                     match v.restore.take() {
-                        Some((at, size)) => (v.at, v.size) = (at, size),
+                        Some((at, scale)) => (v.at, v.scale) = (at, scale),
                         None => {
-                            v.restore = Some((v.at, v.size));
-                            v.at = (8.0, CONTROL_BAR_H + 4.0);
-                            v.size = (vw - 16.0, vh - CONTROL_BAR_H - STATUS_H - 8.0);
+                            // As big as the screen lets it be, as a whole, in the middle.
+                            v.restore = Some((v.at, v.scale));
+                            let (room_w, room_h) = (vw - 16.0, vh - CONTROL_BAR_H - STATUS_H - 8.0);
+                            v.scale = (room_w / v.size.0).min(room_h / v.size.1);
+                            v.at = (
+                                (vw - v.size.0 * v.scale) / 2.0,
+                                CONTROL_BAR_H + 4.0 + (room_h - v.size.1 * v.scale) / 2.0,
+                            );
                         }
                     }
                 }

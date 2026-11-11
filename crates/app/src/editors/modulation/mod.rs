@@ -21,9 +21,10 @@ pub use fields::*;
 pub use learn::*;
 pub use rings::*;
 
+use crate::ui::scale::px;
 use gpui::{
     Bounds, Context, Div, FontWeight, Hsla, MouseButton, MouseDownEvent, PathBuilder, Pixels,
-    Point, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
+    Point, Window, canvas, div, fill, point, prelude::*, rgb, size,
 };
 use pina_engine::{
     dsp::modulate::{

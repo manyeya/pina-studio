@@ -44,9 +44,10 @@ pub use tools::Match;
 
 use std::{cell::Cell, rc::Rc};
 
+use crate::ui::scale::px;
 use gpui::{
     Bounds, Context, MouseDownEvent, Pixels, ScrollWheelEvent, anchored, deferred, div, point,
-    prelude::*, px, rgb,
+    prelude::*, rgb,
 };
 use pina_engine::{
     dsp::eq::{TAP_LEN, auto_times, band_sections, response_db, spectrum_db},
@@ -204,10 +205,16 @@ pub struct EqView {
     pub ch: Channel,
     /// Which of its EQs: its own (None), or one stacked, by its place among them.
     pub stacked: Option<usize>,
+    /// A synth's own EQ instead, by its track and place in the synth's rack: drawn on the
+    /// synth's Effects page, not as a window.
+    pub rack: Option<(usize, usize)>,
     /// Its top left corner and size, in the app's window; and before full screen, those.
     pub at: (f32, f32),
+    /// Its layout's size (what it's laid out in, whatever its scale), and how big it's been made
+    /// as a whole: its corner dragged, all of it scales together and nothing moves inside it.
     pub size: (f32, f32),
-    restore: Option<((f32, f32), (f32, f32))>,
+    pub scale: f32,
+    restore: Option<((f32, f32), f32)>,
     /// The bands picked, by id, the one picked last last.
     pub picked: Vec<u16>,
     /// The band under the pointer, by id; and where the pointer is over the plot.
@@ -268,9 +275,11 @@ impl EqView {
         EqView {
             ch,
             stacked,
+            rack: None,
             at,
             size,
             restore: None,
+            scale: 1.0,
             picked: Vec::new(),
             hover: None,
             pointer: None,

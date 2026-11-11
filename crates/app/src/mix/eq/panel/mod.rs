@@ -10,9 +10,10 @@ mod dynamics;
 
 pub(crate) use dials::*;
 
+use crate::ui::scale::px;
 use gpui::{
     Context, Div, FontWeight, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point,
-    ScrollWheelEvent, canvas, div, point, prelude::*, px, rgb,
+    ScrollWheelEvent, canvas, div, point, prelude::*, rgb,
 };
 use pina_engine::song::project::{Eq, Placement, Shape};
 

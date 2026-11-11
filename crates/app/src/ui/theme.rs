@@ -4,9 +4,10 @@
 
 use std::borrow::Cow;
 
+use crate::ui::scale::px;
 use gpui::{
-    Div, FontWeight, Hsla, PathBuilder, Pixels, Point, Svg, canvas, div, point, prelude::*, px,
-    rgb, svg,
+    Div, FontWeight, Hsla, PathBuilder, Pixels, Point, Svg, canvas, div, point, prelude::*, rgb,
+    svg,
 };
 
 // Surfaces, from the window back to the controls on it.
@@ -135,6 +136,8 @@ pub enum Icon {
     Magnet,
     Agent,
     Keys,
+    /// A computer's keyboard: shortcuts.
+    Keyboard,
     Wave,
     Bus,
     Output,
@@ -212,6 +215,8 @@ pub enum Icon {
     /// A thing liked: outlined, and filled once it is.
     Heart,
     HeartFilled,
+    /// Things in rows.
+    List,
 }
 
 impl Icon {
@@ -258,6 +263,9 @@ impl Icon {
             Icon::Magnet => r##"<path d="M6 4v7a6 6 0 0 0 12 0V4M6 8h4M14 8h4"/>"##,
             Icon::Agent => r##"<path stroke-width="2.25" d="M5 7l5 5-5 5M12.5 17.5H19"/>"##,
             Icon::Keys => r##"<path d="M4 5h16v14H4zM8.5 5v8M15.5 5v8M12 13v6"/>"##,
+            Icon::Keyboard => {
+                r##"<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6.5 10h1M10.5 10h1M14.5 10h1M8 14h8"/>"##
+            }
             Icon::Wave => r##"<path d="M3 12h2M7 8v8M10 5v14M13 9v6M16 7v10M19 11v2"/>"##,
             Icon::Bus => r##"<path d="M4 7h16M4 12h16M4 17h16M8 4v6M16 9v6M11 14v6"/>"##,
             Icon::Output => r##"<path d="M4 12h11M11 7l5 5-5 5M19 5v14"/>"##,
@@ -413,6 +421,9 @@ impl Icon {
             }
             Icon::HeartFilled => {
                 r##"<path fill="#000" d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>"##
+            }
+            Icon::List => {
+                r##"<path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle fill="#000" stroke="none" cx="4.75" cy="6.5" r="1.25"/><circle fill="#000" stroke="none" cx="4.75" cy="12" r="1.25"/><circle fill="#000" stroke="none" cx="4.75" cy="17.5" r="1.25"/>"##
             }
             Icon::Shuffle => {
                 r##"<path d="M4 7h3.5c4.5 0 4.5 10 9 10H20M17.5 14.5L20 17l-2.5 2.5M4 17h3.5c1.6 0 2.6-1.3 3.4-3M13.1 10c.8-1.7 1.8-3 3.4-3H20M17.5 4.5L20 7l-2.5 2.5"/>"##

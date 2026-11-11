@@ -260,6 +260,40 @@ fn the_band_panel_never_hides_the_band_it_is_for(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_eq_window_made_bigger_as_a_whole_still_puts_a_band_where_its_clicked(
+    cx: &mut TestAppContext,
+) {
+    let (ws, cx) = open(cx);
+    cx.simulate_resize(gpui::size(px(2400.), px(1500.)));
+    let made = |cx: &mut VisualTestContext, scale: f32| {
+        ws.update(cx, |ws, cx| {
+            ws.session.project.tracks[0].eq = None;
+            ws.eq_view = None;
+            ws.open_eq(Channel::Track(0), cx);
+            ws.eq_view.as_mut().unwrap().scale = scale;
+        });
+        cx.run_until_parked();
+        let display = cx.debug_bounds("eq-display").unwrap();
+        let at = point(
+            display.origin.x + display.size.width * 0.6,
+            display.origin.y + display.size.height * 0.3,
+        );
+        cx.simulate_click(at, Modifiers::none());
+        let eq = ws.read_with(cx, |ws, _| ws.session.project.tracks[0].eq.unwrap());
+        (display.size.width, eq.bands[0].freq, eq.bands[0].gain_db)
+    };
+    let (w1, f1, g1) = made(cx, 1.0);
+    let (w2, f2, g2) = made(cx, 1.5);
+    // Drawn half as big again, and the same band where the same place is clicked.
+    assert!(
+        (f32::from(w2) / f32::from(w1) - 1.5).abs() < 0.01,
+        "{w1:?} {w2:?}"
+    );
+    assert!((f2 / f1 - 1.0).abs() < 0.01, "{f1} {f2}");
+    assert!((g2 - g1).abs() < 0.2, "{g1} {g2}");
+}
+
+#[gpui::test]
 fn the_eq_window_adds_shapes_moves_and_takes_out_bands(cx: &mut TestAppContext) {
     use pina_engine::song::project::Placement;
     let (ws, cx) = open(cx);

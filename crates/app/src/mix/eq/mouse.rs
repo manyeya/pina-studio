@@ -182,7 +182,9 @@ impl Workspace {
         let Some(lead) = start.iter().find(|b| b.id == id).copied() else {
             return axis;
         };
-        let by = if self.fine { 0.1 } else { 1.0 };
+        // In the EQ's own units, whatever its scale on screen.
+        let s = self.eq_view.as_ref().map_or(1.0, |v| v.scale);
+        let by = if self.fine { 0.1 } else { 1.0 } / s;
         let (mut dx, mut dy) = ((p.x - from.x) * by, (p.y - from.y) * by);
         // ⌥: one way only, the way it first went.
         let axis = match (alt, axis) {
@@ -260,7 +262,10 @@ impl Workspace {
         view.focused = true;
         view.popup = None;
         let o = view.display.get().origin;
-        let (x, y) = (f32::from(e.position.x - o.x), f32::from(e.position.y - o.y));
+        let (x, y) = (
+            f32::from(e.position.x - o.x) / view.scale,
+            f32::from(e.position.y - o.y) / view.scale,
+        );
         let m = e.modifiers;
         let sketching = view.sketching;
         // Spectrum Grab: a peak pressed, a bell to pull.
@@ -299,7 +304,7 @@ impl Workspace {
 
     /// What the shown EQ does at a frequency, as the overall curve has it.
     pub(crate) fn eq_curve_at(&self, freq: f64) -> f32 {
-        let rate = self.session.project.sample_rate as f64;
+        let rate = self.player.rate();
         self.shown_eq().map_or(0.0, |(_, eq)| {
             pina_engine::dsp::eq::eq_response(&eq, freq, rate) as f32
         })
@@ -320,7 +325,11 @@ impl Workspace {
             return;
         };
         let o = pt(view.display.get().origin);
-        let (a, b) = ((from.x - o.x, from.y - o.y), (p.x - o.x, p.y - o.y));
+        let s = view.scale;
+        let (a, b) = (
+            ((from.x - o.x) / s, (from.y - o.y) / s),
+            ((p.x - o.x) / s, (p.y - o.y) / s),
+        );
         if (p.x - from.x).hypot(p.y - from.y) < 4.0 {
             return;
         }
@@ -390,7 +399,8 @@ impl Workspace {
             return;
         }
         let o = pt(view.display.get().origin);
-        let band = band_at(&geo, from.x - o.x, from.y - o.y, false);
+        let s = view.scale;
+        let band = band_at(&geo, (from.x - o.x) / s, (from.y - o.y) / s, false);
         self.make_band(band, alt, cx);
     }
 
@@ -503,11 +513,13 @@ impl Workspace {
         p: gpui::Point<f32>,
     ) {
         let Some(geo) = self.eq_geo() else { return };
-        let level = ((from.y - p.y) / 6.0).clamp(-24.0, 12.0);
+        let s = self.eq_view.as_ref().map_or(1.0, |v| v.scale);
+        let level = ((from.y - p.y) / s / 6.0).clamp(-24.0, 12.0);
         if let Some(v) = self.eq_view.as_mut() {
             v.solo = Some(Solo { id, level });
         }
-        let f = (freq * 2f32.powf((p.x - from.x) / geo.w * geo.octaves())).clamp(10.0, 30_000.0);
+        let f =
+            (freq * 2f32.powf((p.x - from.x) / s / geo.w * geo.octaves())).clamp(10.0, 30_000.0);
         if let Some(eq) = self.eq_mut()
             && let Some(i) = eq.bands.find(id)
         {
@@ -523,12 +535,13 @@ impl Workspace {
             return;
         };
         let o = pt(view.display.get().origin);
-        let at = ((from.x - o.x) / geo.w).clamp(0.0, 1.0) as f64;
+        let s = view.scale;
+        let at = ((from.x - o.x) / s / geo.w).clamp(0.0, 1.0) as f64;
         let octaves = (span.1 / span.0).log2();
         let zoomed =
             (octaves * 2f64.powf((p.y - from.y) as f64 / 80.0)).clamp(1.0, (HIGH / LOW).log2());
         let anchor = span.0 * 2f64.powf(octaves * at);
-        let pan = -((p.x - from.x) / geo.w) as f64 * zoomed;
+        let pan = -((p.x - from.x) / s / geo.w) as f64 * zoomed;
         let lo =
             (anchor / 2f64.powf(zoomed * at) * 2f64.powf(pan)).clamp(LOW, HIGH / 2f64.powf(zoomed));
         view.span = (lo, lo * 2f64.powf(zoomed));

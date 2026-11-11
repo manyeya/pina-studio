@@ -12,7 +12,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let view = self.eq_view.as_ref().expect("the window's open");
-        let rate = self.session.project.sample_rate as f64;
+        let rate = self.player.rate();
         let g = *geo;
         let picked = view.picked.clone();
         let hover = view.hover;
@@ -145,7 +145,7 @@ impl Workspace {
             .collect();
         let grid_f = marks(&g, 26.0);
         let grid_lines = grid_db.clone();
-        let picture = canvas(
+        let picture = crate::ui::scale::scaled_canvas(
             |_, _, _| {},
             move |b, _, window, _| {
                 let o = b.origin;
@@ -535,7 +535,10 @@ impl Workspace {
             .on_mouse_move(cx.listener(move |ws, e: &MouseMoveEvent, _, cx| {
                 let Some(v) = ws.eq_view.as_mut() else { return };
                 let o = v.display.get().origin;
-                v.pointer = Some((f32::from(e.position.x - o.x), f32::from(e.position.y - o.y)));
+                v.pointer = Some((
+                    f32::from(e.position.x - o.x) / v.scale,
+                    f32::from(e.position.y - o.y) / v.scale,
+                ));
                 v.hover = None;
                 cx.notify();
             }))

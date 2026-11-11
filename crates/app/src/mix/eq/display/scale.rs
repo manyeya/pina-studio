@@ -61,7 +61,7 @@ impl Workspace {
         let keys = piano.then(|| {
             let dots: Vec<(f32, u32)> = drawn.iter().map(|d| (d.dot.0, d.color)).collect();
             let hovered = at.map(|x| note_of(g.freq(x) as f32).0);
-            canvas(
+            crate::ui::scale::scaled_canvas(
                 |_, _, _| {},
                 move |b, _, window, _| {
                     let o = b.origin;
@@ -143,7 +143,7 @@ impl Workspace {
             .on_mouse_move(cx.listener(|ws, e: &MouseMoveEvent, _, cx| {
                 let Some(v) = ws.eq_view.as_mut() else { return };
                 let o = v.display.get().origin;
-                v.scale_pointer = Some(f32::from(e.position.x - o.x));
+                v.scale_pointer = Some(f32::from(e.position.x - o.x) / v.scale);
                 cx.notify();
             }))
             .on_hover(cx.listener(|ws, over: &bool, _, cx| {
@@ -198,7 +198,7 @@ impl Workspace {
         let meter = view.meter;
         let peak = view.peak;
         let h = g.h;
-        let bars = canvas(
+        let bars = crate::ui::scale::scaled_canvas(
             |_, _, _| {},
             move |b, _, window, _| {
                 let o = b.origin;
