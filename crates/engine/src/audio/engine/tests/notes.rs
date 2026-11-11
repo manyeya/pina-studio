@@ -573,6 +573,7 @@ fn a_notes_spread_strays_its_velocity_each_time_within_its_range() {
         velocity: 64.0 / 127.0,
         chance: 100,
         spread: 20,
+        release: 0.0,
     };
     let played: Vec<f32> = (0..200).map(|_| held.play(&e).unwrap() * 127.0).collect();
     assert!(
@@ -595,6 +596,7 @@ fn a_tracks_midi_effects_change_what_its_instrument_plays() {
         t.midi_fx = vec![MidiFxSlot {
             fx: MidiFx::Transposer { semitones: 12 },
             bypass,
+            plugin: None,
         }];
         let [l, _] = render(&project(vec![t]), &dir, BEAT);
         let s = &l[BEAT / 8..BEAT / 2];
@@ -603,4 +605,200 @@ fn a_tracks_midi_effects_change_what_its_instrument_plays() {
     };
     assert!((heard(false) - 880.0).abs() < 10.0, "{}", heard(false));
     assert!((heard(true) - 440.0).abs() < 10.0, "{}", heard(true));
+}
+
+#[test]
+fn a_notes_own_bend_plays_along_its_line_and_its_release_goes_with_its_note_off() {
+    use crate::song::project::Bend;
+    // Up two semitones over its first half beat, transposed an octave by its region.
+    let mut n = note(0, PPQ, 60);
+    n.expression.pitch = vec![Bend::new(0, 0.0), Bend::new(PPQ / 2, 2.0)];
+    n.release = 100;
+    let mut t = synth_track("a", vec![n], PPQ);
+    t.regions[0].transpose = 12;
+    let p = project(vec![t]);
+    let mut files = AudioFiles::new(Path::new("."), RATE);
+    let (a, _) = compile(&p, RATE, &[(0, 0)], &[], None, &mut files);
+    let plan = &a.plans[0];
+    let bends: Vec<(u64, f32)> = plan
+        .controls
+        .iter()
+        .filter_map(|c| match c.kind {
+            ControlKind::Expression {
+                pitch: 72,
+                kind: crate::plugin::ExpressionKind::Tuning,
+                value,
+            } => Some((c.at, value)),
+            _ => None,
+        })
+        .collect();
+    // From none as it starts to two semitones half a beat in, a 64th at a time.
+    assert_eq!(bends.first(), Some(&(0, 0.0)));
+    assert_eq!(bends.last(), Some(&(BEAT as u64 / 2, 2.0)));
+    assert_eq!(bends.len(), 33);
+    assert!(bends.windows(2).all(|w| w[0].1 < w[1].1));
+    let off = plan.events.iter().find(|e| e.velocity == 0.0).unwrap();
+    assert_eq!(off.release, 100.0 / 127.0);
+}
+
+#[test]
+fn a_synths_own_effects_play_after_its_voices_and_its_lfo_rides_them() {
+    use crate::song::project::{
+        Instrument, PolyDest, PolyRoute, PolySource, knobs, poly_patch, rack_effect,
+    };
+    // A short note, then a second of quiet: what rings on is the synth's own reverb's.
+    let track = |fx: Vec<Unit>| {
+        let mut p = poly_patch("Init").unwrap();
+        p.fx = fx;
+        let mut t = synth_track("a", vec![note(0, PPQ / 4, 60)], PPQ * 4);
+        t.instrument = Some(Instrument::Poly(Box::new(p)));
+        t
+    };
+    let tail = |t: Track| {
+        let [l, _] = render(&project(vec![t]), Path::new("."), BEAT * 3);
+        peak(&l[BEAT * 2..])
+    };
+    let dry = tail(track(Vec::new()));
+    let hall = rack_effect("Hall").unwrap();
+    let wet = tail(track(vec![hall]));
+    assert!(dry < 1e-4 && wet > 1e-3, "dry {dry}, wet {wet}");
+    // The rack off: passed by, as though it had none.
+    let mut off = track(vec![hall]);
+    if let Some(Instrument::Poly(p)) = &mut off.instrument {
+        p.rack_off = true;
+    }
+    assert!(tail(off) < 1e-4, "the rack off still rings");
+    // Its LFO on the reverb's mix: the tail moves with it.
+    let mix = knobs(hall.kind())
+        .iter()
+        .position(|k| k.name == "Mix")
+        .unwrap();
+    let mut ridden = track(vec![hall]);
+    if let Some(Instrument::Poly(p)) = &mut ridden.instrument {
+        p.routes.push(PolyRoute {
+            source: PolySource::Lfo(0),
+            dest: PolyDest::Rack(0, mix as u8),
+            depth: -1.0,
+            by: None,
+        });
+    }
+    let moved = tail(ridden);
+    assert!(
+        (moved - wet).abs() > wet * 0.05,
+        "wet {wet}, ridden {moved}"
+    );
+}
+
+#[test]
+fn a_synths_own_effect_follows_its_automation() {
+    use crate::song::project::{AutoPoint, Instrument, Param, knobs, poly_patch, rack_effect};
+    let hall = rack_effect("Hall").unwrap();
+    let mix = knobs(hall.kind())
+        .iter()
+        .position(|k| k.name == "Mix")
+        .unwrap();
+    let track = |automated: bool| {
+        let mut p = poly_patch("Init").unwrap();
+        p.fx = vec![hall];
+        let mut t = synth_track("a", vec![note(0, PPQ / 4, 60)], PPQ * 4);
+        t.instrument = Some(Instrument::Poly(Box::new(p)));
+        if automated {
+            t.automation
+                .points_mut(Param::Rack(0, mix as u8))
+                .push(AutoPoint::new(0, 0.0));
+        }
+        t
+    };
+    let tail = |t: Track| {
+        let [l, _] = render(&project(vec![t]), Path::new("."), BEAT * 3);
+        peak(&l[BEAT * 2..])
+    };
+    // The reverb's mix automated to nothing: no tail.
+    let (wet, dry) = (tail(track(false)), tail(track(true)));
+    assert!(
+        wet > 1e-3 && dry < wet * 0.05,
+        "wet {wet}, automated dry {dry}"
+    );
+}
+
+/// A MIDI FX plugin that plays each note it hears an octave up.
+struct OctaveUp {
+    out: Vec<Note>,
+}
+
+impl crate::plugin::ProcessorApi for OctaveUp {
+    fn latency(&self) -> u32 {
+        0
+    }
+    fn set_transport(&mut self, _: bool, _: u64, _: f64, _: f64) {}
+    fn automate(&mut self, _: u32, _: f64, _: f64) {}
+    fn pending(&self) -> bool {
+        false
+    }
+    fn process(
+        &mut self,
+        _: [&mut [f32]; 2],
+        _: usize,
+        notes: &[Note],
+        _: &[Control],
+        _: Option<[&[f32]; 2]>,
+    ) {
+        self.out.clear();
+        self.out.extend(notes.iter().map(|n| Note {
+            pitch: n.pitch + 12,
+            ..*n
+        }));
+    }
+    fn notes_out(&self) -> &[Note] {
+        &self.out
+    }
+}
+
+#[test]
+fn a_midi_fx_plugin_plays_what_it_hears_on_to_the_instrument_in_its_place() {
+    use crate::song::project::{MidiFx, MidiFxSlot, PluginRef};
+    // A4 for a beat, through `chain`: what the synth plays, in Hz.
+    let heard = |chain: Vec<MidiFxSlot>| {
+        let mut t = synth_track("Up", vec![note(0, PPQ, 69)], PPQ);
+        t.midi_fx = chain;
+        let p = project(vec![t]);
+        let mut lane = make_lane(
+            Some(&Instrument::Synth),
+            &[],
+            &mut Vec::new(),
+            RATE,
+            &mut Modules::new(),
+            Path::new("."),
+        )
+        .unwrap()
+        .0;
+        lane.midi_plugins = vec![Box::new(OctaveUp {
+            out: Vec::with_capacity(64),
+        })];
+        let mut files = AudioFiles::new(Path::new("."), RATE);
+        let (arrangement, problems) = compile(&p, RATE, &[(0, 0)], &[], None, &mut files);
+        assert!(problems.is_empty(), "{problems:?}");
+        let mut engine = Engine::new(RATE, arrangement, vec![Some(Box::new(lane))]);
+        engine.play();
+        let [l, _] = run(&mut engine, BEAT);
+        let s = &l[BEAT / 8..BEAT / 2];
+        let ups = s.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count();
+        ups as f64 / (s.len() as f64 / RATE)
+    };
+    let plugin = MidiFxSlot::plugin(PluginRef {
+        class: "Octave Up".into(),
+        ..Default::default()
+    });
+    // The plugin alone: an octave up.
+    assert!((heard(vec![plugin.clone()]) - 880.0).abs() < 10.0);
+    // After a transposer, and before one: both octaves.
+    let up = MidiFxSlot::new(MidiFx::Transposer { semitones: 12 });
+    assert!((heard(vec![up.clone(), plugin.clone()]) - 1760.0).abs() < 20.0);
+    assert!((heard(vec![plugin.clone(), up]) - 1760.0).abs() < 20.0);
+    // Bypassed: as played.
+    let off = MidiFxSlot {
+        bypass: true,
+        ..plugin
+    };
+    assert!((heard(vec![off]) - 440.0).abs() < 10.0);
 }

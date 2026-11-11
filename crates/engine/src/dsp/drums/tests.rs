@@ -10,6 +10,7 @@ fn each_hit_sounds_and_ends() {
             offset: 10,
             pitch,
             velocity: 1.0,
+            release: 0.0,
         };
         d.process([&mut l, &mut r], n, &[hit]);
         let loudest = l.iter().fold(0f32, |m, x| m.max(x.abs()));

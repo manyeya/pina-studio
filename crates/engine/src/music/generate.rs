@@ -137,7 +137,7 @@ impl Contour {
     }
 
     /// How high it is `t` of the way through, 0 to 1.
-    fn at(self, t: f64) -> f64 {
+    pub fn at(self, t: f64) -> f64 {
         use std::f64::consts::PI;
         match self {
             Contour::Rise => t,

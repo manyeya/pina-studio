@@ -64,7 +64,7 @@ impl Region {
             start,
             pitch: (n.pitch as i16 + self.transpose as i16).clamp(0, 127) as u8,
             velocity: (n.velocity as i16 + self.velocity as i16).clamp(1, 127) as u8,
-            ..*n
+            ..n.clone()
         }
     }
 
@@ -181,10 +181,15 @@ impl Content {
             Content::Midi { notes, controls } => Some(Content::Midi {
                 notes: notes
                     .iter()
-                    .map(|n| Note {
-                        start: at(n.start),
-                        length: ((n.length as f64 * ratio).round() as u64).max(1),
-                        ..*n
+                    .map(|n| {
+                        let mut expression = n.expression.clone();
+                        expression.stretch(ratio);
+                        Note {
+                            start: at(n.start),
+                            length: ((n.length as f64 * ratio).round() as u64).max(1),
+                            expression,
+                            ..n.clone()
+                        }
                     })
                     .collect(),
                 controls: controls
@@ -261,7 +266,7 @@ pub(crate) fn pieces(segments: impl IntoIterator<Item = (u64, u64, usize)>) -> V
     out
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Note {
     /// Ticks from the start of the region. Notes outside the region (after trimming it) are kept
     /// but don't play, so extending it again brings them back.
@@ -279,6 +284,12 @@ pub struct Note {
     /// Kept, and drawn, but not played.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub muted: bool,
+    /// How fast it was let go (its note-off's velocity), 1 to 127: 64 when nothing says.
+    #[serde(default = "let_go", skip_serializing_if = "is_let_go")]
+    pub release: u8,
+    /// Its own pitch, slide and pressure over its length (MPE).
+    #[serde(default, skip_serializing_if = "NoteExpression::is_empty")]
+    pub expression: NoteExpression,
 }
 
 impl Default for Note {
@@ -291,8 +302,18 @@ impl Default for Note {
             chance: 100,
             spread: 0,
             muted: false,
+            release: 64,
+            expression: NoteExpression::default(),
         }
     }
+}
+
+fn let_go() -> u8 {
+    64
+}
+
+fn is_let_go(v: &u8) -> bool {
+    *v == 64
 }
 
 fn always() -> u8 {

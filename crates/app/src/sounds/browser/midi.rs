@@ -724,7 +724,7 @@ impl Workspace {
                                 .iter()
                                 .map(|n| Note {
                                     pitch: (n.pitch as i32 + up).clamp(0, 127) as u8,
-                                    ..*n
+                                    ..n.clone()
                                 })
                                 .collect(),
                             controls: part.controls.clone(),

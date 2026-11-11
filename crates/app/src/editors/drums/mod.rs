@@ -119,12 +119,9 @@ impl Default for DrumsUi {
     }
 }
 
-/// A note's name, as drum machines number their pads: C1 is 36.
+/// A note's name, as the piano roll names it.
 pub(crate) fn note_name(n: u8) -> String {
-    const NAMES: [&str; 12] = [
-        "C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B",
-    ];
-    format!("{}{}", NAMES[n as usize % 12], n as i32 / 12 - 2)
+    crate::editors::pianoroll::name(n)
 }
 
 /// What the General MIDI drum map has on a note.

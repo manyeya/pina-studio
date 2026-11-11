@@ -19,6 +19,7 @@ fn note(offset: u32, pitch: u8, velocity: f32) -> Note {
         offset,
         pitch,
         velocity,
+        release: 0.0,
     }
 }
 

@@ -57,8 +57,8 @@ impl ProcessorApi for Vst2Processor {
         self.edits.pending()
     }
 
-    fn set_mpe(&mut self, on: bool) {
-        self.mpe.set(on);
+    fn set_mpe(&mut self, zone: Option<crate::song::project::MpeZone>) {
+        self.mpe.set(zone);
     }
 
     fn process(
@@ -83,8 +83,10 @@ impl ProcessorApi for Vst2Processor {
 
         // Notes and controls, merged in time: with MPE on, the zone set up first.
         self.events.clear();
-        for data in self.mpe.setup().into_iter().flatten() {
-            self.events.push(midi(0, data));
+        if let Some((setup, n)) = self.mpe.setup() {
+            for &data in &setup[..n] {
+                self.events.push(midi(0, data));
+            }
         }
         let (mut n, mut c) = (notes.iter().peekable(), controls.iter().peekable());
         loop {

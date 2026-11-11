@@ -91,19 +91,28 @@ impl Workspace {
     /// Chords and ghost notes are lists of their own, opened from here.
     /// The MPE switch for a track's plugin instrument, if it's one that needs it: an Audio Unit
     /// or VST2 hears each note's expression only with each note on a channel of its own.
-    pub(crate) fn mpe_item(&self, track: usize) -> Option<(String, MenuAction)> {
+    pub(crate) fn mpe_items(&self, track: usize) -> Vec<(String, MenuAction)> {
         use pina_engine::song::project::{Format, Instrument};
-        let Some(Instrument::Plugin(r)) = &self.session.project.tracks.get(track)?.instrument
+        let Some(Instrument::Plugin(r)) = self
+            .session
+            .project
+            .tracks
+            .get(track)
+            .and_then(|t| t.instrument.as_ref())
         else {
-            return None;
+            return Vec::new();
         };
-        matches!(r.format, Format::Au | Format::Vst2).then(|| {
-            let tick = if r.mpe { "✓ " } else { "" };
+        if !matches!(r.format, Format::Au | Format::Vst2) {
+            return Vec::new();
+        }
+        let tick = if r.mpe { "✓ " } else { "" };
+        vec![
             (
                 format!("{tick}MPE: a channel per note"),
                 MenuAction::Mpe(track),
-            )
-        })
+            ),
+            ("MPE settings…".to_string(), MenuAction::MpeSettings(track)),
+        ]
     }
 
     pub(crate) fn roll_more(&self, at: Point<Pixels>) -> Vec<(String, MenuAction)> {
@@ -121,7 +130,10 @@ impl Workspace {
             true => "✓ Colour by velocity",
             false => "Colour by velocity",
         };
-        let mpe = self.roll_region().and_then(|at| self.mpe_item(at.0));
+        let mpe = self
+            .roll_region()
+            .map(|at| self.mpe_items(at.0))
+            .unwrap_or_default();
         [
             (format!("{chords} ▸"), MenuAction::More(More::Chords(at))),
             (format!("{ghost} ▸"), MenuAction::More(More::Ghost(at))),

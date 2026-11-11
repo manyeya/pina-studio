@@ -1,6 +1,6 @@
 //! The panel left of the roll's keyboard: the picked notes' settings, to read and change for all
 //! of them at once (Notes), the tools that change notes (Transform), and those that write them
-//! (Generate, Harmony).
+//! (Generate, Harmony), and each note's own expression (MPE).
 
 use super::*;
 
@@ -12,6 +12,8 @@ pub enum Panel {
     Transform,
     Generate,
     Harmony,
+    /// Each note's own expression.
+    Mpe,
 }
 
 /// A setting every picked note has, changed for all of them at once.
@@ -23,6 +25,7 @@ pub enum NoteField {
     Velocity,
     Spread,
     Chance,
+    Release,
 }
 
 impl NoteField {
@@ -34,6 +37,7 @@ impl NoteField {
             NoteField::Velocity => "Velocity",
             NoteField::Spread => "Range",
             NoteField::Chance => "Chance",
+            NoteField::Release => "Release",
         }
     }
 
@@ -44,6 +48,7 @@ impl NoteField {
             NoteField::Start | NoteField::Length => 8.0,
             // A full chance is as tall as the lane under the notes.
             NoteField::Chance => VELOCITY_H / 100.0,
+            NoteField::Release => VELOCITY_H / 127.0,
             _ => 1.5,
         }
     }
@@ -63,6 +68,7 @@ pub(crate) fn step_note(mut n: Note, field: NoteField, by: i32, grid: u64, floor
         NoteField::Velocity => n.velocity = (n.velocity as i64 + by).clamp(1, 127) as u8,
         NoteField::Spread => n.spread = (n.spread as i64 + by).clamp(0, 127) as u8,
         NoteField::Chance => n.chance = (n.chance as i64 + by).clamp(1, 100) as u8,
+        NoteField::Release => n.release = (n.release as i64 + by).clamp(1, 127) as u8,
     }
     n
 }
@@ -74,7 +80,7 @@ impl Workspace {
         let notes = notes.as_deref().unwrap_or(&[]);
         self.picked
             .iter()
-            .filter_map(|&i| notes.get(i).map(|n| (i, *n)))
+            .filter_map(|&i| notes.get(i).map(|n| (i, n.clone())))
             .collect()
     }
 
@@ -89,13 +95,13 @@ impl Workspace {
         self.edit(cx, |ws| {
             if let Some(notes) = ws.session.project.notes_mut(at) {
                 for (i, n) in &was {
-                    notes[*i] = step_note(*n, field, by, grid, floor);
+                    notes[*i] = step_note(n.clone(), field, by, grid, floor);
                 }
             }
             ws.grow_to_notes(at);
         });
         if field == NoteField::Pitch
-            && let Some(n) = self.picked_notes(at).first().map(|p| p.1)
+            && let Some(n) = self.picked_notes(at).first().map(|p| p.1.clone())
         {
             let track = self.session.project.tracks[at.0].id;
             self.player.preview(track, n.pitch, n.velocity);
@@ -135,6 +141,7 @@ impl Workspace {
             NoteField::Velocity => n.velocity.to_string(),
             NoteField::Spread => format!("±{}", n.spread),
             NoteField::Chance => format!("{}%", n.chance),
+            NoteField::Release => n.release.to_string(),
         };
         let key = |n: &Note| match field {
             NoteField::Pitch => n.pitch as i64,
@@ -143,6 +150,7 @@ impl Workspace {
             NoteField::Velocity => n.velocity as i64,
             NoteField::Spread => n.spread as i64,
             NoteField::Chance => n.chance as i64,
+            NoteField::Release => n.release as i64,
         };
         let (Some(lo), Some(hi)) = (
             notes.iter().min_by_key(|n| key(n)),
@@ -340,6 +348,7 @@ impl Workspace {
                         NoteField::Spread,
                         NoteField::Length,
                         NoteField::Chance,
+                        NoteField::Release,
                     ]
                     .map(|f| self.note_field(f, &picked, at, cx)),
                 ),
@@ -594,16 +603,23 @@ impl Workspace {
     }
 
     /// The panel: its tabs, and the one picked.
-    pub(crate) fn roll_panel(
-        &mut self,
-        at: Option<At>,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<Div> {
+    pub(crate) fn roll_panel(&mut self, at: Option<At>, cx: &mut Context<Self>) -> Div {
         let panel = self.roll.panel;
-        let tab = |label: &'static str, p: Panel, cx: &mut Context<Self>| {
+        // Tabs as wide as their names, shorter names when the panel's narrow; never spilling
+        // past it.
+        let narrow = self.header_w - KEYS_W - 24.0 < 250.0;
+        let tab = |label: &'static str, short: &'static str, p: Panel, cx: &mut Context<Self>| {
+            let id = label;
+            let label = if narrow { short } else { label };
             seg(label, panel == p, 22.)
-                .flex_1()
-                .debug_selector(move || format!("roll-panel-{label}"))
+                .flex_auto()
+                .min_w(px(0.))
+                .px(px(2.))
+                .text_size(px(11.))
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .text_ellipsis()
+                .debug_selector(move || format!("roll-panel-{id}"))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |ws, _, _, cx| {
@@ -612,31 +628,52 @@ impl Workspace {
                     }),
                 )
         };
-        let body = match panel {
-            Panel::Notes => self.notes_tab(at, cx),
-            Panel::Transform => self.transform_tab(at, cx),
+        let (body, foot) = match panel {
+            Panel::Notes => (self.notes_tab(at, cx), None),
+            Panel::Transform => (self.transform_tab(at, cx), None),
             Panel::Generate => self.generate_tab(cx),
-            Panel::Harmony => self.harmony_tab(cx),
+            Panel::Harmony => self.chords_tab(cx),
+            Panel::Mpe => self.mpe_tab(at, cx),
         };
+        // The tabs; what the one picked shows, scrolling; and its foot, staying put.
         div()
-            .id("roll-tools")
             .flex_1()
             .min_w(px(0.))
-            .px(px(12.))
-            .py(px(10.))
+            .min_h(px(0.))
             .flex()
             .flex_col()
-            .gap(px(10.))
-            .overflow_y_scroll()
             .child(
-                tray()
-                    .p(px(2.))
-                    .rounded(px(7.))
-                    .child(tab("Notes", Panel::Notes, cx))
-                    .child(tab("Transform", Panel::Transform, cx))
-                    .child(tab("Generate", Panel::Generate, cx))
-                    .child(tab("Harmony", Panel::Harmony, cx)),
+                div().flex_none().px(px(12.)).pt(px(10.)).pb(px(8.)).child(
+                    tray()
+                        .p(px(2.))
+                        .rounded(px(7.))
+                        .child(tab("Notes", "Notes", Panel::Notes, cx))
+                        .child(tab("Transform", "Edit", Panel::Transform, cx))
+                        .child(tab("Generate", "Write", Panel::Generate, cx))
+                        .child(tab("Chords", "Chords", Panel::Harmony, cx))
+                        .child(tab("MPE", "MPE", Panel::Mpe, cx)),
+                ),
             )
-            .child(body)
+            .child(
+                div()
+                    .id("roll-tools")
+                    .debug_selector(|| "roll-tools".into())
+                    .flex_1()
+                    .min_h(px(0.))
+                    .px(px(12.))
+                    .pb(px(10.))
+                    .overflow_y_scroll()
+                    .child(body),
+            )
+            .children(foot.map(|f| {
+                div()
+                    .flex_none()
+                    .px(px(12.))
+                    .py(px(9.))
+                    .border_t_1()
+                    .border_color(rgb(LINE))
+                    .bg(rgb(SURFACE))
+                    .child(f)
+            }))
     }
 }

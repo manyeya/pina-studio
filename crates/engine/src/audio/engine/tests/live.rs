@@ -53,7 +53,8 @@ fn the_live_engine_follows_its_messages() {
     assert!(
         live.push(LiveNote {
             pitch: 72,
-            velocity: 100
+            velocity: 100,
+            release: 0,
         })
         .is_ok()
     );
@@ -64,7 +65,8 @@ fn the_live_engine_follows_its_messages() {
         Ok(Played {
             at,
             pitch: 72,
-            velocity: 100
+            velocity: 100,
+            release: 0,
         })
     );
     assert!(
@@ -193,6 +195,122 @@ fn the_metronome_clicks_on_the_beat_while_playing() {
     assert!(peak(&l[at..at + 500]) > 0.1);
     engine.note_load(Instant::now() - Duration::from_millis(1), MAX_BLOCK);
     assert!(shared.take_load() > 0.0);
+}
+
+/// An engine of its own, its shared state, and the way to send it messages.
+fn linked() -> (Engine, Arc<Shared>, rtrb::Producer<Msg>) {
+    let (tx, rx) = rtrb::RingBuffer::new(16);
+    let shared = Arc::new(Shared::new());
+    let link = Link {
+        rx,
+        garbage: rtrb::RingBuffer::new(16).0,
+        shared: shared.clone(),
+        live: rtrb::RingBuffer::new(16).1,
+        played: rtrb::RingBuffer::new(16).0,
+        moves: rtrb::RingBuffer::new(16).1,
+        heard: rtrb::RingBuffer::new(16).0,
+    };
+    (Engine::live(RATE, link), shared, tx)
+}
+
+#[test]
+fn counting_in_clicks_a_bar_while_the_playhead_waits_then_plays() {
+    let (mut engine, shared, mut tx) = linked();
+    // The click off: counting in clicks anyway.
+    assert!(!shared.metronome());
+    assert!(tx.push(Msg::CountIn(1, true)).is_ok());
+    let _ = run(&mut engine, MAX_BLOCK);
+    assert!(engine.counting());
+    // A bar of 4 at 120 bpm: four beats half a second apart, the playhead at 0 all along.
+    let [l, _] = run(&mut engine, BEAT * 4);
+    assert_eq!(engine.position, 0);
+    for b in 0..4 {
+        let at = b * BEAT;
+        assert!(peak(&l[at..at + 300]) > 0.05, "beat {b}");
+        assert!(
+            peak(&l[at + 2000..at + BEAT - 10]) < 1e-4,
+            "quiet after beat {b}"
+        );
+    }
+    // Counted in: playing, the playhead moving from the sample the count ended on.
+    let _ = run(&mut engine, MAX_BLOCK);
+    assert!(!engine.counting() && engine.playing);
+    assert!(engine.position > 0 && engine.position <= MAX_BLOCK as u64);
+    // Heard only (Settings' Hear it): the click, then still stopped; and a stop ends a count.
+    let (mut engine, _, mut tx) = linked();
+    assert!(tx.push(Msg::CountIn(1, false)).is_ok());
+    let _ = run(&mut engine, MAX_BLOCK);
+    assert!(peak(&run(&mut engine, BEAT * 4)[0]) > 0.05);
+    assert!(!engine.counting() && !engine.playing);
+    assert!(tx.push(Msg::CountIn(2, true)).is_ok());
+    let _ = run(&mut engine, MAX_BLOCK);
+    assert!(tx.push(Msg::Stop).is_ok());
+    let _ = run(&mut engine, BEAT * 9);
+    assert!(
+        !engine.counting() && !engine.playing,
+        "stopped while counting: no play after"
+    );
+}
+
+#[test]
+fn the_click_sounds_as_its_style_says_and_only_when_let() {
+    let (mut engine, shared, mut tx) = linked();
+    assert!(tx.push(Msg::Play).is_ok());
+    let _ = run(&mut engine, MAX_BLOCK);
+    shared.set_metronome(true);
+    // Twice a beat: one between the beats too.
+    shared.click_style.store(
+        pack_click(ClickStyle {
+            every: 2,
+            ..Default::default()
+        }),
+        Ordering::Relaxed,
+    );
+    let [l, _] = run(&mut engine, BEAT);
+    let half = BEAT / 2 - MAX_BLOCK;
+    assert!(peak(&l[half..half + 300]) > 0.03, "between the beats");
+    // Its level down 40 dB: barely there.
+    shared.click_style.store(
+        pack_click(ClickStyle {
+            level_db: -40.0,
+            ..Default::default()
+        }),
+        Ordering::Relaxed,
+    );
+    let [l, _] = run(&mut engine, BEAT);
+    // Past the last one's ring, struck as it was.
+    assert!(peak(&l[3000..]) < 0.01 && peak(&l[3000..]) > 0.0);
+    // Not let (to click only while recording, and nothing is): silent.
+    shared
+        .click_style
+        .store(pack_click(ClickStyle::default()), Ordering::Relaxed);
+    shared.click_gate.store(false, Ordering::Relaxed);
+    assert_eq!(peak(&run(&mut engine, BEAT)[0]), 0.0);
+    assert_eq!(
+        unpack_click(pack_click(ClickStyle {
+            level_db: -12.0,
+            sound: 2,
+            every: 4,
+            accent: false
+        })),
+        ClickStyle {
+            level_db: -12.0,
+            sound: 2,
+            every: 4,
+            accent: false
+        }
+    );
+}
+
+#[test]
+fn a_test_tone_plays_on_the_side_asked() {
+    let (mut engine, shared, _tx) = linked();
+    shared.tone.store(1, Ordering::Relaxed);
+    let [l, r] = run(&mut engine, BEAT);
+    assert!(peak(&l) > 0.1 && peak(&r) == 0.0);
+    // Then it ends, a second and a half on.
+    let _ = run(&mut engine, BEAT * 2);
+    assert_eq!(peak(&run(&mut engine, BEAT)[0]), 0.0);
 }
 
 #[test]
@@ -333,4 +451,63 @@ fn the_synth_window_hears_its_synth_and_moves_its_wheels() {
     shared.poly_slot.store(usize::MAX, Ordering::Relaxed);
     run(&mut engine, MAX_BLOCK);
     assert_eq!(shared.poly_written.load(Ordering::Relaxed), wrote);
+}
+
+#[test]
+fn what_is_heard_now_is_read_from_when_each_buffer_plays() {
+    let shared = Shared::new();
+    assert_eq!(shared.heard_now(RATE), None, "nothing heard yet");
+    let ms = 1_000_000;
+    // The clock starts at the first read: far enough on to look back 50 ms.
+    clock();
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    let now = clock();
+    // A buffer from 1000 heard 5 ms ago; the next, from 1512, not heard for another 20 ms.
+    shared.note_heard(1000, 512, now - 5 * ms);
+    shared.note_heard(1512, 512, now + 20 * ms);
+    let heard = shared.heard_now(RATE).unwrap();
+    let into = (0.005 * RATE) as u64;
+    assert!(heard >= 1000 + into && heard < 1000 + into + 100, "{heard}");
+    // Never past the end of the buffer being heard.
+    shared.note_heard(4000, 64, now - 50 * ms);
+    assert_eq!(shared.heard_now(RATE), Some(4064));
+    // Played again (or moved): what's left of before isn't now. Till the new play's first is
+    // heard, the playhead waits where it starts.
+    shared.new_play();
+    assert_eq!(shared.heard_now(RATE), None);
+    shared.note_heard(9000, 512, now + 30 * ms);
+    shared.note_heard(9512, 512, now + 40 * ms);
+    assert_eq!(shared.heard_now(RATE), Some(9000));
+    // Heard later than the device says: the playhead later by as much.
+    shared.note_heard(20_000, 4800, now - 50 * ms);
+    let on_time = shared.heard_now(RATE).unwrap();
+    shared
+        .heard_later
+        .store(20 * ms as i64, std::sync::atomic::Ordering::Relaxed);
+    let later = shared.heard_now(RATE).unwrap();
+    let by = on_time - later;
+    assert!((by as f64 - 0.020 * RATE).abs() < 0.004 * RATE, "{by}");
+}
+
+#[test]
+fn each_block_is_heard_in_turn_and_the_cycle_starts_again_where_it_loops() {
+    // A cycle round 0..1000 played from 900: a 512 buffer heard at `at` is 100 samples to the
+    // end, then the cycle's start.
+    let (mut engine, shared, _tx) = linked();
+    engine.arrangement.cycle = Some((0, 1000));
+    engine.position = 900;
+    engine.playing = true;
+    let at = clock() + 1_000_000_000;
+    engine.note_heard(at);
+    let (mut l, mut r) = (vec![0.0; 512], vec![0.0; 512]);
+    engine.process([&mut l, &mut r], 512);
+    let k = shared.heard_at.load(std::sync::atomic::Ordering::Relaxed);
+    let entry = |k: usize| {
+        [0, 1, 2]
+            .map(|f| shared.heard[k % HEARD_KEPT][f].load(std::sync::atomic::Ordering::Relaxed))
+    };
+    let (before, after) = (entry(k + HEARD_KEPT - 1), entry(k));
+    assert_eq!((before[0], before[1], before[2]), (900, 100, at));
+    let later = at + (100.0 * 1e9 / RATE) as u64;
+    assert_eq!((after[0], after[1], after[2]), (0, 412, later));
 }

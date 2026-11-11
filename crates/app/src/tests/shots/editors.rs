@@ -27,41 +27,63 @@ pub(super) fn set_up(
                 });
             }
         }
-        "roll-pro" | "roll-chance" | "roll-transform" | "roll-mpe" | "roll-harmony"
-        | "roll-generate" => {
+        "roll-pro" | "roll-chance" | "roll-transform" | "roll-mpe" | "roll-mpe-tab"
+        | "roll-press" | "roll-harmony" | "roll-progressions" | "roll-generate" | "roll-shape"
+        | "roll-narrow" => {
             ws.track = 0;
             ws.region = Some((0, 0));
             ws.editor_h = 460.0;
             ws.show_bottom(Bottom::PianoRoll, cx);
             ws.picked = vec![0, 1, 2, 3];
-            ws.roll.by_velocity = true;
+            ws.roll.by_velocity = !page.starts_with("roll-mpe") && page != "roll-press";
             ws.roll.in_key = true;
             ws.roll.stamp = crate::editors::pianoroll::Stamp::Triad;
-            // A note bending up two semitones and back, as a hand on an MPE controller does.
-            if page == "roll-mpe" {
-                use pina_engine::song::project::{ControlPoint, ControlValue, ExpressionKind};
-                ws.picked.clear();
-                ws.roll.lane = crate::editors::pianoroll::Lane::Pitch;
+            // Notes with their own expression, as a hand on an MPE controller plays them: a glide
+            // into the next, a vibrato, a fall, a bend; each with a slide and a pressure swell.
+            if page.starts_with("roll-mpe") || page == "roll-press" {
+                use pina_engine::song::project::{Gesture, PPQ};
+                ws.editor_h = 560.0;
                 let r = &mut ws.session.project.tracks[0].regions[0];
-                if let Content::Midi { notes, controls } = &mut r.content {
-                    for n in notes.iter().filter(|n| n.start >= 1920).take(3) {
-                        for k in 0..16 {
-                            let t = n.start + (n.length as i64 * k / 16);
-                            let st = (k as f32 / 15.0 * std::f32::consts::PI).sin() * 2.0;
-                            controls.push(ControlPoint {
-                                start: t,
-                                kind: ControlValue::Expression {
-                                    pitch: n.pitch,
-                                    kind: ExpressionKind::Tuning,
-                                    value: st,
-                                },
-                            });
+                if let Content::Midi { notes, .. } = &mut r.content {
+                    let next: Vec<i64> = notes.iter().map(|n| n.start).collect();
+                    let shapes = [
+                        Gesture::Glide,
+                        Gesture::Vibrato,
+                        Gesture::Fall,
+                        Gesture::BendUp,
+                    ];
+                    let mut k = 0;
+                    for (i, n) in notes.iter_mut().enumerate() {
+                        if n.start < 1920 || k >= shapes.len() {
+                            continue;
                         }
+                        let to = next
+                            .iter()
+                            .any(|&s| s >= n.start + n.length as i64)
+                            .then_some(-3.0);
+                        n.expression.pitch = shapes[k].points(n.length, PPQ, 1.0, 3.0, to);
+                        n.expression.slide = Gesture::Open.points(n.length, PPQ, 0.8, 3.0, None);
+                        n.expression.press = Gesture::Swell.points(n.length, PPQ, 1.0, 3.0, None);
+                        if k == 1 {
+                            ws.picked = vec![i];
+                        }
+                        k += 1;
                     }
-                    controls.sort_by_key(|c| c.start);
+                }
+                ws.roll.lane = match page {
+                    "roll-press" => crate::editors::pianoroll::Lane::Press,
+                    "roll-mpe-tab" => crate::editors::pianoroll::Lane::Slide,
+                    _ => crate::editors::pianoroll::Lane::Pitch,
+                };
+                if page == "roll-mpe-tab" {
+                    ws.roll.panel = crate::editors::pianoroll::Panel::Mpe;
                 }
             }
-            if page == "roll-harmony" {
+            // The track headers' column as narrow as it's dragged.
+            if page == "roll-narrow" {
+                ws.header_w = 280.0;
+            }
+            if page == "roll-harmony" || page == "roll-progressions" || page == "roll-narrow" {
                 use pina_engine::music::harmony;
                 let key = ws.session.project.song_key().unwrap();
                 ws.roll.panel = crate::editors::pianoroll::Panel::Harmony;
@@ -70,9 +92,13 @@ pub(super) fn set_up(
                     .to_vec();
                 ws.roll_writing.performance = harmony::Performance::Arp;
                 ws.roll_writing.bass = true;
+                ws.roll_writing.progressions = page == "roll-progressions";
             }
-            if page == "roll-generate" {
+            if page == "roll-generate" || page == "roll-shape" {
                 ws.roll.panel = crate::editors::pianoroll::Panel::Generate;
+                if page == "roll-shape" {
+                    ws.roll_writing.writer = crate::editors::pianoroll::Writer::Shape;
+                }
             }
             match page {
                 "roll-chance" => ws.roll.lane = crate::editors::pianoroll::Lane::Chance,

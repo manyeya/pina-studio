@@ -59,13 +59,57 @@ pub struct PluginRef {
     /// or VST2 hears each note's bend, slide and pressure apart.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mpe: bool,
+    /// The MPE zone it hears, with `mpe` on.
+    #[serde(default, skip_serializing_if = "MpeZone::is_usual")]
+    pub mpe_zone: MpeZone,
     /// Which running plugin it is (0: none yet), so the same plugin twice on a channel are told
     /// apart as they're moved, added and taken out. Not saved.
     #[serde(skip)]
     pub instance: u64,
 }
 
+/// The MPE zone an instrument taking MIDI 1.0 hears: its notes on `channels` member channels
+/// (1 to 15) next to the manager channel, which is channel 1 (the lower zone) or 16 (`upper`),
+/// each note's bend reaching `bend` semitones either way.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct MpeZone {
+    pub upper: bool,
+    pub channels: u8,
+    pub bend: u8,
+}
+
+impl Default for MpeZone {
+    fn default() -> Self {
+        MpeZone {
+            upper: false,
+            channels: 15,
+            bend: crate::song::project::BEND_REACH as u8,
+        }
+    }
+}
+
+impl MpeZone {
+    pub fn is_usual(&self) -> bool {
+        *self == MpeZone::default()
+    }
+
+    /// Its manager channel (0 to 15), and its member channels.
+    pub fn channels(&self) -> (u8, std::ops::RangeInclusive<u8>) {
+        let n = self.channels.clamp(1, 15);
+        match self.upper {
+            false => (0, 1..=n),
+            true => (15, 15 - n..=14),
+        }
+    }
+}
+
 impl PluginRef {
+    /// The MPE zone it hears, if MPE is on.
+    pub fn mpe_heard(&self) -> Option<MpeZone> {
+        self.mpe.then_some(self.mpe_zone)
+    }
+
     /// Which plugin this is, settings aside.
     pub fn same_plugin(&self, other: &PluginRef) -> bool {
         self.format == other.format

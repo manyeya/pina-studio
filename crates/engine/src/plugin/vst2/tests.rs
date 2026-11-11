@@ -76,12 +76,13 @@ fn ids_read_as_their_characters_or_numbers() {
 
 #[test]
 fn notes_and_controls_pack_as_midi() {
-    let mut mpe = crate::plugin::mpe::Mpe::new(false);
+    let mut mpe = crate::plugin::mpe::Mpe::new(None);
     let mut sent = Vec::new();
     let n = Note {
         offset: 7,
         pitch: 60,
         velocity: 1.0,
+        release: 0.0,
     };
     mpe.note(&n, |m| sent.push(midi(n.offset, m)));
     let on = sent[0];
@@ -145,6 +146,7 @@ fn a_real_plugin_plays_saves_restores_and_shuts_down() {
         offset: 0,
         pitch: 60,
         velocity: 1.0,
+        release: 0.0,
     };
     match info.instrument {
         true => processor.process([&mut l, &mut rt], 512, &[note], &[], None),

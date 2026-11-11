@@ -523,6 +523,8 @@ pub fn read(b: &[u8]) -> Result<MidiFile, String> {
     for (track, mut p) in keep.iter().cloned() {
         p.notes.sort_by_key(|n| (n.start, n.pitch));
         p.controls.sort_by_key(|c| c.start);
+        // Polyphonic pressure on the notes it presses.
+        crate::song::project::adopt_expression(&mut p.notes, &mut p.controls);
         let own = names
             .get(track)
             .cloned()
@@ -671,7 +673,7 @@ impl Project {
                 .iter()
                 .map(|n| Note {
                     pitch: (n.pitch as i32 + shift).clamp(0, 127) as u8,
-                    ..*n
+                    ..n.clone()
                 })
                 .collect();
             self.add_track(

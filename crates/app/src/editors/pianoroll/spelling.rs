@@ -3,12 +3,23 @@ use super::*;
 #[test]
 fn notes_are_named_as_the_key_spells_them() {
     let key = |s: &str| Key::parse(s);
-    assert_eq!(name_in(None, 60), "C3"); // middle C
-    assert_eq!(name_in(None, 70), "A♯3");
-    assert_eq!(name_in(key("Eb major"), 70), "B♭3");
-    assert_eq!(name_in(key("Eb major"), 63), "E♭3");
-    assert_eq!(name_in(key("E major"), 70), "A♯3");
-    assert_eq!(name_in(key("C major"), 72), "C4");
+    assert_eq!(name_in(None, 60), "C4"); // middle C
+    assert_eq!(name_in(None, 48), "C3");
+    assert_eq!(name_in(None, 127), "G9");
+    assert_eq!(name_in(None, 70), "A♯4");
+    assert_eq!(name_in(key("Eb major"), 70), "B♭4");
+    assert_eq!(name_in(key("Eb major"), 63), "E♭4");
+    assert_eq!(name_in(key("E major"), 70), "A♯4");
+    assert_eq!(name_in(key("C major"), 72), "C5");
+    // Middle C named in another octave, as some apps have it.
+    assert_eq!(
+        (
+            octave_named(60, 3),
+            octave_named(60, 5),
+            octave_named(127, 3)
+        ),
+        (3, 5, 8)
+    );
 }
 
 #[test]

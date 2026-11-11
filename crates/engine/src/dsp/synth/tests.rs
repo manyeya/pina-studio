@@ -8,11 +8,13 @@ fn plays_from_the_note_offset_and_releases() {
         offset: 100,
         pitch: 69,
         velocity: 1.0,
+        release: 0.0,
     };
     let off = Note {
         offset: 2000,
         pitch: 69,
         velocity: 0.0,
+        release: 0.0,
     };
     s.process([&mut l, &mut r], 4800, &[on, off]);
     assert!(l[..101].iter().all(|&x| x == 0.0));

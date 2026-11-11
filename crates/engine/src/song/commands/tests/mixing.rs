@@ -436,3 +436,67 @@ fn a_tracks_midi_effects_are_set_in_order_and_kept_to_eight() {
     run(&mut p, r#"{"op": "set_track", "track": 0, "midi_fx": []}"#).unwrap();
     assert!(p.tracks[0].midi_fx.is_empty());
 }
+
+#[test]
+fn an_agent_writes_each_notes_own_expression_and_shapes_it() {
+    use crate::song::project::Dim;
+    let mut p = Project::new(48_000);
+    run(
+        &mut p,
+        r#"{"op": "add_track", "name": "Lead", "instrument": "synth"}"#,
+    )
+    .unwrap();
+    // One note written with its own scoop and release; another bent the old way, by a control.
+    let add = r#"{"op": "add_midi_region", "track": 0, "start": 0, "length": 3840,
+        "notes": [
+            {"start": 0, "length": 960, "pitch": 60, "velocity": 100, "release": 30,
+             "expression": {"pitch": [{"at": 0, "value": -2, "curve": -0.5}, {"at": 240, "value": 0}]}},
+            {"start": 960, "length": 960, "pitch": 64, "velocity": 100}
+        ],
+        "controls": [{"start": 1200, "type": "expression", "pitch": 64, "kind": "tuning", "value": 3}]}"#;
+    run(&mut p, add).unwrap();
+    let notes = |p: &Project| p.region((0, 0)).content.notes(0).unwrap().to_vec();
+    let n = notes(&p);
+    assert_eq!(n[0].release, 30);
+    assert_eq!(n[0].expression.pitch[0].value, -2.0);
+    // The control went onto the note it bends.
+    assert_eq!(n[1].expression.pitch[0].value, 3.0);
+    assert_eq!(n[1].expression.pitch[0].at, 240);
+    assert!(p.controls_mut((0, 0)).unwrap().is_empty());
+    // A swell on every note's pressure; then the pitch taken off the first.
+    let swell = r#"{"op": "edit_notes", "track": 0, "region": 0, "edit": {"kind": "express", "gesture": "swell"}}"#;
+    run(&mut p, swell).unwrap();
+    assert!(notes(&p).iter().all(|n| !n.expression.press.is_empty()));
+    let off = r#"{"op": "edit_notes", "track": 0, "region": 0, "note": 0, "edit": {"kind": "unexpress", "dim": "pitch"}}"#;
+    run(&mut p, off).unwrap();
+    let n = notes(&p);
+    assert!(n[0].expression.get(Dim::Pitch).is_empty() && !n[1].expression.pitch.is_empty());
+    // The MPE Shaper among a track's MIDI effects.
+    let shaper = r#"{"op": "set_track", "track": 0, "midi_fx": [{"type": "mpe_shaper", "bend": 100, "round": 50,
+        "slide": {"curve": 0, "low": 0, "high": 100}, "press": {"curve": 40, "low": 10, "high": 90}, "swap": false}]}"#;
+    run(&mut p, shaper).unwrap();
+    assert_eq!(p.tracks[0].midi_fx[0].fx.name(), "MPE Shaper");
+}
+
+#[test]
+fn an_agent_gives_a_synth_its_own_effects() {
+    use crate::song::project::{Instrument, rack_name};
+    let mut p = Project::new(48_000);
+    run(&mut p, r#"{"op": "add_track", "name": "Pad"}"#).unwrap();
+    // A patch brings its own; the agent's list takes their place.
+    run(
+        &mut p,
+        r#"{"op": "set_synth", "track": 0, "patch": "Warm Pad"}"#,
+    )
+    .unwrap();
+    let rack = |p: &Project| match &p.tracks[0].instrument {
+        Some(Instrument::Poly(s)) => s.fx.iter().map(rack_name).collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    assert_eq!(rack(&p), ["Chorus", "Hall Reverb"]);
+    let set = r#"{"op": "set_synth", "track": 0, "settings": {"fx": [
+        {"motion": {"style": "phaser"}}, {"reverb": {"style": "plate", "mix": 0.4}}
+    ], "routes": [{"source": {"lfo": 0}, "dest": {"rack": [1, 0]}, "depth": 0.2}]}}"#;
+    run(&mut p, set).unwrap();
+    assert_eq!(rack(&p), ["Phaser", "Plate Reverb"]);
+}

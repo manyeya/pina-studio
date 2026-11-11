@@ -357,8 +357,8 @@ impl Project {
                     let mut left = Vec::new();
                     for n in all {
                         match notes.get(&n.pitch) {
-                            Some(&t) => by.entry(t).or_default().push(*n),
-                            None => left.push(*n),
+                            Some(&t) => by.entry(t).or_default().push(n.clone()),
+                            None => left.push(n.clone()),
                         }
                     }
                     for (t, mine) in by {

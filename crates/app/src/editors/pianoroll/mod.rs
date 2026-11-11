@@ -11,18 +11,23 @@
 //! a lane for their velocities (drag a dot, or draw across) or a controller's moves: the mod
 //! wheel, pitch bend, expression or the sustain pedal, drawn freehand. Right-click for more.
 
+mod bends;
 mod body;
 mod controls;
+mod express;
 mod mouse;
 mod ops;
 mod panel;
 mod view;
 mod write;
 
+pub(crate) use bends::*;
 pub(crate) use controls::*;
 pub(crate) use mouse::*;
 pub use panel::{NoteField, Panel};
-pub use write::Writing;
+#[cfg(test)]
+pub use write::Writer;
+pub use write::{Writing, WritingSet};
 
 use gpui::{
     App, Bounds, Context, Div, FontWeight, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
@@ -31,7 +36,7 @@ use gpui::{
 };
 use pina_engine::{
     music::{Key, NoteEdit},
-    song::project::{At, Content, ControlPoint, ControlValue, Note, PPQ, Region},
+    song::project::{At, Content, ControlPoint, ControlValue, Dim, Note, PPQ, Region},
 };
 
 use crate::{
@@ -44,9 +49,11 @@ use crate::{
 pub const KEY_H: f32 = 12.0;
 /// How far a note's own bend shows either way in its lane, in semitones (it goes to 48).
 pub const PITCH_SHOWN: f32 = 12.0;
-/// The lane under the notes, and how tall a full velocity (or controller) stands in it.
+/// The lane under the notes, and how tall a full velocity (or controller) stands in it; the
+/// lane as tall as it is for drawing a note's own lines.
 pub const VELOCITY_LANE: f32 = 78.0;
 pub const VELOCITY_H: f32 = 60.0;
+pub const EXPRESSION_LANE: f32 = 148.0;
 /// The ruler: bar numbers, and under them the chords the notes play.
 const ROLL_RULER: f32 = 36.0;
 const KEYS_W: f32 = 56.0;
@@ -60,15 +67,33 @@ fn black(pitch: u8) -> bool {
     matches!(pitch % 12, 1 | 3 | 6 | 8 | 10)
 }
 
-/// Note names: middle C (60) is C3.
+/// The octave middle C (60) is named in, as Settings has it: 4 as most learn it.
+static MIDDLE_C: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(4);
+
+pub fn set_middle_c(octave: i8) {
+    MIDDLE_C.store(octave.clamp(3, 5), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The octave a pitch is named in.
+pub fn octave(pitch: u8) -> i32 {
+    octave_named(pitch, MIDDLE_C.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// The octave a pitch is named in, with middle C's named `middle`.
+fn octave_named(pitch: u8, middle: i8) -> i32 {
+    pitch as i32 / 12 - 5 + middle as i32
+}
+
+/// Note names: middle C (60) is C4, or as Settings has it.
 pub fn name(pitch: u8) -> String {
     const NAMES: [&str; 12] = [
         "C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B",
     ];
-    format!("{}{}", NAMES[pitch as usize % 12], pitch as i32 / 12 - 2)
+    format!("{}{}", NAMES[pitch as usize % 12], octave(pitch))
 }
 
-/// A pitch's name as a key spells it (B♭ in F major, A♯ in E major), middle C being C3;
+/// A pitch's name as a key spells it (B♭ in F major, A♯ in E major), middle C being C4 (or as
+/// Settings has it);
 /// with no key, sharps.
 pub fn name_in(key: Option<Key>, pitch: u8) -> String {
     let Some(key) = key else {
@@ -81,7 +106,9 @@ pub fn name_in(key: Option<Key>, pitch: u8) -> String {
         _ => "",
     };
     let letter = ["C", "D", "E", "F", "G", "A", "B"][letter as usize];
-    format!("{letter}{accidental}{}", octave - 1)
+    // The key's octaves have middle C's as 4.
+    let middle = MIDDLE_C.load(std::sync::atomic::Ordering::Relaxed) as i32;
+    format!("{letter}{accidental}{}", octave - 4 + middle)
 }
 
 /// Where a note written at a tick goes: its track, the region it's in (if one takes it), else
@@ -176,6 +203,8 @@ impl Stamp {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Lane {
     Velocity,
+    /// How fast each note is let go.
+    Release,
     /// How likely each note is to play.
     Chance,
     /// Each note's own bend, slide and pressure (MPE).
@@ -189,21 +218,21 @@ pub enum Lane {
 }
 
 impl Lane {
-    pub const ALL: [Lane; 9] = [
+    /// The notes' own, then the controllers'.
+    pub const NOTES: [Lane; 6] = [
         Lane::Velocity,
+        Lane::Release,
         Lane::Chance,
         Lane::Pitch,
         Lane::Slide,
         Lane::Press,
-        Lane::Mod,
-        Lane::Bend,
-        Lane::Expression,
-        Lane::Sustain,
     ];
+    pub const CONTROLLERS: [Lane; 4] = [Lane::Mod, Lane::Bend, Lane::Expression, Lane::Sustain];
 
     pub fn short(self) -> &'static str {
         match self {
             Lane::Velocity => "Vel",
+            Lane::Release => "Rel",
             Lane::Chance => "Chance",
             Lane::Pitch => "Pitch",
             Lane::Slide => "Slide",
@@ -218,6 +247,7 @@ impl Lane {
     pub fn name(self) -> &'static str {
         match self {
             Lane::Velocity => "Velocity",
+            Lane::Release => "Release",
             Lane::Chance => "Chance",
             Lane::Pitch => "Note pitch",
             Lane::Slide => "Note slide",
@@ -229,76 +259,40 @@ impl Lane {
         }
     }
 
-    /// Whether it shows each note's own value (else a controller's moves).
+    /// Whether it shows a number each note has (else a line).
     pub fn per_note(self) -> bool {
-        matches!(self, Lane::Velocity | Lane::Chance)
+        matches!(self, Lane::Velocity | Lane::Release | Lane::Chance)
     }
 
     /// Whether it draws each note's own expression (MPE).
     pub fn expression(self) -> bool {
-        matches!(self, Lane::Pitch | Lane::Slide | Lane::Press)
+        self.dim().is_some()
     }
 
-    /// Whether an expression move is this lane's, for the note at `pitch`.
-    fn note_holds(self, v: &ControlValue, pitch: u8) -> bool {
-        use pina_engine::song::project::ExpressionKind as K;
-        match (self, v) {
-            (
-                Lane::Pitch,
-                ControlValue::Expression {
-                    pitch: p,
-                    kind: K::Tuning,
-                    ..
-                },
-            )
-            | (
-                Lane::Slide,
-                ControlValue::Expression {
-                    pitch: p,
-                    kind: K::Brightness,
-                    ..
-                },
-            )
-            | (Lane::Press, ControlValue::PolyPressure { pitch: p, .. }) => *p == pitch,
-            _ => false,
-        }
-    }
-
-    /// The move a height makes for the note at `pitch`: a bend across `PITCH_SHOWN` either way
-    /// (none near the middle), a slide or a pressure.
-    fn note_make(self, pitch: u8, level: f32) -> ControlValue {
-        use pina_engine::song::project::ExpressionKind as K;
-        let level = level.clamp(0.0, 1.0);
+    /// The part of each note's own expression it shows.
+    pub fn dim(self) -> Option<Dim> {
         match self {
-            Lane::Pitch => {
-                let st = (level * 2.0 - 1.0) * PITCH_SHOWN;
-                ControlValue::Expression {
-                    pitch,
-                    kind: K::Tuning,
-                    value: if st.abs() < 0.25 { 0.0 } else { st },
-                }
-            }
-            Lane::Slide => ControlValue::Expression {
-                pitch,
-                kind: K::Brightness,
-                value: level,
-            },
-            _ => ControlValue::PolyPressure {
-                pitch,
-                value: (level * 127.0).round() as u8,
-            },
+            Lane::Pitch => Some(Dim::Pitch),
+            Lane::Slide => Some(Dim::Slide),
+            Lane::Press => Some(Dim::Press),
+            _ => None,
         }
     }
 
-    /// An expression move's height in the lane, 0 to 1.
-    pub(crate) fn note_level(self, v: &ControlValue) -> f32 {
-        match v {
-            ControlValue::Expression { value, .. } if self == Lane::Pitch => {
-                (value / PITCH_SHOWN + 1.0) / 2.0
-            }
-            ControlValue::Expression { value, .. } => *value,
-            ControlValue::PolyPressure { value, .. } => *value as f32 / 127.0,
-            _ => 0.0,
+    /// The lane showing a part of the notes' expression.
+    pub fn of(dim: Dim) -> Lane {
+        match dim {
+            Dim::Pitch => Lane::Pitch,
+            Dim::Slide => Lane::Slide,
+            Dim::Press => Lane::Press,
+        }
+    }
+
+    /// How tall it is: taller for drawing a note's own lines.
+    pub fn height(self) -> f32 {
+        match self.expression() {
+            true => EXPRESSION_LANE,
+            false => VELOCITY_LANE,
         }
     }
 
@@ -385,6 +379,10 @@ pub enum RollOp {
     Deselect,
     /// Mutes the picked notes, or unmutes them if they all are.
     Mute,
+    /// The picked note's own expression copied; pasted onto the picked notes (or all),
+    /// stretched to each one's length.
+    CopyExpression,
+    PasteExpression,
     Copy,
     Cut,
     Paste,
@@ -394,8 +392,54 @@ pub enum RollOp {
     Transpose(i32),
     /// Quarters of the grid.
     Nudge(i32),
+    /// Ticks, earlier or later: the nudge value's worth (⌥← ⌥→).
+    Move(i64),
+    /// Ticks longer, or shorter (⌥⇧← ⌥⇧→).
+    Resize(i64),
     Quantize,
     Edit(NoteEdit),
+    /// The note before or after the last picked (by start, then pitch); `extend` adds it to
+    /// what's picked, or going back over the last picked lets that go (← → ⇧← ⇧→).
+    Step {
+        next: bool,
+        extend: bool,
+    },
+    /// The first note, or the last (⇧Home ⇧End).
+    Edge(bool),
+    /// Notes picked by a rule, as Logic's Select commands pick them.
+    Pick(NotePick),
+    /// The picked notes across the playhead cut there (⌘T).
+    SplitAtPlayhead,
+    /// The picked notes' starts to the playhead, their ends kept (⌘[); or their ends (⌘]).
+    StartToPlayhead,
+    EndToPlayhead,
+    /// The picked notes moved so the first starts at the playhead (;), then the next note
+    /// picked (⇧;).
+    ToPlayhead {
+        then_next: bool,
+    },
+    /// A note of a pitch starting where another of it does, taken out (⌥D).
+    DeleteDuplicates,
+}
+
+/// Which notes a Select command picks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotePick {
+    /// From the first picked (or the playhead) on.
+    Following,
+    /// From the first picked on, of the pitches picked.
+    FollowingSamePitch,
+    /// Starting inside the cycle.
+    InsideCycle,
+    /// Overlapping another of its pitch.
+    Overlapped,
+    /// Of a pitch picked.
+    Equal,
+    /// Of a picked note's name, in any octave.
+    Similar,
+    /// At the same place in the bar as one picked.
+    SameSubposition,
+    Muted,
 }
 
 /// A velocity's colour: soft notes cool, hard ones hot.

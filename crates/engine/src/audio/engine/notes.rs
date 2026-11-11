@@ -95,6 +95,7 @@ impl Held {
                         offset,
                         pitch: pitch as u8,
                         velocity: 0.0,
+                        release: 0.0,
                     };
                     *n += 1;
                 }
@@ -176,6 +177,7 @@ pub(crate) fn gather(
             offset: (e.at - from) as u32 + into as u32,
             pitch: e.pitch,
             velocity,
+            release: e.release,
         };
         *n += 1;
     }
@@ -195,11 +197,13 @@ pub(crate) fn gather(
     }
 }
 
-/// A note from a MIDI keyboard. Velocity 0 is a note off.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A note from a MIDI keyboard. Velocity 0 is a note off; a note off's `release` is how fast
+/// the key came up (0 when the keyboard doesn't say).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct LiveNote {
     pub pitch: u8,
     pub velocity: u8,
+    pub release: u8,
 }
 
 /// A live note as the engine played it, at the playhead, for recording.
@@ -208,4 +212,5 @@ pub struct Played {
     pub at: u64,
     pub pitch: u8,
     pub velocity: u8,
+    pub release: u8,
 }

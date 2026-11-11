@@ -18,7 +18,7 @@ pub(crate) fn grab_note(
             .region(at)
             .content
             .notes(0)
-            .and_then(|n| n.get(i).copied())
+            .and_then(|n| n.get(i).cloned())
         else {
             return;
         };
@@ -52,7 +52,19 @@ pub(crate) fn grab_note(
             }
             _ => {}
         }
-        if e.modifiers.shift {
+        // With the Pitch lane showing, a note's middle bends it (its ends still stretch it).
+        if ws.roll.lane == Lane::Pitch
+            && edge == Edge::Move
+            && ws.expression_down(e, true, Some(i), cx)
+        {
+            return;
+        }
+        // Pressed among others picked: let go without moving, it's picked alone.
+        let alone =
+            !e.modifiers.shift && !e.modifiers.alt && ws.picked.len() > 1 && ws.picked.contains(&i);
+        // ⇧ on a picked note's end: all their ends, together (Logic's), not a pick.
+        let ends = edge != Edge::Move && ws.picked.contains(&i);
+        if e.modifiers.shift && !ends {
             match ws.picked.iter().position(|&k| k == i) {
                 Some(k) => {
                     ws.picked.remove(k);
@@ -81,7 +93,7 @@ pub(crate) fn grab_note(
             let copies: Vec<Note> = ws
                 .picked
                 .iter()
-                .filter_map(|&k| notes.get(k).copied())
+                .filter_map(|&k| notes.get(k).cloned())
                 .collect();
             lead = first + ws.picked.iter().position(|&k| k == i).unwrap_or(0);
             notes.extend(copies);
@@ -98,14 +110,21 @@ pub(crate) fn grab_note(
         ws.held = ws
             .picked
             .iter()
-            .filter_map(|&k| notes.get(k).map(|n| (k, *n)))
+            .filter_map(|&k| notes.get(k).map(|n| (k, n.clone())))
             .collect();
+        ws.mods = e.modifiers;
+        // ⌃⌘ dragged up or down: the picked notes' velocities, as Logic's Velocity tool.
+        if e.modifiers.control && e.modifiers.platform {
+            ws.drag = Some(Drag::Velocity { at, y: from.y });
+            return cx.notify();
+        }
         ws.drag = Some(Drag::Notes {
             at,
             lead,
             edge,
             from,
             moved: false,
+            alone,
         });
         cx.notify();
     })
@@ -115,6 +134,10 @@ impl Workspace {
     /// A click on the grid. With the pointer: a rubber band, or with a double-click a note. With
     /// the pencil: a note (or chord), and painting on as it's dragged.
     pub(crate) fn roll_click(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
+        // A note's bend, where it's drawn away from the note.
+        if self.roll.lane == Lane::Pitch && self.expression_down(e, true, None, cx) {
+            return;
+        }
         let p = e.position.map(f32::from);
         let adds = e.click_count == 2 || self.tool == Tool::Pencil;
         if !adds {
@@ -128,7 +151,11 @@ impl Workspace {
             self.begin_drag(Drag::Marquee { from: p, to: p }, cx);
             return;
         }
-        let tick = self.snap_down(self.tick_at(p.x));
+        // ⌃⇧: exactly where clicked, the grid aside.
+        let tick = match e.modifiers.control && e.modifiers.shift {
+            true => self.tick_at(p.x).max(0.0) as u64,
+            false => self.snap_down(self.tick_at(p.x)),
+        };
         let pitch = self.in_key(self.pitch_at(p.y), 0);
         let Some((track, target, span)) = self.region_for(tick, cx) else {
             return;
@@ -288,14 +315,23 @@ impl Workspace {
             return;
         };
         let was = self.held.clone();
-        let Some(&(_, first)) = was.iter().find(|(i, _)| *i == lead) else {
+        let Some((_, first)) = was.iter().find(|(i, _)| *i == lead).cloned() else {
             return;
         };
         let d = p - from;
         let dt = (d.x / self.px_per_tick()) as f64;
         let region_start = self.session.project.region(at).start as i64;
         let grid = self.grid() as i64;
-        let snapped = |t: f64| self.snap(t.max(0.0)) as i64;
+        let mods = self.mods;
+        // ⌃ finer (a quarter step), ⌃⇧ by the tick, as Logic moves them.
+        let snapped = |t: f64| match (mods.control, mods.shift) {
+            (true, true) => t.max(0.0).round() as i64,
+            (true, false) => {
+                let q = (grid / 4).max(1) as f64;
+                ((t.max(0.0) / q).round() * q) as i64
+            }
+            _ => self.snap(t.max(0.0)) as i64,
+        };
         let track = self.session.project.tracks[at.0].id;
         match edge {
             Edge::Move => {
@@ -310,14 +346,14 @@ impl Workspace {
                 let by = (-rows).clamp(-lo, 127 - hi);
                 let keyed: Vec<(usize, u8)> = was
                     .iter()
-                    .map(|&(i, n)| (i, self.in_key((n.pitch as i32 + by) as u8, by)))
+                    .map(|(i, n)| (*i, self.in_key((n.pitch as i32 + by) as u8, by)))
                     .collect();
                 let Some(notes) = self.session.project.notes_mut(at) else {
                     return;
                 };
                 let before = notes.get(lead).map(|n| n.pitch);
-                for (&(i, n), &(_, pitch)) in was.iter().zip(&keyed) {
-                    if let Some(note) = notes.get_mut(i) {
+                for ((i, n), &(_, pitch)) in was.iter().zip(&keyed) {
+                    if let Some(note) = notes.get_mut(*i) {
                         note.start = n.start + shift;
                         note.pitch = pitch;
                     }
@@ -336,10 +372,19 @@ impl Workspace {
                 let Some(notes) = self.session.project.notes_mut(at) else {
                     return;
                 };
-                for &(i, n) in &was {
-                    if let Some(note) = notes.get_mut(i) {
+                let lead_end = end + by;
+                let lead_length = (first.length as i64 + by).max(1);
+                for (i, n) in &was {
+                    if let Some(note) = notes.get_mut(*i) {
                         let least = grid.min(n.length as i64).max(1);
-                        note.length = (n.length as i64 + by).max(least) as u64;
+                        note.length = match (mods.alt, mods.shift) {
+                            // ⌥⇧: every one as long as the one dragged.
+                            (true, true) => lead_length,
+                            // ⇧: every one ending where it does.
+                            (false, true) if !mods.control => lead_end - n.start,
+                            _ => n.length as i64 + by,
+                        }
+                        .max(least) as u64;
                     }
                 }
                 if let Some(n) = notes.get(lead) {
@@ -364,8 +409,8 @@ impl Workspace {
                 let Some(notes) = self.session.project.notes_mut(at) else {
                     return;
                 };
-                for &(i, n) in &was {
-                    if let Some(note) = notes.get_mut(i) {
+                for (i, n) in &was {
+                    if let Some(note) = notes.get_mut(*i) {
                         note.start = n.start + by;
                         note.length = (n.length as i64 - by) as u64;
                     }
@@ -377,7 +422,7 @@ impl Workspace {
         }
     }
 
-    /// Velocities (or chances) drawn across the lane: each note starting between where the mouse
+    /// Velocities (or releases, or chances) drawn across the lane: each note starting between where the mouse
     /// was and is takes the height it's at (the picked notes only, if some are).
     pub(crate) fn drag_velocity_line(&mut self, p: Point<f32>) {
         let Some(Drag::VelocityLine { at, x }) = self.drag else {
@@ -386,10 +431,10 @@ impl Workspace {
         let lane = self.lane_bounds.get();
         let bottom = f32::from(lane.origin.y) + f32::from(lane.size.height) - 5.0;
         let level = (bottom - p.y) / VELOCITY_H;
-        let chance = self.roll.lane == Lane::Chance;
-        let v = match chance {
-            true => (level * 100.0).round().clamp(1.0, 100.0) as u8,
-            false => (level * 127.0).round().clamp(1.0, 127.0) as u8,
+        let lane = self.roll.lane;
+        let v = match lane {
+            Lane::Chance => (level * 100.0).round().clamp(1.0, 100.0) as u8,
+            _ => (level * 127.0).round().clamp(1.0, 127.0) as u8,
         };
         let (t0, t1) = (self.tick_at(x.min(p.x)), self.tick_at(x.max(p.x)) + 1.0);
         let start = self.session.project.region(at).start as f64;
@@ -398,9 +443,10 @@ impl Workspace {
             for (i, n) in notes.iter_mut().enumerate() {
                 let s = start + n.start as f64;
                 if (t0 - 2.0..=t1).contains(&s) && (only.is_empty() || only.contains(&i)) {
-                    match chance {
-                        true => n.chance = v,
-                        false => n.velocity = v,
+                    match lane {
+                        Lane::Chance => n.chance = v,
+                        Lane::Release => n.release = v,
+                        _ => n.velocity = v,
                     }
                 }
             }
@@ -425,51 +471,10 @@ impl Workspace {
             Some(l) => (l.min(tick), l.max(tick)),
             None => (tick, tick),
         };
-        let picked = self.picked.clone();
         let r = &mut self.session.project.tracks[at.0].regions[at.1];
-        let Content::Midi { notes, controls } = &mut r.content else {
+        let Content::Midi { controls, .. } = &mut r.content else {
             return;
         };
-        // A note's own: each note the stroke crosses (of those picked, if some are) at its pitch.
-        if lane.expression() {
-            let crossed: Vec<Note> = notes
-                .iter()
-                .enumerate()
-                .filter(|(i, n)| {
-                    (picked.is_empty() || picked.contains(i))
-                        && n.start <= to
-                        && from < n.start + n.length as i64
-                })
-                .map(|(_, n)| *n)
-                .collect();
-            let within = |n: &Note, t: i64| n.start <= t && t < n.start + n.length as i64;
-            controls.retain(|c| {
-                !(c.start >= from
-                    && c.start <= to
-                    && crossed
-                        .iter()
-                        .any(|n| within(n, c.start) && lane.note_holds(&c.kind, n.pitch)))
-            });
-            if !erase {
-                let mut t = from;
-                while t <= to {
-                    for n in crossed.iter().filter(|n| within(n, t)) {
-                        controls.push(ControlPoint {
-                            start: t,
-                            kind: lane.note_make(n.pitch, level),
-                        });
-                    }
-                    t += step;
-                }
-                controls.sort_by_key(|c| c.start);
-            }
-            self.drag = Some(Drag::Control {
-                at,
-                last: Some(tick),
-                erase,
-            });
-            return;
-        }
         controls.retain(|c| !(lane.holds(&c.kind) && c.start >= from && c.start <= to));
         if !erase {
             let mut t = from;
@@ -494,7 +499,11 @@ impl Workspace {
         let Some(at) = self.roll_region() else { return };
         let p = e.position.map(f32::from);
         match self.roll.lane {
-            Lane::Velocity | Lane::Chance => {
+            l if l.expression() => {
+                self.expression_down(e, false, None, cx);
+                return;
+            }
+            Lane::Velocity | Lane::Release | Lane::Chance => {
                 self.begin_drag(Drag::VelocityLine { at, x: p.x }, cx);
                 self.drag_velocity_line(p);
             }

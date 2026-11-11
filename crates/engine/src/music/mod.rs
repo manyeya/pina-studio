@@ -337,6 +337,20 @@ pub enum NoteEdit {
         root: u8,
         minor: bool,
     },
+    /// A shape of expression (MPE) written on each note, in place of what that note had of its
+    /// kind: at `amount` percent of how it usually goes, waving `rate` times a beat.
+    Express {
+        gesture: crate::song::project::Gesture,
+        #[serde(default = "hundred")]
+        amount: u32,
+        #[serde(default = "three")]
+        rate: f32,
+    },
+    /// Each note's own expression taken off: its pitch, slide or pressure, or (None) all of it.
+    Unexpress {
+        #[serde(default)]
+        dim: Option<crate::song::project::Dim>,
+    },
 }
 
 /// A part of every note, for edits that move one part round them.
@@ -350,6 +364,14 @@ pub enum NotePart {
 
 fn full() -> f32 {
     1.0
+}
+
+fn hundred() -> u32 {
+    100
+}
+
+fn three() -> f32 {
+    3.0
 }
 
 fn straight() -> f32 {
@@ -436,15 +458,20 @@ impl NoteEdit {
                 let mut out = Vec::new();
                 for (i, n) in notes.iter().enumerate() {
                     if !chosen.contains(&i) || n.length <= grid {
-                        out.push(*n);
+                        out.push(n.clone());
                         continue;
                     }
+                    // Each piece with its part of the note's expression.
+                    let mut rest = n.expression.clone();
                     let mut at = 0;
                     while at < n.length {
+                        let piece = grid.min(n.length - at);
+                        let after = rest.split(piece);
                         out.push(Note {
                             start: n.start + at as i64,
-                            length: grid.min(n.length - at),
-                            ..*n
+                            length: piece,
+                            expression: std::mem::replace(&mut rest, after),
+                            ..n.clone()
                         });
                         at += grid;
                     }
@@ -530,7 +557,7 @@ impl NoteEdit {
                         && notes[order[j]].pitch == notes[first].pitch
                         && notes[order[j]].start <= end
                     {
-                        let n = notes[order[j]];
+                        let n = &notes[order[j]];
                         end = end.max(n.start + n.length as i64);
                         gone[order[j]] = true;
                         j += 1;
@@ -560,7 +587,7 @@ impl NoteEdit {
                 let added: Vec<Note> = chosen
                     .iter()
                     .map(|&i| {
-                        let n = notes[i];
+                        let n = &notes[i];
                         Note {
                             start: n.start - ticks as i64,
                             length: ticks,
@@ -570,7 +597,8 @@ impl NoteEdit {
                                 n.pitch
                             },
                             velocity: (n.velocity as u32 * 6 / 10).max(1) as u8,
-                            ..n
+                            expression: Default::default(),
+                            ..n.clone()
                         }
                     })
                     .collect();
@@ -582,7 +610,7 @@ impl NoteEdit {
                 order.sort_by_key(|&i| (notes[i].start, notes[i].pitch));
                 let mut added = Vec::new();
                 for w in order.windows(2) {
-                    let (a, b) = (notes[w[0]], notes[w[1]]);
+                    let (a, b) = (&notes[w[0]], &notes[w[1]]);
                     let gap_from = a.start + a.length as i64;
                     let steps = (b.start - gap_from) / grid;
                     for k in 0..steps {
@@ -594,7 +622,8 @@ impl NoteEdit {
                             length: grid as u64,
                             pitch: pitch.round().clamp(0.0, 127.0) as u8,
                             velocity: ((a.velocity as u32 + b.velocity as u32) / 2) as u8,
-                            ..a
+                            expression: Default::default(),
+                            ..a.clone()
                         });
                     }
                 }
@@ -640,6 +669,7 @@ impl NoteEdit {
                     let n = &mut notes[i];
                     n.start = from + (n.start - from) * percent as i64 / 100;
                     n.length = (n.length * percent as u64 / 100).max(1);
+                    n.expression.stretch(percent as f64 / 100.0);
                 }
             }
             NoteEdit::VelocityShape { from, to } => {
@@ -666,6 +696,33 @@ impl NoteEdit {
                         .map(|q| q.clamp(0, 127) as u8)
                         .find(|&q| key.contains(q))
                         .unwrap_or(notes[i].pitch);
+                }
+            }
+            NoteEdit::Express {
+                gesture,
+                amount,
+                rate,
+            } => {
+                use crate::song::project::PPQ;
+                for &i in &chosen {
+                    let n = &notes[i];
+                    // A glide: to the nearest note starting from its end on.
+                    let end = n.start + n.length as i64;
+                    let to = notes
+                        .iter()
+                        .filter(|m| m.start >= end - (PPQ / 8) as i64 && m.start > n.start)
+                        .min_by_key(|m| (m.start, m.pitch.abs_diff(n.pitch)))
+                        .map(|m| m.pitch as f32 - n.pitch as f32);
+                    let points = gesture.points(n.length, PPQ, amount as f32 / 100.0, rate, to);
+                    *notes[i].expression.get_mut(gesture.dim()) = points;
+                }
+            }
+            NoteEdit::Unexpress { dim } => {
+                for &i in &chosen {
+                    match dim {
+                        Some(d) => notes[i].expression.get_mut(d).clear(),
+                        None => notes[i].expression = Default::default(),
+                    }
                 }
             }
             NoteEdit::Dynamics { percent, by } => {

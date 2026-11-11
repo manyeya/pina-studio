@@ -416,10 +416,10 @@ fn melody(notes: &[Note]) -> Vec<Note> {
         match out.last_mut() {
             Some(last) if last.start == n.start => {
                 if n.pitch > last.pitch {
-                    *last = *n;
+                    *last = n.clone();
                 }
             }
-            _ => out.push(*n),
+            _ => out.push(n.clone()),
         }
     }
     out
@@ -661,10 +661,10 @@ fn melody_low(notes: &[Note]) -> Vec<Note> {
         match out.last_mut() {
             Some(last) if last.start == n.start => {
                 if n.pitch < last.pitch {
-                    *last = *n;
+                    *last = n.clone();
                 }
             }
-            _ => out.push(*n),
+            _ => out.push(n.clone()),
         }
     }
     out

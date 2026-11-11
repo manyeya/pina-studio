@@ -96,7 +96,7 @@ fn a_sidechain_names_its_track_wherever_the_song_goes() {
 fn ticks_and_samples() {
     let p = Project::new(48_000);
     assert_eq!(p.samples(PPQ, 48_000.0), 24_000); // a beat at 120 bpm is half a second
-    assert_eq!(p.ticks(24_000), PPQ);
+    assert_eq!(p.ticks(24_000, p.sample_rate as f64), PPQ);
 }
 
 #[test]

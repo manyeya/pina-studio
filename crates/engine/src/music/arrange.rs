@@ -122,7 +122,7 @@ pub fn clip(p: &Project, r: &Region, from: u64, to: u64) -> Option<Region> {
                 .filter(|n| n.start >= skip as i64 && n.start < (skip + length) as i64)
                 .map(|n| Note {
                     start: n.start - skip as i64,
-                    ..*n
+                    ..n.clone()
                 })
                 .collect(),
             // ponytail: controller moves are cut, not chased to where they stood at `from`.

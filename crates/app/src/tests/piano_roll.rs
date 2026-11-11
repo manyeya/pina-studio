@@ -283,7 +283,7 @@ fn the_notes_panel_changes_every_picked_note_and_mutes_them(cx: &mut TestAppCont
     let tops = picked(cx);
     assert!(!tops.is_empty() && tops.len() < before.len());
     for &i in &tops {
-        let n = before[i];
+        let n = &before[i];
         assert!(
             before
                 .iter()
@@ -321,67 +321,6 @@ fn the_notes_panel_changes_every_picked_note_and_mutes_them(cx: &mut TestAppCont
     assert!(notes(cx).iter().all(|n| n.muted));
     cx.simulate_keystrokes("0");
     assert!(notes(cx).iter().all(|n| !n.muted));
-}
-
-#[gpui::test]
-fn a_notes_own_bend_is_drawn_in_its_lane_and_rubbed_out(cx: &mut TestAppContext) {
-    use pina_engine::song::project::{ControlValue, ExpressionKind};
-    let (ws, cx) = open(cx);
-    ws.update(cx, |ws, _| ws.editor_h = 460.0);
-    cx.simulate_click(spot(&ws, cx, PPQ, 1), Modifiers::none()); // the Lead region
-    cx.simulate_keystrokes("p");
-    cx.run_until_parked();
-    let region = |cx: &VisualTestContext| {
-        ws.read_with(cx, |ws, _| {
-            match &ws.session.project.region((1, 0)).content {
-                Content::Midi { notes, controls } => (notes.clone(), controls.clone()),
-                _ => unreachable!(),
-            }
-        })
-    };
-    let (notes, _) = region(cx);
-    let n = notes[0];
-    click_on(cx, "lane-Pitch", Modifiers::none(), MouseButton::Left);
-    // Across the first note's middle, high in the lane: it bends up, the next note doesn't.
-    let mut x = |tick: i64| f32::from(roll_spot(&ws, cx, tick.max(0) as u64, n.pitch).x);
-    let (a, b) = (
-        x(n.start + n.length as i64 / 4),
-        x(n.start + n.length as i64 * 3 / 4),
-    );
-    let lane = cx.debug_bounds("roll-lane").unwrap();
-    let y = lane.origin.y + px(12.);
-    drag(cx, point(px(a), y), point(px(b), y));
-    let bends = |cx: &VisualTestContext| -> Vec<(i64, u8, f32)> {
-        region(cx)
-            .1
-            .iter()
-            .filter_map(|c| match c.kind {
-                ControlValue::Expression {
-                    pitch,
-                    kind: ExpressionKind::Tuning,
-                    value,
-                } => Some((c.start, pitch, value)),
-                _ => None,
-            })
-            .collect()
-    };
-    let drawn = bends(cx);
-    assert!(!drawn.is_empty());
-    let end = n.start + n.length as i64;
-    assert!(
-        drawn
-            .iter()
-            .all(|&(t, p, v)| p == n.pitch && (n.start..end).contains(&t) && v > 6.0),
-        "{drawn:?}"
-    );
-    // ⌥ rubs it out.
-    drag_with(
-        cx,
-        point(px(a - 4.), y),
-        point(px(b + 4.), y),
-        Modifiers::alt(),
-    );
-    assert!(bends(cx).is_empty(), "{:?}", bends(cx));
 }
 
 #[gpui::test]
@@ -427,7 +366,7 @@ fn the_roll_writes_rhythms_and_chords_and_names_what_it_hears(cx: &mut TestAppCo
     // C, then A minor, played as picked: written, and read back over the ruler.
     click_on(
         cx,
-        "roll-panel-Harmony",
+        "roll-panel-Chords",
         Modifiers::none(),
         MouseButton::Left,
     );
@@ -465,4 +404,75 @@ fn the_piano_roll_ruler_moves_the_playhead(cx: &mut TestAppContext) {
     });
     cx.simulate_click(point(px(x + 2.), ruler.center().y), Modifiers::none());
     until(cx, &ws, |ws| ws.playhead() == BAR * 2);
+}
+
+#[gpui::test]
+fn generate_and_chords_show_one_thing_at_a_time_and_write_from_their_foot(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    ws.update(cx, |ws, _| ws.editor_h = 560.0);
+    cx.simulate_click(spot(&ws, cx, PPQ, 0), Modifiers::none()); // the Keys region
+    cx.simulate_keystrokes("p");
+    cx.run_until_parked();
+    let notes = |cx: &VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            ws.session
+                .project
+                .region((0, 0))
+                .content
+                .notes(0)
+                .unwrap()
+                .to_vec()
+        })
+    };
+    let writing = |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.roll_writing.clone());
+    let click = |cx: &mut VisualTestContext, name: &'static str| {
+        click_on(cx, name, Modifiers::none(), MouseButton::Left)
+    };
+    // Generate: a known rhythm picked by name; then a melody, and a shape, each its own writer.
+    click(cx, "roll-panel-Generate");
+    click(cx, "write-rhythm-Cinquillo");
+    assert_eq!((writing(cx).pulses, writing(cx).steps), (5, 8));
+    assert!(
+        cx.debug_bounds("write-shape-Arch").is_none(),
+        "one writer at a time"
+    );
+    click(cx, "write-tab-Melody");
+    click(cx, "write-Grow a melody");
+    let grown = notes(cx);
+    let (low, high) = (writing(cx).low, writing(cx).high);
+    assert!(!grown.is_empty() && grown.iter().all(|n| (low..=high).contains(&n.pitch)));
+    click(cx, "write-tab-Shape");
+    click(cx, "write-shape-Rise");
+    click(cx, "write-add");
+    click(cx, "write-Write the shape");
+    let rose = notes(cx);
+    assert!(rose.len() > grown.len(), "added to what was there");
+    // Chords: a progression by mood, heard first (it isn't taken), then taken; played as an
+    // arpeggio from its menu, a bass under it, written.
+    click(cx, "roll-panel-Chords");
+    click(cx, "write-tab-Progressions");
+    click(cx, "harmony-moods");
+    pick(cx, &ws, "lofi");
+    assert_eq!(writing(cx).mood, Some("lofi"));
+    click(cx, "harmony-hear-0");
+    assert!(writing(cx).chords.is_empty());
+    click(cx, "harmony-progression-0");
+    let taken = writing(cx).chords.len();
+    assert!(taken >= 3);
+    click(cx, "harmony-play");
+    pick(cx, &ws, "Arp");
+    assert_eq!(
+        writing(cx).performance,
+        pina_engine::music::harmony::Performance::Arp
+    );
+    click(cx, "harmony-bass");
+    click(cx, "write-replace");
+    click(cx, "write-Write the chords");
+    let written = notes(cx);
+    assert!(written.len() > taken * 4, "arpeggiated, with a bass");
+    // Taken out one at a time, or all.
+    click(cx, "harmony-picked-0");
+    assert_eq!(writing(cx).chords.len(), taken - 1);
+    click(cx, "harmony-clear");
+    assert!(writing(cx).chords.is_empty());
 }
