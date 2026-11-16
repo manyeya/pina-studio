@@ -15,8 +15,8 @@ jobs:
   windows:
     runs-on: windows-latest
     env:
-      # The C runtime linked in, so the app runs on a PC without Visual C++'s installed.
-      RUSTFLAGS: -C target-feature=+crt-static
+      # The C runtime is Microsoft's DLLs, beside the app (copied below): ONNX Runtime's library is
+      # built against them, and a C runtime linked in can't be linked with it.
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +39,13 @@ jobs:
           $dml = Get-ChildItem target\release -Recurse -Filter DirectML.dll | Select-Object -First 1
           if (-not $dml) { Write-Error "DirectML.dll wasn't copied out by ort's build"; exit 1 }
           Copy-Item $dml.FullName staging\DirectML.dll
+          # The C runtime's DLLs (Visual C++'s redistributable, app-local), so the app runs on a PC
+          # without Visual C++'s installed.
+          $crt = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022\*\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT\*.dll" |
+            Sort-Object FullName -Descending
+          if (-not ($crt | Where-Object Name -eq 'vcruntime140.dll')) { Write-Error "Visual C++'s runtime DLLs weren't found"; exit 1 }
+          $crt | Group-Object Name | ForEach-Object { Copy-Item $_.Group[0].FullName staging\ }
+          Get-ChildItem staging
 
       - name: Make the installer
         shell: pwsh
