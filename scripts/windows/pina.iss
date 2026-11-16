@@ -38,6 +38,8 @@ Name: "path"; Description: "The pina command on the PATH, for agents and scripts
 [Files]
 Source: "{#Source}\Pina Studio.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Source}\pina.exe"; DestDir: "{app}"; Flags: ignoreversion
+; DirectML, newer than Windows' own, for ONNX Runtime (stem separation).
+Source: "{#Source}\DirectML.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\crates\app\icon\pina.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

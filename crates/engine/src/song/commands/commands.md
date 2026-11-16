@@ -285,6 +285,25 @@ Each command answers with JSON: what it made (`{"track": 2}`, `{"region": [2, 0]
 - `trim_region` `{"track": 0, "region": 0, "start": 960, "end": 7680}`: either edge; content
   stays where it is on the timeline.
 - `split_region` `{"track": 0, "region": 0, "at": 1920}`: answers with the second half.
+- `add_stems` `{"track": 2, "region": 0, "stems": [["vocals", "Audio Files/Stems/song · BS-RoFormer SW/vocals.wav"], ["drums", "…/drums.wav"]]}`:
+  an audio region's stems (the `stems` tool makes them and adds them for you), each on an audio
+  track of its own playing as the region did, in a stack after its track; the region muted.
+  Answers with the stems' tracks.
+- `lyric_loop` `{"track": 2, "region": 0, "from": 12.4, "to": 15.1, "name": "Ain't no holding back", "file": "Audio Files/Stems/song · Mel-Band RoFormer vocals/vocals.wav"}`:
+  a line sung in an audio region (`from` and `to` are seconds into its file, as the `lyrics` tool
+  gives them) as a loop on the bars: from the bar line it starts after, its pickup with it, for
+  1, 2, 4 or 8 bars, on its track's lyrics track ("Drums Lyrics", made if missing) or
+  `to_track`, at `at` ticks or after the loops already there. `file` plays its vocals stem
+  instead of the region's own audio (the `lyrics` tool says which). Answers with the region and
+  its bars.
+- `flip_words` `{"track": 2, "region": 0, "file": "Audio Files/Stems/song · Mel-Band RoFormer vocals/vocals.wav", "flip": {"name": "Let It Burn", "bars": 2, "pitch": 5, "hits": [{"from": 12.4, "to": 13.1, "beat": 0, "beats": 1.5}, {"from": 20.2, "to": 20.5, "beat": 1.5, "beats": 0.5, "pitch": -12, "reverse": true}]}}`:
+  words sung in an audio region flipped into a hook, as a producer chops a vocal: each hit plays
+  `from` to `to` (seconds into the file, the `lyrics` tool's words' times) at `beat` (0 the
+  loop's downbeat) for `beats`, cut off by the next hit (one at a time); `pitch` (semitones, by
+  speed: +12 twice as fast) on the whole flip and on a hit; `reverse` backwards. On a Sampler
+  track of its own after the region's (a zone a chop, gated, choking each other), a MIDI region
+  of `bars` (1 to 8) looping for 8 bars from `at` ticks (the region's bar by default). `file`
+  chops its vocals stem instead of the region's own audio. Answers with the new track.
 - `delete_region` `{"track": 0, "region": 1}`
 - `set_region` `{"track": 0, "region": 0, "name": "Hook", "loop": true, "transpose": 12, "velocity": -10, "quantize": 240}`:
   any of them. A looped region's `length` is one pass, its notes; `"loop_length"` is how far all

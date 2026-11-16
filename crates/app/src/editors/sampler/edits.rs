@@ -328,6 +328,16 @@ impl Workspace {
                 s.voice.character = SampleCharacter::Vintage;
                 (s.voice.crush_khz, s.voice.bits, s.voice.crush_filter) = (khz, bits, filter);
             }),
+            SamplerOp::Set {
+                track,
+                field,
+                value,
+            } => self.edit_sampler(track, cx, |s| field_set(s, field, value)),
+            SamplerOp::Choke { track, zone, group } => self.edit_sampler(track, cx, |s| {
+                if let Some(z) = s.zones.get_mut(zone) {
+                    z.choke = group;
+                }
+            }),
         }
     }
 

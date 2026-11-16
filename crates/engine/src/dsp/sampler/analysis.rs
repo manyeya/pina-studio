@@ -83,6 +83,8 @@ pub fn slices(file: &Path, cuts: &[f32], first: u8) -> Vec<Zone> {
             note: first + k as u8,
             start,
             end: cuts.get(k + 1).copied().filter(|&e| e < 1.0),
+            // One at a time, as chops: each cuts off the one before.
+            choke: Some(crate::song::project::CHOP_CHOKE),
             ..Zone::default()
         })
         .collect()

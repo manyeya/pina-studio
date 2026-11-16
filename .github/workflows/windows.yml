@@ -34,6 +34,11 @@ jobs:
           Copy-Item target\release\pina.exe "staging\Pina Studio.exe"
           cargo build --release -p pina
           Copy-Item target\release\pina.exe staging\pina.exe
+          # ONNX Runtime (stem separation) is linked in, but its DirectML wants the redistributable
+          # DirectML.dll beside the app, newer than the one Windows has; the build copies it out.
+          $dml = Get-ChildItem target\release -Recurse -Filter DirectML.dll | Select-Object -First 1
+          if (-not $dml) { Write-Error "DirectML.dll wasn't copied out by ort's build"; exit 1 }
+          Copy-Item $dml.FullName staging\DirectML.dll
 
       - name: Make the installer
         shell: pwsh

@@ -250,6 +250,14 @@ pub enum Drag {
         left: f32,
         width: f32,
     },
+    /// A handle on the audio editor's waveform: an audio region's start, end or fades, across
+    /// the waveform from `left`, `width` wide.
+    Clip {
+        at: At,
+        mark: crate::editors::audio::ClipMark,
+        left: f32,
+        width: f32,
+    },
     /// A hand on the notes' own expression (`dim`) in the roll: over the notes (`grid`) or in the
     /// lane under them, doing `how`, from where it pressed; `moved` once it has.
     Bend {
@@ -353,6 +361,15 @@ pub enum Drag {
         target: Target,
         y: f32,
         value: f32,
+    },
+    /// An X/Y pad: across sets `x`, up sets `y`, over the pad's bounds (left, top, size).
+    Xy {
+        x: Target,
+        y: Target,
+        left: f32,
+        top: f32,
+        w: f32,
+        h: f32,
     },
     Slider {
         slider: Slider,
@@ -599,6 +616,31 @@ pub enum Drag {
         from: Point<f32>,
         to: Point<f32>,
     },
+    /// A cut in Flip's sample (its `k`th, from 1), dragged; or none, a click to cut there.
+    Cut {
+        track: usize,
+        k: Option<usize>,
+        start: Point<f32>,
+        moved: bool,
+    },
+    /// A chop in Flip (from the sequence, or the chops), on track `track`'s region `region`.
+    Chop {
+        track: usize,
+        region: At,
+        from: crate::editors::sampler::ChopFrom,
+        start: Point<f32>,
+        at: Point<f32>,
+        moved: bool,
+    },
+    /// A line of lyrics (the `line`th heard in the region at `region`), on its way to the
+    /// tracks as a loop.
+    Lyric {
+        region: At,
+        line: usize,
+        from: Point<f32>,
+        at: Point<f32>,
+        moved: bool,
+    },
 }
 
 impl Workspace {
@@ -621,6 +663,8 @@ impl Workspace {
                 | Drag::Editor { .. }
                 | Drag::Panel { .. }
                 | Drag::Sample { .. }
+                | Drag::Lyric { .. }
+                | Drag::Chop { .. }
                 | Drag::Midi { .. }
                 | Drag::ChatMidi { .. }
                 | Drag::Device { .. }

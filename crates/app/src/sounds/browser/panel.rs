@@ -741,6 +741,7 @@ impl Workspace {
                             cx.listener(move |ws, _, _, cx| ws.audition_sample(index, cx)),
                         ),
                 )
+                // Two rows, so the panel at its narrowest still shows every button whole.
                 .child(
                     div()
                         .flex()
@@ -756,8 +757,16 @@ impl Workspace {
                                     cx.listener(move |ws, _, _, cx| ws.add_sample(index, cx)),
                                 ),
                         )
+                        .child(self.slice_button(index, "Slice", 30., cx)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(6.))
                         .child(
                             button("More like it", liking)
+                                .flex_1()
+                                .justify_center()
                                 .h(px(30.))
                                 .debug_selector(|| "panel-like".into())
                                 .on_mouse_down(

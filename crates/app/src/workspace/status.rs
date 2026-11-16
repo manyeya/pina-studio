@@ -1,7 +1,7 @@
 //! The status bar along the bottom.
 
 use super::*;
-use gpui::{Div, Stateful};
+use gpui::{AnimationExt, Div, Stateful};
 
 /// How long an agent's outline stays on what it touched.
 pub const PRESENCE: Duration = Duration::from_secs(12);
@@ -126,6 +126,31 @@ impl Workspace {
                     // One line however long: an error's path or a second line never spills.
                     .child(text.lines().map(str::trim).collect::<Vec<_>>().join(" ")),
             )
+            .when_some(self.busy.as_ref(), |d, (what, since)| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .text_color(rgb(TEXT_2))
+                        .whitespace_nowrap()
+                        .debug_selector(|| "status-busy".into())
+                        .child(
+                            div()
+                                .size(px(6.))
+                                .rounded(px(3.))
+                                .bg(rgb(ACCENT))
+                                .with_animation(
+                                    "status-busy-dot",
+                                    gpui::Animation::new(Duration::from_millis(900))
+                                        .repeat()
+                                        .with_easing(gpui::pulsating_between(0.3, 1.0)),
+                                    |d, t| d.opacity(t),
+                                ),
+                        )
+                        .child(format!("{what}… {} s", since.elapsed().as_secs())),
+                )
+            })
             .when_some(agent, |d, a| {
                 d.child(
                     div()

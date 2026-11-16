@@ -19,16 +19,20 @@ mod controls;
 mod edits;
 mod empty;
 mod fields;
+mod flip;
 mod graphs;
 mod keys;
 mod matrix;
 pub(crate) mod modules;
 mod wave;
 
-pub(crate) use controls::pill;
+pub(crate) use controls::{captioned, pill, value_field};
 pub use fields::*;
-pub(crate) use graphs::response;
+pub use flip::ChopFrom;
+pub(crate) use flip::HUES;
+pub(crate) use graphs::{response, response_peak};
 use graphs::{wave_graph, wave_icon};
+pub(crate) use wave::{paint_wave, zoomed};
 
 use std::{
     cell::Cell,
@@ -72,6 +76,13 @@ pub struct Wave {
     onsets: Vec<(f32, f32)>,
 }
 
+impl Wave {
+    /// How long its sound is.
+    pub fn seconds(&self) -> f32 {
+        self.seconds
+    }
+}
+
 /// How many steps a waveform's loudness is kept in.
 const LOUD: usize = 4096;
 
@@ -103,6 +114,17 @@ pub struct SamplerUi {
     pub hearing: Option<usize>,
     /// Where the graphs were drawn, for pressing and dragging their points.
     pub graphs: Rc<Graphs>,
+    /// The editor's scroll, down, when the pane's too short for all of it.
+    pub scroll: gpui::ScrollHandle,
+    /// Flip: the last flip's seed (each press a new one), the chop picked in the sequence, and
+    /// where the sequence was drawn.
+    pub flip_seed: u64,
+    pub chop: Option<usize>,
+    pub flip_lane: Rc<Cell<Bounds<Pixels>>>,
+    /// Where the cuts were drawn, and the track soloed to play the flip alone (to unsolo once
+    /// it stops).
+    pub cut_lane: Rc<Cell<Bounds<Pixels>>>,
+    pub flip_solo: Option<(usize, bool)>,
     /// Playheads to show without a sound playing (for pictures of it).
     #[cfg(test)]
     pub pretend: Vec<Playing>,
@@ -115,21 +137,6 @@ pub struct Graphs {
     pub filter_env: Cell<Bounds<Pixels>>,
     pub mod_env: Cell<Bounds<Pixels>>,
     pub curve: Cell<Bounds<Pixels>>,
-}
-
-impl Wave {
-    /// Its loudness at `n` points along it, 0 to 1: its outline, for a little picture.
-    pub(crate) fn outline(&self, n: usize) -> Vec<f32> {
-        let most = self.loud.iter().fold(1e-6f32, |m, &v| m.max(v));
-        (0..n)
-            .map(|i| {
-                let a = i * self.loud.len() / n.max(1);
-                let b = ((i + 1) * self.loud.len() / n.max(1)).max(a + 1);
-                let part = &self.loud[a.min(self.loud.len())..b.min(self.loud.len())];
-                part.iter().fold(0f32, |m, &v| m.max(v)) / most
-            })
-            .collect()
-    }
 }
 
 impl Graphs {
@@ -147,9 +154,6 @@ impl Graphs {
 pub enum Field {
     Attack,
     Decay,
-    /// How long a one-shot rings, as a drum's length: all of it at the top, else dying away
-    /// over the decay (its sustain none).
-    Length,
     Sustain,
     Release,
     Cutoff,
@@ -209,6 +213,24 @@ pub enum Field {
     VelHigh(usize),
     VelFade(usize),
     LoopFade(usize),
+    /// The Drum Sampler's: Hold (at its top, as long as the sound), Decay (the release too, for
+    /// Gate), the sub's frequency, punch's release, 8-Bit's decay, Loop's length and offset,
+    /// the voice's pan, the peak's gain, the modulation's amount.
+    Hold,
+    DrumDecay,
+    SubHz,
+    PunchMs,
+    CrushDecay,
+    LoopMs,
+    LoopOffset,
+    VoicePan,
+    PeakDb,
+    DrumAmount,
+    /// The Drum Sampler's Stretch: how many times longer the sound lasts (1 to 16).
+    StretchFactor,
+    /// Where a zone starts playing, and how much of the sample it plays, as shares of it.
+    Start(usize),
+    Span(usize),
 }
 
 /// How a zone's sample is cut into slices across the keys.
@@ -251,6 +273,18 @@ pub enum SamplerOp {
         khz: f32,
         bits: u8,
         filter: bool,
+    },
+    /// A setting set outright, as its knob at `value` (0 to 1): a note picked from a menu.
+    Set {
+        track: usize,
+        field: Field,
+        value: f32,
+    },
+    /// A zone's choke group (none: it chokes nothing).
+    Choke {
+        track: usize,
+        zone: usize,
+        group: Option<u8>,
     },
 }
 

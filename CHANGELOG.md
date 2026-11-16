@@ -11,6 +11,81 @@ first for changes that break songs or commands made before.
 
 ### Changed
 
+- Slicing a sample (Slice to Sampler, To Sampler, or Slice in the Sounds browser) before its
+  audio has been read waits for it and slices it then, the status bar saying it's reading it
+  and for how long, rather than asking to try again or leaving it unsliced.
+- What takes a while shows that it's at work: progress that can't say how far moves; waveforms
+  still being read breathe where they'll be.
+- The Lyrics panel's hooks are rows like its lines (how often each is sung where a line has its
+  time), each line's waveform in one quiet tone (the accent while it's heard), and Hear is a play
+  button.
+- The Drum Machine is now a drum rack and drum sampler. The rack sits on the left and its panel
+  on the right, laid out to fit the pane with nothing cut off; the pane opens at the height they
+  need:
+  - **Drum Rack**: sixteen pads at a time, sized to the pane's height within limits, with an
+    overview of all 128 notes beside them (drag it; ↑ ↓ a bank, ⌥ or ⌘ a row). Empty pads show
+    their note and the General MIDI drum there. Each pad has mute, preview and solo, and the
+    previous and next similar sound and a lock on hover (Swap all leaves locked pads). Under the
+    pads, the picked pad's strip: its name, note and choke group, mute, solo, lock and swaps.
+    Its title has Swap all, the kit's hot-swap, and its options (auto select, the swap buttons
+    on the pads). Right-click a pad or chain to rename, duplicate, lock, show similar files,
+    extract the chain to a track of its own, or delete it. Drag a pad onto another to trade,
+    with ⌘ or ⌥ to layer it; several samples dropped on a pad map up a note each (with ⌘ or ⌥,
+    all layer on it).
+  - **Its panel**, by tabs: Sampler, Effects (the picked pad's own), Chains, Macros and
+    Hot-swap.
+  - **Chain list**: a row a pad, with on, solo and hot-swap; Receive, Play (moves the sound by
+    the difference) and Choke (16 groups) with a preview; volume and pan; a send to each of the
+    kit's return chains (up to six).
+  - **Macros**: up to 16, shared with every pad; Map, then turn a pad's knob to set how far a
+    macro moves it; Rand; variations kept (New), launched, overwritten and deleted.
+  - **Drum Sampler** on the picked pad, a waveform over two rows of cards: the waveform (drag
+    start and end; the similar sounds and hot-swap along its foot; right-click for Show Similar Files, Return to Reference, Save as
+    Similarity Reference, Reverse); Start, Length and Gain; Attack, Hold and Decay with Trigger
+    or Gate; Transpose and Detune. A playback effect (Stretch, Loop, Pitch Env, Punch, 8-Bit,
+    FM, Ring Mod, Sub Osc or Noise) on and off, its two settings on knobs and an X/Y pad. The
+    filter on and off as 12 dB or 24 dB low pass, 24 dB high pass, or a peak with its gain.
+    Volume, pan, velocity to volume, and velocity or slide moving the filter, attack, hold,
+    decay or either effect setting. Its layers as tabs, with how they play.
+  - **Effects**: the picked pad's own, each opening its window, + to add one.
+  - **Hot-swap**: the picked pad's sounds (like it, its pack's, its kind),
+    or with D the kit's (drums picked to fit the song, or a folder's, loaded into it).
+  - A new kit starts empty, its pads waiting for sounds (with no drums in the library at all,
+    the synthesized kit as before). The Drum Machine's bar no longer has a Kit button.
+  - Too narrow for three across, the Drum Sampler's cards wrap under each other and its panel
+    scrolls, rather than squeezing on top of each other.
+- The sampler has a hold stage, a 24 dB high pass and a peak filter, the sub at its own
+  frequency, punch's release, the vintage sampler's grit fading out, a loop of its own, its own
+  pan, and these all automate.
+- A track has up to 24 modulators (it was 8), so a kit's macros leave its pads room.
+- The Sampler's editor is laid out by what each setting belongs to. Along the top, captioned,
+  the instrument's mode and character; under the sample, the picked zone's bar in its colour:
+  Trim (start and length as sliders, and reverse), One-shot or Gate, its loop and the loop's
+  crossfade, Trigger (as its note starts or as it's let go) and its choke group from a
+  dropdown. The sample's start and end marks are bigger, with a grip to take hold of and their
+  names. A zone's note (a range's low, high and root) is a dropdown of every note, an octave a
+  row, and its other settings sit three and three. Too short for all of it, the editor scrolls.
+- The Drum Sampler's Stretch Factor is how many times longer the sound lasts, 1× to 16×.
+- An audio region opens in the new Audio editor (double-click it, or Open in Audio Editor from its
+  menu): its file big, the part the region plays lit in its track's colour, its hits marked
+  along the top and where it's playing. Drag its START and END handles to trim it (what it plays
+  stays where it is on the timeline) and its fades' dots to fade it; under it, Trim (start and
+  end as sliders, and Reverse, which plays it backwards from a reversed copy of its file and
+  back), Fades, Level (an audio region has its own gain now, ±30 dB, its waveform drawn as loud
+  as it plays here and on the tracks, white where it clips), Pitch (transpose and formants),
+  Stretch and Time. The wheel zooms where it points.
+- An audio region made a Sampler track, from the Audio editor's bar or the region's menu:
+  Convert to Sampler Track puts what it plays across the keys (C3 as recorded, its transpose,
+  fades and timing kept); Slice to Sampler Track cuts it into a sound a note from C1, at its hits
+  or on the song's grid (every 1/16, 1/8 or 1/4 note, or bar).
+  Either way a MIDI region plays it back where it was (at the speed and in the key it played,
+  its loops going on as far as they did), the audio region is muted, and the Sampler opens on it.
+- Any sample in the Sounds browser can be sliced: Slice, beside Add to song (Slice to Sampler on
+  the Sounds page), cuts it at its hits or on the song's grid onto a new Sampler track, a sound a
+  note from C1, with a MIDI region at the playhead playing them back in time (a loop fitted to
+  the song's tempo and key, looping on). No audio track is left behind; one undo takes it back.
+
+
 - Opening a song shows a loading screen while it takes more than a moment: Pina's mark with its
   steps playing, the song's name, a bar filling as each track's instrument and plugins load (and
   what's loading now), and a cell for every track, in its colour, lighting up as it's ready. Its
@@ -83,9 +158,11 @@ first for changes that break songs or commands made before.
   or Solo for that track alone and ⌘-click for every track, ⇧-click a lane for the playhead,
   ⇧-double-click a region for every region on its track, ⇧-click the cycle to stretch it. The
   shortcut sheet lists them all.
-- The Songs page is redesigned. A new song's name, tempo, key and time sit in one row along the
-  top, with Open folder, Study a song and Back to the open song beside them, and the templates
-  below as tiles that show their tracks, each with a Create button. Under them, every song as a
+- The Songs page is redesigned. One slim row along the top: Songs, how many and where they're
+  kept, Open folder, Study a song, Back to the open song and New song (⌘N). New song opens a
+  panel over the page with the new song's name, tempo, key and time and the templates as tiles
+  that show their tracks, each with a Create button; Escape, its ✕ or a click off it puts it away.
+  With no songs yet the panel is on the page itself. Under the row, every song as a
   list (cover, name, tempo, key, time, tracks, length, when edited, grouped Today, This week,
   This month, Earlier) or as a grid of covers; Pina remembers which. Songs can be searched,
   filtered by tempo, key and time, and sorted by when they were edited, name, tempo or length
@@ -127,6 +204,11 @@ first for changes that break songs or commands made before.
 
 ### Fixed
 
+- A kit's pads stayed its own only until the song was closed: reopened, they'd lost their kit.
+  Songs saved that way find their kits again when they're opened.
+- A one-shot sound that never reached its end (a pad's Loop effect with the envelope holding,
+  or a stretched or frozen sound standing still) kept sounding for ever; it now plays out once
+  it's had its length (stretched, sixteen times its length).
 - Audio regions drew their waveforms squeezed and cut short (to 92% of where they play, at 44.1
   kHz against a 48 kHz song) whenever the sound output ran at another rate than the song, as
   Bluetooth headphones can: a loop looked to end early, an empty gap before its next repeat. It
@@ -336,6 +418,103 @@ first for changes that break songs or commands made before.
 
 ### Added
 
+- Flip, in the Sampler: a chopped sample (Slice to Sampler, or Slice in the Sounds browser)
+  rearranged as on an MPC. Its chops along the top, each its waveform and number, to hear with a
+  click or drag onto the sequence; the sequence under them, each chop its waveform, in time, a
+  playhead going through it as it plays. Drag a chop onto another to swap them, or one from the
+  top onto a place to play it there. Pick one to stutter it (×2, ×3, ×4), play it backwards (a
+  reversed copy of its sound, made once) or silence it. Flip makes a new arrangement every press
+  (the first chop on the downbeats, chops said again and answered); Turn round, Half time,
+  Double time, and As it was; Play it loops the region with its track soloed (the solo let go
+  when it stops), so only the flip is heard. Where the chops are cut is yours: the whole sample
+  above them, each chop in its colour, a cut a white handle. Click the sample to cut there (the
+  sequence plays as it did, the chop it split now two), drag a handle to move a cut, double-click
+  one to take it out. A sliced sampler's chops choke each other, so a chop stops the one before
+  it rather than playing over it. Every change is an undo step.
+- Smart Slice, in the Audio editor (in place of Lyrics): any recording sliced as a producer
+  would, in one click, nothing asked. It listens to what's in it by its sound, never its name:
+  how much of its sound is a voice, as the quickest separation model with vocals hears three
+  short stretches (about ten to fifteen seconds; a vocals stem is nine-tenths voice, a song a
+  fifth, a beat none). Then it slices it that way, the panel saying what it's doing and how far
+  (listening, taking the voice out, cutting) with Stop. A beat is cut at its hits, each slice
+  named for what it sounds like by the sample analysis (Kick, Snare, Closed Hat, Chord Am, Bass
+  F#; a hit or phrase in its key when a mix's slice is neither). A voice alone is cut into vocal
+  chops, never named for an instrument: by their notes, then, its words heard at once by
+  Whisper, by the words sung in them. A voice in a beat is cut at its hits, voice and all (as a
+  soul sample is chopped); its words are a tab away, and the voice can be taken out first. What
+  it heard is in the panel's header, to put right if it's wrong (kept, and sliced again that
+  way); without a model to listen with, it guesses, and says so. Only the stretch the region
+  plays is sliced, each slice to where it dies away. The slices: how many of each kind; a
+  dropdown to narrow them (drums; chords, notes and phrases; with a voice; or one kind); a row
+  each with where it is, its kind's icon, its name and waveform, to hear (click the row); To
+  Sampler puts those shown on a Sampler track, a pad each, named, played where they play now
+  (one undo takes it back). Their names are drawn on the waveform (faint ticks when there are
+  too many to read). Flips flips them as on an MPC (a new groove from the hits, chords
+  re-sequenced, half-time, rolls, a bounce, reversed into the beat), a voice's words as hooks.
+  Kept with the song, so slicing it again is instant. The Studio Agent has it too (`slices`, then
+  `flip_words`), and `pina slices <file>` from the command line.
+- Flips, beside a region's lyrics (the Lyrics panel's Flips tab, in its header beside Lines):
+  the Studio Agent's engine reads the words sung and how long each lasts, and writes the hooks a
+  producer would make of them: words from anywhere in the vocal put in a new order on the grid so
+  they say something new, pitched up and sped up (chipmunk soul) or down and slowed, stuttered,
+  answered a bar later, reversed into the beat. Say what you want in your own words ("darker",
+  "make it say never let go") and Find (or Enter); under it, the engine (Claude Code or Codex,
+  with its logo), its model and effort for flips (kept for each engine apart from the Studio
+  Agent's conversation, so flips can run light and fast), and a style. While it works, Find is
+  Stop in its place, the list's header says what it's doing and for how long ("Writing 3 of 6 ·
+  23s") over a line filling as flips are written, the next one waits as an outline, and each
+  flip shows the moment it's written. A flip is a row, as a line is: what it says, its bars and
+  pitch, hear and Use it; its chops on the bars, each numbered, with its waveform, in the colour
+  the Sampler gives it (reversed and pitched ones marked); its name and style, how many chops and
+  hits; while it's heard (click the row), a playhead going through and why it works. Use it puts
+  it on a Sampler track of its own (a zone a chop, gated, choking each other; a MIDI region
+  looping for 8 bars from the playhead's bar), opened in the Sampler to flip further; one undo
+  takes it back. 6 more asks for others; Start over asks afresh. When the engine can't answer,
+  it says why in plain words (not signed in, out of usage, no connection), with Try again and
+  the other engine. The Studio Agent can flip words itself (`flip_words`, with the `lyrics`
+  tool's words and their times); `pina flips <song> <track> <region>` prints them.
+- Lyrics: Smart Slice's Slice the words hears the lines sung in an audio region's file with
+  Whisper (a model you download in Settings › Stems & lyrics: OpenAI's, MIT; on the GPU on Apple
+  silicon). A whole song has its vocals taken out first, by the best separation model with
+  vocals you have, and is heard there; a vocal alone is heard as it is. Beside the waveform: the
+  hooks first (each line sung more than once, shown once, as a card with how often it's sung and
+  its waveform), then every line, each with its own stretch of the waveform, a tick where each
+  word starts, and when it starts. Each has ▶ (lit while it plays), Loop · N bars, which puts it
+  on the track's lyrics track as a loop on the bars: from the bar line it starts after, its
+  pickup with it, for 1, 2, 4 or 8 bars, playing the vocal alone when it came from a song; and
+  Chop, which cuts it at its words onto a Sampler track of its own (a chop a word, a MIDI region
+  playing them as sung) and opens it in Flip. Drag a line or hook onto the tracks to put its loop
+  there, on the bar under the pointer.
+  Each word is drawn on the waveform where it's sung. Loop the hooks loops every line sung more
+  than once at a stroke. The panel says what it's doing (downloading Whisper, which it offers
+  when there's none; taking the vocals out, how far; hearing) and, when it hears nothing, what to
+  try. Lines are heard once per file and kept with the song (nothing heard isn't); what Whisper
+  makes up over music is left out. `pina lyrics <file>` prints them.
+- The Studio Agent separates and hears too: `stem_models`, `stems` (a region's stems on tracks
+  in a stack) and `lyrics` (a region's lines, its vocals taken out first if it's a song), with
+  the `lyric_loop` edit to make a line a loop on the bars and `add_stems` to put stems in.
+- Stems: an audio region separated into vocals, drums, bass and the rest by a separation model
+  you add. Pina Studio ships with no model and downloads none. A model is a folder in Models
+  (in Pina Studio's Application Support, or %APPDATA% on Windows) with its ONNX file and a
+  model.json saying what it gives and how it reads sound: as samples (HTDemucs), as a
+  spectrogram (MDX-Net, Mel-Band RoFormer) or as a spectrogram's real and imaginary parts
+  (BS-RoFormer), so the separators people use all work. Separate Stems… in an audio region's
+  menu (or Stems… in the Audio editor) opens a sheet: the model picked from a dropdown of those
+  you have, each with how long this file will take (or that it's made already), and under it the
+  picked one's stems, how well it did and its licence;
+  more to download there; the stems to keep; whether to mute the region. It runs in the
+  background, the sheet showing what it's doing and the time left, with Stop and Hide. Each stem
+  goes on a track of its own, playing as the region did, all of them in a stack; one undo takes
+  it back. Stems are kept per file and model,
+  so asking again is instant. Settings › Stems & lyrics walks through it, lists the models that have
+  been run (what each gives, how well, how long a song takes, its licence as its host states it)
+  with a Download button that fetches one from where its maker keeps it, and your own, to show
+  or remove; Add a model you have… takes an ONNX file, knowing the tested ones by their size.
+  `pina models` lists the models, `pina models get [name]` downloads one, `pina models inspect
+  <file.onnx>` shows a model's inputs and outputs to write its model.json from, and `pina
+  separate <file>` writes a WAV per stem. Models run in ONNX Runtime on the CPU, or the GPU when the model.json
+  asks; on Apple silicon (so that half of the app needs macOS 13.4) and Windows x64. Intel Macs
+  can't run models. See `docs/separation-models.md`.
 - Bloom, a new built-in instrument: sounds grown from a seed. A seed is 48 genes, each made to
   sound good however it's changed (envelopes, a contour, an LFO, two wavetable oscillators with
   FM, feedback, ring, fold, sub and noise, a filter swept from low- to high-pass, a resonator tuned

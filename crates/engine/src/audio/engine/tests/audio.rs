@@ -50,7 +50,7 @@ fn audio_regions_play_their_slice_of_the_file() {
 }
 
 #[test]
-fn an_audio_regions_fades_bring_it_in_and_take_it_out() {
+fn an_audio_regions_fades_bring_it_in_and_take_it_out_and_its_gain_sets_its_level() {
     let dir = scratch_dir("fades");
     let spec = hound::WavSpec {
         channels: 1,
@@ -85,12 +85,17 @@ fn an_audio_regions_fades_bring_it_in_and_take_it_out() {
         regions: vec![region],
         ..Default::default()
     };
-    let [l, _] = render(&project(vec![track]), &dir, BEAT * 2);
+    let [l, _] = render(&project(vec![track.clone()]), &dir, BEAT * 2);
     let half = BEAT / 2;
     assert!(l[0].abs() < 1e-3); // silent at the start
     assert!(l[half / 2] > 0.3 && l[half / 2] < 0.4, "{}", l[half / 2]); // sin 45°: 0.707 of 0.5
     assert!((l[BEAT] - 0.5).abs() < 1e-6); // full in the middle
     assert!(l[BEAT * 2 - 1] < 0.01); // gone by the end
+    // Its gain: 6 dB down, half as loud.
+    let mut quieter = track;
+    quieter.regions[0].gain_db = -6.0206;
+    let [l, _] = render(&project(vec![quieter]), &dir, BEAT * 2);
+    assert!((l[BEAT] - 0.25).abs() < 1e-4, "{}", l[BEAT]);
     std::fs::remove_dir_all(dir).unwrap();
 }
 

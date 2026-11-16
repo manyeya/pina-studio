@@ -497,6 +497,7 @@ pub struct Workspace {
     pub play_from: u64,
     /// The Sampler editor: the zone picked and the waveforms read; where its waveform was drawn.
     pub sampler_ui: crate::editors::sampler::SamplerUi,
+    pub audio_ui: crate::editors::audio::AudioUi,
     /// The Drum Machine: the pads shown and the one picked, and where they were drawn.
     pub drums: crate::editors::drums::DrumsUi,
     pub sampler_wave_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -540,6 +541,25 @@ pub struct Workspace {
     pub(crate) typed: HashMap<String, u8>,
     /// An open pop-up menu.
     pub menu: Option<Menu>,
+    /// Stems being separated from an audio region, in the background.
+    pub separating: Option<crate::editors::audio::Separating>,
+    /// The Separate Stems sheet, if it's open.
+    pub stems_sheet: Option<crate::editors::audio::StemSheet>,
+    /// Settings' Stem models page: downloads going, a file being added, a model to take out.
+    pub models_ui: crate::pages::studio::ModelsUi,
+    /// An audio region's lyrics, shown beside it in the Audio editor; and whether they're being heard.
+    pub lyrics: Option<crate::editors::audio::Lyrics>,
+    pub lyrics_wait: Option<crate::editors::audio::LyricsWait>,
+    /// Smart Slice: a recording sliced, and slicing going on.
+    pub beat: Option<crate::editors::audio::Beat>,
+    pub beat_wait: Option<crate::editors::audio::BeatWait>,
+    /// The line being heard, and till when.
+    pub lyric_playing: Option<(usize, std::time::Instant)>,
+    /// The Lyrics panel's flips: found by the Studio Agent's engine from the words.
+    pub flips: crate::editors::audio::FlipsUi,
+    /// Work going on that something waits for (an audio file being read to slice it), and
+    /// since when: the status bar says so.
+    pub busy: Option<(String, std::time::Instant)>,
     /// A name being typed.
     pub naming: Option<Naming>,
     /// Something to start naming on the next frame (from a menu, which has no window to hand).
@@ -783,6 +803,7 @@ impl Workspace {
             _settings_typed: None,
             play_from: 0,
             sampler_ui: Default::default(),
+            audio_ui: Default::default(),
             drums: Default::default(),
             sampler_wave_bounds: Rc::new(Cell::new(Bounds::default())),
             effect_rows: Rc::default(),
@@ -823,6 +844,16 @@ impl Workspace {
             typing: None,
             typed: HashMap::new(),
             menu: None,
+            separating: None,
+            stems_sheet: None,
+            models_ui: Default::default(),
+            lyrics: None,
+            lyrics_wait: None,
+            beat: None,
+            beat_wait: None,
+            lyric_playing: None,
+            flips: Default::default(),
+            busy: None,
             naming: None,
             pending_name: None,
             arm: Arm::Selected,
@@ -1211,6 +1242,14 @@ impl Workspace {
                         && !self.browser_open() =>
                     {
                         "Workspace Arrange Roll"
+                    }
+                    // The Drum Machine open: arrows step its sounds and pads.
+                    _ if self.view == View::Arrange
+                        && self.bottom == Some(Bottom::Drums)
+                        && !self.tracks_keys
+                        && !self.browser_open() =>
+                    {
+                        "Workspace Arrange Drums"
                     }
                     // The step sequencer open: its shortcuts.
                     _ if self.view == View::Arrange
@@ -1663,6 +1702,8 @@ impl Workspace {
                 d.child(self.file_listener(cx))
             })
             .children(self.sample_ghost())
+            .children(self.lyric_ghost())
+            .children(self.chop_ghost())
             .children(self.midi_ghost())
             .children(self.card_ghost())
             .children(self.device_ghost())
@@ -1679,8 +1720,10 @@ impl Workspace {
             .children(self.menu_view(cx))
             .children(self.adder_view(cx))
             .children(self.export_view(cx))
+            .children(self.stems_sheet_view(cx))
             .children(self.shortcuts_view(window, cx))
             .children(self.picker_view(cx))
+            .children(self.new_song_modal(cx))
             .children(self.splash_view())
             .into_any_element()
     }

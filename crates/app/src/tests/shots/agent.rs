@@ -67,9 +67,24 @@ pub(super) fn set_up(
         // sample dragged over a pad, and over the pad's sound to layer it.
         "drums" | "drums-empty" | "drums-drop-pad" | "drums-drop-layer" => {
             ws.set_library(pina_engine::samples::library::Library::load(), cx);
+            // PINA_SHOT_EDITOR_H: the pane dragged taller (or shorter).
+            if let Some(h) = std::env::var("PINA_SHOT_EDITOR_H")
+                .ok()
+                .and_then(|h| h.parse().ok())
+            {
+                ws.editor_h = h;
+            }
             if page != "drums-empty" {
-                let folder = "MusicRadar 90s Hip Hop/90s Hip Hop/Drum_Hits";
-                ws.kit_from_folder(folder, None, cx);
+                // PINA_SHOT_KIT: a folder of your library's one-shots to make the kit of (or
+                // "empty").
+                let folder = std::env::var("PINA_SHOT_KIT")
+                    .unwrap_or_else(|_| "MusicRadar 90s Hip Hop/90s Hip Hop/Drum_Hits".into());
+                let folder = folder.as_str();
+                // "empty": a new kit, as it starts.
+                match folder {
+                    "empty" => drop(ws.new_drum_kit(cx)),
+                    _ => ws.kit_from_folder(folder, None, cx),
+                }
                 ws.drums.pad = 38;
                 // A clap layered on the snare, the clap picked.
                 let clap = ws.browser.library.samples.iter().position(|s| {
@@ -86,6 +101,32 @@ pub(super) fn set_up(
                 }
                 for (note, v) in [(36u8, 1.0f32), (42, 0.6)] {
                     ws.drums.struck.insert(note, (std::time::Instant::now(), v));
+                }
+                // PINA_SHOT_VIEWS: the rack's views shown (M macros, V variations, C chains, I
+                // I/O, S sends, R returns) and H hot-swap; PINA_SHOT_PAD: the pad picked.
+                // PINA_SHOT_VIEWS: the panel's tab (E effects, C chains, M macros, H hot-swap,
+                // else the Sampler), the chain list's I/O, sends and returns (I, S, R), N the
+                // inspector shown; PINA_SHOT_PAD: the pad picked.
+                if let Ok(v) = std::env::var("PINA_SHOT_VIEWS") {
+                    use crate::editors::drums::RackTab;
+                    ws.show_inspector = v.contains('N');
+                    ws.drums.tab = match () {
+                        _ if v.contains('E') => RackTab::Effects,
+                        _ if v.contains('C') => RackTab::Chains,
+                        _ if v.contains('M') => RackTab::Macros,
+                        _ if v.contains('H') => RackTab::Swap,
+                        _ => RackTab::Sampler,
+                    };
+                    let views = &mut ws.drums.views;
+                    views.io = v.contains('I');
+                    views.sends = v.contains('S');
+                    views.returns = v.contains('R');
+                }
+                if let Some(p) = std::env::var("PINA_SHOT_PAD")
+                    .ok()
+                    .and_then(|p| p.parse().ok())
+                {
+                    ws.pick_pad(p);
                 }
             } else {
                 ws.show_bottom(crate::workspace::Bottom::Drums, cx);

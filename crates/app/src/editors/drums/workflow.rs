@@ -146,19 +146,19 @@ impl Workspace {
     /// Adds a kit to the song as a stack, picks it and opens it in the Drum Machine.
     pub(crate) fn add_drum_kit(&mut self, name: &str, pads: Vec<NewPad>, cx: &mut Context<Self>) {
         let n = pads.len();
+        let pattern = n > 0;
         let index = self.new_track_index(false);
         let bar = self.session.project.bar();
         let at = self.playhead() / bar * bar;
         let mut made = None;
         self.edit(cx, |ws| {
-            made = Some(ws.session.project.add_kit(name, pads, index, at, true));
+            made = Some(ws.session.project.add_kit(name, pads, index, at, pattern));
         });
         let Some(made) = made else {
             return;
         };
         self.select_track(made.kit);
-        self.region = Some((made.kit, 0));
-        self.drums.from = 36;
+        self.region = pattern.then_some((made.kit, 0));
         self.drums.pad = self
             .session
             .project
@@ -183,9 +183,31 @@ impl Workspace {
         self.editor_h = self.editor_h.max(DRUMS_H);
     }
 
-    /// A new kit picked to go together and fit the song (its key and tempo); with no drums in
-    /// the library, the built-in synthesized kit. Says whether it's a kit of pads.
+    /// A new kit, empty: its pads waiting for sounds. With no drums in the library to drop on
+    /// them, the built-in synthesized kit. Says whether it's a kit of pads.
     pub fn new_drum_kit(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.drum_folders().is_empty() {
+            self.add_synth_drums(cx);
+            return false;
+        }
+        self.add_drum_kit("Kit", Vec::new(), cx);
+        self.status = Some("A new kit: drop sounds on its pads".into());
+        true
+    }
+
+    /// The built-in drum kit, synthesized: for a library with no drums in it yet.
+    fn add_synth_drums(&mut self, cx: &mut Context<Self>) {
+        self.new_track(Some(Instrument::Drums), cx);
+        self.status = Some(
+            "The library has no drums yet, so this is the synthesized kit: add a folder of drum \
+             samples on the Samples page for a kit of pads."
+                .into(),
+        );
+        cx.notify();
+    }
+
+    /// Drums picked to go together and fit the song (its key and tempo), loaded into `kit`.
+    pub(crate) fn fit_kit(&mut self, kit: usize, cx: &mut Context<Self>) {
         let seed = KitSeed {
             key: self.sample_key().map(|k| k.name()),
             bpm: self.sample_bpm(),
@@ -210,27 +232,16 @@ impl Workspace {
             .into_iter()
             .filter_map(|s| Some((s.role, samples.get(s.pick?.index)?.clone())))
             .collect();
-        if picks.len() < 3 {
-            self.add_synth_drums(cx);
-            return false;
+        if picks.is_empty() {
+            self.status = Some(
+                "The library has no drums to pick from yet: add a folder of drum samples on the \
+                 Samples page."
+                    .into(),
+            );
+            cx.notify();
+            return;
         }
-        let name = match self.sample_key() {
-            Some(k) => format!("Kit in {}", k.name()),
-            None => "Kit".to_string(),
-        };
-        self.add_drum_kit(&name, pads_for(&picks), cx);
-        true
-    }
-
-    /// The built-in drum kit, synthesized: for a library with no drums in it yet.
-    fn add_synth_drums(&mut self, cx: &mut Context<Self>) {
-        self.new_track(Some(Instrument::Drums), cx);
-        self.status = Some(
-            "The library has no drums yet, so this is the synthesized kit: add a folder of drum \
-             samples on the Samples page for a kit of pads."
-                .into(),
-        );
-        cx.notify();
+        self.load_into_kit(kit, pads_for(&picks), cx);
     }
 
     /// A kit of a library folder's sounds: a new kit, or into kit track `into` (the pads on its
@@ -395,6 +406,7 @@ impl Workspace {
         &mut self,
         files: &[std::path::PathBuf],
         note: u8,
+        chromatic: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(kit) = self.drum_kit() else {
@@ -402,9 +414,15 @@ impl Workspace {
         };
         let mut next = note;
         for (k, file) in files.iter().enumerate() {
+            // Chromatic: each on the note above the last, its sound replaced; else on the next
+            // free one.
             if k > 0 {
                 let p = &self.session.project;
-                match (next + 1..128).find(|&n| p.pad_on(kit, n).is_none()) {
+                let to = match chromatic {
+                    true => (next < 127).then_some(next + 1),
+                    false => (next + 1..128).find(|&n| p.pad_on(kit, n).is_none()),
+                };
+                match to {
                     Some(n) => next = n,
                     None => break,
                 }
@@ -486,26 +504,11 @@ impl Workspace {
         (list, 0)
     }
 
-    /// A pad's next sound (or previous, `by` -1) in its picked layer's lane: given it, and heard.
+    /// A pad's next sound (or previous, `by` -1): the next in the sounds column beside it, given
+    /// it and heard.
     pub(crate) fn step_pad(&mut self, note: u8, by: i32, cx: &mut Context<Self>) {
-        let Some(kit) = self.drum_kit() else {
-            return;
-        };
-        let layer = self.pad_layer(kit, note);
-        let key = (note, layer);
-        let (list, at) = self.pad_lane(kit, note, layer);
-        if list.len() < 2 {
-            self.status = Some("Nothing in the library sounds like it yet.".into());
-            cx.notify();
-            return;
-        }
-        let to = (at as i32 + by).rem_euclid(list.len() as i32) as usize;
-        self.set_pad_sample(kit, note, layer, list[to], cx);
-        // The lane stays: the sound it's on now is in it.
-        if let Some(lane) = self.drums.lanes.get_mut(&key) {
-            lane.2 = to;
-        } else if let Some(s) = self.browser.library.samples.get(list[to]) {
-            self.drums.lanes.insert(key, (s.path.clone(), list, to));
+        if let Some(kit) = self.drum_kit() {
+            self.step_sound(kit, note, by, cx);
         }
     }
 
@@ -515,12 +518,15 @@ impl Workspace {
         let Some(kit) = self.drum_kit() else {
             return;
         };
+        // A locked pad keeps its sound.
         let notes: Vec<u8> = self
             .session
             .project
             .pads_of(kit)
             .into_iter()
-            .filter_map(|t| self.session.project.tracks[t].pad.map(|p| p.note))
+            .filter_map(|t| self.session.project.tracks[t].pad)
+            .filter(|p| !p.lock)
+            .map(|p| p.note)
             .collect();
         let mut moves = Vec::new();
         for &note in &notes {
@@ -558,59 +564,6 @@ impl Workspace {
             "Every pad's {} sound like it",
             if by > 0 { "next" } else { "last" }
         ));
-    }
-
-    /// A menu of the sounds a pad can have: its picked layer's lane (or, empty, the library's of
-    /// the kind its note plays), picked to give it.
-    pub(crate) fn sound_menu(
-        &mut self,
-        kit: usize,
-        note: u8,
-        at: gpui::Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        let layer = self.pad_layer(kit, note);
-        let (mut list, _) = self.pad_lane(kit, note, layer);
-        if list.is_empty() {
-            let role = match self.drum_pad(kit, note) {
-                Some(_) => self.pad_role(kit, note),
-                None => gm_role(note),
-            };
-            let q = search::Query {
-                categories: vec![role],
-                kind: Some(pina_engine::samples::Kind::OneShot),
-                key: self.sample_key().map(|k| k.name()),
-                limit: LANE,
-                ..Default::default()
-            };
-            list = search::find(&self.browser.library.samples, &q)
-                .into_iter()
-                .map(|h| h.index)
-                .collect();
-        }
-        let samples = &self.browser.library.samples;
-        let items: Vec<(String, MenuAction)> = list
-            .into_iter()
-            .filter_map(|index| {
-                let s = samples.get(index)?;
-                Some((
-                    format!("{}  ·  {}", s.name, s.folder),
-                    MenuAction::Drums(DrumOp::Sound { note, layer, index }),
-                ))
-            })
-            .collect();
-        if items.is_empty() {
-            self.status = Some("The library has nothing of that kind yet.".into());
-            cx.notify();
-            return;
-        }
-        self.menu = Some(Menu {
-            at,
-            items,
-            searchable: true,
-            ..Default::default()
-        });
-        cx.notify();
     }
 
     /// A menu of sounds to layer on a pad: what goes with its kind (a clap or a rim on a snare,
@@ -684,6 +637,28 @@ impl Workspace {
         if !moved || to == note || self.drum_pad(kit, note).is_none() {
             return;
         }
+        // With ⌘ or ⌥: its sounds layered on the pad it's dropped on, both kept.
+        if (self.mods.platform || self.mods.alt)
+            && let Some(t) = self.session.project.pad_on(kit, to)
+        {
+            let zones = self
+                .drum_pad(kit, note)
+                .map(|(_, s)| s.zones.clone())
+                .unwrap_or_default();
+            self.edit(cx, |ws| {
+                for z in zones {
+                    ws.session.project.add_pad_layer(t, z);
+                }
+            });
+            self.pick_pad(to);
+            self.hit_pad(kit, to, 110);
+            return;
+        }
+        self.move_pad(kit, note, to, cx);
+    }
+
+    /// A pad moved to note `to`, trading places with a pad there (the beat following them).
+    fn move_pad(&mut self, kit: usize, note: u8, to: u8, cx: &mut Context<Self>) {
         self.edit(cx, |ws| ws.session.project.swap_pads(kit, note, to));
         let swap = |n: u8| match n {
             n if n == note => to,
@@ -702,6 +677,17 @@ impl Workspace {
     pub(crate) fn drum_op(&mut self, op: DrumOp, cx: &mut Context<Self>) {
         let kit = self.drum_kit();
         match op {
+            DrumOp::Fit => {
+                if let Some(kit) = kit {
+                    self.fit_kit(kit, cx);
+                }
+            }
+            DrumOp::Note { note, to } => {
+                let Some(kit) = kit.filter(|&k| self.drum_pad(k, note).is_some()) else {
+                    return;
+                };
+                self.move_pad(kit, note, to, cx);
+            }
             DrumOp::Folder { folder, into } => self.kit_from_folder(&folder, into, cx),
             DrumOp::Picks { folder } => self.folder_picks(&folder, cx),
             DrumOp::Sound { note, layer, index } => {
@@ -751,6 +737,125 @@ impl Workspace {
                         p.choke = group;
                     }
                 });
+            }
+            DrumOp::Play { note, play } => {
+                let Some(t) = kit.and_then(|k| self.session.project.pad_on(k, note)) else {
+                    return;
+                };
+                self.edit(cx, |ws| {
+                    if let Some(p) = &mut ws.session.project.tracks[t].pad {
+                        p.play = play.filter(|&n| n != p.note);
+                    }
+                });
+                if let Some(kit) = kit {
+                    self.hit_pad(kit, note, 100);
+                }
+            }
+            DrumOp::Fx { note, fx } => {
+                let Some(t) = kit.and_then(|k| self.session.project.pad_on(k, note)) else {
+                    return;
+                };
+                self.edit_sampler(t, cx, |s| super::sampler::set_fx(&mut s.voice, fx));
+                if let Some(kit) = kit {
+                    self.hit_pad(kit, note, 110);
+                }
+            }
+            DrumOp::Filter { note, mode } => {
+                let Some(t) = kit.and_then(|k| self.session.project.pad_on(k, note)) else {
+                    return;
+                };
+                self.edit_sampler(t, cx, |s| {
+                    s.voice.filter = mode;
+                    s.voice.filter_off = false;
+                });
+            }
+            DrumOp::ModDest { note, dest } => {
+                let Some(t) = kit.and_then(|k| self.session.project.pad_on(k, note)) else {
+                    return;
+                };
+                self.edit_sampler(t, cx, |s| s.voice.drum_dest = dest);
+            }
+            DrumOp::Similar { note } => {
+                self.pick_pad(note);
+                self.drums.source = Source::Like;
+                self.drums.tab = RackTab::Swap;
+                self.drums.swap_rack = false;
+            }
+            DrumOp::Reference { note, layer } => {
+                let Some(kit) = kit else {
+                    return;
+                };
+                self.pick_pad(note);
+                self.drums.layer = (note, layer);
+                if let Some(a) = self.sound_list(kit, cx).anchor {
+                    self.set_pad_sample(kit, note, layer, a, cx);
+                }
+            }
+            DrumOp::KeepReference { note, layer } => {
+                let Some(kit) = kit else {
+                    return;
+                };
+                self.pick_pad(note);
+                self.drums.layer = (note, layer);
+                let current = self.layer_index(kit, note, layer);
+                self.sound_list(kit, cx);
+                if let Some(l) = &mut self.drums.list {
+                    l.anchor = current;
+                }
+            }
+            DrumOp::Reverse { note, layer } => {
+                let Some(t) = kit.and_then(|k| self.session.project.pad_on(k, note)) else {
+                    return;
+                };
+                self.edit_sampler(t, cx, |s| {
+                    if let Some(z) = s.zones.get_mut(layer) {
+                        z.reverse ^= true;
+                    }
+                });
+            }
+            DrumOp::Duplicate { note } => {
+                let Some(kit) = kit else {
+                    return;
+                };
+                let (Some(t), to) = (
+                    self.session.project.pad_on(kit, note),
+                    self.free_pad_note(kit),
+                ) else {
+                    return;
+                };
+                self.edit(cx, |ws| {
+                    ws.session.project.duplicate_pad(t, to);
+                });
+                self.pick_pad(to);
+            }
+            DrumOp::Lock { note } => {
+                let Some(t) = kit.and_then(|k| self.session.project.pad_on(k, note)) else {
+                    return;
+                };
+                self.edit(cx, |ws| {
+                    if let Some(p) = &mut ws.session.project.tracks[t].pad {
+                        p.lock ^= true;
+                    }
+                });
+            }
+            DrumOp::Extract { note } => {
+                let Some(t) = kit.and_then(|k| self.session.project.pad_on(k, note)) else {
+                    return;
+                };
+                let mut made = None;
+                self.edit(cx, |ws| {
+                    made = ws.session.project.extract_pad(t);
+                });
+                if let Some(at) = made {
+                    self.status = Some(format!(
+                        "{} is on a track of its own now.",
+                        self.session.project.tracks[at].name
+                    ));
+                }
+            }
+            DrumOp::Option(o) => {
+                let on = self.drums.views.on(o);
+                *on = !*on;
             }
             DrumOp::Remove { note } => {
                 let Some(kit) = kit else {

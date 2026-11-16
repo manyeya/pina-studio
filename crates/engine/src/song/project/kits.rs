@@ -90,11 +90,7 @@ impl Project {
                 Track {
                     name: p.name,
                     instrument: Some(Instrument::Sampler(p.sampler)),
-                    pad: Some(Pad {
-                        kit: id,
-                        note: p.note,
-                        choke: p.choke,
-                    }),
+                    pad: Some(Pad::new(id, p.note, p.choke)),
                     ..Default::default()
                 },
             );
@@ -145,11 +141,7 @@ impl Project {
         let track = Track {
             name: pad.name.clone(),
             instrument: Some(Instrument::Sampler(sampler)),
-            pad: Some(Pad {
-                kit: id,
-                note: pad.note,
-                choke: pad.choke,
-            }),
+            pad: Some(Pad::new(id, pad.note, pad.choke)),
             output: self.tracks[kit].output,
             ..Default::default()
         };
@@ -171,6 +163,63 @@ impl Project {
             p.rows.push(row);
         }
         at
+    }
+
+    /// A copy of a pad on another note: its sound, shaping and channel (its effects, sends and
+    /// level), playing nothing until its note's hit. Returns the copy's track.
+    pub fn duplicate_pad(&mut self, pad: usize, to: u8) -> Option<usize> {
+        let kit = self.kit_of(pad)?;
+        let from = self.tracks.get(pad)?.clone();
+        let Some(Instrument::Sampler(sampler)) = from.instrument.clone() else {
+            return None;
+        };
+        let p = from.pad?;
+        let at = self.add_pad(
+            kit,
+            NewPad {
+                name: from.name.clone(),
+                sampler,
+                note: to,
+                choke: p.choke,
+                steps: Vec::new(),
+            },
+        );
+        // All of the pad's track but what's the copy's own (as Duplicate copies a track): its
+        // id, note, sampler on that note, and nothing played yet.
+        let t = &mut self.tracks[at];
+        let (id, mut q, instrument) = (t.id, t.pad?, t.instrument.take());
+        q.play = p
+            .play
+            .map(|n| (n as i32 + to as i32 - p.note as i32).clamp(0, 127) as u8);
+        *t = Track {
+            id,
+            pad: Some(q),
+            instrument,
+            regions: Vec::new(),
+            cells: Vec::new(),
+            automation: Default::default(),
+            solo: false,
+            ..from
+        };
+        Some(at)
+    }
+
+    /// A pad's chain on a track of its own, out of the kit: its sampler (on its note), channel
+    /// and effects, as a drum rack chain is extracted. Returns the new track.
+    pub fn extract_pad(&mut self, pad: usize) -> Option<usize> {
+        let kit = self.kit_of(pad)?;
+        let mut t = self.tracks.get(pad)?.clone();
+        t.id = 0;
+        t.pad = None;
+        t.regions.clear();
+        t.cells.clear();
+        t.solo = false;
+        // Out of the kit's stack, to the master.
+        t.output = None;
+        let at = self.pads_of(kit).last().map_or(kit + 1, |&p| p + 1);
+        self.tracks.insert(at, t);
+        self.assign_ids();
+        Some(at)
     }
 
     /// Two of a kit's notes trade pads: each sound (its track, shaping, channel and all) moves to

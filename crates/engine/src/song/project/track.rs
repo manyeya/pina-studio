@@ -201,15 +201,39 @@ pub struct Track {
     pub pad: Option<Pad>,
 }
 
-/// A kit's pad: the kit track (by id) whose notes it plays, the note that's its, and the choke
-/// group it's in (a pad playing cuts off the others in its group, as a closed hat does an open
-/// one).
+/// A kit's pad: the kit track (by id) whose notes it plays, the note that's its (the one it
+/// receives), and the choke group it's in (1 to 16: a pad playing cuts off the others in its
+/// group, as a closed hat does an open one).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pad {
     pub kit: u64,
     pub note: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choke: Option<u8>,
+    /// The note its instrument is played, if not the one it receives: its sound moved by the
+    /// difference, as a drum rack chain's Play note does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub play: Option<u8>,
+    /// Kept as it is when the kit's sounds are all swapped.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lock: bool,
+}
+
+impl Pad {
+    pub fn new(kit: u64, note: u8, choke: Option<u8>) -> Pad {
+        Pad {
+            kit,
+            note,
+            choke,
+            play: None,
+            lock: false,
+        }
+    }
+
+    /// Semitones its sound is moved by its Play note.
+    pub fn shift(&self) -> f32 {
+        self.play.map_or(0.0, |p| p as f32 - self.note as f32)
+    }
 }
 
 /// Input channels to record from.
@@ -344,6 +368,12 @@ pub struct Aux {
     /// How tall a stack's row shows, as dragged (pixels; the usual height without).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<f32>,
+    /// A kit's return chain: the kit track (by id) whose pads send to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kit: Option<u64>,
+    /// A stack's macro variations: each its macros' values, in their order, to bring back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variations: Vec<Vec<f32>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

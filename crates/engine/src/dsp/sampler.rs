@@ -40,8 +40,8 @@ use crate::{
     audio::engine::load_wav,
     plugin::{Control, ControlKind, ExpressionKind, Note},
     song::project::{
-        self, FilterMode, LoopMode, ModDest, ModSource, SampleCharacter, SampleMode, SamplerVoice,
-        Trigger, Zone,
+        self, DrumModDest, DrumModSource, FilterMode, LoopMode, ModDest, ModSource, PlaybackFx,
+        SampleCharacter, SampleMode, SamplerVoice, Trigger, Zone,
     },
 };
 use filter::{COMB, Coefs, Filter};
@@ -265,6 +265,32 @@ struct Voice {
     spray: f32,
     position: f32,
     seed: u64,
+    /// Its own amp envelope, when the Drum Sampler's modulation moved its times as it started.
+    shape: Option<Shape>,
+    /// Looping as the Drum Sampler's Loop has it; the vintage sampler's grit left (1 to 0).
+    fx_loop: bool,
+    grit: f32,
+    /// What the pitch drop keeps every few samples and punch every sample; how fast the
+    /// vintage sampler's clock runs (times the instrument's) and how much grit stays a sample:
+    /// the instrument's, as the modulation moved them as it started.
+    penv_k: f32,
+    punch_k: f32,
+    crush_rate: f32,
+    grit_k: f32,
+    /// The oscillator's ratio, the sub's frequency (0: under the note) and the noise's colour,
+    /// as the modulation moves them now.
+    osc_ratio: f32,
+    sub_hz: f32,
+    noise_color: f32,
+}
+
+/// How far the Drum Sampler's modulation moves `dest` (-1 to 1) for its source at `src` (0 to 1).
+fn drum_mod(v: &SamplerVoice, dest: DrumModDest, src: f32) -> f32 {
+    let fx = matches!(dest, DrumModDest::Fx1 | DrumModDest::Fx2);
+    match v.drum_dest == dest && !(fx && v.fx_off) {
+        true => v.drum_amount.clamp(-1.0, 1.0) * src.clamp(0.0, 1.0),
+        false => 0.0,
+    }
 }
 
 /// What every voice reads from the instrument this stretch of a block.
@@ -283,9 +309,6 @@ struct Ctx {
     filter: Shape,
     menv: Shape,
     gain: f32,
-    /// How much the pitch drop keeps every few samples, and punch every sample.
-    penv: f32,
-    punch: f32,
     /// The tape's smoothing, the vintage clock a sample (in its ticks), its bits' steps and
     /// its output filter's smoothing.
     tape: f32,
@@ -321,6 +344,8 @@ pub struct Sampler {
     tempo: f32,
     /// Each note's next round robin.
     turns: [u16; 128],
+    /// Each note's slide (MPE's brightness), 0 to 1.
+    slide: [f32; 128],
     /// Mono: the notes held, the latest last.
     held: [u8; 16],
     holding: usize,
@@ -346,7 +371,7 @@ impl Sampler {
         let mut s = Sampler {
             rate,
             zones,
-            voice,
+            voice: voice.heard(),
             amp: Shape::new(0.0, 0.0, 1.0, 60.0, rate),
             filter: Shape::new(0.0, 400.0, 0.0, 200.0, rate),
             menv: Shape::new(0.0, 500.0, 0.0, 300.0, rate),
@@ -364,6 +389,7 @@ impl Sampler {
             clock: 0,
             tempo: 120.0,
             turns: [0; 128],
+            slide: [0.0; 128],
             held: [0; 16],
             holding: 0,
             following: 0,
@@ -386,7 +412,8 @@ impl Sampler {
 
     fn shape(&mut self) {
         let v = &self.voice;
-        self.amp = Shape::new(v.attack_ms, v.decay_ms, v.sustain, v.release_ms, self.rate);
+        self.amp = Shape::new(v.attack_ms, v.decay_ms, v.sustain, v.release_ms, self.rate)
+            .with_hold(v.hold_ms, self.rate);
         self.filter = Shape::new(
             v.filter_attack_ms,
             v.filter_decay_ms,
@@ -409,8 +436,9 @@ impl Sampler {
         for (l, z) in self.zones.iter_mut().zip(&s.zones) {
             l.p = Params::of(z);
         }
-        if s.voice != self.voice {
-            self.voice = s.voice;
+        let heard = s.voice.heard();
+        if heard != self.voice {
+            self.voice = heard;
             self.shape();
         }
     }
@@ -421,10 +449,10 @@ impl Sampler {
         if by.voice {
             let mut v = *base;
             by.voice(&mut v);
-            self.voice = v;
+            self.voice = v.heard();
             self.modulated = true;
         } else if std::mem::take(&mut self.modulated) {
-            self.voice = *base;
+            self.voice = base.heard();
         }
     }
 
@@ -458,8 +486,6 @@ impl Sampler {
             filter: self.filter,
             menv: self.menv,
             gain: 10f32.powf(v.gain_db / 20.0),
-            penv: fall(v.pitch_decay_ms.max(1.0), rate).powi(EVERY as i32),
-            punch: fall(40.0, rate),
             tape: smooth(20_000.0 - 14_000.0 * v.color.clamp(0.0, 1.0)),
             crush: crush_hz / rate,
             steps: (1u32 << (v.bits.clamp(2, 16) - 1)) as f32,
@@ -512,22 +538,19 @@ impl Sampler {
             combs,
             gain,
             poly,
+            slide,
             ..
         } = self;
         for (i, vc) in voices.iter_mut().enumerate().filter(|(_, v)| v.on) {
             let comb = &mut combs[i * 2 * COMB..(i + 1) * 2 * COMB];
             let note = vc.note as usize;
             let z = &zones[vc.zone];
-            render_voice(
-                vc,
-                z,
-                comb,
-                gain[note],
-                poly[note],
-                &cx,
-                &mut l[..n],
-                &mut r[..n],
-            );
+            let held = Held {
+                gain: gain[note],
+                poly: poly[note],
+                slide: slide[note],
+            };
+            render_voice(vc, z, comb, held, &cx, &mut l[..n], &mut r[..n]);
         }
         for k in 0..2 {
             self.lfo[k] += cx.inc[k] * n as f64;
@@ -608,6 +631,11 @@ impl Sampler {
                     self.tuning[pitch as usize & 127] = value.clamp(-120.0, 120.0)
                 }
                 ExpressionKind::Volume => self.gain[pitch as usize & 127] = value.clamp(0.0, 4.0),
+                // The slide: the Drum Sampler's modulation reads it.
+                ExpressionKind::Brightness => {
+                    self.slide[pitch as usize & 127] = value.clamp(0.0, 1.0);
+                    return;
+                }
                 _ => return,
             },
             _ => return,
@@ -780,15 +808,70 @@ impl Sampler {
             (p.start as f64 * len).floor(),
             (p.end as f64 * len).ceil().min(len),
         );
-        let loops = (
-            (p.loop_start as f64 * len).floor(),
-            (p.loop_end as f64 * len).ceil().min(len),
-        );
+        // The Drum Sampler's modulation as the note starts: on its envelope's times, and on its
+        // playback effect's two settings.
+        let src = match v.drum_source {
+            DrumModSource::Velocity => st.velocity,
+            DrumModSource::Slide => self.slide[pitch as usize & 127],
+        };
+        let dm = |d: DrumModDest| drum_mod(&v, d, src);
+        let fx = v.shown_fx();
+        let on = |f: PlaybackFx| fx == Some(f);
+        let fxm = |k: usize, f: PlaybackFx| match on(f) {
+            true => dm([DrumModDest::Fx1, DrumModDest::Fx2][k]),
+            false => 0.0,
+        };
+        // The Drum Sampler's Loop: `loop_ms` of it from the offset on, round and round.
+        let fx_loop = v.loop_ms > 0.0;
+        let loops = match fx_loop {
+            true => {
+                let span = bounds.1 - bounds.0;
+                let offset = (v.loop_offset + fxm(0, PlaybackFx::Loop)).clamp(0.0, 0.99);
+                let from = bounds.0 + (offset as f64 * span).floor();
+                let ms = v.loop_ms * 4f32.powf(fxm(1, PlaybackFx::Loop));
+                let frames = (ms * 0.001 * self.rate) as f64;
+                (from, (from + frames.max(16.0)).min(bounds.1))
+            }
+            false => (
+                (p.loop_start as f64 * len).floor(),
+                (p.loop_end as f64 * len).ceil().min(len),
+            ),
+        };
         // The crossfade takes what's before the loop: no more than there is, nor half of it.
-        let fade_len = (p.loop_fade as f64 * (loops.1 - loops.0))
+        let fade = match fx_loop {
+            true => (0.002 * self.rate) as f64,
+            false => p.loop_fade as f64 * (loops.1 - loops.0),
+        };
+        let fade_len = fade
             .min(loops.0 - bounds.0)
             .min((loops.1 - loops.0) / 2.0)
             .max(0.0);
+        // Its envelope's times moved: up to eight times longer, or shorter.
+        let times = [
+            dm(DrumModDest::Attack),
+            dm(DrumModDest::Hold),
+            dm(DrumModDest::Decay),
+        ];
+        let shape = (times != [0.0; 3]).then(|| {
+            let k = |m: f32| 8f32.powf(m);
+            Shape::new(
+                v.attack_ms * k(times[0]),
+                v.decay_ms * k(times[2]),
+                v.sustain,
+                v.release_ms * k(times[2]),
+                self.rate,
+            )
+            .with_hold(v.hold_ms * k(times[1]), self.rate)
+        });
+        let pitch_decay = v.pitch_decay_ms * 4f32.powf(fxm(1, PlaybackFx::PitchEnv));
+        let punch_ms = v.punch_ms * 4f32.powf(fxm(1, PlaybackFx::Punch));
+        let grit_k = match v.crush_decay_ms > 0.0 {
+            true => fall(
+                v.crush_decay_ms * 4f32.powf(fxm(1, PlaybackFx::EightBit)),
+                self.rate,
+            ),
+            false => 1.0,
+        };
         let random_value = random(self.started.wrapping_mul(7919) ^ pitch as u64);
         // Where it starts: as the matrix moves it, from what's known as the note starts.
         let mut s: Sources = [0.0; 12];
@@ -858,8 +941,18 @@ impl Sampler {
             held: !st.once,
             age: self.started,
             lfo_from,
-            penv: v.pitch_env,
-            punch: 1.5 * v.punch.clamp(0.0, 1.0),
+            penv: v.pitch_env + fxm(0, PlaybackFx::PitchEnv) * 24.0,
+            penv_k: fall(pitch_decay.max(1.0), self.rate).powi(EVERY as i32),
+            punch: 1.5 * (v.punch + fxm(0, PlaybackFx::Punch)).clamp(0.0, 1.0),
+            punch_k: fall(punch_ms.max(1.0), self.rate),
+            crush_rate: 4f32.powf(fxm(0, PlaybackFx::EightBit)),
+            grit: 1.0,
+            grit_k,
+            fx_loop,
+            shape,
+            osc_ratio: v.osc_ratio,
+            sub_hz: v.sub_hz,
+            noise_color: v.noise_color,
             noise_seed: self.started as u32 | 1,
             head,
             seed: self.started.wrapping_mul(0x2545_F491_4F6C_DD1D),
@@ -935,11 +1028,29 @@ struct Start {
     once: bool,
 }
 
+/// What its note has now: its own volume, pressure and slide.
+#[derive(Clone, Copy)]
+struct Held {
+    gain: f32,
+    poly: f32,
+    slide: f32,
+}
+
 /// Every few samples: where the voice's pitch, filter, level and grains are now, the matrix
-/// moving them.
-fn control(vc: &mut Voice, z: &Loaded, note_gain: f32, poly: f32, cx: &Ctx, i: usize) {
+/// and the Drum Sampler's modulation moving them.
+fn control(vc: &mut Voice, z: &Loaded, held: Held, cx: &Ctx, i: usize) {
     let v = &cx.v;
     let p = &z.p;
+    let (note_gain, poly) = (held.gain, held.poly);
+    let src = match v.drum_source {
+        DrumModSource::Velocity => vc.velocity,
+        DrumModSource::Slide => held.slide,
+    };
+    let fx = v.shown_fx();
+    let fxm = |k: usize, f: PlaybackFx| match fx == Some(f) {
+        true => drum_mod(v, [DrumModDest::Fx1, DrumModDest::Fx2][k], src),
+        false => 0.0,
+    };
     let phase = |k: usize| cx.base[k] + cx.inc[k] * i as f64 + vc.lfo_from[k];
     let lfo1 = wave(v.lfo_wave, phase(0), 1);
     let lfo2 = wave(v.lfo2.wave, phase(1), 2);
@@ -972,7 +1083,8 @@ fn control(vc: &mut Voice, z: &Loaded, note_gain: f32, poly: f32, cx: &Ctx, i: u
         vc.note as f32 + v.transpose + vc.shift + vc.detune + vc.penv + at(ModDest::Pitch) * 24.0;
     let semis = played - p.root as f32 + p.tune + v.vibrato_cents / 100.0 * lfo1 + wow;
     let ratio = 2f64.powf(semis as f64 / 12.0);
-    let speed = (v.speed + at(ModDest::Speed) * 2.0) as f64;
+    let factor = 2f32.powf(fxm(0, PlaybackFx::Stretch) * 2.0);
+    let speed = (v.speed * factor + at(ModDest::Speed) * 2.0) as f64;
     match v.mode {
         SampleMode::Repitch => vc.step = ratio * speed * vc.dir,
         _ => {
@@ -981,22 +1093,23 @@ fn control(vc: &mut Voice, z: &Loaded, note_gain: f32, poly: f32, cx: &Ctx, i: u
         }
     }
     vc.note_hz = 440.0 * 2f32.powf((played - 69.0) / 12.0);
-    vc.penv *= cx.penv;
+    vc.penv *= vc.penv_k;
     if v.filter != FilterMode::Off {
         let octaves = v.filter_env * vc.fenv.level
             + v.lfo_filter * lfo1
             + v.key_track * (vc.note as f32 - 60.0) / 12.0
-            + at(ModDest::Cutoff) * 6.0;
+            + at(ModDest::Cutoff) * 6.0
+            + drum_mod(v, DrumModDest::Filter, src) * 6.0;
         let hz = v.cutoff_hz * 2f32.powf(octaves);
         let reso = v.resonance + at(ModDest::Resonance);
         let drive = v.drive + at(ModDest::Drive);
-        vc.coefs = filter::coefs(v.filter, hz, reso, drive, cx.rate);
+        vc.coefs = filter::coefs_with(v.filter, hz, reso, drive, v.peak_db, cx.rate);
     }
     // Level and place: tremolo, the matrix, the note's own volume, velocity, layer and unison.
     let tremolo = 1.0 - v.tremolo.clamp(0.0, 1.0) * (0.5 + 0.5 * lfo1);
     let level =
         tremolo * (1.0 + at(ModDest::Level)).clamp(0.0, 2.0) * note_gain * vc.gain * cx.gain;
-    let pan = (vc.pan + at(ModDest::Pan)).clamp(-1.0, 1.0);
+    let pan = (vc.pan + v.pan + at(ModDest::Pan)).clamp(-1.0, 1.0);
     let to = [
         level * p.gain[0] * (1.0 - pan).min(1.0),
         level * p.gain[1] * (1.0 + pan).min(1.0),
@@ -1008,12 +1121,20 @@ fn control(vc: &mut Voice, z: &Loaded, note_gain: f32, poly: f32, cx: &Ctx, i: u
         (to[0] - vc.out[0]) / EVERY as f32,
         (to[1] - vc.out[1]) / EVERY as f32,
     ];
-    vc.fm = (v.fm + at(ModDest::Fm)).clamp(0.0, 1.0);
-    vc.ring = v.ring.clamp(0.0, 1.0);
-    vc.sub = (v.sub + at(ModDest::Sub)).clamp(0.0, 1.0);
-    vc.noise = (v.noise + at(ModDest::Noise)).clamp(0.0, 1.0);
+    vc.fm = (v.fm + at(ModDest::Fm) + fxm(0, PlaybackFx::Fm)).clamp(0.0, 1.0);
+    vc.ring = (v.ring + fxm(0, PlaybackFx::RingMod)).clamp(0.0, 1.0);
+    let ratio = fxm(1, PlaybackFx::Fm) + fxm(1, PlaybackFx::RingMod);
+    vc.osc_ratio = v.osc_ratio * 4f32.powf(ratio);
+    vc.sub = (v.sub + at(ModDest::Sub) + fxm(0, PlaybackFx::SubOsc)).clamp(0.0, 1.0);
+    vc.sub_hz = match v.sub_hz > 0.0 {
+        true => (v.sub_hz + fxm(1, PlaybackFx::SubOsc) * 45.0).clamp(20.0, 200.0),
+        false => 0.0,
+    };
+    vc.noise = (v.noise + at(ModDest::Noise) + fxm(0, PlaybackFx::Noise)).clamp(0.0, 1.0);
+    vc.noise_color = (v.noise_color + fxm(1, PlaybackFx::Noise)).clamp(-1.0, 1.0);
     // Grains: size, spacing (Stretch overlaps four), scatter and place.
-    let size = (v.grain_ms * 8f32.powf(at(ModDest::Size))).clamp(5.0, 2_000.0);
+    let grow = at(ModDest::Size) + fxm(1, PlaybackFx::Stretch);
+    let size = (v.grain_ms * 8f32.powf(grow)).clamp(5.0, 2_000.0);
     vc.grain_len = size * 0.001 * cx.rate;
     vc.interval = match v.mode {
         SampleMode::Stretch => vc.grain_len / 4.0,
@@ -1029,8 +1150,7 @@ fn render_voice(
     vc: &mut Voice,
     z: &Loaded,
     comb: &mut [f32],
-    note_gain: f32,
-    poly: f32,
+    held: Held,
     cx: &Ctx,
     l: &mut [f32],
     r: &mut [f32],
@@ -1039,10 +1159,11 @@ fn render_voice(
     let (comb_l, comb_r) = comb.split_at_mut(COMB);
     for i in 0..l.len() {
         if vc.tick.is_multiple_of(EVERY) {
-            control(vc, z, note_gain, poly, cx, i);
+            control(vc, z, held, cx, i);
         }
         vc.tick = vc.tick.wrapping_add(1);
-        let e = vc.amp.next(&cx.amp, vc.release.unwrap_or(cx.amp.release));
+        let shape = vc.shape.unwrap_or(cx.amp);
+        let e = vc.amp.next(&shape, vc.release.unwrap_or(shape.release));
         if vc.amp.stage == Stage::Done || vc.level <= 0.0 {
             vc.on = false;
             return;
@@ -1052,7 +1173,7 @@ fn render_voice(
         // The oscillator FM and ring modulation ride on.
         let osc = match vc.fm > 0.0 || vc.ring > 0.0 {
             true => {
-                let hz = vc.note_hz * v.osc_ratio.clamp(0.25, 16.0);
+                let hz = vc.note_hz * vc.osc_ratio.clamp(0.25, 16.0);
                 vc.phases[1] = (vc.phases[1] + hz / cx.rate).fract();
                 (vc.phases[1] * std::f32::consts::TAU).sin()
             }
@@ -1072,13 +1193,17 @@ fn render_voice(
         };
         character(vc, cx, &mut x, &mut y);
         if vc.sub > 0.0 {
-            vc.phases[0] = (vc.phases[0] + vc.note_hz * 0.5 / cx.rate).fract();
+            let hz = match vc.sub_hz > 0.0 {
+                true => vc.sub_hz,
+                false => vc.note_hz * 0.5,
+            };
+            vc.phases[0] = (vc.phases[0] + hz / cx.rate).fract();
             let s = (vc.phases[0] * std::f32::consts::TAU).sin() * vc.sub * 0.5;
             x += s;
             y += s;
         }
         if vc.noise > 0.0 {
-            let color = v.noise_color.clamp(-1.0, 1.0);
+            let color = vc.noise_color.clamp(-1.0, 1.0);
             for (k, side) in [&mut x, &mut y].into_iter().enumerate() {
                 vc.noise_seed ^= vc.noise_seed << 13;
                 vc.noise_seed ^= vc.noise_seed >> 17;
@@ -1104,7 +1229,7 @@ fn render_voice(
             y = vc.filter.run(&vc.coefs, 1, y, comb_r);
         }
         let g = e * vc.level * (1.0 + vc.punch);
-        vc.punch *= cx.punch;
+        vc.punch *= vc.punch_k;
         l[i] += x * g * vc.out[0];
         r[i] += y * g * vc.out[1];
         vc.out[0] += vc.out_step[0];
@@ -1126,8 +1251,15 @@ fn render_voice(
 fn read_repitch(vc: &mut Voice, z: &Loaded, v: &SamplerVoice, fm: f64) -> Option<[f32; 2]> {
     let p = &z.p;
     let (a, b) = vc.loops;
-    if p.looping != LoopMode::Off && !vc.once && b - a > 2.0 {
-        match p.looping {
+    // The Drum Sampler's Loop loops forward, whatever the zone's own loop: on a one-shot, for
+    // as long as its sound would have lasted.
+    let looping = match vc.fx_loop {
+        true if spent(vc, p, 1.0) => LoopMode::Off,
+        true => LoopMode::Forward,
+        false => p.looping,
+    };
+    if looping != LoopMode::Off && !vc.once && b - a > 2.0 {
+        match looping {
             LoopMode::PingPong => {
                 if vc.step > 0.0 && vc.pos >= b - 1.0 {
                     vc.dir = -vc.dir;
@@ -1162,20 +1294,31 @@ fn read_repitch(vc: &mut Voice, z: &Loaded, v: &SamplerVoice, fm: f64) -> Option
     let mut s = read(vc.pos);
     // Nearing a forward loop's end, what comes before its start fades in: at the end, it's
     // all that, and the jump back to the start is seamless.
-    if p.looping == LoopMode::Forward && !vc.once && vc.fade_len > 1.0 && vc.step > 0.0 {
+    if looping == LoopMode::Forward && !vc.once && vc.fade_len > 1.0 && vc.step > 0.0 {
         let from = b - 1.0 - vc.fade_len;
         if vc.pos > from {
             let w = (((vc.pos - from) / vc.fade_len) as f32).clamp(0.0, 1.0);
             let other = read(vc.pos - (b - 1.0 - a));
-            let (keep, take) = (
-                (w * std::f32::consts::FRAC_PI_2).cos(),
-                (w * std::f32::consts::FRAC_PI_2).sin(),
-            );
+            // The Drum Sampler's Loop is a short stutter of one sound, the two sides alike:
+            // they cross at equal gain, not equal power, so the seam doesn't swell.
+            let (keep, take) = match vc.fx_loop {
+                true => (1.0 - w, w),
+                false => (
+                    (w * std::f32::consts::FRAC_PI_2).cos(),
+                    (w * std::f32::consts::FRAC_PI_2).sin(),
+                ),
+            };
             s = [s[0] * keep + other[0] * take, s[1] * keep + other[1] * take];
         }
     }
     vc.pos += step;
     Some(s)
+}
+
+/// Whether a one-shot (it plays on past its note) has played `times` its sound's length: then
+/// what would keep it going for ever (a loop, a held or crawling place) lets it end.
+fn spent(vc: &Voice, p: &Params, times: f64) -> bool {
+    !p.gate && vc.tick as f64 >= (vc.bounds.1 - vc.bounds.0) * times
 }
 
 /// Stretch and Grains: the grains sounding (new ones started as they're due) at their places;
@@ -1184,9 +1327,15 @@ fn read_repitch(vc: &mut Voice, z: &Loaded, v: &SamplerVoice, fm: f64) -> Option
 fn read_grains(vc: &mut Voice, z: &Loaded, v: &SamplerVoice, fm: f64) -> Option<[f32; 2]> {
     let (lo, hi) = vc.bounds;
     let (a, b) = vc.loops;
-    let looping = z.p.looping != LoopMode::Off && !vc.once && b - a > 2.0;
-    if v.freeze {
+    let looping = (z.p.looping != LoopMode::Off || vc.fx_loop && !spent(vc, &z.p, 1.0))
+        && !vc.once
+        && b - a > 2.0;
+    // A one-shot held in place, or barely moving, plays out after sixteen times its length.
+    let stuck = spent(vc, &z.p, 16.0);
+    if v.freeze && !stuck {
         vc.head = lo + vc.position as f64 * (hi - lo);
+    } else if stuck && vc.speed.abs() < 1.0 {
+        vc.head += vc.speed.signum();
     } else {
         vc.head += vc.speed;
     }
@@ -1280,7 +1429,8 @@ fn character(vc: &mut Voice, cx: &Ctx, x: &mut f32, y: &mut f32) {
             }
         }
         SampleCharacter::Vintage => {
-            vc.clock += cx.crush;
+            let clean = [*x, *y];
+            vc.clock += cx.crush * vc.crush_rate;
             if vc.clock >= 1.0 {
                 vc.clock -= vc.clock.floor();
                 vc.hold = [
@@ -1296,7 +1446,12 @@ fn character(vc: &mut Voice, cx: &Ctx, x: &mut f32, y: &mut f32) {
                     f[1] += (f[0] - f[1]) * cx.crush_soft;
                     *s = f[1];
                 }
+                // The 8-Bit's decay: the grit fading to the clean sound.
+                if vc.grit < 1.0 {
+                    *s = clean[c] + (*s - clean[c]) * vc.grit;
+                }
             }
+            vc.grit *= vc.grit_k;
         }
     }
 }

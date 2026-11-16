@@ -1,11 +1,16 @@
 mod automation;
+mod chops;
 mod files;
+mod flips;
 mod kits;
+mod lyric_loops;
 
 mod regions;
 mod sections;
+mod separated;
 mod takes;
 mod tempo;
+mod to_sampler;
 mod tracks;
 
 use super::*;

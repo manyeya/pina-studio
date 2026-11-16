@@ -281,6 +281,45 @@ fn songs_start_from_the_songs_page_open_here_and_go_to_the_trash(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn a_new_songs_panel_opens_over_the_songs_and_goes_away(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    let song = |name: &str| crate::pages::projects::Song {
+        dir: std::path::PathBuf::from(format!("/songs/{name}")),
+        name: name.into(),
+        modified: std::time::SystemTime::now(),
+        tempo: 120.0,
+        key: None,
+        signature: [4, 4],
+        tracks: 3,
+        seconds: 60.0,
+        lanes: Vec::new(),
+    };
+    ws.update(cx, |ws, _| ws.songs = vec![song("Night"), song("Rain")]);
+    let up = |cx: &mut VisualTestContext| cx.debug_bounds("new-song-modal").is_some();
+    // Songs: the list, the templates put away behind New song.
+    cx.update(|window, cx| ws.update(cx, |ws, cx| ws.show_home(false, window, cx)));
+    cx.run_until_parked();
+    assert!(!up(cx) && cx.debug_bounds("template-Beat").is_none());
+    // ⌘N: the panel over them, its name to type; Escape puts it away.
+    cx.simulate_keystrokes("cmd-n");
+    cx.run_until_parked();
+    assert!(up(cx) && cx.debug_bounds("template-Beat").is_some());
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!up(cx));
+    // New song brings it back; a click in it keeps it, a click off it doesn't.
+    click_on(cx, "songs-new", Modifiers::none(), MouseButton::Left);
+    assert!(up(cx));
+    click_on(cx, "new-song-tempo", Modifiers::none(), MouseButton::Left);
+    assert!(up(cx));
+    let corner = cx.debug_bounds("new-song-backdrop").unwrap().origin + point(px(4.), px(4.));
+    cx.simulate_mouse_down(corner, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(corner, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(!up(cx));
+}
+
+#[gpui::test]
 fn with_no_song_open_tempo_starts_on_the_songs_page(cx: &mut TestAppContext) {
     // A song not made yet, as Pina Studio opens with none named: the Songs page is the whole window,
     // a template a click away. Close Song from a song comes back here.
@@ -636,4 +675,36 @@ fn the_audio_page_scrolls_to_its_end(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let after = cx.debug_bounds("setting-devices-rescan").unwrap();
     assert!(after.origin.y < before.origin.y, "{before:?} {after:?}");
+}
+
+#[gpui::test]
+fn stem_models_shows_how_to_separate_the_models_to_download_and_yours(cx: &mut TestAppContext) {
+    use crate::pages::settings::Section;
+    let models = test_models();
+    let (ws, cx) = open(cx);
+    // From a region's menu, with no model it can use: here.
+    ws.update(cx, |ws, cx| ws.show_models(cx));
+    cx.run_until_parked();
+    let (view, section) = ws.read_with(cx, |ws, _| (ws.view, ws.settings_section));
+    assert_eq!((view, section), (View::Settings, Section::Models));
+    if !pina_engine::separate::available() {
+        return;
+    }
+    // Each model that's been run, to download; the person's own, to show or take out.
+    for (i, _) in pina_engine::separate::catalog::KNOWN.iter().enumerate() {
+        assert!(
+            cx.debug_bounds(Box::leak(format!("model-download-{i}").into_boxed_str()))
+                .is_some()
+        );
+    }
+    assert!(cx.debug_bounds("model-add").is_some());
+    // Remove asks once more before it deletes (under the fold here, so asked directly).
+    assert!(
+        cx.debug_bounds("whisper-download-0").is_some(),
+        "the lyrics models too"
+    );
+    ws.update(cx, |ws, cx| ws.remove_model(models.join("splitter"), cx));
+    let asked = ws.read_with(cx, |ws, _| ws.models_ui.removing.clone());
+    assert_eq!(asked, Some(models.join("splitter")));
+    assert!(models.join("splitter").is_dir(), "not gone yet");
 }

@@ -21,6 +21,7 @@ fn knobs_turn_settings_and_back() {
         Field::Tune(0),
         Field::Drive,
         Field::Speed,
+        Field::StretchFactor,
         Field::Position,
         Field::GrainSize,
         Field::Density,

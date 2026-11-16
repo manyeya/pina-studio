@@ -387,6 +387,27 @@ impl Workspace {
             let drag = self.drag.take();
             self.drop_sample(drag, cx);
         }
+        if let Some(Drag::Chop { .. }) = self.drag {
+            let drag = self.drag.take();
+            self.drop_chop(drag, cx);
+        }
+        if let Some(Drag::Cut { .. }) = self.drag {
+            let drag = self.drag.take();
+            self.drop_cut(drag, cx);
+        }
+        if let Some(Drag::Lyric {
+            region,
+            line,
+            at,
+            moved: true,
+            ..
+        }) = self.drag
+        {
+            self.drag = None;
+            self.drop_lyric(region, line, at, cx);
+        } else if let Some(Drag::Lyric { .. }) = self.drag {
+            self.drag = None;
+        }
         if let Some(Drag::Midi { .. }) = self.drag {
             let drag = self.drag.take();
             self.drop_midi(drag, cx);

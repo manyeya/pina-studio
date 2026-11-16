@@ -1,4 +1,4 @@
-//! The Songs page: a new song along the top, every song below.
+//! The Songs page: every song, and a new one made in a panel over it.
 
 use super::*;
 
@@ -6,10 +6,10 @@ use super::*;
 const CARD_W: f32 = 236.0;
 
 impl Workspace {
-    /// The Songs page: a new song along the top (its name, tempo, key and time; a template's
-    /// click makes it), then every song, to search, filter, sort, see as a list or a grid, open,
-    /// pick several of (⌘-click, or their boxes) and move to the Trash. With no song open, it's
-    /// the whole window.
+    /// The Songs page: every song, to search, filter, sort, see as a list or a grid, open, pick
+    /// several of (⌘-click, or their boxes) and move to the Trash; New song (⌘N) opens a panel over
+    /// it for a new one's name, tempo, key and time, a template's click making it. With no songs
+    /// yet that panel is on the page. With no song open, it's the whole window.
     pub fn songs_page(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let current = self.session.dir.clone();
         let open = self.session.on_disk.then(|| {
@@ -39,7 +39,9 @@ impl Workspace {
                 .filter(|(d, _)| *d == s.dir)
                 .map(|(_, f)| f.clone())
         };
-        let body = if songs.is_empty() {
+        let body = if self.songs.is_empty() {
+            self.first_song(cx).into_any_element()
+        } else if songs.is_empty() {
             self.no_songs(&search, &shelving, cx).into_any_element()
         } else if grid {
             let cols = ((self.viewport_w - 64.0 + 16.0) / (CARD_W + 16.0))
@@ -185,37 +187,170 @@ impl Workspace {
             .flex()
             .flex_col()
             .bg(rgb(BG))
-            .child(self.new_song_band(open, cx))
-            .child(self.songs_bar(shown, &search, &shelving, grid, cx))
+            .child(self.songs_header(open, (shown, &search, &shelving), cx))
+            .when(!self.songs.is_empty(), |d| {
+                d.child(self.songs_bar(&shelving, grid, cx))
+            })
             .children(picked_bar)
             .child(body)
     }
 
-    /// Along the top: a new song's name, tempo, key and time, a song from a folder, a song to
-    /// study, back to the song open; then the templates, a click making the song and opening it.
-    pub(crate) fn new_song_band(&self, open: Option<String>, cx: &mut Context<Self>) -> Div {
-        let band = div()
+    /// Along the top, one row: the page's name, a song from a folder, a song to study, back to the
+    /// song open, and New song (⌘N), which opens the new song's panel over the page.
+    fn songs_header(
+        &self,
+        open: Option<String>,
+        (shown, search, shelving): (usize, &str, &Shelving),
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let all = self.songs.len();
+        let count = match search.is_empty() && !shelving.filtered() {
+            true => all.to_string(),
+            false => format!("{shown} of {all}"),
+        };
+        let home = std::env::var("HOME").unwrap_or_default();
+        let place = root().display().to_string();
+        let place = match !home.is_empty() && place.starts_with(&home) {
+            true => format!("~{}", &place[home.len()..]),
+            false => place,
+        };
+        // With no song to go back to, a new one is what the page is for.
+        let lone = open.is_none();
+        let accent = |d: Div| {
+            d.h(px(38.))
+                .px(px(16.))
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(8.))
+                .rounded(px(10.))
+                .bg(rgb(ACCENT))
+                .text_color(rgb(0xffffff))
+                .text_size(px(13.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .whitespace_nowrap()
+                .cursor_pointer()
+                .hover(|d| d.bg(rgb(tint(ACCENT, 0.12))))
+        };
+        let new_song = match lone {
+            true => accent(div())
+                .child(icon(Icon::Plus, 15.).text_color(rgb(0xffffff)))
+                .child("New song"),
+            false => pill(Some(Icon::Plus), "New song", 38.).calm(),
+        }
+        .child(
+            div()
+                .font_family(MONO)
+                .text_size(px(11.))
+                .text_color(match lone {
+                    true => alpha(0xffffff, 0.7),
+                    false => rgb(TEXT_3).into(),
+                })
+                .child("⌘N"),
+        )
+        .debug_selector(|| "songs-new".into())
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|ws, _, window, cx| ws.show_home(true, window, cx)),
+        );
+        div()
             .flex_none()
             .flex()
-            .flex_col()
-            .gap(px(18.))
+            .items_center()
+            .gap(px(12.))
             .px(px(32.))
-            .pt(px(22.))
-            .pb(px(24.))
+            .py(px(16.))
             .bg(rgb(0x111115))
             .border_b_1()
-            .border_color(rgb(LINE));
+            .border_color(rgb(LINE))
+            .child(
+                div()
+                    .text_size(px(22.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Songs"),
+            )
+            .child(
+                div()
+                    .h(px(22.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(11.))
+                    .bg(rgb(FIELD))
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(TEXT_2))
+                    .debug_selector(|| "songs-count".into())
+                    .child(count),
+            )
+            .child(
+                div()
+                    .ml(px(2.))
+                    .min_w(px(0.))
+                    .font_family(MONO)
+                    .text_size(px(12.))
+                    .text_color(rgb(TEXT_3))
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(place),
+            )
+            .child(div().flex_1())
+            .child(
+                pill(Some(Icon::Folder), "Open folder…", 38.)
+                    .calm()
+                    .debug_selector(|| "songs-open-folder".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, _, _, cx| ws.open_folder(cx)),
+                    ),
+            )
+            .child(
+                pill(Some(Icon::Wave), "Study a song…", 38.)
+                    .calm()
+                    .debug_selector(|| "songs-study".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, _, _, cx| ws.open_study(cx)),
+                    ),
+            )
+            .children(open.map(|name| {
+                accent(div())
+                    .max_w(px(280.))
+                    .child(icon(Icon::ArrowLeft, 15.).text_color(rgb(0xffffff)))
+                    .child(
+                        div()
+                            .min_w(px(0.))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(format!("Back to {name}")),
+                    )
+                    .debug_selector(|| "songs-back".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|ws, _, _, cx| {
+                            ws.view = View::Arrange;
+                            cx.notify();
+                        }),
+                    )
+            }))
+            .child(new_song)
+    }
+
+    /// A new song: its name, tempo, key and time, and the templates, a click making the song and
+    /// opening it. Over the page as a panel of its own (`modal`, with a close button), or on it
+    /// while there are no songs yet.
+    pub(crate) fn new_song_panel(&self, modal: bool, cx: &mut Context<Self>) -> Div {
+        let panel = div().flex().flex_col().gap(px(18.));
         let Some(h) = self.home.as_ref() else {
-            return band;
+            return panel;
         };
         let (key, signature) = (h.key, h.signature);
-        let field = |f: &Entity<TextInput>, label: &'static str, sel: &'static str, w: f32| {
+        let field = |f: &Entity<TextInput>, label: &'static str, sel: &'static str| {
             div()
-                .w(px(w))
                 .h(px(38.))
                 .px(px(12.))
                 .flex()
-                .flex_none()
                 .items_center()
                 .gap(px(8.))
                 .rounded(px(10.))
@@ -283,7 +418,7 @@ impl Workspace {
                     )
             }));
         let key_pick = div()
-            .w(px(140.))
+            .w(px(150.))
             .h(px(38.))
             .px(px(12.))
             .flex()
@@ -317,6 +452,7 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|ws, e: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
                     let mut items = vec![("No key".to_string(), MenuAction::NewSongKey(None))];
                     items.extend(
                         Key::all().map(|k| (k.name(), MenuAction::NewSongKey(Some(k.name())))),
@@ -331,102 +467,163 @@ impl Workspace {
                     cx.notify();
                 }),
             );
-        let tiles = TEMPLATES.map(|t| template_tile(t, cx));
-        band.child(
+        let close = modal.then(|| {
             div()
+                .size(px(32.))
                 .flex()
-                .flex_wrap()
+                .flex_none()
                 .items_center()
-                .gap(px(12.))
-                .child(
-                    div()
-                        .mr(px(8.))
-                        .text_size(px(22.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("New song"),
+                .justify_center()
+                .rounded(px(9.))
+                .cursor_pointer()
+                .hover(|d| d.bg(rgb(OFF)))
+                .child(icon(Icon::Close, 16.).text_color(rgb(TEXT_2)))
+                .debug_selector(|| "new-song-close".into())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|ws, _, _, cx| {
+                        cx.stop_propagation();
+                        ws.close_new_song(cx);
+                    }),
                 )
-                .child(field(&h.name, "Name", "new-song-name", 230.))
-                .child(field(&h.tempo, "BPM", "new-song-tempo", 112.))
-                .child(key_pick)
-                .child(signatures)
-                .child(div().flex_1())
-                .child(
-                    pill(Some(Icon::Folder), "Open folder…", 38.)
-                        .calm()
-                        .debug_selector(|| "songs-open-folder".into())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|ws, _, _, cx| ws.open_folder(cx)),
-                        ),
-                )
-                .child(
-                    pill(Some(Icon::Wave), "Study a song…", 38.)
-                        .calm()
-                        .debug_selector(|| "songs-study".into())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|ws, _, _, cx| ws.open_study(cx)),
-                        ),
-                )
-                .children(open.map(|name| {
-                    div()
-                        .h(px(38.))
-                        .max_w(px(280.))
-                        .px(px(16.))
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .gap(px(8.))
-                        .rounded(px(10.))
-                        .bg(rgb(ACCENT))
-                        .text_color(rgb(0xffffff))
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .cursor_pointer()
-                        .hover(|d| d.bg(rgb(tint(ACCENT, 0.12))))
-                        .child(icon(Icon::ArrowLeft, 15.).text_color(rgb(0xffffff)))
-                        .child(
-                            div()
-                                .min_w(px(0.))
-                                .whitespace_nowrap()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(format!("Back to {name}")),
-                        )
-                        .debug_selector(|| "songs-back".into())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|ws, _, _, cx| {
-                                ws.view = View::Arrange;
-                                cx.notify();
-                            }),
-                        )
-                })),
-        )
-        .child(div().flex().gap(px(14.)).children(tiles))
+        });
+        panel
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .text_size(px(20.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(match self.songs.is_empty() {
+                                        true => "Start your first song",
+                                        false => "New song",
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .text_color(rgb(TEXT_3))
+                                    .child("Name it and set its tempo, key and time, then pick how it starts. Enter makes an empty one."),
+                            ),
+                    )
+                    .children(close),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(
+                        field(&h.name, "Name", "new-song-name")
+                            .flex_1()
+                            .min_w(px(180.)),
+                    )
+                    .child(
+                        field(&h.tempo, "BPM", "new-song-tempo")
+                            .w(px(112.))
+                            .flex_none(),
+                    )
+                    .child(key_pick)
+                    .child(signatures),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(12.))
+                    .children(TEMPLATES.map(|t| template_tile(t, cx))),
+            )
     }
 
-    /// Over the songs: how many, where they're kept, the search, the filters, the order, and
-    /// list or grid.
-    fn songs_bar(
-        &self,
-        shown: usize,
-        search: &str,
-        shelving: &Shelving,
-        grid: bool,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let all = self.songs.len();
-        let count = match search.is_empty() && !shelving.filtered() {
-            true => all.to_string(),
-            false => format!("{shown} of {all}"),
-        };
-        let home = std::env::var("HOME").unwrap_or_default();
-        let place = root().display().to_string();
-        let place = match !home.is_empty() && place.starts_with(&home) {
-            true => format!("~{}", &place[home.len()..]),
-            false => place,
-        };
+    /// The new song's panel over the Songs page, the page dimmed behind it: Escape, its close
+    /// button or a click off it puts it away. With no songs yet it's on the page instead.
+    pub(crate) fn new_song_modal(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let up = self.view == View::Songs && self.home.as_ref().is_some_and(|h| h.creating);
+        if !up || self.songs.is_empty() {
+            return None;
+        }
+        let w = (self.viewport_w - 64.0).clamp(640.0, 1040.0);
+        let card = div()
+            .id("new-song-modal")
+            .debug_selector(|| "new-song-modal".into())
+            .w(px(w))
+            .p(px(24.))
+            .rounded(px(18.))
+            .bg(rgb(0x141418))
+            .border_1()
+            .border_color(rgb(LINE_STRONG))
+            .shadow(vec![gpui::BoxShadow {
+                color: alpha(0x000000, 0.6),
+                offset: gpui::point(px(0.), px(24.)),
+                blur_radius: px(60.),
+                spread_radius: px(-8.),
+                inset: false,
+            }])
+            // A click in it stays in it.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(self.new_song_panel(true, cx));
+        let backdrop = div()
+            .id("new-song-backdrop")
+            .debug_selector(|| "new-song-backdrop".into())
+            .occlude()
+            .absolute()
+            .inset_0()
+            .bg(alpha(0x000000, 0.55))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|ws, _, _, cx| {
+                    // A menu open over it (the key's) goes first.
+                    if ws.menu.is_none() {
+                        ws.close_new_song(cx);
+                    }
+                }),
+            )
+            .child(card);
+        Some(gpui::deferred(backdrop).with_priority(3).into_any_element())
+    }
+
+    /// Puts the new song's panel away.
+    pub(crate) fn close_new_song(&mut self, cx: &mut Context<Self>) {
+        if let Some(h) = self.home.as_mut() {
+            h.creating = false;
+        }
+        cx.notify();
+    }
+
+    /// No songs yet: the new song's panel, on the page.
+    fn first_song(&self, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        div()
+            .id("first-song")
+            .flex_1()
+            .min_h(px(0.))
+            .overflow_y_scroll()
+            .child(
+                div().px(px(32.)).pt(px(24.)).pb(px(28.)).child(
+                    div()
+                        .max_w(px(1040.))
+                        .p(px(24.))
+                        .rounded(px(18.))
+                        .bg(rgb(0x141418))
+                        .border_1()
+                        .border_color(rgb(LINE))
+                        .child(self.new_song_panel(false, cx)),
+                ),
+            )
+    }
+
+    /// Over the songs: the search, the filters, the order, and list or grid.
+    fn songs_bar(&self, shelving: &Shelving, grid: bool, cx: &mut Context<Self>) -> Div {
         let search_field = self.home.as_ref().map(|h| {
             div()
                 .w(px(280.))
@@ -551,41 +748,6 @@ impl Workspace {
             .flex_wrap()
             .items_center()
             .gap(px(10.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .child(
-                        div()
-                            .text_size(px(18.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Songs"),
-                    )
-                    .child(
-                        div()
-                            .h(px(22.))
-                            .px(px(8.))
-                            .flex()
-                            .items_center()
-                            .rounded(px(11.))
-                            .bg(rgb(FIELD))
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(TEXT_2))
-                            .debug_selector(|| "songs-count".into())
-                            .child(count),
-                    ),
-            )
-            .child(
-                div()
-                    .mr(px(8.))
-                    .font_family(MONO)
-                    .text_size(px(12.))
-                    .text_color(rgb(TEXT_3))
-                    .whitespace_nowrap()
-                    .child(place),
-            )
             .child(div().flex_1())
             .children(search_field)
             .child(
@@ -708,18 +870,14 @@ impl Workspace {
             .child(div().w(px(COL_ACTS)).flex_none())
     }
 
-    /// No songs to show: none yet, none by that name, or none the filters let through.
+    /// No songs to show: none by that name, or none the filters let through.
     fn no_songs(&self, search: &str, shelving: &Shelving, cx: &mut Context<Self>) -> Div {
-        let (title, line) = match (self.songs.is_empty(), search.is_empty()) {
-            (true, _) => (
-                "No songs yet".to_string(),
-                "Pick a template above to start one.",
-            ),
-            (false, false) => (
+        let (title, line) = match search.is_empty() {
+            false => (
                 format!("No songs called \u{201c}{search}\u{201d}"),
                 "Esc clears the search.",
             ),
-            (false, true) => (
+            true => (
                 "No songs match these filters".to_string(),
                 "Clear them to see every song.",
             ),
@@ -739,7 +897,7 @@ impl Workspace {
                     .child(title),
             )
             .child(div().text_size(px(13.)).text_color(rgb(TEXT_3)).child(line))
-            .when(!self.songs.is_empty() && shelving.filtered(), |d| {
+            .when(shelving.filtered(), |d| {
                 d.child(
                     pill(None, "Clear filters", 34.)
                         .calm()
@@ -972,32 +1130,29 @@ fn template_tile(t: Template, cx: &mut Context<Workspace>) -> gpui::Stateful<Div
         .child(
             div()
                 .flex()
-                .items_center()
-                .gap(px(10.))
+                .flex_col()
+                .gap(px(3.))
                 .child(
                     div()
-                        .flex_1()
-                        .min_w(px(0.))
                         .flex()
-                        .flex_col()
-                        .gap(px(2.))
+                        .items_center()
+                        .gap(px(8.))
                         .child(
                             div()
+                                .flex_1()
+                                .min_w(px(0.))
                                 .text_size(px(14.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(t.name()),
                         )
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .text_color(rgb(0x9a9aa6))
-                                .whitespace_nowrap()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(t.about()),
-                        ),
+                        .child(create),
                 )
-                .child(create),
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(rgb(0x9a9aa6))
+                        .child(t.about()),
+                ),
         )
         .debug_selector(move || format!("template-{}", t.name()))
         .on_mouse_down(

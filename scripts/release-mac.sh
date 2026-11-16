@@ -59,6 +59,8 @@ cat > "$INSTALLER/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <!-- ONNX Runtime (stem separation), linked into Apple silicon's half, needs 13.4. -->
+  <key>LSMinimumSystemVersionByArchitecture</key><dict><key>arm64</key><string>13.4</string><key>x86_64</key><string>13.0</string></dict>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>

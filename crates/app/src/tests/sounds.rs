@@ -117,6 +117,79 @@ fn a_loop_is_previewed_at_the_songs_tempo(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn slice_puts_a_sample_on_a_sampler_track_cut_in_time_and_one_undo_takes_it_back(
+    cx: &mut TestAppContext,
+) {
+    use pina_engine::song::project::{Instrument, SampleMode};
+    let (ws, cx, dir) = open_browser(cx, "browser-slice");
+    let i = ws.read_with(cx, |ws, _| {
+        let s = &ws.browser.library.samples;
+        s.iter().position(|s| s.name == "Keys_Loop_90").unwrap()
+    });
+    ws.update(cx, |ws, cx| {
+        ws.select_track(0);
+        ws.select_sample(i, false, cx);
+    });
+    cx.run_until_parked();
+    let before = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    // Slice, every quarter note: its four beats (90 BPM, a bar at the song's 100) four sounds.
+    click_on(cx, "sample-slice", Modifiers::none(), MouseButton::Left);
+    let choices = ws.read_with(cx, |ws, _| {
+        ws.menu
+            .as_ref()
+            .map(|m| m.items.iter().map(|i| i.0.clone()).collect::<Vec<_>>())
+    });
+    let choices = choices.expect("how to slice it");
+    assert_eq!(choices[0], "At its hits");
+    let quarters = choices.iter().position(|c| c == "Every 1/4 note").unwrap();
+    ws.update(cx, |ws, cx| {
+        let action = ws.menu.take().unwrap().items[quarters].1.clone();
+        ws.choose(action, cx);
+    });
+    let (tracks, track, sampler, region) = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        let t = &p.tracks[1];
+        (
+            p.tracks.len(),
+            ws.track,
+            t.instrument.clone(),
+            t.regions[0].clone(),
+        )
+    });
+    // One new track after Keys, a Sampler: no audio track left behind.
+    assert_eq!((tracks, track), (before + 1, 1));
+    let Some(Instrument::Sampler(s)) = sampler else {
+        panic!("{sampler:?}")
+    };
+    assert_eq!(s.zones.len(), 4);
+    assert_eq!(s.voice.mode, SampleMode::Stretch, "at the song's tempo");
+    // Played back where they were, looping on as the loop would.
+    let Content::Midi { notes, .. } = &region.content else {
+        panic!("{:?}", region.content)
+    };
+    let q = PPQ as i64;
+    let starts: Vec<i64> = notes.iter().map(|n| n.start).collect();
+    assert!(
+        starts
+            .iter()
+            .zip([0, q, q * 2, q * 3])
+            .all(|(a, b)| (a - b).abs() <= 2),
+        "{starts:?}"
+    );
+    assert!(region.looped);
+    // One undo: the song as it was.
+    ws.update(cx, |ws, cx| {
+        ws.session.undo();
+        ws.changed(cx);
+    });
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks.len()),
+        before
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui::test]
 fn add_to_song_puts_loops_on_audio_tracks_and_one_shots_on_samplers(cx: &mut TestAppContext) {
     use pina_engine::song::project::Instrument;
     let (ws, cx, dir) = open_browser(cx, "browser-add");

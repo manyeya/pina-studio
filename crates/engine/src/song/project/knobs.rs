@@ -774,8 +774,32 @@ macro_rules! voice {
 
 const TIME_MS: KnobScale = KnobScale::Log(0.5, 10_000.0);
 
-/// Every setting of the Sampler's voice that moves smoothly.
-pub static VOICE: [VoiceKnob; 32] = [
+/// The Drum Sampler's Decay: the decay, and (as it has it in Gate mode) the release too.
+const DRUM_DECAY: VoiceKnob = VoiceKnob {
+    name: "Drum decay",
+    scale: TIME_MS,
+    pos: |v| TIME_MS.pos(v.decay_ms),
+    set: |v, p| {
+        v.decay_ms = TIME_MS.value(p);
+        v.release_ms = v.decay_ms;
+    },
+    say: |v| ms(v.decay_ms),
+};
+
+/// The Drum Sampler's Stretch factor: how many times longer the sound lasts (1 to 16), its
+/// speed's inverse; never still, so a one-shot always plays out.
+const STRETCH: KnobScale = KnobScale::Log(1.0, 16.0);
+const STRETCH_FACTOR: VoiceKnob = VoiceKnob {
+    name: "Stretch factor",
+    scale: STRETCH,
+    pos: |v| STRETCH.pos(1.0 / v.speed.abs().max(1.0 / 16.0)),
+    set: |v, p| v.speed = 1.0 / STRETCH.value(p),
+    say: |v| format!("{:.2}×", 1.0 / v.speed.abs().max(1.0 / 16.0)),
+};
+
+/// Every setting of the Sampler's voice that moves smoothly (new ones last: automation knows
+/// them by their place).
+pub static VOICE: [VoiceKnob; 47] = [
     voice!("Cutoff", cutoff_hz, HZ, hz),
     voice!("Resonance", resonance, UNIT, percent),
     voice!("Filter drive", drive, UNIT, percent),
@@ -823,6 +847,31 @@ pub static VOICE: [VoiceKnob; 32] = [
     voice!("Punch", punch, UNIT, percent),
     voice!("Grain position", position, UNIT, percent),
     voice!("Grain density", density, KnobScale::Lin(1.0, 100.0), plain),
+    voice!("Hold", hold_ms, TIME_MS, ms),
+    DRUM_DECAY,
+    voice!("Sub frequency", sub_hz, KnobScale::Lin(0.0, 120.0), hz),
+    voice!("Punch release", punch_ms, TIME_MS, ms),
+    voice!("8-Bit decay", crush_decay_ms, TIME_MS, ms),
+    voice!("8-Bit rate", crush_khz, KnobScale::Log(1.0, 48.0), plain),
+    voice!("Loop length", loop_ms, TIME_MS, ms),
+    voice!("Loop offset", loop_offset, UNIT, percent),
+    voice!("Pan", pan, KnobScale::Lin(-1.0, 1.0), plain),
+    voice!("Peak gain", peak_db, KnobScale::Lin(-24.0, 24.0), db),
+    voice!(
+        "Mod amount",
+        drum_amount,
+        KnobScale::Lin(-1.0, 1.0),
+        percent
+    ),
+    voice!(
+        "Noise colour",
+        noise_color,
+        KnobScale::Lin(-1.0, 1.0),
+        plain
+    ),
+    voice!("Osc ratio", osc_ratio, KnobScale::Log(0.25, 16.0), plain),
+    voice!("Speed", speed, KnobScale::Lin(-2.0, 2.0), plain),
+    STRETCH_FACTOR,
 ];
 
 static REVERB: [ToolKnob; 15] = [

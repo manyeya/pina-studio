@@ -4,6 +4,7 @@
 pub mod midi;
 pub mod reference;
 pub mod samples;
+pub mod separate;
 pub mod server;
 pub mod sounds;
 pub mod study;

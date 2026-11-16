@@ -341,6 +341,11 @@ impl Workspace {
                                 ),
                         )
                         .child(
+                            self.slice_button(index, "Slice to Sampler", 30., cx)
+                                .w_full()
+                                .justify_center(),
+                        )
+                        .child(
                             self.give_button(s.path.clone(), 30., cx)
                                 .w_full()
                                 .justify_center(),

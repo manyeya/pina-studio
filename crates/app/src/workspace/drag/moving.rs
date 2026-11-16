@@ -196,6 +196,7 @@ impl Workspace {
             Some(Drag::Control { .. }) => self.drag_control(p),
             Some(Drag::Bend { .. }) => self.drag_expression(p),
             Some(Drag::Mark { .. }) => self.drag_mark(p),
+            Some(Drag::Clip { .. }) => self.drag_clip(p),
             Some(Drag::SamplerEnv { .. }) => self.drag_sampler_env(p),
             Some(Drag::SamplerFilter { .. }) => self.drag_sampler_filter(p),
             Some(Drag::Width { side, x, width }) => {
@@ -387,6 +388,17 @@ impl Workspace {
                     return;
                 }
             },
+            Some(Drag::Xy {
+                x,
+                y,
+                left,
+                top,
+                w,
+                h,
+            }) => {
+                self.set_target(x, ((p.x - left) / w.max(1.0)).clamp(0.0, 1.0));
+                self.set_target(y, 1.0 - ((p.y - top) / h.max(1.0)).clamp(0.0, 1.0));
+            }
             Some(Drag::Knob { target, y, value }) => {
                 let v = (value - (p.y - y) / 150.0).clamp(0.0, 1.0);
                 self.set_target(target, v);
@@ -636,6 +648,18 @@ impl Workspace {
             }
             Some(Drag::Sample { .. } | Drag::MapBox { .. }) => {
                 self.drag_sample(p, cx);
+                return;
+            }
+            Some(Drag::Lyric { .. }) => {
+                self.drag_lyric(p, cx);
+                return;
+            }
+            Some(Drag::Chop { .. }) => {
+                self.drag_chop(p, cx);
+                return;
+            }
+            Some(Drag::Cut { .. }) => {
+                self.drag_cut(p, cx);
                 return;
             }
             Some(Drag::Midi { .. }) => {

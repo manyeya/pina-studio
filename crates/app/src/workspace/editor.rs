@@ -76,7 +76,9 @@ impl Workspace {
                     Content::Midi { notes, .. } => format!("{} notes", notes.len()),
                     Content::Pattern(p) => format!("{} rows", p.rows.len()),
                     Content::Takes { takes, .. } => format!("{} takes", takes.len()),
-                    Content::Audio { .. } => "Audio".into(),
+                    Content::Audio { file, .. } => file
+                        .file_name()
+                        .map_or("Audio".into(), |n| n.to_string_lossy().into_owned()),
                 };
                 (t.name.clone(), detail, self.color(at.0))
             }
@@ -93,7 +95,7 @@ impl Workspace {
         let controls = match pane {
             Bottom::PianoRoll => Some(self.roll_controls(cx)),
             Bottom::Sampler => self.sampler_controls(cx),
-            Bottom::Drums => Some(self.drums_controls(cx)),
+            Bottom::Audio => self.audio_controls(cx),
             _ => None,
         };
         let bar = div()
@@ -188,6 +190,7 @@ impl Workspace {
             );
         let body = match pane {
             Bottom::PianoRoll => self.roll_body(cx).into_any_element(),
+            Bottom::Audio => self.audio_body(cx).into_any_element(),
             Bottom::Steps => self.steps_body(cx).into_any_element(),
             Bottom::Drums => self.drums_body(cx).into_any_element(),
             Bottom::Sampler => self.sampler_body(cx).into_any_element(),

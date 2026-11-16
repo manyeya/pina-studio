@@ -38,6 +38,9 @@ pub struct Region {
     pub velocity: i8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quantize: Option<u64>,
+    /// An audio region's level, in dB (0: as recorded).
+    #[serde(default, skip_serializing_if = "sampler::is_zero_f32")]
+    pub gain_db: f32,
     #[serde(flatten)]
     pub content: Content,
 }

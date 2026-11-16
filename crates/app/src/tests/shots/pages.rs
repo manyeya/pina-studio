@@ -166,17 +166,272 @@ pub(super) fn set_up(
             ];
             ws.in_levels = vec![0.12];
         }
-        "settings-recording" | "settings-plugins" | "settings-sounds" | "settings-saving" => {
+        "settings-recording" | "settings-plugins" | "settings-sounds" | "settings-models"
+        | "settings-saving" => {
             use crate::pages::settings::Section;
             ws.settings_section = match page {
                 "settings-recording" => Section::Recording,
                 "settings-plugins" => Section::Plugins,
                 "settings-sounds" => Section::Sounds,
+                "settings-models" => Section::Models,
                 _ => Section::Saving,
             };
             ws.settings.count_in = 1;
             ws.settings.click.sound = 1;
             ws.open_settings(cx);
+        }
+        // Flip: the demo's drums sliced into eight chops on a Sampler track, flipped, a chop
+        // picked.
+        "sampler-flip" => {
+            let p = &ws.session.project;
+            if let Some(t) = p.tracks.iter().position(|t| t.name == "Drums") {
+                let file = match &p.tracks[t].regions[0].content {
+                    pina_engine::song::project::Content::Audio { file, .. } => file.clone(),
+                    _ => Default::default(),
+                };
+                let rate = p.sample_rate as f64;
+                let read = pina_engine::audio::engine::read_audio(&ws.session.dir.join(&file));
+                if let Ok((sides, own)) = read {
+                    let frames = (sides[0].len() as f64 * rate / own) as u64;
+                    let cuts: Vec<u64> = (1..8).map(|k| k * frames / 8).collect();
+                    let made = ws
+                        .session
+                        .project
+                        .sampler_from_audio((t, 0), frames, Some(&cuts));
+                    if let Some(s) = made {
+                        ws.session.project.flip_chops((s, 0), 3);
+                        ws.select_track(s);
+                        ws.region = Some((s, 0));
+                        ws.sampler_ui.chop = Some(2);
+                        ws.changed(cx);
+                        ws.show_bottom(crate::workspace::Bottom::Sampler, cx);
+                    }
+                }
+            }
+        }
+        // The Separate Stems sheet on the demo's drums, with the models there are (PINA_MODELS for
+        // a folder of your own); "-running", as if it were a third of the way through.
+        "stems-sheet" | "stems-sheet-running" => {
+            let p = &ws.session.project;
+            if let Some(t) = p.tracks.iter().position(|t| t.name == "Drums") {
+                ws.open_stems((t, 0), cx);
+                if page == "stems-sheet-running"
+                    && let Some(model) = ws.stems_sheet.as_ref().and_then(|s| s.model.clone())
+                {
+                    ws.separating = Some(crate::editors::audio::Separating {
+                        model,
+                        at: (t, 0),
+                        done: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(340)),
+                        stop: Default::default(),
+                        started: std::time::Instant::now() - std::time::Duration::from_secs(95),
+                        kept: false,
+                    });
+                }
+            }
+        }
+        // The Audio editor on the demo's drums, lyrics beside it as if heard (or, "-get",
+        // waiting for Whisper to download).
+        "audio-lyrics" | "audio-lyrics-get" | "audio-flips" | "audio-flips-finding" => {
+            use pina_engine::lyrics::Line;
+            let p = &ws.session.project;
+            if let Some(t) = p.tracks.iter().position(|t| t.name == "Drums") {
+                let file = match &p.tracks[t].regions[0].content {
+                    pina_engine::song::project::Content::Audio { file, .. } => file.clone(),
+                    _ => Default::default(),
+                };
+                // Its words spread across it, as Whisper would hear them.
+                let line = |text: &str, start: f32, end: f32, sung: usize| {
+                    let said: Vec<&str> = text.split_whitespace().collect();
+                    let each = (end - start) / said.len().max(1) as f32;
+                    Line {
+                        text: text.into(),
+                        start,
+                        end,
+                        sung,
+                        words: said
+                            .iter()
+                            .enumerate()
+                            .map(|(k, w)| pina_engine::lyrics::Word {
+                                text: w.to_string(),
+                                start: start + k as f32 * each,
+                                end: start + (k + 1) as f32 * each,
+                            })
+                            .collect(),
+                    }
+                };
+                ws.lyrics = Some(crate::editors::audio::Lyrics::shown(
+                    file,
+                    "Whisper large-v3 turbo",
+                    vec![
+                        line("Ain't no holding back", 0.05, 0.75, 2),
+                        line("Because you are all I see", 0.8, 1.55, 1),
+                        line("Ain't no holding back", 1.6, 2.35, 2),
+                    ],
+                ));
+                ws.select_track(t);
+                ws.region = Some((t, 0));
+                ws.show_bottom(crate::workspace::Bottom::Audio, cx);
+                // Tall enough to show the hooks and every line under them.
+                ws.editor_h = ws.editor_h.max(560.0);
+                if page.starts_with("audio-flips") {
+                    use pina_engine::lyrics::flips::{Flip, Hit};
+                    let hit = |from: f32, to: f32, beat: f32, beats: f32, pitch: i8, reverse| Hit {
+                        from,
+                        to,
+                        beat,
+                        beats,
+                        pitch,
+                        reverse,
+                        words: String::new(),
+                    };
+                    let flip =
+                        |name: &str, style: &str, says: &str, why: &str, bars, pitch, hits| Flip {
+                            name: name.into(),
+                            style: style.into(),
+                            says: says.into(),
+                            why: why.into(),
+                            bars,
+                            pitch,
+                            hits,
+                        };
+                    let ideas = vec![
+                        flip(
+                            "No Holding",
+                            "chipmunk",
+                            "ain't no holding back, all I see",
+                            "Up five, the line turns to soul, and 'all I see' answers it on bar two.",
+                            2,
+                            5,
+                            vec![
+                                hit(0.05, 0.75, 0.0, 3.5, 0, false),
+                                hit(1.175, 1.55, 4.0, 2.5, 0, false),
+                                hit(0.575, 0.75, 7.0, 1.0, 0, true),
+                            ],
+                        ),
+                        flip(
+                            "I See You",
+                            "chop",
+                            "I see you, back, back, holding back",
+                            "Three words from two lines say something new, and the low 'holding back' drops it into the loop.",
+                            1,
+                            0,
+                            vec![
+                                hit(1.3, 1.55, 0.0, 1.0, 0, false),
+                                hit(0.925, 1.05, 1.0, 0.5, 0, false),
+                                hit(0.575, 0.75, 1.5, 0.5, 0, false),
+                                hit(0.575, 0.75, 2.0, 0.5, 0, false),
+                                hit(0.4, 0.75, 2.5, 1.5, -12, false),
+                            ],
+                        ),
+                        flip(
+                            "All All All",
+                            "stutter",
+                            "all all all all, all I see",
+                            "The stutter climbs on sixteenths and throws the whole line on the one.",
+                            2,
+                            0,
+                            vec![
+                                hit(1.175, 1.55, 0.0, 3.0, 0, false),
+                                hit(1.175, 1.3, 6.0, 0.25, 0, false),
+                                hit(1.175, 1.3, 6.25, 0.25, 0, false),
+                                hit(1.175, 1.3, 6.5, 0.25, 2, false),
+                                hit(1.175, 1.3, 6.75, 0.25, 4, false),
+                                hit(1.175, 1.55, 7.0, 1.0, 7, false),
+                            ],
+                        ),
+                    ];
+                    let heard = ws
+                        .lyrics
+                        .as_ref()
+                        .map(|l| l.heard.clone())
+                        .unwrap_or_default();
+                    let finding = page == "audio-flips-finding";
+                    let mut flips = crate::editors::audio::Flips::shown(
+                        heard,
+                        match finding {
+                            true => ideas[..2].to_vec(),
+                            false => ideas,
+                        },
+                        finding.then_some((
+                            crate::agent::Kind::ClaudeCode,
+                            crate::editors::audio::Stage::Writing,
+                            23,
+                        )),
+                    );
+                    if !finding {
+                        flips.playing = Some((
+                            1,
+                            std::time::Instant::now() - std::time::Duration::from_millis(900),
+                            8.0,
+                            2.4,
+                        ));
+                    }
+                    ws.flips.now = Some(flips);
+                    ws.flips.tab = crate::editors::audio::LyricsTab::Flips;
+                    ws.flips.style = Some("any");
+                }
+                if page == "audio-lyrics-get"
+                    && let Some(l) = ws.lyrics.take()
+                {
+                    ws.lyrics_wait = Some(crate::editors::audio::LyricsWait {
+                        file: l.file,
+                        at: (t, 0),
+                        hearing: None,
+                        failed: None,
+                    });
+                }
+            }
+        }
+        "audio-slices" | "audio-slices-voice" => {
+            let p = &ws.session.project;
+            if let Some(t) = p.tracks.iter().position(|t| t.name == "Drums") {
+                let file = match &p.tracks[t].regions[0].content {
+                    pina_engine::song::project::Content::Audio { file, .. } => file.clone(),
+                    _ => Default::default(),
+                };
+                ws.select_track(t);
+                ws.region = Some((t, 0));
+                ws.editor_h = ws.editor_h.max(560.0);
+                ws.show_bottom(crate::workspace::Bottom::Audio, cx);
+                let voice = page == "audio-slices-voice";
+                let (sides, rate) =
+                    pina_engine::audio::engine::read_audio(&ws.session.dir.join(&file)).unwrap();
+                let stop = std::sync::atomic::AtomicBool::new(false);
+                let mut slices = pina_engine::smart::slices(&sides, rate, voice, |_| {}, &stop);
+                match voice {
+                    // A voice alone, its words heard: its chops named by them.
+                    true => {
+                        let sung = ["ain't", "no", "holding", "back", "all", "I", "see", "you"];
+                        for (s, w) in slices.iter_mut().zip(sung) {
+                            s.name = w.into();
+                        }
+                    }
+                    // One with the voice in it, as a song's would be.
+                    false => {
+                        if let Some(s) = slices.get_mut(3) {
+                            s.voice = true;
+                        }
+                    }
+                }
+                ws.beat = Some(crate::editors::audio::Beat {
+                    at: (t, 0),
+                    file: file.clone(),
+                    cut: file,
+                    heard: match voice {
+                        true => pina_engine::smart::InIt::Voice,
+                        false => pina_engine::smart::InIt::Mixed,
+                    },
+                    guessed: false,
+                    slices,
+                    audio: std::sync::Arc::new((sides, rate)),
+                    unvoiced: false,
+                    filter: None,
+                    playing: Some((
+                        2,
+                        std::time::Instant::now() + std::time::Duration::from_secs(9),
+                    )),
+                });
+            }
         }
         "settings-midi" => {
             ws.settings_section = crate::pages::settings::Section::Midi;
@@ -194,6 +449,9 @@ pub(super) fn set_up(
             if page == "samples-kit-folder" {
                 // A kit in the song, picked, to load the folder's sounds into.
                 ws.new_drum_kit(cx);
+                if let Some(kit) = ws.drum_kit() {
+                    ws.fit_kit(kit, cx);
+                }
             }
             ws.toggle_samples_page(cx);
             match page {
@@ -243,11 +501,26 @@ pub(super) fn set_up(
             }
         }
         // The compact browser's sounds, each with its play button.
-        "panel-sounds" => {
+        "panel-sounds" | "panel-sounds-picked" | "samples-picked" => {
             let library = pina_engine::samples::library::Library::load();
             ws.set_library(library, cx);
-            ws.toggle_samples(cx);
-            ws.browse(crate::sounds::catalog::Scope::Sounds, cx);
+            match page {
+                "samples-picked" => ws.toggle_samples_page(cx),
+                _ => {
+                    ws.toggle_samples(cx);
+                    ws.browse(crate::sounds::catalog::Scope::Sounds, cx);
+                }
+            }
+            // A loop picked: its card, with Add to song and Slice.
+            let samples = &ws.browser.library.samples;
+            let loop_at = samples
+                .iter()
+                .position(|s| s.analysis.kind == pina_engine::samples::Kind::Loop);
+            if page != "panel-sounds"
+                && let Some(i) = loop_at
+            {
+                ws.select_sample(i, false, cx);
+            }
         }
         "settings" => {
             ws.settings.hidden = vec!["score".into(), "takes".into(), "live_loops".into()];
@@ -268,7 +541,8 @@ pub(super) fn set_up(
             ws.loading = Some(o);
             cx.notify();
         }
-        "home" | "songs" | "songs-grid" | "songs-picked" => {
+        // "songs-new": the new song's panel up over them; "songs-first": no songs yet.
+        "home" | "songs" | "songs-grid" | "songs-picked" | "songs-new" | "songs-first" => {
             // A library's worth: tempos, keys, times and arrangements of every size.
             let names = [
                 ("Night Drive", 92.0, 0, Some("A minor"), [4, 4], 7, 192.0),
@@ -411,6 +685,12 @@ pub(super) fn set_up(
                 .collect();
             if page.ends_with("-grid") {
                 ws.settings.songs_grid = true;
+            }
+            if page == "songs-first" {
+                ws.songs.clear();
+            }
+            if page == "songs-new" || page == "songs-first" {
+                ws.show_home(true, window, cx);
             }
             if page.ends_with("-picked") {
                 ws.show_home(false, window, cx);

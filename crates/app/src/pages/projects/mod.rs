@@ -271,6 +271,8 @@ pub struct Home {
     pub search: Entity<TextInput>,
     pub picks: Vec<PathBuf>,
     pub shelving: Shelving,
+    /// The new song's panel is up, over the page.
+    pub creating: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -284,13 +286,12 @@ impl Home {
         });
         let search = cx.new(|cx| TextInput::search("Search songs", cx));
         let mut subs = Vec::new();
-        // Enter in either: an empty song, at once.
+        // Enter in either: an empty song, at once; Escape puts the panel away.
         for field in [&name, &tempo] {
             subs.push(
-                cx.subscribe_in(field, window, |ws, _, e: &TextEvent, window, cx| {
-                    if let TextEvent::Confirm(_) = e {
-                        ws.create_song(Template::Empty, window, cx);
-                    }
+                cx.subscribe_in(field, window, |ws, _, e: &TextEvent, window, cx| match e {
+                    TextEvent::Confirm(_) => ws.create_song(Template::Empty, window, cx),
+                    TextEvent::Cancel => ws.close_new_song(cx),
                 }),
             );
         }
@@ -308,6 +309,7 @@ impl Home {
             search,
             picks: Vec::new(),
             shelving: Shelving::default(),
+            creating: false,
             _subs: subs,
         }
     }

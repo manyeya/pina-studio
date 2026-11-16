@@ -86,22 +86,32 @@ pub(crate) fn codex_models() -> Vec<Model> {
 
 /// The model and effort last picked for an agent, kept for every song.
 pub fn tuning(kind: Kind) -> Tuning {
+    tuning_for(kind.def().id)
+}
+
+pub fn tune(kind: Kind, tuning: &Tuning) {
+    tune_for(kind.def().id, tuning)
+}
+
+/// The model and effort last picked for what's kept as `key` (an agent's id, or a feature's own
+/// for it: "flips:codex").
+pub fn tuning_for(key: &str) -> Tuning {
     let all: serde_json::Map<String, Value> = std::fs::read_to_string(tuning_file())
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    all.get(kind.def().id)
+    all.get(key)
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default()
 }
 
-pub fn tune(kind: Kind, tuning: &Tuning) {
+pub fn tune_for(key: &str, tuning: &Tuning) {
     let file = tuning_file();
     let mut all: serde_json::Map<String, Value> = std::fs::read_to_string(&file)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    all.insert(kind.def().id.into(), json!(tuning));
+    all.insert(key.into(), json!(tuning));
     let _ = std::fs::create_dir_all(file.parent().unwrap());
     let _ = std::fs::write(file, Value::Object(all).to_string());
 }

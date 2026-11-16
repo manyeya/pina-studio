@@ -7,6 +7,8 @@ use crate::song::project::{ModDest, ModSource, Routes, Wave};
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
 pub enum Stage {
     Attack,
+    /// At the top for the shape's hold, before the decay.
+    Hold,
     Decay,
     Sustain,
     Release,
@@ -19,13 +21,17 @@ pub enum Stage {
 pub struct Env {
     pub stage: Stage,
     pub level: f32,
+    /// Samples held so far.
+    held: u32,
 }
 
-/// An envelope's shape at a sample rate: the attack's rise a sample, the decay's and release's
-/// fall (as a factor a sample toward their goal), and the level held.
-#[derive(Clone, Copy)]
+/// An envelope's shape at a sample rate: the attack's rise a sample, how many samples it holds
+/// at the top, the decay's and release's fall (as a factor a sample toward their goal), and the
+/// level held.
+#[derive(Clone, Copy, Default)]
 pub struct Shape {
     rise: f32,
+    hold: u32,
     decay: f32,
     sustain: f32,
     pub release: f32,
@@ -48,10 +54,17 @@ impl Shape {
             } else {
                 1.0 / (attack_ms * 0.001 * rate)
             },
+            hold: 0,
             decay: fall(decay_ms, rate),
             sustain: sustain.clamp(0.0, 1.0),
             release: fall(release_ms, rate),
         }
+    }
+
+    /// The same, holding at the top for `ms` after the attack.
+    pub fn with_hold(mut self, ms: f32, rate: f32) -> Shape {
+        self.hold = (ms.clamp(0.0, 600_000.0) * 0.001 * rate) as u32;
+        self
     }
 }
 
@@ -60,6 +73,7 @@ impl Env {
         Env {
             stage: Stage::Attack,
             level: 0.0,
+            held: 0,
         }
     }
 
@@ -75,6 +89,16 @@ impl Env {
                 self.level += s.rise;
                 if self.level >= 1.0 {
                     self.level = 1.0;
+                    self.stage = match s.hold {
+                        0 => Stage::Decay,
+                        _ => Stage::Hold,
+                    };
+                }
+            }
+            Stage::Hold => {
+                self.level = 1.0;
+                self.held += 1;
+                if self.held >= s.hold {
                     self.stage = Stage::Decay;
                 }
             }

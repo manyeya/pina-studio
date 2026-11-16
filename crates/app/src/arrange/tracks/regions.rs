@@ -10,6 +10,8 @@ pub struct Inside {
     waves: Vec<Wave>,
     /// A pattern's: its rows' pitches (top first) and its step, to draw it as steps.
     steps: Option<(Vec<u8>, u64)>,
+    /// Audio's gain (dB): its waveform drawn as loud as it plays.
+    gain_db: f32,
 }
 
 #[cfg(test)]
@@ -211,14 +213,14 @@ pub(crate) fn grab(
         ws.focus_region(at);
         ws.picks_from = ws.picks.clone();
         ws.select_track(at.0);
-        // Double-clicking a region opens it: MIDI in the piano roll, a pattern in the step
-        // sequencer, a take folder its takes.
+        // Double-clicking a region opens it: MIDI in the piano roll, audio in the audio editor,
+        // a pattern in the step sequencer, a take folder its takes.
         if e.click_count == 2 && edge == Edge::Move {
             let pane = match ws.session.project.region(at).content {
                 Content::Takes { .. } => Some(Bottom::Takes),
                 Content::Pattern { .. } => Some(Bottom::Steps),
                 Content::Midi { .. } => Some(Bottom::PianoRoll),
-                Content::Audio { .. } => None,
+                Content::Audio { .. } => Some(Bottom::Audio),
             };
             if let Some(pane) = pane {
                 ws.show_bottom(pane, cx);
@@ -370,6 +372,9 @@ pub fn paint_inside(
     }
     let mid = h / 2.0;
     let wave = color.opacity(0.85);
+    // As loud as its gain makes it; pushed past full scale, white, as it clips.
+    let gain = 10f32.powf(inside.gain_db / 20.0);
+    let clips = Hsla::from(rgb(0xffffff)).opacity(0.9);
     for wv in &inside.waves {
         for x in wv.x0.max(0.0) as usize..wv.x1.min(w) as usize {
             let from = wv.offset + (x as f32 - wv.x0) * wv.samples_per_px;
@@ -379,8 +384,10 @@ pub fn paint_inside(
             let (lo, hi) = wv
                 .peaks
                 .range(from as usize, (from + wv.samples_per_px) as usize);
-            let (y1, y2) = (mid - hi * mid, mid - lo * mid);
-            bar(x as f32, y1, 1.0, (y2 - y1).max(1.0), wave);
+            let (lo, hi) = (lo * gain, hi * gain);
+            let (y1, y2) = ((mid - hi * mid).max(0.0), (mid - lo * mid).min(h));
+            let c = if hi > 1.0 || lo < -1.0 { clips } else { wave };
+            bar(x as f32, y1, 1.0, (y2 - y1).max(1.0), c);
         }
     }
 }
@@ -398,7 +405,8 @@ impl Workspace {
         let color = self.color(at.0);
         let selected = self.is_selected(at);
         let muted = region.mute;
-        let inside = self.inside(&region.content, region.start, region.length);
+        let mut inside = self.inside(&region.content, region.start, region.length);
+        inside.gain_db = region.gain_db;
         let (start, end) = (region.start, region.start + region.length);
         let ink = Hsla::from(rgb(color));
         // Its start trims; its end's bottom half trims (⌥ time-stretches), its top half loops.
@@ -682,7 +690,8 @@ impl Workspace {
                 break;
             }
             if x + w >= 0.0 {
-                let inside = self.inside(&region.content, start, length);
+                let mut inside = self.inside(&region.content, start, length);
+                inside.gain_db = region.gain_db;
                 out.push(
                     div()
                         .absolute()

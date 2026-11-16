@@ -43,7 +43,7 @@ use crate::{
 };
 
 /// Each modulator's colour, by its place on its track.
-pub const MOD_COLORS: [u32; MAX_MODS] = [VIOLET, AMBER, TEAL, PINK, SKY, MINT, CORAL, SLATE];
+pub const MOD_COLORS: [u32; 8] = [VIOLET, AMBER, TEAL, PINK, SKY, MINT, CORAL, SLATE];
 
 /// How far a parameter must move to count as turned, of its 0 to 1.
 const TURNED: f64 = 0.004;

@@ -1,17 +1,15 @@
-//! The zone's switches, and the keys under the zones.
+//! The picked zone's bar (its trim, how it plays and loops, its choke), and the keys under
+//! the zones.
 
 use super::*;
 
 impl Workspace {
-    /// The zone's switches: how it ends, loops, which way it plays, its choke group, and when
-    /// it plays (as its note starts, or as it's let go).
-    pub(crate) fn zone_switches(
-        &mut self,
-        t: usize,
-        i: usize,
-        z: &Zone,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    /// The picked zone's bar, under its sample, in its colour: where it's trimmed (its start and
+    /// length, to drag) and which way it plays, whether it plays out or stops with its note,
+    /// its loop and the loop's crossfade, whether it plays as its note starts or as it's let go,
+    /// and its choke group.
+    pub(crate) fn zone_bar(&mut self, t: usize, i: usize, z: &Zone, cx: &mut Context<Self>) -> Div {
+        let color = zone_color(i);
         let set = move |ws: &mut Workspace, cx: &mut Context<Workspace>, f: fn(&mut Zone)| {
             ws.edit_sampler(t, cx, |s| {
                 if let Some(z) = s.zones.get_mut(i) {
@@ -24,7 +22,7 @@ impl Workspace {
                       sel: &'static str,
                       f: fn(&mut Zone),
                       cx: &mut Context<Self>| {
-            pill(label, on, TEXT)
+            pill(label, on, color)
                 .debug_selector(move || sel.into())
                 .on_mouse_down(
                     MouseButton::Left,
@@ -36,12 +34,12 @@ impl Workspace {
         };
         let looping = z.loop_mode;
         let loops = [
-            (LoopMode::Off, "No loop"),
+            (LoopMode::Off, "Off"),
             (LoopMode::Forward, "Loop"),
             (LoopMode::PingPong, "Ping-pong"),
         ]
         .map(|(m, label)| {
-            pill(label, looping == m, AMBER)
+            pill(label, looping == m, color)
                 .debug_selector(move || format!("loop-{label}"))
                 .on_mouse_down(
                     MouseButton::Left,
@@ -55,22 +53,59 @@ impl Workspace {
                     }),
                 )
         });
-        let choke = match z.choke {
-            Some(g) => {
-                ["Choke 1", "Choke 2", "Choke 3", "Choke 4"][(g as usize).saturating_sub(1).min(3)]
-            }
-            None => "No choke",
-        };
+        let choke = dropdown(
+            z.choke.map_or("None".to_string(), |g| format!("Group {g}")),
+            28.,
+        )
+        .debug_selector(|| "zone-choke".into())
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                let items = [None, Some(1), Some(2), Some(3), Some(4)]
+                    .map(|group| {
+                        let label = group.map_or("None".to_string(), |g| format!("Group {g}"));
+                        let op = SamplerOp::Choke {
+                            track: t,
+                            zone: i,
+                            group,
+                        };
+                        (label, MenuAction::Sampler(op))
+                    })
+                    .to_vec();
+                ws.menu = Some(Menu {
+                    at: e.position,
+                    items,
+                    ..Default::default()
+                });
+                cx.notify();
+            }),
+        );
+        let tray_of = || tray().p(px(2.)).gap(px(1.)).rounded(px(8.));
         div()
             .flex()
             .flex_wrap()
-            .items_center()
-            .gap(px(6.))
-            .child(
-                tray()
-                    .p(px(2.))
-                    .gap(px(1.))
-                    .rounded(px(8.))
+            .items_start()
+            .gap(px(12.))
+            .child(captioned(
+                "TRIM",
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .child(self.sampler_value(t, Field::Start(i), "Start", color, cx))
+                    .child(self.sampler_value(t, Field::Span(i), "Length", color, cx))
+                    .child(tray_of().child(switch(
+                        "Reverse",
+                        z.reverse,
+                        "zone-reverse",
+                        |z| z.reverse ^= true,
+                        cx,
+                    ))),
+            ))
+            .child(captioned(
+                "PLAYS",
+                tray_of()
                     .child(switch(
                         "One-shot",
                         !z.gate,
@@ -79,46 +114,36 @@ impl Workspace {
                         cx,
                     ))
                     .child(switch("Gate", z.gate, "zone-gate", |z| z.gate = true, cx)),
-            )
-            .child(tray().p(px(2.)).gap(px(1.)).rounded(px(8.)).children(loops))
-            .child(
-                tray()
-                    .p(px(2.))
-                    .gap(px(1.))
-                    .rounded(px(8.))
+            ))
+            .child(captioned(
+                "LOOP",
+                div()
+                    .flex()
+                    .gap(px(4.))
+                    .child(tray_of().children(loops))
+                    .when(looping != LoopMode::Off, |d| {
+                        d.child(self.sampler_value(t, Field::LoopFade(i), "Fade", color, cx))
+                    }),
+            ))
+            .child(captioned(
+                "TRIGGER",
+                tray_of()
                     .child(switch(
-                        "Reverse",
-                        z.reverse,
-                        "zone-reverse",
-                        |z| z.reverse ^= true,
+                        "Note on",
+                        z.trigger == Trigger::Attack,
+                        "zone-attack",
+                        |z| z.trigger = Trigger::Attack,
                         cx,
                     ))
                     .child(switch(
-                        "On release",
+                        "Release",
                         z.trigger == Trigger::Release,
                         "zone-release",
-                        |z| {
-                            z.trigger = match z.trigger {
-                                Trigger::Attack => Trigger::Release,
-                                Trigger::Release => Trigger::Attack,
-                            }
-                        },
-                        cx,
-                    ))
-                    .child(switch(
-                        choke,
-                        z.choke.is_some(),
-                        "zone-choke",
-                        |z| {
-                            z.choke = match z.choke {
-                                None => Some(1),
-                                Some(g) if g < 4 => Some(g + 1),
-                                _ => None,
-                            };
-                        },
+                        |z| z.trigger = Trigger::Release,
                         cx,
                     )),
-            )
+            ))
+            .child(captioned("CHOKE", choke))
     }
 
     /// Four octaves and more of keys, the zones over the notes they play.

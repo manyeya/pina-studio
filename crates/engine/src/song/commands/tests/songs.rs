@@ -282,6 +282,9 @@ fn every_command_is_described() {
         "move_region",
         "trim_region",
         "split_region",
+        "add_stems",
+        "lyric_loop",
+        "flip_words",
         "delete_region",
         "stretch_region",
         "set_cell",
@@ -667,4 +670,58 @@ fn a_pass_that_ends_in_silence_says_so() {
         out["note"].as_str().unwrap().contains("ends in silence"),
         "{out}"
     );
+}
+
+#[test]
+fn the_agent_flips_words_into_a_sampler_hook_kept_inside_its_bars_and_the_file() {
+    let dir = std::env::temp_dir().join(format!("pina-flip-cmd-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("Audio Files")).unwrap();
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 48_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    // Four seconds of a vocal.
+    let mut w = hound::WavWriter::create(dir.join("Audio Files/vox.wav"), spec).unwrap();
+    (0..192_000).for_each(|i| w.write_sample(((i % 100) * 100) as i16).unwrap());
+    w.finalize().unwrap();
+    let mut p = Project::new(48_000);
+    run(&mut p, r#"{"op": "add_track", "name": "Vox"}"#).unwrap();
+    let add = json!({"op": "add_audio_region", "track": 0, "file": "Audio Files/vox.wav", "start": PPQ * 4});
+    apply(&mut p, &dir, serde_json::from_value(add).unwrap()).unwrap();
+    let flip = json!({"op": "flip_words", "track": 0, "region": 0, "flip": {
+    "name": "Let It Burn", "bars": 2, "pitch": 5,
+    "hits": [
+        {"from": 1.0, "to": 2.0, "beat": 0, "beats": 1.5},
+        {"from": 3.0, "to": 2.5, "beat": 1.5, "beats": 99, "pitch": -12, "reverse": true},
+        {"from": 1.0, "to": 2.0, "beat": 40, "beats": 1},
+        {"from": 9.0, "to": 12.0, "beat": 4, "beats": 1}
+    ]}});
+    let made = apply(&mut p, &dir, serde_json::from_value(flip).unwrap()).unwrap();
+    // Out of the loop's bars, or past the file's end: left out.
+    assert_eq!(
+        (made["track"].clone(), made["hits"].clone()),
+        (json!(1), json!(2))
+    );
+    let t = &p.tracks[1];
+    assert_eq!(t.name, "Let It Burn");
+    let Some(Instrument::Sampler(s)) = &t.instrument else {
+        panic!()
+    };
+    assert_eq!(s.zones.len(), 2);
+    // Its from and to put right, as shares of the 4 seconds.
+    assert_eq!((s.zones[1].start, s.zones[1].end), (0.625, Some(0.75)));
+    // At the region's bar; the backwards hit kept inside the 8 beats.
+    let r = &t.regions[0];
+    assert_eq!(r.start, PPQ * 4);
+    let Content::Midi { notes, .. } = &r.content else {
+        panic!()
+    };
+    assert_eq!(notes[1].length, PPQ * 13 / 2);
+    // Nothing left inside: refused.
+    let none = json!({"op": "flip_words", "track": 0, "region": 0, "flip": {
+        "name": "Nothing", "bars": 1, "hits": [{"from": 1.0, "to": 2.0, "beat": 9, "beats": 1}]}});
+    assert!(apply(&mut p, &dir, serde_json::from_value(none).unwrap()).is_err());
+    let _ = std::fs::remove_dir_all(dir);
 }

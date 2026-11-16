@@ -5,11 +5,14 @@
 mod automation;
 mod bloom;
 mod chain;
+mod chops;
 mod editing;
 mod eq;
 mod expression;
+mod flips;
 mod kits;
 mod knobs;
+mod lyric_loops;
 mod midi_fx;
 mod params;
 mod patterns;
@@ -20,18 +23,21 @@ mod rack;
 mod regions;
 mod sampler;
 mod sections;
+mod separated;
 mod space;
 mod stacks;
 mod strip;
 mod synth;
 mod tempo;
 mod timing;
+mod to_sampler;
 mod tools;
 mod track;
 
 pub use automation::*;
 pub use bloom::*;
 pub use chain::*;
+pub use chops::*;
 pub use eq::*;
 pub use expression::*;
 pub use kits::*;
@@ -51,6 +57,7 @@ pub use strip::*;
 pub use synth::*;
 pub use tempo::*;
 pub use timing::*;
+pub use to_sampler::*;
 pub use tools::*;
 pub use track::*;
 
@@ -436,6 +443,14 @@ impl Project {
                 .position(|&x| x == *s)
                 .map_or(0, |i| i as u64 + 1);
         }
+        // A pad's kit and a kit's return too.
+        let number = |id: u64| ids.iter().position(|&x| x == id).map(|i| i as u64 + 1);
+        for pad in p.tracks.iter_mut().filter_map(|t| t.pad.as_mut()) {
+            pad.kit = number(pad.kit).unwrap_or(0);
+        }
+        for a in &mut p.auxes {
+            a.kit = a.kit.and_then(number);
+        }
         p
     }
 
@@ -464,6 +479,45 @@ impl Project {
                 .checked_sub(1)
                 .and_then(|i| ids.get(i).copied())
                 .unwrap_or(0);
+        }
+        // A pad's kit, by its number. Songs saved before kits were numbered hold an id of a
+        // session gone: the kit is the one in the pad's stack.
+        let kits: Vec<(u64, Option<u32>)> = self
+            .tracks
+            .iter()
+            .map(|t| match t.instrument == Some(Instrument::Kit) {
+                true => (t.id, t.output),
+                false => (0, None),
+            })
+            .collect();
+        for t in &mut self.tracks {
+            let output = t.output;
+            let Some(pad) = &mut t.pad else {
+                continue;
+            };
+            let number = (pad.kit as usize)
+                .checked_sub(1)
+                .and_then(|i| kits.get(i))
+                .filter(|k| k.0 != 0);
+            let numbered = number
+                .filter(|k| output.is_none() || k.1 == output)
+                .map(|k| k.0);
+            let stacked = || {
+                kits.iter()
+                    .find(|k| k.0 != 0 && output.is_some() && k.1 == output)
+                    .map(|k| k.0)
+            };
+            // Last, a pad played into another bus (no kit there): its number.
+            pad.kit = numbered
+                .or_else(stacked)
+                .or(number.map(|k| k.0))
+                .unwrap_or(0);
+        }
+        for a in &mut self.auxes {
+            a.kit = a.kit.and_then(|n| {
+                let i = (n as usize).checked_sub(1)?;
+                kits.get(i).map(|k| k.0).filter(|&id| id != 0)
+            });
         }
     }
 

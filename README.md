@@ -28,6 +28,9 @@ of it.
     (`arrange.rs`), playbooks, the critic, track looks and audio analysis.
   - `plugin/`: hosting VST3, CLAP, VST2 and Audio Units behind one interface, and the scan.
   - `samples/`: the sample library: analysis, the index, search, kits and the sound map.
+  - `lyrics/`: the lines sung in a recording, by Whisper (whisper.cpp), and its hooks.
+  - `separate/`: stems, by a separation model the person adds, run in ONNX Runtime: its
+    model.json, the STFT, segments overlapped and crossfaded.
   - `study/`: finished songs taken apart: beats, harmony, form, groove and words.
   - `paths.rs`: where Pina Studio keeps its files.
 - `crates/app`, the gpui UI and the `pina` command:
@@ -523,7 +526,32 @@ In the app:
   grain position, size, density, spray, speed, drive, FM, sub, noise) and Layers (a pitch drop,
   sub, noise, punch, FM and ring). Mono and Legato (in the bar's More) play one note at a time, gliding. Slice… cuts
   a loop across the keys from C1 at its hits, or into equal parts. Turning a knob while it plays
-  changes what's playing, without a reload.
+  changes what's playing, without a reload. Any sample in the Sounds browser has Slice too: at
+  its hits or on the song's grid onto a new Sampler track, a MIDI region playing the slices back
+  in time. Flip, under the keys of a sliced sampler, rearranges the chops as on an MPC: each
+  its waveform; drag one onto another to swap them, or from the chops onto a place; stutter,
+  backwards, silence; Flip for a new arrangement each press, Turn round, Half and Double time,
+  As it was; Play it loops it alone. Cut it where you like: click the sample to cut, drag a cut
+  to move it, double-click to take it out.
+- Stems: Separate Stems in an audio region's menu parts it into vocals, drums, bass and the rest
+  with a separation model you add (none come with Pina Studio): Settings › Stems & lyrics
+  downloads the tested ones from where their makers keep them, or adds one you have. Each stem goes on a track of its own in a stack, playing as the region
+  did. On Apple silicon and Windows x64; `pina models` and `pina separate` from the command line.
+  How to add one, and the models that have been run: `docs/separation-models.md`.
+- Smart Slice, in the Audio editor: any recording sliced as a producer would, in one click. It
+  hears what's in it by its sound (a beat, a voice in a beat, a voice alone) and slices it that
+  way: a beat at its hits (kick, snare, a chord in A minor), a voice into vocal chops named by
+  the words sung, a song voice and all (or without it), its words a tab away. Slices to hear,
+  narrow by kind, put on a Sampler, or flip with the Studio Agent; `pina slices <file>`.
+- Lyrics: Smart Slice's Slice the words lists the lines sung in a region (Whisper, a model you
+  download; a song's vocals taken out first): the hooks first, then every line, each with its
+  waveform and how often it's sung, to hear, to make a loop on the bars, to chop at its words
+  onto a Sampler to flip, or to drag onto a track; its words drawn on the waveform. Flips: the
+  Studio Agent's engine (Claude Code or Codex) flips the words into hooks as a producer chops a
+  vocal (a new order on the grid, pitched up as soul samples are or down, stuttered, answered,
+  reversed), each shown as it's written, to hear looping or use on a Sampler track. `pina
+  lyrics <file>` and `pina flips <song> <track> <region>` from the command line; the Studio
+  Agent's `stems` and `lyrics` tools and `lyric_loop` and `flip_words` edits.
 - Automation (A shows it): each track has lanes under it, a parameter each: volume, pan, mute,
   its sends, or any parameter of its plugins (type to search; those with automation are marked).
   + adds a lane, × takes one away; each shows its value at the playhead and a scale. Click for a

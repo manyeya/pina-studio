@@ -36,6 +36,11 @@ pub enum Target {
         track: usize,
         field: crate::editors::sampler::Field,
     },
+    /// A setting of an audio region (by where it is), as the audio editor turns it.
+    Clip {
+        at: (usize, usize),
+        field: crate::editors::audio::ClipField,
+    },
 }
 
 /// A compressor's, saturator's or limiter's knob, on one stacked on a channel.
@@ -241,6 +246,7 @@ impl Workspace {
                 .and_then(|u| Some((crate::mix::strip::knobs(u.kind()).get(knob)?.pos)(u)))
                 .unwrap_or(0.0),
             Target::Sampler { track, field } => self.sampler_pos(track, field),
+            Target::Clip { at, field } => self.clip_pos(at, field),
         }
     }
 
@@ -284,6 +290,7 @@ impl Workspace {
                 }
             }
             Target::Sampler { track, field } => self.sampler_set(track, field, v),
+            Target::Clip { at, field } => self.clip_set(at, field, v),
             Target::Rack { track, slot, knob } => {
                 if let Some(u) = self.poly_mut(track).and_then(|p| p.fx.get_mut(slot))
                     && let Some(k) = crate::mix::strip::knobs(u.kind()).get(knob)

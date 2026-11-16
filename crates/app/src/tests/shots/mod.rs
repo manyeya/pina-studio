@@ -151,6 +151,24 @@ fn shots() {
         cx.run_until_parked();
         thread::sleep(Duration::from_millis(5));
     }
+    // The audio editor's file read (its waveform and hits) before it's drawn.
+    if page == "audio" {
+        for _ in 0..80 {
+            let ready = cx.update(|cx| {
+                window
+                    .update(cx, |ws, _, cx| {
+                        cx.notify();
+                        ws.audio_region().and_then(|at| ws.audio_end(at)).is_some()
+                    })
+                    .unwrap_or(false)
+            });
+            cx.run_until_parked();
+            thread::sleep(Duration::from_millis(25));
+            if ready {
+                break;
+            }
+        }
+    }
     // Drawn once first: what's placed by where something was drawn (a popover under its button)
     // is where it would be on screen.
     cx.capture_screenshot(window.into()).unwrap();

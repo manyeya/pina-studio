@@ -262,6 +262,24 @@ pub enum MenuAction {
     /// The right-click menus of the tracks area (`context.rs`).
     Track(crate::workspace::context::TrackOp),
     Region(At, crate::workspace::context::RegionOp),
+    /// A library sample (by its index) sliced onto a new Sampler track.
+    SliceSample(usize, crate::editors::audio::SliceBy),
+    /// The separation model picked in the Separate Stems sheet, by name.
+    StemModel(String),
+    /// The engine the Lyrics panel's flips are asked of.
+    FlipEngine(crate::agent::Kind),
+    /// The style flips are asked for (an id of `lyrics::flips::STYLES`).
+    FlipStyle(&'static str),
+    /// The model flips are asked of (None: the engine's own).
+    FlipModel(Option<String>),
+    /// How hard the engine thinks about flips (None: its own).
+    FlipEffort(Option<String>),
+    /// Which of a recording's slices show (Smart Slice): all, or a kind.
+    SliceFilter(Option<crate::editors::audio::SliceFilter>),
+    /// What's in a recording, put right (Smart Slice): sliced again that way.
+    SliceHeardAs(pina_engine::smart::InIt),
+    /// A song sliced with its voice in, or taken out.
+    SliceUnvoiced(bool),
     /// Makes an alias of a region, after it.
     Alias(At),
     /// Makes an alias a region of its own.
@@ -617,6 +635,24 @@ impl Workspace {
             MenuAction::Map(t, k, target) => self.map_modulator(t, k, target, cx),
             MenuAction::Tool(t) => self.tool = t,
             MenuAction::Region(at, op) => self.region_op(at, op, cx),
+            MenuAction::SliceSample(index, how) => self.slice_sample(index, how, cx),
+            MenuAction::StemModel(name) => {
+                if let Some(s) = self.stems_sheet.as_mut() {
+                    s.model = Some(name);
+                    s.without.clear();
+                }
+            }
+            MenuAction::FlipEngine(kind) => self.flips.kind = Some(kind),
+            MenuAction::FlipStyle(style) => self.flips.style = Some(style),
+            MenuAction::FlipModel(model) => self.pick_flip_tuning(Some(model), None),
+            MenuAction::FlipEffort(effort) => self.pick_flip_tuning(None, Some(effort)),
+            MenuAction::SliceFilter(f) => {
+                if let Some(b) = self.beat.as_mut() {
+                    b.filter = f;
+                }
+            }
+            MenuAction::SliceHeardAs(h) => self.slice_heard_as(h, cx),
+            MenuAction::SliceUnvoiced(u) => self.slice_unvoiced(u, cx),
         }
         cx.notify();
     }

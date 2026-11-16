@@ -16,7 +16,8 @@ impl Workspace {
         let Some(device) = self.catalog.devices.get(d).cloned() else {
             return;
         };
-        // The Drum Kit is a kit of pads, each a track of its own: a new kit, fitted to the song.
+        // The Drum Kit is a kit of pads, each a track of its own: a new kit, empty (with no
+        // drums in the library, the synthesized kit).
         if device.own == Some(Own::Drums) {
             self.new_drum_kit(cx);
             return;

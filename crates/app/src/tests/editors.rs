@@ -204,6 +204,39 @@ fn the_sampler_takes_samples_slices_them_and_its_knobs_and_marks_turn(cx: &mut T
     assert!((start - 0.25).abs() < 0.03, "{start}");
     cx.simulate_keystrokes("cmd-z");
     assert_eq!(sampler(cx).zones[0].start, 0.0);
+    // Trimmed from its bar too: its start dragged up from the field under the sample.
+    let field = cx.debug_bounds("sampler-Start(0)").unwrap().center();
+    drag(cx, field, field - point(px(0.), px(40.)));
+    assert!(sampler(cx).zones[0].start > 0.05);
+    cx.simulate_keystrokes("cmd-z");
+    // Its low note from a dropdown of every note, an octave a row; its choke group from one.
+    click_on(cx, "sampler-Note(0)", Modifiers::none(), MouseButton::Left);
+    ws.read_with(cx, |ws, _| {
+        let menu = ws.menu.as_ref().expect("the notes");
+        assert_eq!((menu.items.len(), menu.columns), (120, 12));
+    });
+    ws.update(cx, |ws, cx| {
+        ws.menu = None;
+        let track = ws.sampler_track().unwrap();
+        let set = |field, value| crate::editors::sampler::SamplerOp::Set {
+            track,
+            field,
+            value,
+        };
+        ws.sampler_op(
+            set(crate::editors::sampler::Field::Note(0), 24.0 / 127.0),
+            cx,
+        );
+        let choke = crate::editors::sampler::SamplerOp::Choke {
+            track,
+            zone: 0,
+            group: Some(2),
+        };
+        ws.sampler_op(choke, cx);
+    });
+    let z = &sampler(cx).zones[0];
+    assert_eq!((z.note, z.high, z.choke), (24, Some(127), Some(2)));
+    cx.simulate_keystrokes("cmd-z cmd-z");
     // The attack knob turned up.
     let knob = cx.debug_bounds("sampler-Attack").unwrap().center();
     drag(cx, knob, knob - point(px(0.), px(60.)));
@@ -1261,4 +1294,173 @@ fn bloom_grows_from_its_window_and_everything_in_it_works(cx: &mut TestAppContex
     });
     ws.update(cx, |ws, cx| ws.close_bloom(cx));
     assert!(ws.read_with(cx, |ws, _| ws.bloom_view.is_none()));
+}
+
+/// The demo's drums cut in eight on a Sampler track, a MIDI region playing them in order, open
+/// in the Sampler: its track.
+fn chopped_drums(ws: &Entity<Workspace>, cx: &mut VisualTestContext) -> usize {
+    use pina_engine::song::project::Content;
+    let sampler = ws.update(cx, |ws, cx| {
+        let p = &ws.session.project;
+        let t = p.tracks.iter().position(|t| t.name == "Drums").unwrap();
+        let file = match &p.tracks[t].regions[0].content {
+            Content::Audio { file, .. } => file.clone(),
+            _ => unreachable!(),
+        };
+        let rate = p.sample_rate as f64;
+        let (sides, own) =
+            pina_engine::audio::engine::read_audio(&ws.session.dir.join(file)).unwrap();
+        let frames = (sides[0].len() as f64 * rate / own) as u64;
+        let cuts: Vec<u64> = (1..8).map(|k| k * frames / 8).collect();
+        let s = ws
+            .session
+            .project
+            .sampler_from_audio((t, 0), frames, Some(&cuts))
+            .unwrap();
+        ws.select_track(s);
+        ws.region = Some((s, 0));
+        ws.changed(cx);
+        ws.show_bottom(Bottom::Sampler, cx);
+        s
+    });
+    cx.run_until_parked();
+    sampler
+}
+
+#[gpui::test]
+fn the_cuts_are_yours_click_to_cut_drag_to_move_double_click_to_join(cx: &mut TestAppContext) {
+    use pina_engine::song::project::{Instrument, cuts_of};
+    let dir = demo_copy("cuts");
+    let (ws, cx) = open_at(cx, &dir);
+    let t = chopped_drums(&ws, cx);
+    ws.update(cx, |ws, cx| {
+        ws.sampler_ui.scroll.scroll_to_bottom();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    // Where each chop starts, along the sample.
+    let starts = |cx: &mut VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let Some(Instrument::Sampler(s)) = &ws.session.project.tracks[t].instrument else {
+                unreachable!()
+            };
+            cuts_of(s).iter().map(|c| c.2).collect::<Vec<f32>>()
+        })
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    assert_eq!(starts(cx).len(), 8);
+    let lane = cx
+        .debug_bounds("cut-lane")
+        .expect("the cuts lane on screen");
+    let along = |share: f32| {
+        gpui::point(
+            lane.origin.x + lane.size.width * share,
+            lane.origin.y + lane.size.height / 2.0,
+        )
+    };
+    // A click halfway into the second chop: a cut there, a chop more.
+    let at = along(3.0 / 16.0);
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    let cut = starts(cx);
+    assert_eq!(cut.len(), 9);
+    assert!(cut.iter().any(|&s| near(s, 3.0 / 16.0)), "{cut:?}");
+    // The first cut dragged back to a sixteenth: the first chop shorter, the second longer.
+    let from = cx.debug_bounds("cut-1").unwrap().center();
+    drag(cx, from, along(1.0 / 16.0));
+    let moved = starts(cx);
+    assert_eq!(moved.len(), 9);
+    assert!(near(moved[1], 1.0 / 16.0), "{moved:?}");
+    // Double-clicked: that cut taken out, its two chops one.
+    let cut1 = cx.debug_bounds("cut-1").unwrap().center();
+    double_click(cx, cut1);
+    let joined = starts(cx);
+    assert_eq!(joined.len(), 8);
+    assert!(near(joined[1], 3.0 / 16.0), "{joined:?}");
+    // Each an undo a step.
+    for n in [9, 9, 8] {
+        ws.update(cx, |ws, cx| ws.undo(cx));
+        assert_eq!(starts(cx).len(), n);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui::test]
+fn a_chopped_sample_flips_its_chops_swap_go_where_theyre_dropped_and_stutter(
+    cx: &mut TestAppContext,
+) {
+    use pina_engine::song::project::Content;
+    let dir = demo_copy("flip");
+    let (ws, cx) = open_at(cx, &dir);
+    let sampler = chopped_drums(&ws, cx);
+    let at = (sampler, 0);
+    let order = |cx: &mut VisualTestContext| {
+        ws.read_with(cx, |ws, _| {
+            let p = &ws.session.project;
+            let Content::Midi { notes, .. } = &p.region(at).content else {
+                unreachable!()
+            };
+            p.chop_order(at)
+                .iter()
+                .map(|&k| notes[k].pitch)
+                .collect::<Vec<u8>>()
+        })
+    };
+    let first = order(cx);
+    assert_eq!(first, (36..44).collect::<Vec<u8>>());
+    assert!(cx.debug_bounds("flip-module").is_some());
+    // Play it: the flip alone, from its start, even before the audio's started; stopped, the
+    // solo let go.
+    click_on(cx, "flip-play", Modifiers::none(), MouseButton::Left);
+    let solo = |cx: &mut VisualTestContext| {
+        ws.read_with(cx, |ws, _| ws.session.project.tracks[sampler].solo)
+    };
+    assert!(solo(cx));
+    until(cx, &ws, |ws| ws.player.playing());
+    assert!(solo(cx), "still alone while it plays");
+    ws.update(cx, |ws, cx| ws.play_stop(cx));
+    until(cx, &ws, |ws| !ws.player.playing());
+    ws.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(!solo(cx));
+    // Flip: a new order, the one still on the one.
+    click_on(cx, "flip", Modifiers::none(), MouseButton::Left);
+    let flipped = order(cx);
+    assert_ne!(flipped, first);
+    assert_eq!(flipped[0], 36);
+    click_on(cx, "flip-original", Modifiers::none(), MouseButton::Left);
+    assert_eq!(order(cx), first);
+    // The first chop dragged onto the fourth: they trade places (the editor scrolled to them).
+    ws.update(cx, |ws, cx| {
+        ws.sampler_ui.scroll.scroll_to_bottom();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let a = cx.debug_bounds("slot-0").unwrap().center();
+    let b = cx.debug_bounds("slot-3").unwrap().center();
+    drag(cx, a, b);
+    assert_eq!(&order(cx)[..4], [39, 37, 38, 36]);
+    // Chop 8 dragged from the chops onto the second place: it plays there.
+    let chop = cx.debug_bounds("chop-43").unwrap().center();
+    let to = cx.debug_bounds("slot-1").unwrap().center();
+    drag(cx, chop, to);
+    assert_eq!(order(cx)[1], 43);
+    // Picked and stuttered: three where it was.
+    click_on(cx, "slot-2", Modifiers::none(), MouseButton::Left);
+    ws.update(cx, |ws, cx| {
+        ws.sampler_ui.scroll.scroll_to_bottom();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_eq!(ws.read_with(cx, |ws, _| ws.sampler_ui.chop), Some(2));
+    click_on(cx, "chop-stutter-3", Modifiers::none(), MouseButton::Left);
+    assert_eq!(order(cx).len(), 10);
+    // All of it one undo a step.
+    ws.update(cx, |ws, cx| {
+        ws.session.undo();
+        ws.changed(cx);
+    });
+    assert_eq!(order(cx).len(), 8);
+    let _ = std::fs::remove_dir_all(dir);
 }

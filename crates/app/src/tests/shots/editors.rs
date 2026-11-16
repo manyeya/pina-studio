@@ -12,6 +12,22 @@ pub(super) fn set_up(
     let Shot { page, song, out } = *shot;
     let _ = (song, out, &window);
     match page {
+        // The audio editor, on the drums' first region, faded in and out and turned up past clipping.
+        "audio" => {
+            let drums = ws
+                .session
+                .project
+                .tracks
+                .iter()
+                .position(|t| t.name == "Drums")
+                .unwrap_or(0);
+            ws.select_track(drums);
+            ws.region = Some((drums, 0));
+            let r = &mut ws.session.project.tracks[drums].regions[0];
+            (r.fade_in, r.fade_out, r.gain_db) = (r.length / 16, r.length / 8, 6.0);
+            ws.editor_h = 360.0;
+            ws.show_bottom(Bottom::Audio, cx);
+        }
         "roll" | "roll-more" => {
             ws.track = 0;
             ws.region = Some((0, 0));
@@ -349,8 +365,11 @@ pub(super) fn set_up(
                 },
             ];
             let id = t.id;
-            ws.mod_values
-                .insert(id, [0.6, 0.85, 0.4, 0.7, -0.3, 0.0, 0.0, 0.0]);
+            ws.mod_values.insert(id, {
+                let mut v = [0.0; pina_engine::dsp::modulate::MAX_MODS];
+                v[..5].copy_from_slice(&[0.6, 0.85, 0.4, 0.7, -0.3]);
+                v
+            });
             for k in 0..5 {
                 let trace = (0..96)
                     .map(|i| match k {

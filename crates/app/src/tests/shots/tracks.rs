@@ -197,8 +197,11 @@ pub(super) fn set_up(
                 });
             let ids: Vec<u64> = p.tracks.iter().map(|t| t.id).collect();
             ws.tracks_picked = vec![ids[0], ids[1]];
-            ws.mod_values
-                .insert(ids[0], [0.6, 0.35, -0.3, 0.0, 0.0, 0.0, 0.0, 0.0]);
+            ws.mod_values.insert(ids[0], {
+                let mut v = [0.0; pina_engine::dsp::modulate::MAX_MODS];
+                v[..3].copy_from_slice(&[0.6, 0.35, -0.3]);
+                v
+            });
             ws.track = 0;
             ws.editor_h = 330.0;
             ws.show_bottom(Bottom::Modulation, cx);

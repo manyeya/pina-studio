@@ -115,6 +115,8 @@ impl Workspace {
             Target::Limit(..) => return None,
             Target::Poly { track, param } => (track, ModTarget::Poly(param as u16)),
             Target::Sampler { track, field } => (track, ModTarget::Sampler(param_of(field)?)),
+            // A region's own settings: not a track's to move.
+            Target::Clip { .. } => return None,
         })
     }
 
@@ -248,7 +250,7 @@ impl Workspace {
             .map(|(k, low, depth)| {
                 let (a, b) = (self.mod_pos(t, mt, depth * low), self.mod_pos(t, mt, depth));
                 Ring {
-                    color: MOD_COLORS[k % MAX_MODS],
+                    color: MOD_COLORS[k % MOD_COLORS.len()],
                     lo: a.min(b),
                     hi: a.max(b),
                     live: self.mod_pos(t, mt, depth * values[k]),

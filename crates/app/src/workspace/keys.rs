@@ -6,6 +6,13 @@ actions!(
     tempo,
     [
         PlayStop,
+        PadSoundPrev,
+        PadSoundNext,
+        PadPrev,
+        PadNext,
+        PadRowUp,
+        PadRowDown,
+        HotSwapTarget,
         ToggleAgent,
         NewSong,
         ShowSongs,
@@ -241,7 +248,8 @@ actions!(
 /// The window's shortcuts. Those with no ⌘, ⌃ or ⌥ stand down while a text field has the
 /// keyboard, so typing "a" types it rather than showing automation.
 /// Where the arrows walk regions and tracks: the arrangement, nothing else with the keys.
-const ARROWS: &str = "Arrange && !Roll && !Steps && !Samples && !Plugins && !TextInput && !Auto";
+const ARROWS: &str =
+    "Arrange && !Roll && !Steps && !Drums && !Samples && !Plugins && !TextInput && !Auto";
 /// Where a letter or ⇧-letter works on regions: the arrangement, no editor with the keys.
 const REGIONS: &str = "Arrange && !Roll && !Steps && !TextInput";
 /// Where it works on the piano roll's notes: the roll open, with the keys.
@@ -322,6 +330,16 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("q", QuantizeNotes, Some("Roll")),
         KeyBinding::new("0", MuteNotes, Some("Roll")),
         KeyBinding::new("escape", DeselectNotes, Some("Roll")),
+        // The Drum Machine: up and down the sounds beside the pad, left and right the pads.
+        KeyBinding::new("up", PadSoundPrev, Some("Drums && !TextInput")),
+        KeyBinding::new("down", PadSoundNext, Some("Drums && !TextInput")),
+        KeyBinding::new("left", PadPrev, Some("Drums && !TextInput")),
+        KeyBinding::new("right", PadNext, Some("Drums && !TextInput")),
+        KeyBinding::new("alt-up", PadRowUp, Some("Drums && !TextInput")),
+        KeyBinding::new("alt-down", PadRowDown, Some("Drums && !TextInput")),
+        KeyBinding::new("cmd-up", PadRowUp, Some("Drums && !TextInput")),
+        KeyBinding::new("cmd-down", PadRowDown, Some("Drums && !TextInput")),
+        KeyBinding::new("d", HotSwapTarget, Some("Drums && !TextInput")),
         KeyBinding::new("up", AdderUp, Some("Adder")),
         KeyBinding::new("down", AdderDown, Some("Adder")),
         KeyBinding::new("cmd-,", ShowSettings, None),
@@ -579,6 +597,14 @@ pub(crate) fn on_logic_keys(d: gpui::Div, cx: &mut Context<Workspace>) -> gpui::
             $d$(.on_action(cx.listener(|ws, _: &$action, w, cx| ws.shortcut($s, w, cx))))*
         };
     }
+    let d = d
+        .on_action(cx.listener(|ws, _: &PadSoundPrev, _, cx| ws.drum_key(-1, 0, cx)))
+        .on_action(cx.listener(|ws, _: &PadSoundNext, _, cx| ws.drum_key(1, 0, cx)))
+        .on_action(cx.listener(|ws, _: &PadPrev, _, cx| ws.drum_key(0, -1, cx)))
+        .on_action(cx.listener(|ws, _: &PadNext, _, cx| ws.drum_key(0, 1, cx)))
+        .on_action(cx.listener(|ws, _: &PadRowUp, _, cx| ws.shift_pad_view(1, cx)))
+        .on_action(cx.listener(|ws, _: &PadRowDown, _, cx| ws.shift_pad_view(-1, cx)))
+        .on_action(cx.listener(|ws, _: &HotSwapTarget, _, cx| ws.hot_swap_target(cx)));
     let d = roll!(d,
         SelectPrevNote => RollOp::Step { next: false, extend: false },
         SelectNextNote => RollOp::Step { next: true, extend: false },

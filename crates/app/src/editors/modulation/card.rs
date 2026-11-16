@@ -21,7 +21,7 @@ impl Workspace {
                 .clone(),
             routes: track.modulators[k].routes.clone(),
         };
-        let color = MOD_COLORS[k % MAX_MODS];
+        let color = MOD_COLORS[k % MOD_COLORS.len()];
         let picked = self.mod_edit == Some((t, k));
         let value = self.mod_values.get(&track.id).map_or(0.0, |v| v[k]);
         let name = self.mod_name(t, k);

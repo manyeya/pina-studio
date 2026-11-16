@@ -802,3 +802,75 @@ fn a_midi_fx_plugin_plays_what_it_hears_on_to_the_instrument_in_its_place() {
     };
     assert!((heard(vec![off]) - 440.0).abs() < 10.0);
 }
+
+#[test]
+fn a_flipped_chop_plays_alone_in_its_place_not_over_the_others() {
+    use crate::song::project::{Content, Follow, Instrument, StretchMode};
+    let dir = scratch_dir("flip");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: RATE as u32,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let p = project(Vec::new());
+    let beat = (RATE * 60.0 / p.tempo) as usize;
+    // Four beats, each a steady level of its own: chop k is (k + 1) tenths.
+    let mut w = hound::WavWriter::create(dir.join("loop.wav"), spec).unwrap();
+    for k in 0..4 {
+        (0..beat).for_each(|_| w.write_sample(0.1 * (k + 1) as f32).unwrap());
+    }
+    w.finalize().unwrap();
+    let frames = (beat * 4) as u64;
+    for stretched in [false, true] {
+        let mut q = p.clone();
+        q.tracks.push(crate::song::project::Track {
+            name: "Loop".into(),
+            regions: vec![Region {
+                start: 0,
+                length: PPQ * 4,
+                content: Content::Audio {
+                    file: "loop.wav".into(),
+                    offset: 0,
+                    stretch: 1.0,
+                    stretch_mode: StretchMode::default(),
+                    follow: Follow::Off,
+                    tempo: None,
+                    grid: None,
+                    formants: false,
+                    warps: Vec::new(),
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        if stretched {
+            // A loop at another tempo, stretched to the song's: its chops play in Stretch.
+            if let Content::Audio { stretch, .. } = &mut q.tracks[0].regions[0].content {
+                *stretch = 1.25;
+            }
+            q.tracks[0].regions[0].length = PPQ * 5;
+        }
+        let cuts: Vec<u64> = (1..4).map(|k| k * frames / 4).collect();
+        let t = q.sampler_from_audio((0, 0), frames, Some(&cuts)).unwrap();
+        // Flipped: the fourth chop first, then the first, the third, the second.
+        q.chops_in_order((t, 0), &[39, 36, 38, 37]);
+        q.tracks[t].solo = true;
+        let span = if stretched { 1.25 } else { 1.0 };
+        let out = render(&q, &dir, (beat as f64 * 4.0 * span) as usize);
+        let level = |at: f64| peak(&out[0][(at * span * beat as f64) as usize..][..400]);
+        let mode = match &q.tracks[t].instrument {
+            Some(Instrument::Sampler(s)) => s.voice.mode,
+            _ => unreachable!(),
+        };
+        // Each beat its chop, alone: never two summed.
+        for (k, want) in [0.4f32, 0.1, 0.3, 0.2].into_iter().enumerate() {
+            let got = level(k as f64 + 0.5);
+            assert!(
+                (got - want).abs() < 0.06,
+                "{mode:?}, beat {k}: {got}, not {want} (chops over each other?)"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

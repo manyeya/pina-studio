@@ -40,7 +40,7 @@ fn percent(v: f32) -> String {
     format!("{:.0}%", v * 100.0)
 }
 
-/// The Length knob's top before Full: below it the decay, from nothing to 10 s.
+/// The Hold knob's top before it lasts as long as the sound: below it, from nothing to 10 s.
 const LENGTH_TOP: f32 = 0.96;
 
 /// An LFO's lengths in time with the song, in beats: a 64th note to four bars.
@@ -91,8 +91,6 @@ pub fn field_pos(s: &Sampler, f: Field) -> f32 {
     match f {
         Field::Attack => ms_pos(v.attack_ms),
         Field::Decay => ms_pos(v.decay_ms),
-        Field::Length if v.sustain >= 0.999 => 1.0,
-        Field::Length => ms_pos(v.decay_ms) * LENGTH_TOP,
         Field::Sustain => v.sustain,
         Field::Release => ms_pos(v.release_ms),
         Field::Cutoff => (v.cutoff_hz / 20.0).max(1.0).log10() / 3.0,
@@ -115,9 +113,10 @@ pub fn field_pos(s: &Sampler, f: Field) -> f32 {
         Field::ModDecay => ms_pos(v.mod_env.decay_ms),
         Field::ModSustain => v.mod_env.sustain,
         Field::ModRelease => ms_pos(v.mod_env.release_ms),
-        Field::Transpose => (v.transpose + 24.0) / 48.0,
-        Field::Volume => (v.gain_db + 24.0) / 36.0,
+        Field::Transpose => (v.transpose + 48.0) / 96.0,
+        Field::Volume => (v.gain_db + 36.0) / 72.0,
         Field::Speed => (v.speed + 2.0) / 4.0,
+        Field::StretchFactor => log_pos(1.0 / v.speed.abs().max(1.0 / 16.0), 1.0, 16.0),
         Field::Position => v.position,
         Field::GrainSize => log_pos(v.grain_ms, 5.0, 2_000.0),
         Field::Density => log_pos(v.density, 1.0, 200.0),
@@ -146,12 +145,26 @@ pub fn field_pos(s: &Sampler, f: Field) -> f32 {
         Field::High(i) => z(i).high.unwrap_or(z(i).note) as f32 / 127.0,
         Field::Root(i) => z(i).root.unwrap_or(z(i).note) as f32 / 127.0,
         Field::Tune(i) => (z(i).tune_cents + 100.0) / 200.0,
-        Field::Gain(i) => (z(i).gain_db + 24.0) / 36.0,
+        Field::Gain(i) => (z(i).gain_db + 70.0) / 94.0,
         Field::Pan(i) => (z(i).pan + 1.0) / 2.0,
         Field::VelLow(i) => z(i).velocities.unwrap_or((1, 127)).0 as f32 / 127.0,
         Field::VelHigh(i) => z(i).velocities.unwrap_or((1, 127)).1 as f32 / 127.0,
         Field::VelFade(i) => z(i).velocity_fade as f32 / 64.0,
         Field::LoopFade(i) => z(i).loop_fade * 2.0,
+        Field::Hold if v.sustain >= 0.999 => 1.0,
+        Field::Hold => ms_pos(v.hold_ms) * LENGTH_TOP,
+        Field::DrumDecay => ms_pos(v.decay_ms),
+        Field::SubHz if v.sub_hz <= 0.0 => 0.0,
+        Field::SubHz => 0.02 + 0.98 * ((v.sub_hz - 30.0) / 90.0).clamp(0.0, 1.0),
+        Field::PunchMs => ms_pos(v.punch_ms),
+        Field::CrushDecay => ms_pos(v.crush_decay_ms),
+        Field::LoopMs => ms_pos(v.loop_ms),
+        Field::LoopOffset => v.loop_offset,
+        Field::VoicePan => (v.pan + 1.0) / 2.0,
+        Field::PeakDb => (v.peak_db + 24.0) / 48.0,
+        Field::DrumAmount => (v.drum_amount + 1.0) / 2.0,
+        Field::Start(i) => z(i).start,
+        Field::Span(i) => z(i).end.unwrap_or(1.0) - z(i).start,
     }
     .clamp(0.0, 1.0)
 }
@@ -165,11 +178,6 @@ pub fn field_set(s: &mut Sampler, f: Field, v: f32) {
     match f {
         Field::Attack => voice.attack_ms = ms_of(v),
         Field::Decay => voice.decay_ms = ms_of(v),
-        Field::Length if v > LENGTH_TOP + 0.01 => voice.sustain = 1.0,
-        Field::Length => {
-            voice.sustain = 0.0;
-            voice.decay_ms = ms_of(v / LENGTH_TOP).max(5.0).round();
-        }
         Field::Sustain => voice.sustain = v,
         Field::Release => voice.release_ms = ms_of(v),
         Field::Cutoff => voice.cutoff_hz = 20.0 * 1000f32.powf(v),
@@ -198,9 +206,12 @@ pub fn field_set(s: &mut Sampler, f: Field, v: f32) {
         Field::ModDecay => voice.mod_env.decay_ms = ms_of(v),
         Field::ModSustain => voice.mod_env.sustain = v,
         Field::ModRelease => voice.mod_env.release_ms = ms_of(v),
-        Field::Transpose => voice.transpose = (v * 48.0 - 24.0).round(),
-        Field::Volume => voice.gain_db = ((v * 36.0 - 24.0) * 2.0).round() / 2.0,
+        Field::Transpose => voice.transpose = (v * 96.0 - 48.0).round(),
+        Field::Volume => voice.gain_db = ((v * 72.0 - 36.0) * 2.0).round() / 2.0,
         Field::Speed => voice.speed = ((v * 4.0 - 2.0) * 100.0).round() / 100.0,
+        Field::StretchFactor => {
+            voice.speed = 1.0 / ((log_of(v, 1.0, 16.0) * 100.0).round() / 100.0)
+        }
         Field::Position => voice.position = (v * 1000.0).round() / 1000.0,
         Field::GrainSize => voice.grain_ms = log_of(v, 5.0, 2_000.0).round(),
         Field::Density => voice.density = (log_of(v, 1.0, 200.0) * 10.0).round() / 10.0,
@@ -225,6 +236,36 @@ pub fn field_set(s: &mut Sampler, f: Field, v: f32) {
         Field::CrushKhz => voice.crush_khz = (log_of(v, 4.0, 48.0) * 10.0).round() / 10.0,
         Field::Bits => voice.bits = (v * 14.0).round() as u8 + 2,
         Field::Route(i) => voice.matrix.slots_mut()[i.min(7)].amount = hundredths(v * 2.0 - 1.0),
+        // At its top, Hold lasts as long as the sound: the decay never starts.
+        Field::Hold if v > LENGTH_TOP + 0.01 => voice.sustain = 1.0,
+        Field::Hold => {
+            voice.sustain = 0.0;
+            voice.hold_ms = ms_of(v / LENGTH_TOP).round();
+        }
+        Field::DrumDecay => {
+            voice.decay_ms = ms_of(v).round();
+            voice.release_ms = voice.decay_ms;
+        }
+        Field::SubHz if v < 0.02 => voice.sub_hz = 0.0,
+        Field::SubHz => voice.sub_hz = (30.0 + (v - 0.02) / 0.98 * 90.0).round(),
+        Field::PunchMs => voice.punch_ms = ms_of(v).max(1.0).round(),
+        Field::CrushDecay => voice.crush_decay_ms = ms_of(v).round(),
+        Field::LoopMs => voice.loop_ms = ms_of(v).round(),
+        Field::LoopOffset => voice.loop_offset = (v * 1000.0).round() / 1000.0,
+        Field::VoicePan => voice.pan = ((v * 2.0 - 1.0) * 50.0).round() / 50.0,
+        Field::PeakDb => voice.peak_db = ((v * 48.0 - 24.0) * 2.0).round() / 2.0,
+        Field::DrumAmount => voice.drum_amount = hundredths(v * 2.0 - 1.0),
+        Field::Start(i) => {
+            let Some(z) = s.zones.get_mut(i) else { return };
+            let end = z.end.unwrap_or(1.0);
+            z.start = (v * 1000.0).round() / 1000.0;
+            z.start = z.start.min(end - 0.001).max(0.0);
+        }
+        Field::Span(i) => {
+            let Some(z) = s.zones.get_mut(i) else { return };
+            let end = (z.start + (v * 1000.0).round() / 1000.0).clamp(z.start + 0.001, 1.0);
+            z.end = (end < 0.9999).then_some(end);
+        }
         Field::Note(i)
         | Field::High(i)
         | Field::Root(i)
@@ -255,7 +296,7 @@ pub fn field_set(s: &mut Sampler, f: Field, v: f32) {
                 }
                 Field::Root(_) => z.root = Some(note(v)),
                 Field::Tune(_) => z.tune_cents = (v * 200.0 - 100.0).round(),
-                Field::Gain(_) => z.gain_db = ((v * 36.0 - 24.0) * 2.0).round() / 2.0,
+                Field::Gain(_) => z.gain_db = ((v * 94.0 - 70.0) * 2.0).round() / 2.0,
                 Field::Pan(_) => z.pan = ((v * 2.0 - 1.0) * 50.0).round() / 50.0,
                 Field::VelLow(_) => {
                     let (_, hi) = z.velocities.unwrap_or((1, 127));
@@ -282,8 +323,6 @@ pub(crate) fn field_text(s: &Sampler, f: Field, key: Option<pina_engine::music::
     match f {
         Field::Attack => ms_text(v.attack_ms),
         Field::Decay => ms_text(v.decay_ms),
-        Field::Length if v.sustain >= 0.999 => "Full".into(),
-        Field::Length => ms_text(v.decay_ms),
         Field::Sustain => percent(v.sustain),
         Field::FilterSustain => percent(v.filter_sustain),
         Field::Release => ms_text(v.release_ms),
@@ -311,6 +350,7 @@ pub(crate) fn field_text(s: &Sampler, f: Field, key: Option<pina_engine::music::
         Field::ModRelease => ms_text(v.mod_env.release_ms),
         Field::Transpose => format!("{:+.0} st", v.transpose),
         Field::Volume => db(v.gain_db),
+        Field::StretchFactor => format!("{:.2}×", 1.0 / v.speed.abs().max(1.0 / 16.0)),
         Field::Speed => match v.speed {
             s if s.abs() < 0.005 => "Still".into(),
             s => format!("{s:.2}×").replace('-', "−"),
@@ -369,6 +409,25 @@ pub(crate) fn field_text(s: &Sampler, f: Field, key: Option<pina_engine::music::
             n => n.to_string(),
         },
         Field::LoopFade(i) => percent(z(i).loop_fade),
+        Field::Hold if v.sustain >= 0.999 => "inf".into(),
+        Field::Hold => ms_text(v.hold_ms),
+        Field::DrumDecay => ms_text(v.decay_ms),
+        Field::SubHz if v.sub_hz <= 0.0 => "Key".into(),
+        Field::SubHz => format!("{:.0} Hz", v.sub_hz),
+        Field::PunchMs => ms_text(v.punch_ms),
+        Field::CrushDecay if v.crush_decay_ms <= 0.0 => "inf".into(),
+        Field::CrushDecay => ms_text(v.crush_decay_ms),
+        Field::LoopMs => ms_text(v.loop_ms),
+        Field::LoopOffset => format!("{:.1}%", v.loop_offset * 100.0),
+        Field::VoicePan => match v.pan {
+            p if p.abs() < 0.01 => "C".into(),
+            p if p < 0.0 => format!("{:.0}L", -p * 50.0),
+            p => format!("{:.0}R", p * 50.0),
+        },
+        Field::PeakDb => db(v.peak_db),
+        Field::DrumAmount => format!("{:+.0}%", v.drum_amount * 100.0).replace('-', "−"),
+        Field::Start(i) => format!("{:.1}%", z(i).start * 100.0),
+        Field::Span(i) => format!("{:.1}%", (z(i).end.unwrap_or(1.0) - z(i).start) * 100.0),
     }
 }
 
@@ -384,6 +443,9 @@ pub(crate) fn bipolar(f: Field) -> bool {
             | Field::PitchEnv
             | Field::NoiseColor
             | Field::Route(_)
+            | Field::VoicePan
+            | Field::PeakDb
+            | Field::DrumAmount
     )
 }
 
@@ -422,6 +484,21 @@ pub(crate) fn voice_name(f: Field) -> Option<&'static str> {
         Field::Punch => "Punch",
         Field::Position => "Grain position",
         Field::Density => "Grain density",
+        Field::Hold => "Hold",
+        Field::DrumDecay => "Drum decay",
+        Field::SubHz => "Sub frequency",
+        Field::PunchMs => "Punch release",
+        Field::CrushDecay => "8-Bit decay",
+        Field::CrushKhz => "8-Bit rate",
+        Field::LoopMs => "Loop length",
+        Field::LoopOffset => "Loop offset",
+        Field::VoicePan => "Pan",
+        Field::PeakDb => "Peak gain",
+        Field::DrumAmount => "Mod amount",
+        Field::NoiseColor => "Noise colour",
+        Field::OscRatio => "Osc ratio",
+        Field::Speed => "Speed",
+        Field::StretchFactor => "Stretch factor",
         _ => return None,
     })
 }

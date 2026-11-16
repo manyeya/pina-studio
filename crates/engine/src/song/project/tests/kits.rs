@@ -42,14 +42,7 @@ fn a_kit_is_a_stack_of_its_pads() {
     }
     assert_eq!(p.tracks[1].instrument, Some(Instrument::Kit));
     let kit = p.tracks[1].id;
-    assert_eq!(
-        p.tracks[3].pad,
-        Some(Pad {
-            kit,
-            note: 42,
-            choke: Some(1)
-        })
-    );
+    assert_eq!(p.tracks[3].pad, Some(Pad::new(kit, 42, Some(1))));
     // Its starter pattern: a row a pad, on their steps.
     let Content::Pattern(pt) = &p.tracks[1].regions[0].content else {
         panic!()
@@ -213,4 +206,77 @@ fn a_pads_layers_stack_take_turns_or_split_by_velocity() {
         p.add_pad_layer(t, Zone::default());
     }
     assert_eq!(p.add_pad_layer(t, Zone::default()), None);
+}
+
+#[test]
+fn a_pad_is_duplicated_to_another_note_and_extracted_out_of_its_kit() {
+    let mut p = project(vec![midi(0, PPQ, &[])], true);
+    let made = p.add_kit(
+        "Kit",
+        vec![pad("Kick", 36, None, &[0]), pad("Hat", 42, Some(1), &[2])],
+        1,
+        0,
+        true,
+    );
+    let hat = made.pads[1];
+    p.tracks[hat].volume_db = -6.0;
+    p.tracks[hat].spread = Some(0.5);
+    p.tracks[hat].pad.as_mut().unwrap().play = Some(44);
+    // A copy on 46: its sound, level, width and choke group, its Play note as far off its own.
+    let copy = p.duplicate_pad(hat, 46).unwrap();
+    let c = &p.tracks[copy];
+    assert_eq!((c.volume_db, c.spread), (-6.0, Some(0.5)));
+    assert_ne!(c.id, p.tracks[hat].id);
+    let cp = c.pad.unwrap();
+    assert_eq!((cp.note, cp.choke, cp.play), (46, Some(1), Some(48)));
+    assert_eq!(p.pad_on(made.kit, 46), Some(copy));
+    assert_eq!(p.pads_of(made.kit).len(), 3);
+    // Extracted: a track of its own, out of the kit and its stack, its sound kept.
+    let out = p.extract_pad(made.pads[0]).unwrap();
+    let t = &p.tracks[out];
+    assert!(t.pad.is_none() && t.output.is_none());
+    assert!(matches!(t.instrument, Some(Instrument::Sampler(_))));
+    assert_eq!(p.pads_of(made.kit).len(), 3);
+}
+
+#[test]
+fn a_kits_pads_and_return_stay_its_own_after_the_song_is_saved_and_read() {
+    let mut p = project(vec![midi(0, PPQ, &[])], true);
+    p.add_kit("Kit", vec![pad("Snare", 38, None, &[])], 1, 0, false);
+    let made = p.add_kit("Kit 2", vec![pad("Kick", 36, None, &[])], 1, 0, false);
+    let id = p.tracks[made.kit].id;
+    p.auxes.push(Aux {
+        kit: Some(id),
+        ..Default::default()
+    });
+    let read = |p: &Project| {
+        let saved = serde_json::to_string(&p.portable()).unwrap();
+        let mut read: Project = serde_json::from_str(&saved).unwrap();
+        read.assign_ids();
+        read.resolve_sources();
+        read
+    };
+    let again = read(&p);
+    let kit = again.tracks[made.kit].id;
+    assert_ne!(kit, id, "a new session's ids");
+    assert_eq!(again.pads_of(made.kit), made.pads);
+    assert_eq!(again.auxes.last().unwrap().kit, Some(kit));
+    // A pad played into another bus (as `set_output` can) finds its kit by its number.
+    let mut routed = p.clone();
+    let bus = routed.add_aux();
+    routed.tracks[made.pads[0]].output = Some(bus);
+    assert_eq!(read(&routed).pads_of(made.kit), made.pads);
+    // Saved before kits were numbered: a session's ids, long gone. Each pad finds its kit by
+    // its stack.
+    let mut old = again.clone();
+    for t in &mut old.tracks {
+        if let Some(pad) = &mut t.pad {
+            pad.kit += 1_000;
+        }
+    }
+    let saved = serde_json::to_string(&old).unwrap();
+    let mut read: Project = serde_json::from_str(&saved).unwrap();
+    read.assign_ids();
+    read.resolve_sources();
+    assert_eq!(read.pads_of(made.kit), made.pads);
 }

@@ -6,6 +6,7 @@ use super::*;
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Bottom {
     PianoRoll,
+    Audio,
     Steps,
     Drums,
     Sampler,

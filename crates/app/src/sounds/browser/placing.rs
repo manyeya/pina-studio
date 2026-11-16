@@ -1,7 +1,8 @@
 //! Putting samples in the song: on new or existing tracks, dropped from the Finder, as sampler zones.
 
 use super::*;
-use crate::editors::drums::DrumOp;
+use crate::editors::{audio::SliceBy, drums::DrumOp};
+use crate::workspace::Help;
 
 impl Workspace {
     /// Add to Song: a loop as audio on the selected audio track (or a new one) at the playhead;
@@ -24,6 +25,90 @@ impl Workspace {
                 self.add_zone(index, sampler, false, cx);
             }
         }
+    }
+
+    /// Slice: the sample on a new Sampler track at the playhead, cut at its hits or on the
+    /// song's grid into a sound a note from C1, a MIDI region playing them where they were (a
+    /// loop fitted to the song's tempo and key and looping on, as Add to Song puts it in). No
+    /// audio track is left behind, and one undo takes it all back.
+    pub fn slice_sample(&mut self, index: usize, how: SliceBy, cx: &mut Context<Self>) {
+        let Some(s) = self.browser.sample(index).cloned() else {
+            return;
+        };
+        let new = self.new_track_index(false);
+        let tick = self.snap(self.playhead() as f64);
+        let semis = self.sample_transpose(index).round() as i8;
+        self.session.checkpoint();
+        let at = match self.put_audio(&s.path, &s.name, Some(&s), semis, None, new, tick) {
+            Ok(at) => at,
+            Err(e) => return self.placed(Err(e), &s.name, cx),
+        };
+        // Synced, the player reads it: its hits.
+        self.changed(cx);
+        let name = s.name.clone();
+        let sliced = move |ws: &mut Workspace, cx: &mut Context<Workspace>| {
+            ws.clip_to_sampler(at, Some(how), cx);
+            if !ws.session.project.region(at).mute {
+                return;
+            }
+            // The slicing's undo step folded into the placing's, and the audio, there only to
+            // be sliced, gone.
+            ws.session.cancel();
+            ws.session.project.tracks.remove(at.0);
+            ws.select_track(at.0);
+            ws.region = Some((at.0, 0));
+            ws.changed(cx);
+            let zones = ws.sampler_of(at.0).map_or(0, |s| s.zones.len());
+            let bar = ws.session.project.bar();
+            ws.status = Some(format!(
+                "Sliced {name} {} into {zones} sounds, from {}",
+                how.name(bar).to_lowercase(),
+                crate::editors::pianoroll::name_in(None, pina_engine::song::project::FIRST_SLICE)
+            ));
+        };
+        let file = match &self.session.project.region(at).content {
+            pina_engine::song::project::Content::Audio { file, .. } => file.clone(),
+            _ => return,
+        };
+        let rate = self.session.project.sample_rate as f64;
+        match self.player.hits(&file, rate) {
+            Some(_) => sliced(self, cx),
+            // Not read yet: sliced as soon as it is, the status bar saying so meanwhile.
+            None => self.once_read(file, format!("Reading {} to slice it", s.name), sliced, cx),
+        }
+    }
+
+    /// Slice: a menu of the ways to slice the sample at `index` (`slice_sample`).
+    pub(crate) fn slice_button(
+        &self,
+        index: usize,
+        label: &'static str,
+        h: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        dropdown(label, h)
+            .debug_selector(|| "sample-slice".into())
+            .help(
+                "On a new Sampler track, cut at its hits or on the grid, a note each from C1, \
+                 played back in time",
+                cx,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    let bar = ws.session.project.bar();
+                    ws.menu = Some(Menu {
+                        at: e.position,
+                        items: SliceBy::all(bar)
+                            .into_iter()
+                            .map(|how| (how.name(bar), MenuAction::SliceSample(index, how)))
+                            .collect(),
+                        ..Default::default()
+                    });
+                    cx.notify();
+                }),
+            )
     }
 
     /// Where a new track goes: after the selected one, or (dropped under them) after the last.
@@ -230,16 +315,21 @@ impl Workspace {
             self.add_samples(&files, cx);
             return;
         }
-        // On the Drum Machine, on the pad's sound: each layered on it; on a pad: the first on
-        // it, the rest on the empty pads after.
-        if let Some(note) = self.strip_under(at) {
+        // On the Drum Machine, on the pad's sound (or on a pad with ⌘ or ⌥ held): each layered
+        // on it; on a pad: the first on it, the rest up from it, a note each (as a drum rack
+        // maps them).
+        let layering = self.mods.platform || self.mods.alt;
+        if let Some(note) = self
+            .strip_under(at)
+            .or_else(|| self.pad_under(at).filter(|_| layering))
+        {
             let files: Vec<PathBuf> = audio.iter().map(|p| p.to_path_buf()).collect();
             self.layer_files(&files, note, cx);
             return;
         }
         if let Some(note) = self.pad_under(at) {
             let files: Vec<PathBuf> = audio.iter().map(|p| p.to_path_buf()).collect();
-            self.drop_files_on_pads(&files, note, cx);
+            self.drop_files_on_pads(&files, note, true, cx);
             return;
         }
         // On the Song Study page, a song dropped is studied.
@@ -257,7 +347,7 @@ impl Workspace {
                 let note = self.free_pad_note(kit);
                 self.select_track(kit);
                 self.show_bottom(Bottom::Drums, cx);
-                self.drop_files_on_pads(&files, note, cx);
+                self.drop_files_on_pads(&files, note, false, cx);
                 return;
             }
             Some(Drop::Zone(t, tick) | Drop::Under(t, tick)) => (None, tick, t + 1),
@@ -429,6 +519,27 @@ impl Workspace {
 
     /// Lets go of a sample over the tracks, or of a box on the map.
     pub fn drop_sample(&mut self, drag: Option<Drag>, cx: &mut Context<Self>) {
+        // Pressed in the Drum Machine's sounds and let go without dragging: on the pad.
+        let pressed = self.drums.pressed.take();
+        if let (
+            Some(Drag::Sample {
+                index,
+                moved: false,
+                ..
+            }),
+            Some((note, layer, i)),
+        ) = (&drag, pressed)
+            && *index == i
+        {
+            return self.drum_op(
+                DrumOp::Sound {
+                    note,
+                    layer,
+                    index: i,
+                },
+                cx,
+            );
+        }
         match drag {
             Some(Drag::Sample {
                 index,

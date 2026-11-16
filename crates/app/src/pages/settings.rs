@@ -207,12 +207,13 @@ pub enum Section {
     Recording,
     Plugins,
     Sounds,
+    Models,
     Saving,
 }
 
 impl Section {
     /// Down the rail, by group: the studio, working, the library.
-    const ALL: [Section; 12] = [
+    const ALL: [Section; 13] = [
         Section::Audio,
         Section::Midi,
         Section::Recording,
@@ -224,6 +225,7 @@ impl Section {
         Section::Tabs,
         Section::Plugins,
         Section::Sounds,
+        Section::Models,
         Section::Saving,
     ];
 
@@ -231,7 +233,7 @@ impl Section {
     fn group(self) -> &'static str {
         match self {
             Section::Audio | Section::Midi | Section::Recording => "STUDIO",
-            Section::Plugins | Section::Sounds | Section::Saving => "LIBRARY",
+            Section::Plugins | Section::Sounds | Section::Models | Section::Saving => "LIBRARY",
             _ => "WORKING",
         }
     }
@@ -246,6 +248,9 @@ impl Section {
             Section::Recording => "bit depth wav count in click metronome takes",
             Section::Plugins => "vst vst3 clap audio units folders scan",
             Section::Sounds => "synth presets packs maker",
+            Section::Models => {
+                "stems separate separation vocals drums bass download onnx ai lyrics whisper words"
+            }
             Section::Saving => "recovery backup songs folder autosave",
             Section::Transport => "play stop follow playhead",
             Section::Editing => "middle c octave note names c3 c4 c5",
@@ -266,6 +271,7 @@ impl Section {
             Section::Recording => "Recording",
             Section::Plugins => "Plugins",
             Section::Sounds => "Sounds & packs",
+            Section::Models => "Stems & lyrics",
             Section::Saving => "Saving & files",
         }
     }
@@ -283,6 +289,7 @@ impl Section {
             Section::Recording => Icon::Record,
             Section::Plugins => Icon::Plug,
             Section::Sounds => Icon::Samples,
+            Section::Models => Icon::Stack,
             Section::Saving => Icon::Folder,
         }
     }
@@ -310,6 +317,9 @@ impl Section {
             Section::Recording => "What recording writes, counting you in, and the click.",
             Section::Plugins => "Where Pina looks for plugins, and what it found.",
             Section::Sounds => "The synth's sounds and packs: who makes them, where they're kept.",
+            Section::Models => {
+                "The models that part a recording into its vocals, drums, bass and the rest, and that hear the words sung. Pina Studio comes with none: you choose which to download."
+            }
             Section::Saving => "Your songs, and getting back what you lost.",
         }
     }
@@ -317,8 +327,9 @@ impl Section {
 
 impl Bottom {
     /// The editor's tabs, in order.
-    pub const ALL: [Bottom; 8] = [
+    pub const ALL: [Bottom; 9] = [
         Bottom::PianoRoll,
+        Bottom::Audio,
         Bottom::Steps,
         Bottom::Drums,
         Bottom::Sampler,
@@ -331,6 +342,7 @@ impl Bottom {
     pub fn key(self) -> &'static str {
         match self {
             Bottom::PianoRoll => "piano_roll",
+            Bottom::Audio => "audio",
             Bottom::Steps => "steps",
             Bottom::Drums => "drums",
             Bottom::Sampler => "sampler",
@@ -344,6 +356,7 @@ impl Bottom {
     pub fn name(self) -> &'static str {
         match self {
             Bottom::PianoRoll => "Piano Roll",
+            Bottom::Audio => "Audio",
             Bottom::Steps => "Step Sequencer",
             Bottom::Drums => "Drum Machine",
             Bottom::Sampler => "Sampler",
@@ -367,6 +380,9 @@ impl Bottom {
     fn what(self) -> &'static str {
         match self {
             Bottom::PianoRoll => "A MIDI region's notes against a keyboard · P",
+            Bottom::Audio => {
+                "An audio region's file: trim, fades, gain, pitch, reverse; to the Sampler"
+            }
             Bottom::Steps => "Patterns: the sounds as pads, a row of steps each",
             Bottom::Drums => "A kit's pads: play them, shape and swap their sounds",
             Bottom::Sampler => "The Sampler's zones, waveform and voice",
@@ -885,6 +901,7 @@ impl Workspace {
             Section::Recording => self.recording_page(cx),
             Section::Plugins => self.plugin_settings(cx),
             Section::Sounds => self.sound_settings(cx),
+            Section::Models => self.models_page(cx),
             Section::Saving => self.saving_page(cx),
             Section::Midi => {
                 let inputs = self.player.midi_inputs();
@@ -1184,6 +1201,8 @@ impl Workspace {
                                     .child(
                                         div()
                                             .flex_1()
+                                            // Narrower than its words: they wrap, Done stays.
+                                            .min_w(px(0.))
                                             .flex()
                                             .flex_col()
                                             .gap(px(4.))

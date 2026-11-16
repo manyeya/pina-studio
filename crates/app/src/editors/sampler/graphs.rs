@@ -359,6 +359,17 @@ impl Workspace {
 /// How loud a filter leaves `hz` (dB), as the sampler's filters do (their analog prototypes;
 /// close at what's drawn).
 pub(crate) fn response(mode: FilterMode, cutoff: f32, reso: f32, hz: f32) -> f32 {
+    response_peak(mode, cutoff, reso, 0.0, hz)
+}
+
+/// As `response`, a peak boosting (or cutting) by `peak_db`.
+pub(crate) fn response_peak(
+    mode: FilterMode,
+    cutoff: f32,
+    reso: f32,
+    peak_db: f32,
+    hz: f32,
+) -> f32 {
     let w = hz / cutoff.max(1.0);
     let reso = reso.clamp(0.0, 1.0);
     let k = 2.0 * (1.0 - 0.97 * reso);
@@ -367,6 +378,18 @@ pub(crate) fn response(mode: FilterMode, cutoff: f32, reso: f32, hz: f32) -> f32
         FilterMode::Off => 1.0,
         FilterMode::LowPass => 1.0 / den,
         FilterMode::HighPass => w * w / den,
+        FilterMode::HighPass24 => {
+            let flat = ((1.0 - w * w).powi(2) + 2.0 * w * w).sqrt();
+            w * w / den * w * w / flat
+        }
+        FilterMode::Peak => {
+            // (s² + k A² s + 1) / (s² + k s + 1), k = 1 / (Q A).
+            let a = 10f32.powf(peak_db.clamp(-24.0, 24.0) / 40.0);
+            let q = 0.5 + 11.5 * reso * reso;
+            let k = 1.0 / (q * a);
+            let re = 1.0 - w * w;
+            re.hypot(k * a * a * w) / re.hypot(k * w)
+        }
         FilterMode::BandPass => w / den,
         FilterMode::Notch => (1.0 - w * w).abs() / den,
         FilterMode::Ladder => {

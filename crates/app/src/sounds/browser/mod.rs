@@ -9,7 +9,8 @@
 //!
 //! A click hears a sample (in the song's key, with Play in Key on); up and down hear the next.
 //! Add to Song, or a drag onto the tracks, puts it in the song: a loop as audio, in time; a
-//! one-shot on a sampler's note, in tune. A drag out of the page brings the tracks back to drop
+//! one-shot on a sampler's note, in tune; Slice cuts it onto a new Sampler track, played back in
+//! time. A drag out of the page brings the tracks back to drop
 //! it on. The library loads and scans in the background.
 
 mod audition;

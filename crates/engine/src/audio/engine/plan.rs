@@ -12,6 +12,8 @@ pub(crate) struct Clip {
     /// Its region's fades: where the region starts and how long it fades in; where it ends and
     /// how long it fades out (samples).
     pub(crate) fades: [u64; 4],
+    /// Its region's level (1: as recorded).
+    pub(crate) gain: f32,
 }
 
 /// A clip's level at a sample, under its region's fades: an equal-power curve each end.
@@ -862,8 +864,13 @@ pub fn compile(
                 }
                 _ => Arc::default(),
             },
+            // A pad's Play note moves its sound by its distance from the note it receives.
             sampler: match &t.instrument {
-                Some(Instrument::Sampler(s)) => Some(Arc::new(s.clone())),
+                Some(Instrument::Sampler(s)) => Some(Arc::new({
+                    let mut s = s.clone();
+                    s.voice.transpose += t.pad.map_or(0.0, |p| p.shift());
+                    s
+                })),
                 _ => None,
             },
             // A plugin's place: its index among the track's MIDI FX plugins (all loaded, those
@@ -1280,6 +1287,7 @@ pub(crate) fn play_region(
                             rate,
                         ),
                     ],
+                    gain: 10f32.powf(region.gain_db / 20.0),
                 }),
                 Err(e) => problems.push(e),
             }

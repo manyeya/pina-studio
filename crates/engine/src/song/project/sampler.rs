@@ -30,10 +30,14 @@ pub enum FilterMode {
     Comb,
     /// Vowels: the cutoff sweeps from "a" through "e", "i", "o" to "u".
     Formant,
+    /// 24 dB an octave high pass: two of the clean one.
+    HighPass24,
+    /// A bell at the cutoff, boosting or cutting by `peak_db`, as wide as the resonance says.
+    Peak,
 }
 
 impl FilterMode {
-    pub const ALL: [FilterMode; 8] = [
+    pub const ALL: [FilterMode; 10] = [
         FilterMode::Off,
         FilterMode::LowPass,
         FilterMode::HighPass,
@@ -42,6 +46,16 @@ impl FilterMode {
         FilterMode::Ladder,
         FilterMode::Comb,
         FilterMode::Formant,
+        FilterMode::HighPass24,
+        FilterMode::Peak,
+    ];
+
+    /// The Drum Sampler's four, as it names them.
+    pub const DRUM: [FilterMode; 4] = [
+        FilterMode::LowPass,
+        FilterMode::Ladder,
+        FilterMode::HighPass24,
+        FilterMode::Peak,
     ];
 
     pub fn name(self) -> &'static str {
@@ -54,6 +68,144 @@ impl FilterMode {
             FilterMode::Ladder => "Ladder",
             FilterMode::Comb => "Comb",
             FilterMode::Formant => "Formant",
+            FilterMode::HighPass24 => "High pass 24",
+            FilterMode::Peak => "Peak",
+        }
+    }
+
+    /// Its name on the Drum Sampler: by its slope.
+    pub fn drum_name(self) -> &'static str {
+        match self {
+            FilterMode::LowPass => "12 dB Low Pass",
+            FilterMode::Ladder => "24 dB Low Pass",
+            FilterMode::HighPass24 => "24 dB High Pass",
+            FilterMode::HighPass => "12 dB High Pass",
+            FilterMode::Peak => "Peak",
+            m => m.name(),
+        }
+    }
+}
+
+/// The Drum Sampler's playback effect: one shown at a time, its two settings on two knobs (and
+/// an X/Y pad). Each is the sampler's own settings: Stretch its speed and grains, Loop
+/// `loop_offset` and `loop_ms`, Pitch Env its pitch drop, Punch, 8-Bit the vintage sampler's
+/// rate and `crush_decay_ms`, FM and Ring Mod with the oscillator's ratio, Sub Osc with
+/// `sub_hz`, and Noise with its colour.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackFx {
+    Stretch,
+    Loop,
+    #[default]
+    PitchEnv,
+    Punch,
+    EightBit,
+    Fm,
+    RingMod,
+    SubOsc,
+    Noise,
+}
+
+impl PlaybackFx {
+    pub const ALL: [PlaybackFx; 9] = [
+        PlaybackFx::Stretch,
+        PlaybackFx::Loop,
+        PlaybackFx::PitchEnv,
+        PlaybackFx::Punch,
+        PlaybackFx::EightBit,
+        PlaybackFx::Fm,
+        PlaybackFx::RingMod,
+        PlaybackFx::SubOsc,
+        PlaybackFx::Noise,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            PlaybackFx::Stretch => "Stretch",
+            PlaybackFx::Loop => "Loop",
+            PlaybackFx::PitchEnv => "Pitch Env",
+            PlaybackFx::Punch => "Punch",
+            PlaybackFx::EightBit => "8-Bit",
+            PlaybackFx::Fm => "FM",
+            PlaybackFx::RingMod => "Ring Mod",
+            PlaybackFx::SubOsc => "Sub Osc",
+            PlaybackFx::Noise => "Noise",
+        }
+    }
+
+    /// Whether its settings make a sound of their own on `v` (so it's the one to show).
+    pub fn sounds(self, v: &SamplerVoice) -> bool {
+        match self {
+            PlaybackFx::Stretch => v.mode == SampleMode::Stretch,
+            PlaybackFx::Loop => v.loop_ms > 0.0,
+            PlaybackFx::PitchEnv => v.pitch_env != 0.0,
+            PlaybackFx::Punch => v.punch > 0.0,
+            PlaybackFx::EightBit => v.character == SampleCharacter::Vintage,
+            PlaybackFx::Fm => v.fm > 0.0,
+            PlaybackFx::RingMod => v.ring > 0.0,
+            PlaybackFx::SubOsc => v.sub > 0.0,
+            PlaybackFx::Noise => v.noise > 0.0,
+        }
+    }
+
+    /// `v` with this effect taking no part: what's heard when it's switched off.
+    pub fn silence(self, v: &mut SamplerVoice) {
+        match self {
+            PlaybackFx::Stretch => v.mode = SampleMode::Repitch,
+            PlaybackFx::Loop => v.loop_ms = 0.0,
+            PlaybackFx::PitchEnv => v.pitch_env = 0.0,
+            PlaybackFx::Punch => v.punch = 0.0,
+            PlaybackFx::EightBit => v.character = SampleCharacter::Clean,
+            PlaybackFx::Fm => v.fm = 0.0,
+            PlaybackFx::RingMod => v.ring = 0.0,
+            PlaybackFx::SubOsc => v.sub = 0.0,
+            PlaybackFx::Noise => v.noise = 0.0,
+        }
+    }
+}
+
+/// What moves the Drum Sampler's modulation: how hard a note is played, or its slide (MPE's
+/// brightness).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DrumModSource {
+    #[default]
+    Velocity,
+    Slide,
+}
+
+/// What the Drum Sampler's modulation moves: the filter's cutoff, the envelope's three times,
+/// or the playback effect's first or second setting.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DrumModDest {
+    #[default]
+    Filter,
+    Attack,
+    Hold,
+    Decay,
+    Fx1,
+    Fx2,
+}
+
+impl DrumModDest {
+    pub const ALL: [DrumModDest; 6] = [
+        DrumModDest::Filter,
+        DrumModDest::Attack,
+        DrumModDest::Hold,
+        DrumModDest::Decay,
+        DrumModDest::Fx1,
+        DrumModDest::Fx2,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            DrumModDest::Filter => "Filter",
+            DrumModDest::Attack => "Attack",
+            DrumModDest::Hold => "Hold",
+            DrumModDest::Decay => "Decay",
+            DrumModDest::Fx1 => "FX1",
+            DrumModDest::Fx2 => "FX2",
         }
     }
 }
@@ -493,6 +645,34 @@ pub struct SamplerVoice {
     pub ring: f32,
     pub osc_ratio: f32,
     pub punch: f32,
+    /// The amp envelope's hold: how long (ms) it stays at the top after its attack before it
+    /// decays (with a sustain of 1, as long as the sound lasts).
+    pub hold_ms: f32,
+    /// The sub's own frequency (Hz, 30 to 120); 0 an octave under the note.
+    pub sub_hz: f32,
+    /// How long punch's boost takes to fall away (ms).
+    pub punch_ms: f32,
+    /// How long the vintage sampler's grit lasts from each note's start (ms), fading to clean
+    /// over it; 0 the whole note.
+    pub crush_decay_ms: f32,
+    /// The Drum Sampler's Loop: `loop_ms` of the sample from `loop_offset` (a share of the part
+    /// played) on, round and round; 0 none.
+    pub loop_ms: f32,
+    pub loop_offset: f32,
+    /// Where it sits, -1 left to 1 right, over every zone's own.
+    pub pan: f32,
+    /// The peak filter's boost (under 0 a cut), dB.
+    pub peak_db: f32,
+    /// The filter switched off, its settings kept.
+    pub filter_off: bool,
+    /// The Drum Sampler's playback effect shown (none: the first that sounds), and whether it's
+    /// switched off (its settings kept, unheard).
+    pub fx: Option<PlaybackFx>,
+    pub fx_off: bool,
+    /// The Drum Sampler's modulation: what moves it, what it moves, and how far (-1 to 1).
+    pub drum_source: DrumModSource,
+    pub drum_dest: DrumModDest,
+    pub drum_amount: f32,
 }
 
 impl Default for SamplerVoice {
@@ -556,6 +736,20 @@ impl Default for SamplerVoice {
             ring: 0.0,
             osc_ratio: 1.0,
             punch: 0.0,
+            hold_ms: 0.0,
+            sub_hz: 0.0,
+            punch_ms: 40.0,
+            crush_decay_ms: 0.0,
+            loop_ms: 0.0,
+            loop_offset: 0.0,
+            pan: 0.0,
+            peak_db: 0.0,
+            filter_off: false,
+            fx: None,
+            fx_off: false,
+            drum_source: DrumModSource::Velocity,
+            drum_dest: DrumModDest::Filter,
+            drum_amount: 0.0,
         }
     }
 }
@@ -563,6 +757,24 @@ impl Default for SamplerVoice {
 impl SamplerVoice {
     pub fn is_default(&self) -> bool {
         *self == SamplerVoice::default()
+    }
+
+    /// The playback effect the Drum Sampler shows: the one picked, else the first that sounds.
+    pub fn shown_fx(&self) -> Option<PlaybackFx> {
+        self.fx
+            .or_else(|| PlaybackFx::ALL.into_iter().find(|f| f.sounds(self)))
+    }
+
+    /// As it's heard: a filter switched off off, a playback effect switched off silent.
+    pub fn heard(&self) -> SamplerVoice {
+        let mut v = *self;
+        if v.filter_off {
+            v.filter = FilterMode::Off;
+        }
+        if let (true, Some(fx)) = (v.fx_off, v.shown_fx()) {
+            fx.silence(&mut v);
+        }
+        v
     }
 }
 

@@ -148,7 +148,7 @@ impl Workspace {
             return None;
         };
         let at = self.mod_drag_at?;
-        let color = MOD_COLORS[index % MAX_MODS];
+        let color = MOD_COLORS[index % MOD_COLORS.len()];
         Some(
             div()
                 .absolute()

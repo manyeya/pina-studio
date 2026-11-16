@@ -1,8 +1,11 @@
 pub mod audio;
 pub mod dsp;
+pub mod lyrics;
 pub mod music;
 pub mod paths;
 pub mod plugin;
 pub mod samples;
+pub mod separate;
+pub mod smart;
 pub mod song;
 pub mod study;

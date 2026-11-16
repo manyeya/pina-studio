@@ -20,6 +20,91 @@ fn scatter(i: usize) -> f32 {
     (x % 10_000) as f32 / 10_000.0
 }
 
+/// A waveform painted into `b`: the part `view` shows (shares of it), each column its peaks and,
+/// brighter inside them, its loudness, in the colours `tone` gives the place there (0 to 1);
+/// `gain` times as loud (past full scale, white, as it clips).
+pub(crate) fn paint_wave(
+    window: &mut Window,
+    wave: &Wave,
+    b: Bounds<Pixels>,
+    view: (f32, f32),
+    gain: f32,
+    tone: impl Fn(f32) -> (Hsla, Hsla),
+) {
+    let (x0, y0) = (f32::from(b.origin.x), f32::from(b.origin.y));
+    let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
+    let mid = y0 + h / 2.0;
+    let quad = |window: &mut Window, x: f32, y: f32, hh: f32, c: Hsla| {
+        window.paint_quad(fill(
+            Bounds::new(point(px(x), px(y)), size(px(1.), px(hh))),
+            c,
+        ));
+    };
+    let cols = w.max(1.0) as usize;
+    for c in 0..cols {
+        let (fa, fb) = (
+            view.0 + (view.1 - view.0) * c as f32 / cols as f32,
+            view.0 + (view.1 - view.0) * (c + 1) as f32 / cols as f32,
+        );
+        let (a, bb) = (
+            (fa * wave.len as f32) as usize,
+            (fb * wave.len as f32) as usize,
+        );
+        let (lo, hi) = wave.peaks.range(a, bb.max(a + 1));
+        let loud = {
+            let k = |f: f32| ((f * LOUD as f32) as usize).min(LOUD - 1);
+            wave.loud[k(fa)..=k(fb).max(k(fa))]
+                .iter()
+                .fold(0f32, |m, &x| m.max(x))
+        };
+        let (hi, lo, loud) = (hi * gain, lo * gain, loud * gain);
+        let (outer, inner) = match hi > 1.0 || lo < -1.0 {
+            true => (alpha(0xffffff, 0.5), alpha(0xffffff, 0.95)),
+            false => tone(fa),
+        };
+        let scale = h * 0.46;
+        let (top, bottom) = (
+            (mid - hi.max(0.0) * scale).max(y0),
+            (mid - lo.min(0.0) * scale).min(y0 + h),
+        );
+        quad(window, x0 + c as f32, top, (bottom - top).max(1.0), outer);
+        let body = ((loud * 1.4).min(1.0) * scale).min(h / 2.0);
+        quad(
+            window,
+            x0 + c as f32,
+            mid - body,
+            (body * 2.0).max(1.0),
+            inner,
+        );
+    }
+}
+
+/// What's shown of a sample after the wheel at `at` (0 to 1 across it): up and down zooms around
+/// there, sideways scrolls; all of it is none.
+pub(crate) fn zoomed(view: Option<(f32, f32)>, at: f32, dy: f32, dx: f32) -> Option<(f32, f32)> {
+    let (a, b) = view.unwrap_or((0.0, 1.0));
+    let span = b - a;
+    let (mut a, mut b) = match dy.abs() > dx.abs() {
+        true => {
+            let factor = (dy * 0.004).exp();
+            let new = (span * factor).clamp(0.002, 1.0);
+            let pivot = a + at * span;
+            (pivot - at * new, pivot + (1.0 - at) * new)
+        }
+        false => {
+            let shift = -dx / 600.0 * span;
+            (a + shift, b + shift)
+        }
+    };
+    if a < 0.0 {
+        (a, b) = (0.0, b - a);
+    }
+    if b > 1.0 {
+        (a, b) = ((a - (b - 1.0)).max(0.0), 1.0);
+    }
+    ((b - a) < 0.999).then_some((a, b))
+}
+
 impl Workspace {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn sampler_wave(
@@ -77,52 +162,17 @@ impl Workspace {
                 quad(window, x0, mid, w, 1.0, alpha(0xffffff, 0.06));
                 let Some(wave) = &wave else { return };
                 // The waveform: its peaks, and its loudness as a brighter body inside them.
-                let cols = w.max(1.0) as usize;
-                for c in 0..cols {
-                    let (fa, fb) = (
-                        view.0 + (view.1 - view.0) * c as f32 / cols as f32,
-                        view.0 + (view.1 - view.0) * (c + 1) as f32 / cols as f32,
-                    );
-                    let (a, bb) = (
-                        (fa * wave.len as f32) as usize,
-                        (fb * wave.len as f32) as usize,
-                    );
-                    let (lo, hi) = wave.peaks.range(a, bb.max(a + 1));
-                    let loud = {
-                        let k = |f: f32| ((f * LOUD as f32) as usize).min(LOUD - 1);
-                        wave.loud[k(fa)..=k(fb).max(k(fa))]
-                            .iter()
-                            .fold(0f32, |m, &x| m.max(x))
-                    };
+                paint_wave(window, wave, b, view, 1.0, |fa| {
                     let part = parts
                         .iter()
                         .filter(|p| fa >= p.0 && fa < p.1)
                         .max_by_key(|p| p.3);
-                    let (outer, inner) = match part {
+                    match part {
                         Some(&(_, _, c, true)) => (alpha(c, 0.4), alpha(c, 0.95)),
                         Some(&(_, _, c, false)) => (alpha(c, 0.16), alpha(c, 0.42)),
                         None => (alpha(0xffffff, 0.1), alpha(0xffffff, 0.2)),
-                    };
-                    let scale = h * 0.46;
-                    let (top, bottom) = (mid - hi.max(0.0) * scale, mid - lo.min(0.0) * scale);
-                    quad(
-                        window,
-                        x0 + c as f32,
-                        top,
-                        1.0,
-                        (bottom - top).max(1.0),
-                        outer,
-                    );
-                    let body = (loud * 1.4).min(1.0) * scale;
-                    quad(
-                        window,
-                        x0 + c as f32,
-                        mid - body,
-                        1.0,
-                        (body * 2.0).max(1.0),
-                        inner,
-                    );
-                }
+                    }
+                });
                 // Outside what plays, shaded.
                 let shade = alpha(0x000000, 0.45);
                 if x_of(start) > x0 {
@@ -197,39 +247,58 @@ impl Workspace {
         let mark =
             |at: f32, which: Mark, label: &'static str, tone: u32, cx: &mut Context<Self>| {
                 let x = across(at, view);
+                // The trim's marks are the big ones: a grip halfway down to take hold of, and
+                // the end's name inside it, so it's never off the edge.
+                let trim = matches!(which, Mark::Start | Mark::End);
+                let inward = matches!(which, Mark::End | Mark::LoopEnd);
                 div()
                     .absolute()
                     .left(gpui::relative(x))
                     .top_0()
                     .bottom_0()
-                    .w(px(11.))
-                    .ml(px(-5.))
+                    .w(px(15.))
+                    .ml(px(-7.))
                     .cursor_ew_resize()
                     .debug_selector(move || format!("mark-{which:?}"))
                     .when(!(-0.01..=1.01).contains(&x), |d| d.invisible())
                     .child(
                         div()
                             .absolute()
-                            .left(px(5.))
+                            .left(px(7.))
                             .top_0()
                             .bottom_0()
-                            .w(px(1.5))
+                            .w(px(if trim { 2. } else { 1.5 }))
                             .bg(rgb(tone)),
                     )
+                    .when(trim, |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .left(px(4.))
+                                .top(gpui::relative(0.5))
+                                .mt(px(-14.))
+                                .w(px(8.))
+                                .h(px(28.))
+                                .rounded(px(4.))
+                                .bg(rgb(tone))
+                                .border_1()
+                                .border_color(rgb(BG)),
+                        )
+                    })
                     .child(
                         div()
                             .absolute()
-                            .left(px(5.))
+                            .when(!inward, |d| d.left(px(7.)).rounded_r(px(4.)))
+                            .when(inward, |d| d.right(px(7.)).rounded_l(px(4.)))
                             .top(px(match which {
-                                Mark::LoopStart | Mark::LoopEnd => 5.,
-                                Mark::Position => 22.,
+                                Mark::LoopStart | Mark::LoopEnd => 18.,
+                                Mark::Position => 36.,
                                 _ => 0.,
                             }))
                             .h(px(15.))
                             .px(px(4.))
                             .flex()
                             .items_center()
-                            .rounded_r(px(4.))
                             .bg(rgb(tone))
                             .text_size(px(9.))
                             .font_weight(FontWeight::BOLD)
@@ -333,14 +402,14 @@ impl Workspace {
                     .text_color(rgb(TEXT_4))
                     .child(label)
             }))
-            .child(mark(start, Mark::Start, "S", MINT, cx))
-            .child(mark(end, Mark::End, "E", CORAL, cx))
+            .child(mark(start, Mark::Start, "START", MINT, cx))
+            .child(mark(end, Mark::End, "END", CORAL, cx))
             .when(looping, |d| {
-                d.child(mark(ls, Mark::LoopStart, "L", AMBER, cx))
-                    .child(mark(le, Mark::LoopEnd, "L", AMBER, cx))
+                d.child(mark(ls, Mark::LoopStart, "LOOP", AMBER, cx))
+                    .child(mark(le, Mark::LoopEnd, "LOOP", AMBER, cx))
             })
             .when(grains, |d| {
-                d.child(mark(place, Mark::Position, "P", PINK, cx))
+                d.child(mark(place, Mark::Position, "POS", PINK, cx))
             })
             .when(zoomed, |d| {
                 // Where what's shown is in the whole sample.
@@ -375,27 +444,7 @@ impl Workspace {
     /// The wheel over the sample: up and down zooms around `at` (0 to 1 across), sideways
     /// scrolls.
     pub(crate) fn zoom_sample(&mut self, at: f32, dy: f32, dx: f32, cx: &mut Context<Self>) {
-        let (a, b) = self.sampler_ui.view.unwrap_or((0.0, 1.0));
-        let span = b - a;
-        let (mut a, mut b) = match dy.abs() > dx.abs() {
-            true => {
-                let factor = (dy * 0.004).exp();
-                let new = (span * factor).clamp(0.002, 1.0);
-                let pivot = a + at * span;
-                (pivot - at * new, pivot + (1.0 - at) * new)
-            }
-            false => {
-                let shift = -dx / 600.0 * span;
-                (a + shift, b + shift)
-            }
-        };
-        if a < 0.0 {
-            (a, b) = (0.0, b - a);
-        }
-        if b > 1.0 {
-            (a, b) = ((a - (b - 1.0)).max(0.0), 1.0);
-        }
-        self.sampler_ui.view = ((b - a) < 0.999).then_some((a, b));
+        self.sampler_ui.view = zoomed(self.sampler_ui.view, at, dy, dx);
         cx.notify();
     }
 }

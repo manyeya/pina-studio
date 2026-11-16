@@ -3,7 +3,8 @@
 //! levels live, the rate and the buffer with what they cost in time, recordings moved back for
 //! the input's lateness, the cores making sound. Recording: how deep takes are, counting in, the
 //! click. Plugins: where they're looked for and what's found. Sounds & packs: who makes them,
-//! where they're kept. Saving & files: how often a recovery copy's kept, where songs are.
+//! where they're kept. Stem models: separation models to download or add, and yours. Saving &
+//! files: how often a recovery copy's kept, where songs are.
 
 use gpui::{Context, Div, FontWeight, MouseButton, div, prelude::*, px, rgb};
 use pina_engine::audio::{
@@ -15,6 +16,36 @@ use crate::{
     ui::theme::*,
     workspace::{Name, Workspace},
 };
+
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+};
+
+use pina_engine::{
+    lyrics,
+    separate::{self, catalog::KNOWN},
+};
+
+/// Settings' Stem models page: what's downloading, being added, or asked to be taken out.
+#[derive(Default)]
+pub struct ModelsUi {
+    /// Each download going, by its model's id: the bytes come down so far, and its stop.
+    pub downloads: HashMap<&'static str, (Arc<AtomicU64>, Arc<AtomicBool>)>,
+    /// A file being copied in.
+    pub adding: bool,
+    /// A model asked to be taken out, asked again before it goes.
+    pub removing: Option<PathBuf>,
+}
+
+/// Megabytes, as a download's size reads.
+fn mb(bytes: u64) -> String {
+    format!("{} MB", (bytes as f64 / 1e6).round())
+}
 
 /// A card: its title, then its rows.
 fn card(title: &'static str, note: Option<&'static str>, rows: Vec<Div>) -> Div {
@@ -49,6 +80,17 @@ fn row(
     what: impl Into<gpui::SharedString>,
     right: impl IntoElement,
 ) -> Div {
+    row_with(None, title, None, what, right)
+}
+
+/// A row with something before its title (`lead`, a step's number) and beside it (`tag`).
+fn row_with(
+    lead: Option<Div>,
+    title: impl Into<gpui::SharedString>,
+    tag: Option<Div>,
+    what: impl Into<gpui::SharedString>,
+    right: impl IntoElement,
+) -> Div {
     let what = what.into();
     div()
         .flex()
@@ -58,6 +100,7 @@ fn row(
         .py(px(10.))
         .border_t_1()
         .border_color(rgb(LINE_SOFT))
+        .children(lead)
         .child(
             div()
                 .flex_1()
@@ -67,9 +110,17 @@ fn row(
                 .gap(px(2.))
                 .child(
                     div()
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(title.into()),
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(title.into()),
+                        )
+                        .children(tag),
                 )
                 .when(!what.is_empty(), |d| {
                     d.child(
@@ -1417,6 +1468,434 @@ impl Workspace {
                 ),
             ],
         )]
+    }
+
+    /// Settings' Stem models page: how separating works, the models that have been run (each
+    /// to download from where its maker keeps it, with what it gives, how well and its
+    /// licence), and the person's own: added, shown, taken out.
+    pub(crate) fn models_page(&mut self, cx: &mut Context<Self>) -> Vec<Div> {
+        if !separate::available() {
+            return vec![card(
+                "Stems",
+                None,
+                vec![row(
+                    "Separating stems needs a Mac with Apple silicon, or Windows on x64",
+                    "The models can't run on this computer",
+                    div(),
+                )],
+            )];
+        }
+        let dir = separate::folder();
+        let (models, wrong) = separate::models(&dir);
+        let step = |n: &'static str, title: &'static str, what: &'static str| {
+            let number = div()
+                .size(px(22.))
+                .flex_none()
+                .rounded(px(11.))
+                .bg(rgb(ACCENT))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(11.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(0xffffff))
+                .child(n);
+            row_with(Some(number), title, None, what, div())
+        };
+        let how = card(
+            "How it works",
+            None,
+            vec![
+                step(
+                    "1",
+                    "Download a model, or add one you have",
+                    "Each below says what it gives, how well and its licence. Which you use, and on what terms, is up to you",
+                ),
+                step(
+                    "2",
+                    "Right-click an audio region › Separate Stems › the model",
+                    "It runs in the background, how far it's got in the status line",
+                ),
+                step(
+                    "3",
+                    "Its stems, each on a track of its own",
+                    "In a stack, playing as the region did. The region's muted; one undo takes it all back",
+                ),
+                step(
+                    "4",
+                    "Lyrics: open an audio region in the Audio editor › Lyrics",
+                    "With a Whisper model below: each line sung, how often (a hook), to hear or to make a loop on the bars. On a whole song, do it on its vocals stem",
+                ),
+            ],
+        );
+        let downloads: Vec<Div> = KNOWN
+            .iter()
+            .enumerate()
+            .map(|(i, k)| {
+                let about = k.about();
+                let going = self.models_ui.downloads.get(k.id).cloned();
+                let licence = div()
+                    .flex_none()
+                    .px(px(6.))
+                    .py(px(1.))
+                    .rounded(px(5.))
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(if k.open { MINT } else { AMBER }))
+                    .bg(rgb(WELL))
+                    .child(match k.open {
+                        true => format!("Licence: {}", k.licence),
+                        false => k.licence.to_string(),
+                    });
+                let right = match going {
+                    Some((done, stop)) => {
+                        let pct = done.load(Ordering::Relaxed) * 100 / k.bytes.max(1);
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(label(format!("{pct}%")).min_w(px(34.)))
+                            .child(
+                                button("Stop", false)
+                                    .h(px(26.))
+                                    .debug_selector(move || format!("model-stop-{i}"))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |_, _, _, _| {
+                                            stop.store(true, Ordering::Relaxed)
+                                        }),
+                                    ),
+                            )
+                    }
+                    None if k.installed(&models) => label("Downloaded ✓"),
+                    None => button(format!("Download · {}", mb(k.bytes)), false)
+                        .h(px(26.))
+                        .debug_selector(move || format!("model-download-{i}"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| ws.download_model(i, cx)),
+                        ),
+                };
+                row_with(None, about.name, Some(licence), k.heard, right)
+            })
+            .collect();
+        let get = card(
+            "Download a model",
+            Some("from where its maker keeps it"),
+            downloads,
+        );
+        let mut yours: Vec<Div> = models
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let about = &m.about;
+                let mut what = about.stems.join(", ");
+                if let Some(rest) = &about.rest {
+                    what = format!("{what} and {rest}");
+                }
+                if !about.licence.is_empty() {
+                    what = format!("{what} · {}", about.licence);
+                }
+                let (show, gone) = (m.dir.clone(), m.dir.clone());
+                let asked = self.models_ui.removing.as_ref() == Some(&m.dir);
+                let loose = m.dir == dir;
+                row(
+                    about.name.clone(),
+                    what,
+                    div()
+                        .flex()
+                        .gap(px(6.))
+                        .child(button("Show", false).h(px(26.)).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |_, _, _, _| crate::platform::reveal(&show)),
+                        ))
+                        .when(!loose, |d| {
+                            d.child(
+                                button(if asked { "Remove for good" } else { "Remove" }, asked)
+                                    .h(px(26.))
+                                    .debug_selector(move || format!("model-remove-{i}"))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |ws, _, _, cx| {
+                                            ws.remove_model(gone.clone(), cx)
+                                        }),
+                                    ),
+                            )
+                        }),
+                )
+            })
+            .collect();
+        yours.extend(wrong.iter().map(|why| {
+            let at = dir.clone();
+            row(
+                "Not a model yet",
+                why.clone(),
+                button("Show", false).h(px(26.)).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |_, _, _, _| crate::platform::reveal(&at)),
+                ),
+            )
+        }));
+        if yours.is_empty() {
+            yours.push(row(
+                "None yet",
+                "Download one above, or add one you have",
+                div(),
+            ));
+        }
+        let adding = self.models_ui.adding;
+        yours.push(row(
+            "Add a model you have…",
+            "Its ONNX file. One of those above is known by its size; another gets a model.json for you to finish",
+            button(if adding { "Adding…" } else { "+" }, false)
+                .h(px(26.))
+                .debug_selector(|| "model-add".into())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|ws, _, _, cx| ws.add_model(cx)),
+                ),
+        ));
+        let folder = dir.clone();
+        yours.push(row(
+            "Models folder",
+            dir.display().to_string(),
+            button("Show", false).h(px(26.)).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_, _, _, _| {
+                    let _ = std::fs::create_dir_all(&folder);
+                    crate::platform::reveal(&folder);
+                }),
+            ),
+        ));
+        let whisper = lyrics::folder();
+        let have = lyrics::installed(&whisper);
+        let words: Vec<Div> = lyrics::WHISPERS
+            .iter()
+            .enumerate()
+            .map(|(i, w)| {
+                let going = self.models_ui.downloads.get(w.file).cloned();
+                let file = whisper.join(w.file);
+                let asked = self.models_ui.removing.as_ref() == Some(&file);
+                let right = match going {
+                    Some((done, stop)) => {
+                        let pct = done.load(Ordering::Relaxed) * 100 / w.bytes.max(1);
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(label(format!("{pct}%")).min_w(px(34.)))
+                            .child(button("Stop", false).h(px(26.)).on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |_, _, _, _| stop.store(true, Ordering::Relaxed)),
+                            ))
+                    }
+                    None if have.iter().any(|h| h.file == w.file) => div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(label("Downloaded ✓"))
+                        .child(
+                            button(if asked { "Remove for good" } else { "Remove" }, asked)
+                                .h(px(26.))
+                                .debug_selector(move || format!("whisper-remove-{i}"))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |ws, _, _, cx| {
+                                        ws.remove_model(file.clone(), cx)
+                                    }),
+                                ),
+                        ),
+                    None => button(format!("Download · {}", mb(w.bytes)), false)
+                        .h(px(26.))
+                        .debug_selector(move || format!("whisper-download-{i}"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |ws, _, _, cx| ws.download_whisper(i, cx)),
+                        ),
+                };
+                let licence = div()
+                    .flex_none()
+                    .px(px(6.))
+                    .py(px(1.))
+                    .rounded(px(5.))
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(MINT))
+                    .bg(rgb(WELL))
+                    .child("Licence: MIT");
+                row_with(None, w.name, Some(licence), w.heard, right)
+            })
+            .collect();
+        let hear = card(
+            "Lyrics models",
+            Some("OpenAI's Whisper, as whisper.cpp keeps it; the best one downloaded is used"),
+            words,
+        );
+        vec![how, get, hear, card("Your models", None, yours)]
+    }
+
+    /// The `i`th Whisper model downloaded from whisper.cpp's host, in the background.
+    pub(crate) fn download_whisper(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some(w) = lyrics::WHISPERS.get(i) else {
+            return;
+        };
+        let (done, stop) = (Arc::<AtomicU64>::default(), Arc::<AtomicBool>::default());
+        self.models_ui
+            .downloads
+            .insert(w.file, (done.clone(), stop.clone()));
+        let dir = lyrics::folder();
+        let job = cx.background_spawn(async move {
+            std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            separate::catalog::fetch(
+                &w.url(),
+                w.bytes,
+                &dir.join(w.file),
+                |b| done.store(b, Ordering::Relaxed),
+                &stop,
+            )
+        });
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            let _ = this.update(cx, |ws, cx| {
+                ws.models_ui.downloads.remove(w.file);
+                // Lyrics waiting for it: heard now.
+                let waiting = ws
+                    .lyrics_wait
+                    .as_ref()
+                    .filter(|l| l.hearing.is_none() && l.failed.is_none())
+                    .map(|l| l.at);
+                if let (Ok(()), Some(at)) = (&result, waiting) {
+                    ws.hear_lyrics(at, cx);
+                    return;
+                }
+                ws.status = Some(match result {
+                    Ok(()) => format!(
+                        "{} downloaded: open an audio region in the Audio editor › Lyrics",
+                        w.name
+                    ),
+                    Err(e) if e == "Stopped" => "Download stopped".into(),
+                    Err(e) => e,
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The `k`th known model downloaded from where its maker keeps it, in the background.
+    pub(crate) fn download_model(&mut self, k: usize, cx: &mut Context<Self>) {
+        let Some(known) = KNOWN.get(k) else {
+            return;
+        };
+        let (done, stop) = (Arc::<AtomicU64>::default(), Arc::<AtomicBool>::default());
+        self.models_ui
+            .downloads
+            .insert(known.id, (done.clone(), stop.clone()));
+        let dir = separate::folder();
+        let job = cx.background_spawn(async move {
+            separate::catalog::download(
+                &KNOWN[k],
+                &dir,
+                |b| done.store(b, Ordering::Relaxed),
+                &stop,
+            )
+        });
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            let _ = this.update(cx, |ws, cx| {
+                let known = &KNOWN[k];
+                ws.models_ui.downloads.remove(known.id);
+                ws.status = Some(match result {
+                    Ok(_) => format!(
+                        "{} downloaded: it's in each audio region's menu, under Separate Stems",
+                        known.about().name
+                    ),
+                    Err(e) if e == "Stopped" => "Download stopped".into(),
+                    Err(e) => e,
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// An ONNX file the person picks, copied into Models as a model.
+    fn add_model(&mut self, cx: &mut Context<Self>) {
+        if self.models_ui.adding {
+            return;
+        }
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Add".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let Some(file) = paths.into_iter().next() else {
+                return;
+            };
+            if this
+                .update(cx, |ws, cx| {
+                    ws.models_ui.adding = true;
+                    cx.notify();
+                })
+                .is_err()
+            {
+                return;
+            }
+            let dir = separate::folder();
+            let added = cx
+                .background_executor()
+                .spawn(async move { separate::catalog::add(&file, &dir) })
+                .await;
+            let _ = this.update(cx, |ws, cx| {
+                ws.models_ui.adding = false;
+                ws.status = Some(match added {
+                    Ok((_, true)) => {
+                        "Added: it's in each audio region's menu, under Separate Stems".into()
+                    }
+                    Ok((folder, false)) => {
+                        crate::platform::reveal(&folder.join("model.json"));
+                        "Added. Pina doesn't know this one: name its stems (and check how it takes \
+                         sound in) in its model.json, shown in the Finder"
+                            .into()
+                    }
+                    Err(e) => e,
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// A model taken out of Models (its folder deleted): asked once, then gone.
+    pub(crate) fn remove_model(&mut self, at: PathBuf, cx: &mut Context<Self>) {
+        let dir = separate::folder();
+        if self.models_ui.removing.as_ref() != Some(&at) {
+            self.models_ui.removing = Some(at);
+            return cx.notify();
+        }
+        self.models_ui.removing = None;
+        // Only ever a folder inside Models, or a Whisper model's file.
+        let whisper = lyrics::folder();
+        let gone = match at.parent() == Some(whisper.as_path()) {
+            true => std::fs::remove_file(&at),
+            false if at != dir && at.starts_with(&dir) => std::fs::remove_dir_all(&at),
+            false => return,
+        };
+        self.status = Some(match gone {
+            Ok(()) => format!(
+                "Removed {}",
+                at.file_name().map_or("it".into(), |n| n.to_string_lossy())
+            ),
+            Err(e) => format!("{}: {e}", at.display()),
+        });
+        cx.notify();
     }
 
     /// Settings' Saving & files page.

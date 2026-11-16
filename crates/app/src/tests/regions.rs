@@ -872,3 +872,513 @@ fn a_recording_dropped_on_blooms_grow_page_is_grown_toward(cx: &mut TestAppConte
         Some(Instrument::Bloom(_))
     ));
 }
+
+#[gpui::test]
+fn audio_opens_in_its_editor_to_trim_fade_reverse_and_become_a_sampler(cx: &mut TestAppContext) {
+    let dir = demo_copy("audio-editor");
+    let (ws, cx) = open_at(cx, &dir);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    let at = (drums, 0);
+    let region =
+        |cx: &VisualTestContext| ws.read_with(cx, |ws, _| ws.session.project.region(at).clone());
+    let file_and_offset = |cx: &VisualTestContext| match region(cx).content {
+        Content::Audio { file, offset, .. } => (file, offset),
+        c => panic!("{c:?}"),
+    };
+    // Double-clicked, it opens in the audio editor, its file read.
+    double_click(cx, spot(&ws, cx, PPQ, drums));
+    assert_eq!(ws.read_with(cx, |ws, _| ws.bottom), Some(Bottom::Audio));
+    until(cx, &ws, |ws| ws.audio_end(at).is_some());
+    cx.run_until_parked();
+    // Its start dragged in: it starts later, what it plays where it was.
+    let wave = cx.debug_bounds("audio-wave").unwrap();
+    let was = (region(cx).start, file_and_offset(cx).1);
+    let mark = cx.debug_bounds("clip-mark-Start").unwrap().center();
+    drag(cx, mark, mark + point(wave.size.width * 0.05, px(0.)));
+    let now = (region(cx).start, file_and_offset(cx).1);
+    assert!(now.0 > was.0 && now.1 > was.1, "{was:?} {now:?}");
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!((region(cx).start, file_and_offset(cx).1), was);
+    // Its gain up from its field; a fade in from its handle.
+    let gain = cx.debug_bounds("clip-Gain").unwrap().center();
+    drag(cx, gain, gain - point(px(0.), px(30.)));
+    assert!(region(cx).gain_db > 0.5, "{}", region(cx).gain_db);
+    let fade = cx.debug_bounds("clip-mark-FadeIn").unwrap().center();
+    drag(cx, fade, fade + point(wave.size.width * 0.03, px(0.)));
+    assert!(region(cx).fade_in > 0);
+    // Reversed: a reversed copy beside it, the region on the same part of it; again, back.
+    let (file, offset) = file_and_offset(cx);
+    click_on(cx, "clip-reverse", Modifiers::none(), MouseButton::Left);
+    until(cx, &ws, |ws| match &ws.session.project.region(at).content {
+        Content::Audio { file: f, .. } => *f != file,
+        _ => false,
+    });
+    let (reversed, _) = file_and_offset(cx);
+    assert!(dir.join(&reversed).is_file(), "{reversed:?}");
+    click_on(cx, "clip-reverse", Modifiers::none(), MouseButton::Left);
+    until(cx, &ws, |ws| match &ws.session.project.region(at).content {
+        Content::Audio { file: f, .. } => *f == file,
+        _ => false,
+    });
+    let back = file_and_offset(cx).1;
+    assert!(back.abs_diff(offset) <= 1, "{offset} {back}");
+    // Sliced to a Sampler track after it, from its bar's menu: at its hits or on the grid. Every
+    // quarter note, its bar is four slices, each played where it was; the audio muted, the
+    // Sampler open on it.
+    click_on(cx, "clip-slice", Modifiers::none(), MouseButton::Left);
+    let choices = ws.read_with(cx, |ws, _| {
+        ws.menu
+            .as_ref()
+            .map(|m| m.items.iter().map(|i| i.0.clone()).collect::<Vec<_>>())
+    });
+    let choices = choices.expect("how to slice it");
+    assert_eq!(choices[0], "At its hits");
+    let quarters = choices.iter().position(|c| c == "Every 1/4 note").unwrap();
+    ws.update(cx, |ws, cx| {
+        let action = ws.menu.take().unwrap().items[quarters].1.clone();
+        ws.choose(action, cx);
+    });
+    let (zones, notes, muted, bottom) = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        let zones = match &p.tracks[drums + 1].instrument {
+            Some(pina_engine::song::project::Instrument::Sampler(s)) => s.zones.len(),
+            _ => 0,
+        };
+        let notes = match &p.tracks[drums + 1].regions[0].content {
+            Content::Midi { notes, .. } => notes.iter().map(|n| n.start).collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        (zones, notes, p.region(at).mute, ws.bottom)
+    });
+    let q = PPQ as i64;
+    assert_eq!((zones, notes), (4, vec![0, q, q * 2, q * 3]));
+    assert!(muted && bottom == Some(Bottom::Sampler));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui::test]
+fn an_audio_region_is_separated_into_stems_from_a_sheet_picking_the_model_and_stems(
+    cx: &mut TestAppContext,
+) {
+    use crate::workspace::context::RegionOp;
+    let models = test_models();
+    let dir = demo_copy("stems");
+    let (ws, cx) = open_at(cx, &dir);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    let at = (drums, 0);
+    let tracks = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    let items = ws.read_with(cx, |ws, _| ws.stems_items(at));
+    if !pina_engine::separate::available() {
+        assert_eq!(items[0].0, "Separate Stems (needs Apple silicon)");
+        return;
+    }
+    // The region's menu opens the sheet, the model there is picked, every stem kept, the
+    // region to be muted.
+    assert_eq!(items[0].0, "Separate Stems…");
+    ws.update(cx, |ws, cx| ws.region_op(at, RegionOp::Stems, cx));
+    cx.run_until_parked();
+    let (model, without, mute) = ws.read_with(cx, |ws, _| {
+        let s = ws.stems_sheet.as_ref().unwrap();
+        (s.model.clone(), s.without.clone(), s.mute)
+    });
+    assert_eq!(
+        (model.as_deref(), without.len(), mute),
+        (Some("Test Splitter"), 0, true)
+    );
+    assert!(
+        cx.debug_bounds("stems-model").is_some(),
+        "the model, a dropdown"
+    );
+    // Its stems made before by this model are kept: no model runs, they go straight in. The
+    // rest left out.
+    let made = dir.join("Audio Files/Stems/drums · Test Splitter");
+    std::fs::create_dir_all(&made).unwrap();
+    for stem in ["kick", "rest"] {
+        std::fs::copy(
+            dir.join("Audio Files/drums.wav"),
+            made.join(format!("{stem}.wav")),
+        )
+        .unwrap();
+    }
+    click_on(cx, "stems-keep-rest", Modifiers::none(), MouseButton::Left);
+    click_on(cx, "stems-go", Modifiers::none(), MouseButton::Left);
+    until(cx, &ws, |ws| ws.separating.is_none());
+    cx.run_until_parked();
+    let (names, muted, stack, sheet) = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        let names: Vec<String> = p.tracks[drums + 1..]
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        let stack = p.stack_of(drums + 1).map(|a| a.name.clone());
+        (names, p.region(at).mute, stack, ws.stems_sheet.is_some())
+    });
+    assert_eq!(names.first().map(String::as_str), Some("kick"));
+    assert!(!names.iter().any(|n| n == "rest"), "{names:?}");
+    assert!(muted, "the region muted");
+    assert_eq!(stack.as_deref(), Some("Drums Stems"));
+    assert!(!sheet, "the sheet put away once they're in");
+    // One undo: as it was.
+    ws.update(cx, |ws, cx| {
+        ws.session.undo();
+        ws.changed(cx);
+    });
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks.len()),
+        tracks
+    );
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = models;
+}
+
+#[gpui::test]
+fn an_audio_regions_lyrics_show_beside_it_and_a_line_becomes_a_loop_on_the_bars(
+    cx: &mut TestAppContext,
+) {
+    use pina_engine::lyrics::Line;
+    let whisper = test_whisper();
+    let dir = demo_copy("lyrics");
+    // Heard before, by Whisper small: kept beside the song's audio, read back.
+    let line = |text: &str, start: f32, end: f32, sung: usize| Line {
+        text: text.into(),
+        start,
+        end,
+        sung,
+        words: Vec::new(),
+    };
+    let kept = dir.join("Audio Files/Lyrics/drums · Whisper small.json");
+    std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
+    let lines = vec![
+        line("Ain't no holding back", 0.5, 1.8, 2),
+        line("Because you are all I see", 2.0, 3.0, 1),
+    ];
+    std::fs::write(&kept, serde_json::to_string(&lines).unwrap()).unwrap();
+    let (ws, cx) = open_at(cx, &dir);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    let at = (drums, 0);
+    ws.update(cx, |ws, cx| {
+        ws.select_track(drums);
+        ws.region = Some(at);
+        ws.show_bottom(Bottom::Audio, cx);
+        ws.hear_lyrics(at, cx);
+    });
+    until(cx, &ws, |ws| ws.lyrics.is_some());
+    cx.run_until_parked();
+    let heard = ws.read_with(cx, |ws, _| {
+        ws.lyrics.as_ref().map(|l| (l.model, l.lines.clone()))
+    });
+    assert_eq!(heard, Some(("Whisper small", lines)));
+    // A line as a loop: on the bars, on the track's lyrics track, ready to loop.
+    let tracks = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    assert!(
+        cx.debug_bounds("lyrics-loop-hooks").is_some(),
+        "a hook to loop"
+    );
+    // The hook's card loops it, as its line in the list below does.
+    assert!(cx.debug_bounds("lyric-loop-0").is_some());
+    click_on(cx, "hook-loop-0", Modifiers::none(), MouseButton::Left);
+    let (name, region) = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        let t = p.tracks.iter().find(|t| t.name == "Drums Lyrics").unwrap();
+        (t.name.clone(), t.regions[0].clone())
+    });
+    assert_eq!(name, "Drums Lyrics");
+    assert_eq!(region.name, "Ain't no holding back");
+    assert!(region.looped);
+    let bar = ws.read_with(cx, |ws, _| ws.session.project.bar());
+    assert_eq!(region.start % bar, 0, "on a bar line");
+    // One undo: as it was.
+    ws.update(cx, |ws, cx| {
+        ws.session.undo();
+        ws.changed(cx);
+    });
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks.len()),
+        tracks
+    );
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = whisper;
+}
+
+#[gpui::test]
+fn a_line_of_lyrics_dragged_onto_the_tracks_becomes_a_loop_where_its_let_go(
+    cx: &mut TestAppContext,
+) {
+    use pina_engine::lyrics::{Line, Word};
+    let _ = test_whisper();
+    let dir = demo_copy("lyrics-drag");
+    let kept = dir.join("Audio Files/Lyrics/drums · Whisper small.json");
+    std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
+    let word = |text: &str, start: f32, end: f32| Word {
+        text: text.into(),
+        start,
+        end,
+    };
+    let lines = vec![Line {
+        text: "Ain't no holding back".into(),
+        start: 0.5,
+        end: 1.8,
+        sung: 1,
+        words: vec![
+            word("Ain't", 0.5, 0.8),
+            word("no", 0.8, 1.0),
+            word("holding", 1.0, 1.4),
+            word("back", 1.4, 1.8),
+        ],
+    }];
+    std::fs::write(&kept, serde_json::to_string(&lines).unwrap()).unwrap();
+    let (ws, cx) = open_at(cx, &dir);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    let at = (drums, 0);
+    ws.update(cx, |ws, cx| {
+        ws.select_track(drums);
+        ws.region = Some(at);
+        ws.show_bottom(Bottom::Audio, cx);
+        ws.hear_lyrics(at, cx);
+    });
+    until(cx, &ws, |ws| ws.lyrics.is_some());
+    cx.run_until_parked();
+    // Its words are on the waveform, where they're sung.
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.lyrics.as_ref().unwrap().lines[0].words.len()),
+        4
+    );
+    // Dragged onto the first track (an instrument's): a loop on Drums Lyrics, at the bar there.
+    let line = cx.debug_bounds("lyric-line-0").unwrap().center();
+    let to = spot(&ws, cx, PPQ * 8 + PPQ / 2, 0);
+    drag(cx, line, to);
+    let (name, start) = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        let t = p.tracks.iter().find(|t| t.name == "Drums Lyrics").unwrap();
+        (t.regions[0].name.clone(), t.regions[0].start)
+    });
+    assert_eq!(name, "Ain't no holding back");
+    assert_eq!(start, PPQ * 8, "on the bar where it was let go");
+    assert!(ws.read_with(cx, |ws, _| ws.drag.is_none()));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui::test]
+fn a_line_of_lyrics_chopped_is_a_sampler_with_a_chop_a_word_open_to_flip(cx: &mut TestAppContext) {
+    use pina_engine::lyrics::{Line, Word};
+    use pina_engine::song::project::Instrument;
+    let _ = test_whisper();
+    let dir = demo_copy("lyrics-chop");
+    let kept = dir.join("Audio Files/Lyrics/drums · Whisper small.json");
+    std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
+    let word = |text: &str, start: f32, end: f32| Word {
+        text: text.into(),
+        start,
+        end,
+    };
+    let line = |start: f32| Line {
+        text: "Ain't no holding back".into(),
+        start,
+        end: start + 1.3,
+        sung: 2,
+        words: vec![
+            word("Ain't", start, start + 0.3),
+            word("no", start + 0.3, start + 0.5),
+            word("holding", start + 0.5, start + 0.9),
+            word("back", start + 0.9, start + 1.3),
+        ],
+    };
+    std::fs::write(
+        &kept,
+        serde_json::to_string(&[line(0.5), line(2.5)]).unwrap(),
+    )
+    .unwrap();
+    let (ws, cx) = open_at(cx, &dir);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    let at = (drums, 0);
+    ws.update(cx, |ws, cx| {
+        ws.select_track(drums);
+        ws.region = Some(at);
+        ws.show_bottom(Bottom::Audio, cx);
+        ws.hear_lyrics(at, cx);
+    });
+    until(cx, &ws, |ws| ws.lyrics.is_some());
+    cx.run_until_parked();
+    // Sung twice: one hook card, with its wave, and both lines below it.
+    assert!(cx.debug_bounds("lyric-hook-0").is_some());
+    assert!(
+        cx.debug_bounds("lyric-hook-1").is_none(),
+        "a hook shows once"
+    );
+    assert!(cx.debug_bounds("lyric-line-1").is_some());
+    let tracks = ws.read_with(cx, |ws, _| ws.session.project.tracks.len());
+    click_on(cx, "hook-chop-0", Modifiers::none(), MouseButton::Left);
+    // The new track is picked: a Sampler with a chop a word, its notes playing them in order.
+    let (zones, notes, bottom) = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        let t = ws.track;
+        let Some(Instrument::Sampler(s)) = &p.tracks[t].instrument else {
+            panic!("no sampler on the picked track")
+        };
+        (s.zones.len(), p.chop_order((t, 0)), ws.bottom)
+    });
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.session.project.tracks.len()),
+        tracks + 1
+    );
+    assert_eq!(zones, 4, "a chop a word");
+    assert_eq!(notes, [0, 1, 2, 3]);
+    assert_eq!(bottom, Some(Bottom::Sampler), "open in the Sampler to flip");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_agent_separates_a_region_hears_its_lines_and_makes_one_a_loop() {
+    use crate::agent::mcp::call;
+    use serde_json::json;
+    let _ = (test_models(), test_whisper());
+    let dir = demo_copy("agent-stems");
+    let p = pina_engine::song::project::Project::load(&dir).unwrap();
+    let drums = p.tracks.iter().position(|t| t.name == "Drums").unwrap();
+    // The stand-in splitter's stems, made before: kept, so no model runs.
+    let made = dir.join("Audio Files/Stems/drums · Test Splitter");
+    std::fs::create_dir_all(&made).unwrap();
+    for stem in ["kick", "rest"] {
+        std::fs::copy(
+            dir.join("Audio Files/drums.wav"),
+            made.join(format!("{stem}.wav")),
+        )
+        .unwrap();
+    }
+    let models = call("stem_models", &json!({})).unwrap();
+    assert_eq!(models["models"][0]["name"], "Test Splitter");
+    let stems = call(
+        "stems",
+        &json!({"project": dir, "track": drums, "region": 0}),
+    )
+    .unwrap();
+    assert_eq!(stems["stems"][0]["name"], "kick");
+    let p = pina_engine::song::project::Project::load(&dir).unwrap();
+    assert_eq!(p.tracks[drums + 1].name, "kick");
+    assert!(p.tracks[drums].regions[0].mute);
+    // Its lines, heard before by Whisper small: read back.
+    let kept = dir.join("Audio Files/Lyrics/drums · Whisper small.json");
+    std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
+    std::fs::write(
+        &kept,
+        r#"[{"text": "Ain't no holding back", "start": 0.5, "end": 1.8, "sung": 2}]"#,
+    )
+    .unwrap();
+    let heard = call(
+        "lyrics",
+        &json!({"project": dir, "track": drums, "region": 0}),
+    )
+    .unwrap();
+    assert_eq!(heard["lines"][0]["text"], "Ain't no holding back");
+    assert_eq!(heard["lines"][0]["sung"], 2);
+    assert_eq!(heard["from_vocals_stem"], false);
+    // The line as a loop, as the agent makes it.
+    let looped = call(
+        "edit",
+        &json!({"project": dir, "command": {
+            "op": "lyric_loop", "track": drums, "region": 0, "from": 0.5, "to": 1.8,
+            "name": "Ain't no holding back"
+        }}),
+    )
+    .unwrap();
+    assert_eq!(looped["bars"], 1);
+    let p = pina_engine::song::project::Project::load(&dir).unwrap();
+    assert!(p.tracks.iter().any(|t| {
+        t.name == "Drums Lyrics"
+            && t.regions
+                .first()
+                .is_some_and(|r| r.name == "Ain't no holding back")
+    }));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui::test]
+fn lyrics_say_what_theyre_waiting_for_and_the_hooks_loop_at_once(cx: &mut TestAppContext) {
+    use crate::editors::audio::LyricsWait;
+    use pina_engine::lyrics::Line;
+    let _ = test_whisper();
+    let dir = demo_copy("lyrics-states");
+    let (ws, cx) = open_at(cx, &dir);
+    let drums = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        p.tracks.iter().position(|t| t.name == "Drums").unwrap()
+    });
+    let at = (drums, 0);
+    let file = ws.read_with(cx, |ws, _| match &ws.session.project.region(at).content {
+        Content::Audio { file, .. } => file.clone(),
+        c => panic!("{c:?}"),
+    });
+    // Waiting for Whisper: the panel offers it, to download.
+    ws.update(cx, |ws, cx| {
+        ws.select_track(drums);
+        ws.region = Some(at);
+        ws.show_bottom(Bottom::Audio, cx);
+        ws.lyrics_wait = Some(LyricsWait {
+            file: file.clone(),
+            at,
+            hearing: None,
+            failed: None,
+        });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("lyrics-get-whisper").is_some());
+    // Heard: two hooks, one sung twice, loop at once, one after the other, on the bars.
+    let line = |text: &str, start: f32, end: f32, sung: usize| Line {
+        text: text.into(),
+        start,
+        end,
+        sung,
+        words: Vec::new(),
+    };
+    ws.update(cx, |ws, cx| {
+        ws.lyrics_wait = None;
+        ws.lyrics = Some(crate::editors::audio::Lyrics::shown(
+            file.clone(),
+            "Whisper small",
+            vec![
+                line("Euphoria", 0.1, 0.6, 2),
+                line("Set me free", 0.7, 1.2, 1),
+                line("Euphoria", 1.3, 1.8, 2),
+                line("Oh oh", 1.9, 2.3, 2),
+            ],
+        ));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    click_on(
+        cx,
+        "lyrics-loop-hooks",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    let loops = ws.read_with(cx, |ws, _| {
+        let p = &ws.session.project;
+        let t = p.tracks.iter().find(|t| t.name == "Drums Lyrics").unwrap();
+        t.regions
+            .iter()
+            .map(|r| (r.name.clone(), r.start))
+            .collect::<Vec<_>>()
+    });
+    let bar = ws.read_with(cx, |ws, _| ws.session.project.bar());
+    assert_eq!(
+        loops,
+        [("Euphoria".to_string(), 0), ("Oh oh".to_string(), bar)]
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

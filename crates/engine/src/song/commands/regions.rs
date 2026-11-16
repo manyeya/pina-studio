@@ -182,6 +182,84 @@ pub(super) fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, St
             let at = p.move_region((t, r), to, start);
             return Ok(json!({ "region": [at.0, at.1] }));
         }
+        Command::AddStems {
+            track: t,
+            region: r,
+            stems,
+        } => {
+            region_at(p, t, r)?;
+            if !matches!(p.region((t, r)).content, Content::Audio { .. }) {
+                return Err(format!("region {r} on track {t} isn't audio"));
+            }
+            if stems.is_empty() {
+                return Err("no stems".into());
+            }
+            let made = p.stems_from_audio((t, r), &stems);
+            return Ok(json!({ "tracks": made }));
+        }
+        Command::LyricLoop {
+            track: t,
+            region: r,
+            from,
+            to,
+            name,
+            at,
+            to_track,
+            file,
+        } => {
+            region_at(p, t, r)?;
+            let bars = p.lyric_bars((t, r), from, to).ok_or(format!(
+                "region {r} on track {t} doesn't play {from} s to {to} s of its file"
+            ))?;
+            let lane = match to_track {
+                Some(l) => {
+                    track(p, l)?;
+                    l
+                }
+                None => p.lyrics_track(t),
+            };
+            let bar = p.bar().max(1);
+            let after = p.tracks[lane]
+                .regions
+                .iter()
+                .map(|x| (x.start + x.length).div_ceil(bar) * bar)
+                .max()
+                .unwrap_or(0);
+            let name = name.unwrap_or_else(|| "Lyric".into());
+            let made = p.lyric_loop(
+                (t, r),
+                bars,
+                &name,
+                lane,
+                at.unwrap_or(after),
+                file.as_deref(),
+            );
+            return Ok(json!({ "region": [made.0, made.1], "bars": bars.1 / bar }));
+        }
+        Command::FlipWords {
+            track: t,
+            region: r,
+            flip,
+            file,
+            at,
+        } => {
+            region_at(p, t, r)?;
+            let Content::Audio { file: own, .. } = &p.region((t, r)).content else {
+                return Err(format!("region {r} on track {t} isn't audio"));
+            };
+            let file = file.unwrap_or_else(|| own.clone());
+            let (sides, rate) = crate::audio::engine::read_audio(&dir.join(&file))?;
+            let seconds = sides.first().map_or(0, Vec::len) as f32 / rate as f32;
+            let bar = p.bar().max(1);
+            let flip = flip
+                .fit((bar / PPQ).max(1) as u32, seconds)
+                .ok_or("the flip has no hits inside its bars and the file")?;
+            let tick = at.unwrap_or(p.region((t, r)).start / bar * bar);
+            let made = p
+                .flip_words((t, r), &file, seconds, &flip, tick)
+                .ok_or("the flip plays nothing")?;
+            return Ok(json!({ "track": made, "name": flip.name, "hits": flip.hits.len() }));
+        }
         Command::TrimRegion {
             track: t,
             region: r,

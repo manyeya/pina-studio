@@ -18,7 +18,7 @@ use crate::song::project::{
 use crate::song::project::{Unit, knobs};
 
 /// The most modulators a track has.
-pub const MAX_MODS: usize = 8;
+pub const MAX_MODS: usize = 24;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Modulator {

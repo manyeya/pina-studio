@@ -7,6 +7,7 @@ mod drums;
 mod editors;
 mod eq;
 mod expression;
+mod flips;
 mod like;
 mod logic_keys;
 mod midi_browser;
@@ -18,6 +19,7 @@ mod plugins;
 mod regions;
 #[cfg(target_os = "macos")]
 mod shots;
+mod smart;
 mod sounds;
 mod steps;
 mod studio_agent;
@@ -103,6 +105,40 @@ fn test_songs() -> PathBuf {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         unsafe { std::env::set_var("PINA_SONGS", &d) };
+        d
+    })
+    .clone()
+}
+
+/// A Models folder of the tests' own, never the person's: one separation model, a stand-in
+/// (its ONNX file empty) that gives a kick and the rest.
+fn test_models() -> PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let d = std::env::temp_dir().join(format!("pina-test-models-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let model = d.join("splitter");
+        std::fs::create_dir_all(&model).unwrap();
+        let json =
+            r#"{"name": "Test Splitter", "stems": ["kick"], "rest": "rest", "input": "wave"}"#;
+        std::fs::write(model.join("model.json"), json).unwrap();
+        std::fs::write(model.join("model.onnx"), b"").unwrap();
+        unsafe { std::env::set_var("PINA_MODELS", &d) };
+        d
+    })
+    .clone()
+}
+
+/// A Whisper folder of the tests' own, never the person's, holding a stand-in for Whisper small
+/// (empty: lyrics heard before are read back, so it never runs).
+fn test_whisper() -> PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let d = std::env::temp_dir().join(format!("pina-test-whisper-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("ggml-small-q5_1.bin"), b"").unwrap();
+        unsafe { std::env::set_var("PINA_WHISPER", &d) };
         d
     })
     .clone()

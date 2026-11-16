@@ -1,6 +1,6 @@
 use super::*;
 use crate::audio::engine::MAX_BLOCK;
-use crate::song::project::{SampleCharacter, SampleMode, Trigger};
+use crate::song::project::{DrumModDest, PlaybackFx, SampleCharacter, SampleMode, Trigger};
 
 fn sampler(zones: Vec<(Zone, Vec<f32>)>) -> Sampler {
     with_voice(zones, SamplerVoice::default())
@@ -585,6 +585,146 @@ fn the_sub_adds_an_octave_under_and_pitch_is_heard() {
     assert_eq!(note_of(hz).0, 57);
 }
 
+/// A one-shot: half-level silence-free DC on note 36, a second long.
+fn hit() -> (Zone, Vec<f32>) {
+    (
+        Zone {
+            note: 36,
+            ..Zone::default()
+        },
+        vec![0.5; 48_000],
+    )
+}
+
+#[test]
+fn the_drum_samplers_envelope_holds_then_decays() {
+    let voice = SamplerVoice {
+        sustain: 0.0,
+        hold_ms: 100.0,
+        decay_ms: 50.0,
+        ..SamplerVoice::default()
+    };
+    let mut s = with_voice(vec![hit()], voice);
+    let out = render(&mut s, &[note(0, 36, 1.0)], 24_000);
+    // Held at the top for its 100 ms, then gone within the decay's 50.
+    assert!((out[0][4_000] - 0.5).abs() < 1e-3, "{}", out[0][4_000]);
+    assert!(out[0][4_700] > 0.4, "{}", out[0][4_700]);
+    assert!(out[0][8_000] < 0.005, "{}", out[0][8_000]);
+}
+
+#[test]
+fn the_sub_plays_at_its_own_frequency_and_a_switched_off_effect_is_silent() {
+    let voice = SamplerVoice {
+        sub: 1.0,
+        sub_hz: 50.0,
+        fx: Some(PlaybackFx::SubOsc),
+        ..SamplerVoice::default()
+    };
+    let mut s = with_voice(vec![(tone(69), vec![0.0; 48_000])], voice);
+    let out = render(&mut s, &[note(0, 69, 1.0)], 24_000);
+    let f = frequency(&out[0][2_000..24_000]);
+    assert!((f - 50.0).abs() < 3.0, "{f}");
+    let off = SamplerVoice {
+        fx_off: true,
+        ..voice
+    };
+    let mut s = with_voice(vec![(tone(69), vec![0.0; 48_000])], off);
+    let out = render(&mut s, &[note(0, 69, 1.0)], 4_800);
+    assert!(peak(&out[0], 0, 4_800) < 1e-6);
+    // Switched off, its settings are kept, for when it's back on.
+    assert_eq!(off.sub, 1.0);
+}
+
+#[test]
+fn velocity_moves_what_the_drum_samplers_modulation_says() {
+    // Velocity on Decay: a hard hit rings eight times longer than one that isn't moved.
+    let voice = SamplerVoice {
+        sustain: 0.0,
+        decay_ms: 40.0,
+        velocity: 0.0,
+        drum_dest: DrumModDest::Decay,
+        drum_amount: 1.0,
+        ..SamplerVoice::default()
+    };
+    let at_100ms = |velocity: f32, voice: SamplerVoice| {
+        let mut s = with_voice(vec![hit()], voice);
+        render(&mut s, &[note(0, 36, velocity)], 6_000)[0][4_800]
+    };
+    let (hard, soft) = (at_100ms(1.0, voice), at_100ms(0.01, voice));
+    assert!(hard > 0.05 && soft < 0.01, "{hard} {soft}");
+    // On the effect's first setting: punch boosts the start as hard as it's hit.
+    let punch = SamplerVoice {
+        fx: Some(PlaybackFx::Punch),
+        velocity: 0.0,
+        drum_dest: DrumModDest::Fx1,
+        drum_amount: 1.0,
+        ..SamplerVoice::default()
+    };
+    let (hard, soft) = (at_100ms(1.0, punch), at_100ms(0.01, punch));
+    let start = |velocity: f32| {
+        let mut s = with_voice(vec![hit()], punch);
+        render(&mut s, &[note(0, 36, velocity)], 100)[0][1]
+    };
+    assert!(
+        start(1.0) > start(0.01) * 2.0,
+        "{} {}",
+        start(1.0),
+        start(0.01)
+    );
+    assert!((hard - soft).abs() < 1e-3, "{hard} {soft}");
+}
+
+#[test]
+fn the_loop_effect_repeats_a_stretch_from_its_offset() {
+    // A ramp, its value its place: looped 10 ms from a quarter in, it never reads past there.
+    let ramp: Vec<f32> = (0..48_000).map(|i| i as f32 / 48_000.0).collect();
+    let voice = SamplerVoice {
+        loop_ms: 10.0,
+        loop_offset: 0.25,
+        fx: Some(PlaybackFx::Loop),
+        ..SamplerVoice::default()
+    };
+    let mut s = with_voice(vec![(hit().0, ramp)], voice);
+    let out = render(&mut s, &[note(0, 36, 1.0)], 24_000);
+    let late = &out[0][20_000..24_000];
+    let (lo, hi) = late
+        .iter()
+        .fold((f32::MAX, 0f32), |(a, b), &x| (a.min(x), b.max(x)));
+    assert!(lo > 0.24 && hi < 0.262, "{lo} {hi}");
+}
+
+#[test]
+fn the_8_bits_grit_fades_to_clean_and_pan_places_it() {
+    let tone_at = |voice: SamplerVoice| {
+        let mut s = with_voice(vec![(tone(69), sine(440.0, 1.0, 0.5))], voice);
+        render(&mut s, &[note(0, 69, 1.0)], 24_000)
+    };
+    let clean = tone_at(SamplerVoice::default());
+    let gritty = SamplerVoice {
+        character: SampleCharacter::Vintage,
+        crush_khz: 4.0,
+        bits: 4,
+        crush_decay_ms: 30.0,
+        fx: Some(PlaybackFx::EightBit),
+        ..SamplerVoice::default()
+    };
+    let crushed = tone_at(gritty);
+    let diff = |a: usize, b: usize| {
+        (a..b)
+            .map(|i| (crushed[0][i] - clean[0][i]).abs())
+            .fold(0f32, f32::max)
+    };
+    assert!(diff(10, 300) > 0.05, "{}", diff(10, 300));
+    assert!(diff(12_000, 24_000) < 0.01, "{}", diff(12_000, 24_000));
+    // All the way right: nothing on the left.
+    let right = tone_at(SamplerVoice {
+        pan: 1.0,
+        ..SamplerVoice::default()
+    });
+    assert!(peak(&right[0], 1_000, 24_000) < 1e-4);
+    assert!(peak(&right[1], 1_000, 24_000) > 0.4);
+}
+
 /// How much of real time a sampler takes, playing hard: `cargo test --release -p pina-engine
 /// sampler_cost -- --ignored --nocapture`.
 #[test]
@@ -619,4 +759,34 @@ fn sampler_cost() {
     eprintln!(
         "% of real time, 8 notes: plain {plain:.2}, ladder+unison 4+sub+fm {rich:.2}, grains {grains:.2}"
     );
+}
+
+#[test]
+fn a_one_shot_looped_frozen_or_still_still_ends() {
+    // A half-second hit, played once: looped by the Loop effect, frozen, or not moving at all.
+    let loop_fx = SamplerVoice {
+        loop_ms: 10.0,
+        fx: Some(PlaybackFx::Loop),
+        ..SamplerVoice::default()
+    };
+    let frozen = SamplerVoice {
+        mode: SampleMode::Stretch,
+        freeze: true,
+        ..SamplerVoice::default()
+    };
+    let still = SamplerVoice {
+        mode: SampleMode::Stretch,
+        speed: 0.0,
+        ..SamplerVoice::default()
+    };
+    for (name, voice, gone) in [
+        ("loop", loop_fx, 48_000),
+        ("frozen", frozen, 410_000),
+        ("still", still, 410_000),
+    ] {
+        let mut s = with_voice(vec![(hit().0, vec![0.5; 24_000])], voice);
+        let out = render(&mut s, &[note(0, 36, 1.0)], gone + 4_800);
+        assert!(peak(&out[0], 2_000, 4_000) > 0.1, "{name} sounds");
+        assert!(peak(&out[0], gone, gone + 4_800) < 1e-6, "{name} ends");
+    }
 }

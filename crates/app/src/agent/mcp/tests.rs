@@ -55,7 +55,11 @@ fn speaks_mcp() {
             "midi_study",
             "reference_study",
             "reference_create",
-            "reference_compare"
+            "reference_compare",
+            "stem_models",
+            "stems",
+            "lyrics",
+            "slices"
         ]
     );
 

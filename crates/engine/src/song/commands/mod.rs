@@ -266,6 +266,41 @@ pub enum Command {
         region: usize,
         at: u64,
     },
+    /// An audio region's stems (as `pina separate` makes them: each a name and its file, sample
+    /// for sample its file's), each on an audio track of its own playing as the region did, in a
+    /// stack after its track; the region muted.
+    AddStems {
+        track: usize,
+        region: usize,
+        stems: Vec<(String, std::path::PathBuf)>,
+    },
+    /// A line sung in an audio region (seconds into its file, as `pina lyrics` hears them) as a
+    /// loop on the bars: from the bar line it starts after for 1, 2, 4 or 8 bars, on its track's
+    /// lyrics track (or `to_track`), at `at` ticks (else after the loops there); playing `file`
+    /// (its vocals stem) instead of the region's, if given.
+    LyricLoop {
+        track: usize,
+        region: usize,
+        from: f32,
+        to: f32,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        at: Option<u64>,
+        #[serde(default)]
+        to_track: Option<usize>,
+        #[serde(default)]
+        file: Option<std::path::PathBuf>,
+    },
+    FlipWords {
+        track: usize,
+        region: usize,
+        flip: crate::lyrics::flips::Flip,
+        #[serde(default)]
+        file: Option<std::path::PathBuf>,
+        #[serde(default)]
+        at: Option<u64>,
+    },
     DeleteRegion {
         track: usize,
         region: usize,
@@ -963,6 +998,9 @@ fn run(p: &mut Project, dir: &Path, cmd: Command) -> Result<Value, String> {
         | Command::MoveRegion { .. }
         | Command::TrimRegion { .. }
         | Command::SplitRegion { .. }
+        | Command::AddStems { .. }
+        | Command::LyricLoop { .. }
+        | Command::FlipWords { .. }
         | Command::SetCell { .. }
         | Command::StretchRegion { .. }
         | Command::AnalyzeTempo { .. }

@@ -406,8 +406,65 @@ fn tools() -> Value {
     ]);
     if let Value::Array(list) = &mut all {
         list.extend(reference_tools(&project));
+        list.extend(stem_tools(&project));
     }
     all
+}
+
+/// The tools for stems and lyrics: the models there are, a region separated, its lines heard.
+fn stem_tools(project: &Value) -> Vec<Value> {
+    let tools = json!([
+        {
+            "name": "stem_models",
+            "description": "The separation models (for `stems`) and Whisper models (for `lyrics`) the person has downloaded, and those they could. Pina Studio ships none: if what's needed isn't there, tell them to get it in Settings › Stems & lyrics (the separation models' licences are their makers', some unclear; Whisper's are MIT).",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "stems",
+            "description": "Separates an audio region (`track`, `region`) into stems with a separation model (`model`, a name or the start of one; else the first downloaded): vocals, drums, bass, the rest, as the model gives. Each stem goes on an audio track of its own playing as the region did, in a stack after its track; the region is muted (live in the app if it's open; one undo there takes it back). Takes minutes on a whole song on the CPU; a file's stems by a model are kept, so asking again is instant. Answers with each stem's file and track.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": project,
+                    "track": { "type": "integer", "minimum": 0 },
+                    "region": { "type": "integer", "minimum": 0 },
+                    "model": { "type": "string" }
+                },
+                "required": ["project", "track", "region"]
+            }
+        },
+        {
+            "name": "lyrics",
+            "description": "The lines sung in an audio region's file (`track`, `region`), heard by Whisper: each with `from` and `to` (seconds into the file) and `sung` (how many times it's sung: 2 or more is a hook). A whole song's vocals are separated first if a separation model with vocals is downloaded, and the lines are heard in that stem (`file`, `from_vocals_stem`). Kept: asking again is instant. Each line has its `words`, each with its `from` and `to`. To make a line a loop on the bars, `edit` with `lyric_loop` (track, region, from, to, name: the line, file: this `file` when from_vocals_stem, so the loop plays the vocal alone). To flip the words into a hook as a producer chops a vocal (words from anywhere in a new order on the grid, pitched up or down, stuttered, reversed), `edit` with `flip_words`, each hit a word or run of words by their seconds.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": project,
+                    "track": { "type": "integer", "minimum": 0 },
+                    "region": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["project", "track", "region"]
+            }
+        },
+        {
+            "name": "slices",
+            "description": "Smart Slice: an audio region (`track`, `region`) cut at its hits and phrases, the stretch it plays, each slice with `from` and `to` (seconds into `file`) and `name` (what it sounds like: Kick, Snare, Closed Hat, Chord Am, Bass F#, Hit, Phrase Dm, Vocal; `voice`: a voice is in it). Nothing separated: a voice in a beat is sliced with it, as a soul sample is chopped. `unvoiced`: the vocals taken out first (a separation model with vocals), the beat sliced without them. Kept: asking again is instant. To flip the slices into a new beat as on an MPC (a new groove from the hits, chords re-sequenced, rolls, half-time, reversed into the downbeat), `edit` with `flip_words` (file: this `file`), each hit a slice or run of slices by their seconds.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": project,
+                    "track": { "type": "integer", "minimum": 0 },
+                    "region": { "type": "integer", "minimum": 0 },
+                    "unvoiced": { "type": "boolean" }
+                },
+                "required": ["project", "track", "region"]
+            }
+        }
+    ]);
+    match tools {
+        Value::Array(list) => list,
+        _ => Vec::new(),
+    }
 }
 
 /// The tools for songs like a reference: studying one, setting one up, comparing with it.
@@ -562,6 +619,14 @@ fn bar_range(args: &Value) -> Result<Option<(u64, u64)>, String> {
         (None, Some(b)) => Some((1, b)),
         (Some(a), Some(b)) => Some((a, b)),
     })
+}
+
+/// A whole number the tool needs.
+fn index(args: &Value, name: &str) -> Result<usize, String> {
+    args.get(name)
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .ok_or(format!("`{name}` is needed, a whole number"))
 }
 
 pub(crate) fn call(name: &str, args: &Value) -> Result<Value, String> {
@@ -804,6 +869,26 @@ pub(crate) fn call(name: &str, args: &Value) -> Result<Value, String> {
             args.get("at").and_then(Value::as_u64).unwrap_or(0),
         ),
         "palette" => crate::cli::samples::palette(&path(args, "project")?),
+        "stem_models" => crate::cli::separate::stem_models_tool(),
+        "stems" => crate::cli::separate::stems_tool(
+            &path(args, "project")?,
+            index(args, "track")?,
+            index(args, "region")?,
+            text(args, "model"),
+        ),
+        "lyrics" => crate::cli::separate::lyrics_tool(
+            &path(args, "project")?,
+            index(args, "track")?,
+            index(args, "region")?,
+        ),
+        "slices" => crate::cli::separate::slices_tool(
+            &path(args, "project")?,
+            index(args, "track")?,
+            index(args, "region")?,
+            args.get("unvoiced")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
         "samples_library" => match args.get("action").and_then(Value::as_str) {
             Some("status") => crate::cli::samples::status(),
             Some("scan") => crate::cli::samples::scan(),

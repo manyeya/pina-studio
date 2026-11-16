@@ -39,11 +39,12 @@ impl Workspace {
         self.view == View::Songs && !self.session.on_disk && !self.session.edited
     }
 
-    /// ⌘N, or Songs: the Songs page; for ⌘N, its new song's name ready to type.
+    /// ⌘N, or Songs: the Songs page; for ⌘N, the new song's panel up, its name ready to type.
     pub fn show_home(&mut self, name: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.view = View::Songs;
         self.refresh_songs(cx);
         let home = self.home.get_or_insert_with(|| Home::new(window, cx));
+        home.creating = name;
         if name {
             let focus = gpui::Focusable::focus_handle(home.name.read(cx), cx);
             focus.focus(window, cx);
@@ -185,6 +186,9 @@ impl Workspace {
         match create(&root(), name, tempo, h.key, h.signature, template) {
             Ok(dir) => {
                 h.name.update(cx, |f, cx| f.set_text("", cx));
+                if let Some(h) = self.home.as_mut() {
+                    h.creating = false;
+                }
                 self.open_song(dir, window, cx);
             }
             Err(e) => self.status = Some(e),

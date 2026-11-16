@@ -72,6 +72,11 @@ pub enum RegionOp {
     Quantize,
     Bounce,
     Open,
+    /// An audio region made a Sampler track: whole, or sliced at its hits or on the grid.
+    ToSampler,
+    SliceToSampler(crate::editors::audio::SliceBy),
+    /// The Separate Stems sheet, for an audio region (or the one separating).
+    Stems,
 }
 
 /// A rule between groups of a menu's items.
@@ -291,6 +296,17 @@ impl Workspace {
         }
         // Audio: how it keeps time, and the song keeping time with it.
         if let Content::Audio { follow, .. } = &region.content {
+            items.push(op("Open in Audio Editor", RegionOp::Open));
+            items.push(op("Convert to Sampler Track", RegionOp::ToSampler));
+            // Sliced: at its hits, or on the grid.
+            let bar = self.session.project.bar();
+            items.extend(
+                crate::editors::audio::slice_items(r, bar)
+                    .into_iter()
+                    .map(|(how, action)| (format!("Slice to Sampler Track · {how}"), action)),
+            );
+            items.extend(self.stems_items(r));
+            items.push(rule());
             items.push(op("Quantize Hits", RegionOp::Quantize));
             use crate::arrange::tempo::TempoOp;
             use pina_engine::song::project::Follow;
@@ -618,10 +634,14 @@ impl Workspace {
                 let pane = match region.content {
                     Content::Pattern { .. } => Bottom::Steps,
                     Content::Takes { .. } => Bottom::Takes,
+                    Content::Audio { .. } => Bottom::Audio,
                     _ => Bottom::PianoRoll,
                 };
                 self.show_bottom(pane, cx);
             }
+            RegionOp::ToSampler => self.clip_to_sampler(at, None, cx),
+            RegionOp::SliceToSampler(how) => self.clip_to_sampler(at, Some(how), cx),
+            RegionOp::Stems => self.open_stems(at, cx),
         }
         cx.notify();
     }

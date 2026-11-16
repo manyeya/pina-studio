@@ -73,6 +73,23 @@ const USAGE: &str = "usage:
   pina samples kit [<words or JSON>] [--for <project>]
                                    a kit that goes together, with alternatives
   pina samples info <file>        what a sample is
+  pina models                     the separation models you've added (none come with Pina
+                                   Studio): a folder each in its Models folder, with an ONNX
+                                   file and a model.json saying what it gives
+  pina models inspect <file.onnx> a model's inputs and outputs, to write its model.json from
+  pina models get [name]          a model that's been run, downloaded from where its maker
+                                   keeps it (its licence is its maker's); without a name, the list
+  pina separate <audio file> [--model <name>] [--out <folder>]
+                                   the file parted into its stems by a model: a WAV each
+  pina lyrics <audio file> [--model base|small|turbo]
+                                   the lines sung in it, when each starts and ends, and how
+                                   often each is sung (a hook), by a Whisper model you got
+  pina slices <audio file>        Smart Slice: what's in it (a beat, a voice in a beat, a
+                                   voice alone, by its sound), cut that way, each slice named
+  pina flips <project> <track> <region> [--style any|chipmunk|chop|stutter|call|dark|reverse]
+            [--vibe <text>] [--count N] [--agent claude-code|codex]
+                                   hooks made from the words sung in an audio region, by an
+                                   agent: a flip a line of JSON, each as it's found
   pina samples put <file> <project> [--track N] [--at TICK]
                                    into the song, made to fit: a loop stretched to its
                                    tempo and moved into its key; a one-shot as a sampler
@@ -217,6 +234,17 @@ fn main() {
             }
         }
         ["samples", rest @ ..] => print(cli::samples::command(rest)),
+        ["models"] => print(cli::separate::models()),
+        ["models", "inspect", file] => print(cli::separate::inspect(p(file))),
+        ["models", "get"] => print(cli::separate::get(None)),
+        ["models", "get", name] => print(cli::separate::get(Some(name))),
+        ["separate", file, rest @ ..] => print(cli::separate::command(p(file), rest)),
+        ["lyrics", file, rest @ ..] => print(cli::separate::lyrics(p(file), rest)),
+        ["slices", file, rest @ ..] => print(cli::separate::slices(p(file), rest)),
+        ["flips", dir, track, region, rest @ ..] => match (track.parse(), region.parse()) {
+            (Ok(t), Ok(r)) => print(cli::separate::flips(p(dir), t, r, rest)),
+            _ => Err(USAGE.to_string()),
+        },
         ["learn", dir, "--master"] => print(agent::produce::learn(p(dir), None)),
         ["learn", dir, "--master", "--sat"] => print(agent::produce::learn_saturator(p(dir), None)),
         ["learn", dir, "--track", t, "--sat"] => match t.parse() {

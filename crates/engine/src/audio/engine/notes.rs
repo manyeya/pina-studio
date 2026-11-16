@@ -190,7 +190,7 @@ pub(crate) fn gather(
             let fades = c.fades[1] > 0 || c.fades[3] > 0;
             for t in a..b {
                 let i = (c.offset + t - c.start) as usize;
-                let v = src.get(i).copied().unwrap_or(0.0);
+                let v = src.get(i).copied().unwrap_or(0.0) * c.gain;
                 dst[(t - from) as usize + into] += if fades { v * faded(c, t) } else { v };
             }
         }

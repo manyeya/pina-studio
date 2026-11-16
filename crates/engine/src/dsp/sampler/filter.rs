@@ -65,10 +65,26 @@ pub struct Coefs {
     formants: [Svf; 3],
     /// Into the filter: how hard (1 clean), and the loudness that keeps.
     drive: f32,
+    /// The 24 dB high pass's second stage (flat, without resonance); the peak's band added
+    /// back (its gain squared, less one).
+    second: Svf,
+    bell: f32,
 }
 
 /// The coefficients for `mode` at `hz` and `resonance` (0 to 1), `drive` 0 to 1.
 pub fn coefs(mode: FilterMode, hz: f32, resonance: f32, drive: f32, rate: f32) -> Coefs {
+    coefs_with(mode, hz, resonance, drive, 0.0, rate)
+}
+
+/// As `coefs`, a peak boosting (or cutting) by `gain_db`.
+pub fn coefs_with(
+    mode: FilterMode,
+    hz: f32,
+    resonance: f32,
+    drive: f32,
+    gain_db: f32,
+    rate: f32,
+) -> Coefs {
     let resonance = resonance.clamp(0.0, 1.0);
     let hz = hz.clamp(20.0, rate * 0.45);
     let mut c = Coefs {
@@ -80,6 +96,17 @@ pub fn coefs(mode: FilterMode, hz: f32, resonance: f32, drive: f32, rate: f32) -
         FilterMode::Off => {}
         FilterMode::LowPass | FilterMode::HighPass | FilterMode::BandPass | FilterMode::Notch => {
             c.svf = Svf::new(hz, 2.0 * (1.0 - 0.97 * resonance), rate);
+        }
+        FilterMode::HighPass24 => {
+            c.svf = Svf::new(hz, 2.0 * (1.0 - 0.97 * resonance), rate);
+            c.second = Svf::new(hz, std::f32::consts::SQRT_2, rate);
+        }
+        FilterMode::Peak => {
+            // A bell (Simper's): Q from 0.5 to 12 with the resonance, narrower as it's boosted.
+            let a = 10f32.powf(gain_db.clamp(-24.0, 24.0) / 40.0);
+            let q = 0.5 + 11.5 * resonance * resonance;
+            c.svf = Svf::new(hz, 1.0 / (q * a), rate);
+            c.bell = a * a - 1.0;
         }
         FilterMode::Ladder => {
             let g = (std::f32::consts::PI * hz / rate).tan();
@@ -109,6 +136,7 @@ pub fn coefs(mode: FilterMode, hz: f32, resonance: f32, drive: f32, rate: f32) -
 #[derive(Clone, Copy, Default)]
 pub struct Filter {
     svf: [[f32; 2]; 2],
+    second: [[f32; 2]; 2],
     ladder: [[f32; 4]; 2],
     formants: [[[f32; 2]; 3]; 2],
     comb_at: [usize; 2],
@@ -132,6 +160,16 @@ impl Filter {
             FilterMode::Notch => {
                 let (band, _) = c.svf.run(&mut self.svf[channel], x);
                 x - c.svf.k * band
+            }
+            FilterMode::HighPass24 => {
+                let (band, low) = c.svf.run(&mut self.svf[channel], x);
+                let y = x - c.svf.k * band - low;
+                let (band, low) = c.second.run(&mut self.second[channel], y);
+                y - c.second.k * band - low
+            }
+            FilterMode::Peak => {
+                let (band, _) = c.svf.run(&mut self.svf[channel], x);
+                x + c.bell * c.svf.k * band
             }
             FilterMode::Ladder => {
                 let s = &mut self.ladder[channel];
@@ -218,6 +256,42 @@ mod tests {
             gain(FilterMode::Comb, 500.0, 0.9, 750.0),
         );
         assert!(on > off * 4.0, "{on} {off}");
+    }
+
+    #[test]
+    fn the_24_db_high_pass_cuts_lows_steeper_and_a_peak_boosts_or_cuts_its_band() {
+        let (hp12, hp24) = (
+            gain(FilterMode::HighPass, 1_000.0, 0.0, 250.0),
+            gain(FilterMode::HighPass24, 1_000.0, 0.0, 250.0),
+        );
+        assert!(hp24 < hp12 / 3.0, "{hp12} {hp24}");
+        assert!(gain(FilterMode::HighPass24, 1_000.0, 0.0, 8_000.0) > 0.85);
+        let bell = |db: f32, hz: f32| {
+            let c = coefs_with(FilterMode::Peak, 1_000.0, 0.3, 0.0, db, RATE);
+            let mut f = Filter::default();
+            let mut comb = vec![0f32; COMB];
+            let mut peak = 0f32;
+            for i in 0..24_000 {
+                let x = (std::f32::consts::TAU * hz * i as f32 / RATE).sin() * 0.1;
+                let y = f.run(&c, 0, x, &mut comb);
+                if i > 12_000 {
+                    peak = peak.max(y.abs());
+                }
+            }
+            peak / 0.1
+        };
+        // +12 dB is four times, -12 a quarter; far from the cutoff, it's left alone.
+        assert!(
+            (bell(12.0, 1_000.0) - 3.98).abs() < 0.4,
+            "{}",
+            bell(12.0, 1_000.0)
+        );
+        assert!(
+            (bell(-12.0, 1_000.0) - 0.25).abs() < 0.05,
+            "{}",
+            bell(-12.0, 1_000.0)
+        );
+        assert!((bell(12.0, 60.0) - 1.0).abs() < 0.1, "{}", bell(12.0, 60.0));
     }
 
     #[test]

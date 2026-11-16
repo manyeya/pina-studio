@@ -3,6 +3,81 @@
 use super::*;
 use crate::editors::pianoroll::{More, more_button};
 
+/// A control with its name, small, over it.
+pub(crate) fn captioned(caption: &'static str, child: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(
+            div()
+                .text_size(px(9.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(TEXT_4))
+                .whitespace_nowrap()
+                .child(caption),
+        )
+        .child(child)
+}
+
+/// A setting as its name and value, its place along its foot: dragged up and down like a knob
+/// (`target`). `sel` names it for tests.
+pub(crate) fn value_field(
+    label: &'static str,
+    text: String,
+    at: f32,
+    color: u32,
+    target: Target,
+    sel: String,
+    cx: &mut Context<Workspace>,
+) -> Div {
+    div()
+        .relative()
+        .h(px(26.))
+        .px(px(8.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .rounded(px(7.))
+        .overflow_hidden()
+        .bg(rgb(FIELD))
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .bottom_0()
+                .h(px(2.))
+                .w(gpui::relative(at.clamp(0.0, 1.0)))
+                .bg(alpha(color, 0.7)),
+        )
+        .cursor_ns_resize()
+        .hover(|d| d.bg(rgb(RAISED)))
+        .debug_selector(move || sel.clone())
+        .child(
+            div()
+                .text_size(px(10.5))
+                .text_color(rgb(TEXT_3))
+                .child(label),
+        )
+        .child(
+            div()
+                .font_family(MONO)
+                .text_size(px(11.))
+                .text_color(rgb(color))
+                .whitespace_nowrap()
+                .child(text),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                let value = ws.target(target);
+                let y = pt(e.position).y;
+                ws.begin_drag(Drag::Knob { target, y, value }, cx);
+            }),
+        )
+}
+
 /// A switch in a tray: lit when on.
 pub(crate) fn pill(label: &'static str, on: bool, color: u32) -> Div {
     div()
@@ -186,42 +261,15 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Div {
         let s = self.sampler_of(t).cloned().unwrap_or_default();
-        let text = field_text(&s, f, None);
-        let target = Target::Sampler { track: t, field: f };
-        div()
-            .h(px(26.))
-            .px(px(8.))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .rounded(px(7.))
-            .bg(rgb(FIELD))
-            .cursor_ns_resize()
-            .hover(|d| d.bg(rgb(RAISED)))
-            .debug_selector(move || format!("sampler-{f:?}"))
-            .child(
-                div()
-                    .text_size(px(10.5))
-                    .text_color(rgb(TEXT_3))
-                    .child(label),
-            )
-            .child(
-                div()
-                    .font_family(MONO)
-                    .text_size(px(11.))
-                    .text_color(rgb(color))
-                    .whitespace_nowrap()
-                    .child(text),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    let value = ws.target(target);
-                    let y = pt(e.position).y;
-                    ws.begin_drag(Drag::Knob { target, y, value }, cx);
-                }),
-            )
+        value_field(
+            label,
+            field_text(&s, f, None),
+            field_pos(&s, f),
+            color,
+            Target::Sampler { track: t, field: f },
+            format!("sampler-{f:?}"),
+            cx,
+        )
     }
 
     /// A row of choices in a tray, the one the sampler has lit; picking one is an edit.
@@ -253,5 +301,50 @@ impl Workspace {
                         }),
                     )
             }))
+    }
+
+    /// A zone's note (its low, high or root) as a dropdown: every note, an octave a row, C to
+    /// B across, in the song's names; typing finds one.
+    pub(crate) fn note_dropdown(
+        &self,
+        t: usize,
+        f: Field,
+        label: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let s = self.sampler_of(t).cloned().unwrap_or_default();
+        let key = self.session.project.song_key();
+        captioned(
+            label,
+            dropdown(field_text(&s, f, key), 24.)
+                .debug_selector(move || format!("sampler-{f:?}"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        let key = ws.session.project.song_key();
+                        // A column a note name, an octave a row (to B8: twelve to every row).
+                        let items = (0..12u8)
+                            .flat_map(|pc| (0..10u8).map(move |oct| oct * 12 + pc))
+                            .map(|n| {
+                                let op = SamplerOp::Set {
+                                    track: t,
+                                    field: f,
+                                    value: n as f32 / 127.0,
+                                };
+                                (name_in(key, n), MenuAction::Sampler(op))
+                            })
+                            .collect();
+                        ws.menu = Some(Menu {
+                            at: e.position,
+                            items,
+                            searchable: true,
+                            columns: 12,
+                            ..Default::default()
+                        });
+                        cx.notify();
+                    }),
+                ),
+        )
     }
 }

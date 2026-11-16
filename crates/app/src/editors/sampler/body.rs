@@ -21,29 +21,38 @@ impl Workspace {
         let wave = self.wave(&z.file, cx);
         let v = s.voice;
         let left = self.zone_column(t, &s, picked, &wave, cx);
+        // Along the top, the instrument's own: how it plays a sample, and its character. The
+        // picked zone's settings go under its sample.
         let header = div()
             .flex()
             .flex_wrap()
-            .items_center()
-            .gap(px(8.))
-            .child(self.sampler_choices(
-                t,
-                "sampler-mode",
-                &SampleMode::ALL.map(|m| (m.name(), m)),
-                v.mode,
-                VIOLET,
-                cx,
-                |s, m| s.voice.mode = m,
+            .items_end()
+            .gap(px(12.))
+            .child(captioned(
+                "MODE",
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .child(self.sampler_choices(
+                        t,
+                        "sampler-mode",
+                        &SampleMode::ALL.map(|m| (m.name(), m)),
+                        v.mode,
+                        VIOLET,
+                        cx,
+                        |s, m| s.voice.mode = m,
+                    ))
+                    .when(v.mode == SampleMode::Grains, |d| {
+                        d.child(self.sampler_value(t, Field::GrainSpread, "Width", VIOLET, cx))
+                            .child(self.sampler_value(t, Field::GrainShape, "Shape", VIOLET, cx))
+                    }),
             ))
-            .when(v.mode == SampleMode::Grains, |d| {
-                d.child(self.sampler_value(t, Field::GrainSpread, "Width", VIOLET, cx))
-                    .child(self.sampler_value(t, Field::GrainShape, "Shape", VIOLET, cx))
-            })
-            .child(self.character_controls(t, &v, cx))
-            .child(div().flex_1())
-            .child(self.zone_switches(t, picked, &z, cx));
+            .child(captioned("CHARACTER", self.character_controls(t, &v, cx)));
         let wave_view = self.sampler_wave(t, &s, picked, wave, cx);
+        let zone_bar = self.zone_bar(t, picked, &z, cx);
         let keymap = self.sampler_keys(t, &s, picked, cx);
+        let flip = self.flip_module(t, &s, cx);
         let modules = div()
             .id("sampler-modules")
             .h(px(194.))
@@ -61,18 +70,41 @@ impl Workspace {
             .flex()
             .bg(rgb(LANE))
             .child(left)
+            // The pane's height at least (the sample takes what's spare); shorter, it scrolls.
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_w(px(0.))
-                    .p(px(10.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .child(header)
-                    .child(wave_view)
-                    .child(keymap)
-                    .child(modules),
+                    .h_full()
+                    .child(
+                        div()
+                            .id("sampler-main")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.sampler_ui.scroll)
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_h(gpui::relative(1.))
+                                    .p(px(10.))
+                                    .pr(px(14.))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(8.))
+                                    .child(header)
+                                    .child(wave_view)
+                                    .child(zone_bar)
+                                    .child(keymap)
+                                    .children(flip)
+                                    .child(modules),
+                            ),
+                    )
+                    .child(crate::editors::drums::scroll_bar(
+                        self.sampler_ui.scroll.clone(),
+                        "sampler-bar",
+                        cx,
+                    )),
             )
             .into_any_element()
     }
@@ -161,7 +193,7 @@ impl Workspace {
         div()
             .flex()
             .items_center()
-            .gap(px(6.))
+            .gap(px(4.))
             .child(picker)
             .child(extra)
     }
@@ -275,24 +307,32 @@ impl Workspace {
         let k =
             |ws: &Self, f, label, cx: &mut Context<Self>| ws.sampler_knob(t, f, label, color, cx);
         let hearing = self.sampler_ui.hearing == Some(picked);
-        let hear = button(
-            if hearing {
-                "Listening…"
-            } else {
-                "Hear its root"
-            },
-            hearing,
-        )
-        .debug_selector(|| "zone-hear-root".into())
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |ws, _, _, cx| {
-                cx.stop_propagation();
-                if ws.sampler_ui.hearing.is_none() {
-                    ws.detect_root(t, picked, cx);
-                }
-            }),
-        );
+        let hear_button = |hearing: bool, cx: &mut Context<Self>| {
+            button(
+                if hearing {
+                    "Listening…"
+                } else {
+                    "Hear its root"
+                },
+                hearing,
+            )
+            .debug_selector(|| "zone-hear-root".into())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |ws, _, _, cx| {
+                    cx.stop_propagation();
+                    if ws.sampler_ui.hearing.is_none() {
+                        ws.detect_root(t, picked, cx);
+                    }
+                }),
+            )
+        };
+        // Beside a note; under a range's three.
+        let hear = hear_button(hearing, cx).h(px(24.));
+        let (inline, below) = match ranged {
+            true => (None, Some(hear)),
+            false => (Some(hear), None),
+        };
         let settings = div()
             .flex_none()
             .m(px(8.))
@@ -333,34 +373,42 @@ impl Workspace {
                             }),
                     ),
             )
+            // Its notes: dropdowns, a range's low, high and root.
             .child(
                 div()
                     .flex()
-                    .flex_wrap()
-                    .gap(px(2.))
-                    .child(k(
-                        self,
+                    .items_end()
+                    .gap(px(4.))
+                    .child(self.note_dropdown(
+                        t,
                         Field::Note(picked),
-                        if ranged { "Low" } else { "Note" },
+                        if ranged { "LOW" } else { "NOTE" },
                         cx,
                     ))
                     .when(ranged, |d| {
-                        d.child(k(self, Field::High(picked), "High", cx)).child(k(
-                            self,
-                            Field::Root(picked),
-                            "Root",
-                            cx,
-                        ))
+                        d.child(self.note_dropdown(t, Field::High(picked), "HIGH", cx))
+                            .child(self.note_dropdown(t, Field::Root(picked), "ROOT", cx))
                     })
+                    .when_some(inline, |d, h| d.child(div().flex_1()).child(h)),
+            )
+            .when_some(below, |d, h| d.child(div().flex().child(h)))
+            // Its tuning, level and place, then the velocities it plays at: three and three.
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
                     .child(k(self, Field::Tune(picked), "Fine", cx))
                     .child(k(self, Field::Gain(picked), "Level", cx))
-                    .child(k(self, Field::Pan(picked), "Pan", cx))
+                    .child(k(self, Field::Pan(picked), "Pan", cx)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
                     .child(k(self, Field::VelLow(picked), "Vel low", cx))
                     .child(k(self, Field::VelHigh(picked), "Vel high", cx))
-                    .child(k(self, Field::VelFade(picked), "Vel fade", cx))
-                    .child(k(self, Field::LoopFade(picked), "Loop fade", cx)),
-            )
-            .child(div().flex().child(hear));
+                    .child(k(self, Field::VelFade(picked), "Vel fade", cx)),
+            );
         div()
             .w(px(ZONES_W))
             .flex_none()

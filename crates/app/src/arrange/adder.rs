@@ -481,7 +481,8 @@ impl Workspace {
                 self.new_sampler_track(cx);
                 self.show_bottom(Bottom::Sampler, cx);
             }
-            // A kit of pads; with no drums in the library, the synthesized kit and a pattern.
+            // A kit of pads, empty; with no drums in the library, the synthesized kit and a
+            // pattern.
             Item::Kind(Kind2::Beat) => {
                 if !self.new_drum_kit(cx) {
                     self.new_pattern(cx);
