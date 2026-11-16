@@ -41,7 +41,9 @@ jobs:
           Copy-Item $dml.FullName staging\DirectML.dll
           # The C runtime's DLLs (Visual C++'s redistributable, app-local), so the app runs on a PC
           # without Visual C++'s installed.
-          $crt = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022\*\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT\*.dll" |
+          # Wherever Visual Studio is (vswhere knows; its version changes with the runner image).
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT\*.dll" |
             Sort-Object FullName -Descending
           if (-not ($crt | Where-Object Name -eq 'vcruntime140.dll')) { Write-Error "Visual C++'s runtime DLLs weren't found"; exit 1 }
           $crt | Group-Object Name | ForEach-Object { Copy-Item $_.Group[0].FullName staging\ }
