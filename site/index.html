@@ -47,6 +47,7 @@
       <nav class="nav__links" aria-label="Sections">
         <a href="#replay">Replay</a>
         <a href="#agents">Agents</a>
+        <a href="#sampling">Sampling</a>
         <a href="#listen">Listen</a>
         <a href="#studio">Studio</a>
         <a href="#open">Open source</a>
@@ -69,7 +70,7 @@
     <!-- ============ HERO ============ -->
     <section class="hero" id="top" aria-labelledby="hero-title">
       <div class="wrap hero__head">
-        <p class="eyebrow reveal">Free and open source <span class="sep">/</span> Version <span data-version>0.3.0</span></p>
+        <p class="eyebrow reveal">Free and open source <span class="sep">/</span> Version <span data-version>0.4.0</span></p>
         <h1 class="display reveal" id="hero-title">
           <span class="line">Make music with an agent.</span>
           <span class="line tone-2">Hear every edit land.</span>
@@ -90,7 +91,7 @@
                 </span>
               </button>
             </div>
-            <p class="meta">Version <span data-version>0.3.0</span><span class="size" data-dl-size="primary"></span><span class="sep">/</span>also for <a data-dl="other" href="https://github.com/manyeya/pina-studio/releases/latest"><span data-dl-other="label">Windows</span></a></p>
+            <p class="meta">Version <span data-version>0.4.0</span><span class="size" data-dl-size="primary"></span><span class="sep">/</span>also for <a data-dl="other" href="https://github.com/manyeya/pina-studio/releases/latest"><span data-dl-other="label">Windows</span></a></p>
           </div>
         </div>
       </div>
@@ -255,7 +256,7 @@
       <header class="wrap section-head">
         <p class="eyebrow reveal">Agents, built in</p>
         <h2 class="h2 reveal" id="notes-title">Give notes like you would <span class="tone-2">to a producer.</span></h2>
-        <p class="lead reveal">Claude Code and Codex live in the Agent panel <kbd>⌘L</kbd>, or take your notes from a terminal. Each runs on your own account, with Pina Studio's tools as its only tools.</p>
+        <p class="lead reveal">Claude Code and Codex are the Studio Agent's engines <kbd>⌘L</kbd>, or take your notes from a terminal. Each runs on your own account, with Pina Studio's tools as its only tools.</p>
       </header>
 
       <div class="wrap">
@@ -276,9 +277,9 @@
             <button class="prompt__copy" type="button" data-copy='pina ask song "find a dusty keys loop in C minor"'><code>pina ask song "find a dusty keys loop in C minor"</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
           </li>
           <li class="prompt reveal">
-            <p class="prompt__note">“pick a genre for this song”</p>
-            <p class="prompt__why">Seventeen playbooks, lo-fi to amapiano.</p>
-            <button class="prompt__copy" type="button" data-copy='pina ask song "pick a genre for this song"'><code>pina ask song "pick a genre for this song"</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
+            <p class="prompt__note">“flip the vocal into a hook”</p>
+            <p class="prompt__why">Smart Slice cuts it at its words; the agent re-sequences them.</p>
+            <button class="prompt__copy" type="button" data-copy='pina ask song "flip the vocal into a hook"'><code>pina ask song "flip the vocal into a hook"</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
           </li>
           <li class="prompt reveal">
             <p class="prompt__note">“what's wrong with it? fix the worst first”</p>
@@ -295,8 +296,8 @@
         <div class="live">
           <figure class="shot shot--agent reveal" data-react>
             <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="bleed" aria-hidden="true"><img src="media/agent.webp" width="636" height="1626" alt="" loading="lazy" decoding="async"></div>
-            <div class="frame"><img src="media/agent.webp" width="636" height="1626" loading="lazy" decoding="async" alt="The Agent panel: Make music with Claude Code. The song's key, tempo and length at the top, suggested next steps, and a composer at the bottom with the selected Snare as context."></div>
+            <div class="bleed" aria-hidden="true"><img src="media/agent.webp" width="795" height="2039" alt="" loading="lazy" decoding="async"></div>
+            <div class="frame"><img src="media/agent.webp" width="795" height="2039" loading="lazy" decoding="async" alt="The Studio Agent mid-song: the song's shape, its loudness, true peak, low end and width after the mix, what it says it did, and a What changed card listing the tempo, a new Sub track, the lead's notes and the drums' compressor."></div>
           </figure>
 
           <div class="live__copy">
@@ -349,7 +350,7 @@
             <span class="craft__n">01</span>
             <div>
               <h3 class="h3">Playbooks</h3>
-              <p>Seventeen genres, lo-fi to amapiano: tempo, swing, keys, the parts and how to write them, sections, progressions, and mix targets measured from released songs. Each one is editable on its own page.</p>
+              <p>Yours, and only if you want one: a genre's tempo, swing, keys, the parts and how to write them, sections, progressions and mix targets. Make one from a song you study, keeping its chords, drums and each section's loudness, and the agent follows it when you ask.</p>
               <code class="chip-cmd">pina playbook lofi</code>
             </div>
           </li>
@@ -394,6 +395,61 @@
             </div>
           </li>
         </ol>
+      </div>
+    </section>
+
+    <!-- ============ SAMPLING ============ -->
+    <section class="studio sample-sec" id="sampling" aria-labelledby="sampling-title">
+      <header class="wrap section-head">
+        <p class="eyebrow reveal">Sampling</p>
+        <h2 class="h2 reveal" id="sampling-title">Chop anything. <span class="tone-2">Flip it like a producer.</span></h2>
+        <p class="lead reveal">Smart Slice listens to what's in a recording, a beat, a voice in a beat or a voice alone, and slices it that way in one click, each slice named for what it sounds like. Take a song's stems apart with a separation model you add. Then the Studio Agent flips the chops into hooks and grooves you can hear before you keep them.</p>
+      </header>
+
+      <div class="wrap">
+        <div class="tabs reveal" data-tabs>
+          <div class="tabs__list" role="tablist" aria-label="Sampling">
+            <button role="tab" type="button" id="tab-slice" aria-controls="panel-slice" aria-selected="true">Smart Slice</button>
+            <button role="tab" type="button" id="tab-chops" aria-controls="panel-chops" aria-selected="false" tabindex="-1">Vocal chops</button>
+            <button role="tab" type="button" id="tab-flips" aria-controls="panel-flips" aria-selected="false" tabindex="-1">Flips</button>
+            <button role="tab" type="button" id="tab-stems" aria-controls="panel-stems" aria-selected="false" tabindex="-1">Stems</button>
+          </div>
+
+          <div class="tabs__panels">
+            <div class="tabs__panel" role="tabpanel" id="panel-slice" aria-labelledby="tab-slice" tabindex="0">
+              <figure class="shot shot--fit" style="--ar:2.14" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/smart-slice.webp" width="2376" height="1110" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/smart-slice.webp" width="2376" height="1110" loading="lazy" decoding="async" alt="Smart Slice on a drum loop: Kick, Perc, Snare and Closed Hat slices, each with its icon, waveform and play button, a filter by kind and To Sampler."></div>
+              </figure>
+              <p class="tabs__cap">A beat cut at its hits, each slice named by what it sounds like: kick, snare, closed hat, a chord in A minor. Hear one, narrow them by kind, and put them on a Sampler, a pad each, played where they were. A voice in a beat is chopped with it, the way a soul sample is.</p>
+            </div>
+            <div class="tabs__panel" role="tabpanel" id="panel-chops" aria-labelledby="tab-chops" tabindex="0" hidden>
+              <figure class="shot shot--fit" style="--ar:2.14" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/vocal-chops.webp" width="2376" height="1110" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/vocal-chops.webp" width="2376" height="1110" loading="lazy" decoding="async" alt="Smart Slice on a voice alone: vocal chops named by the words sung in them, ain't, no, holding, back, beside Words and Flips tabs."></div>
+              </figure>
+              <p class="tabs__cap">A voice alone becomes vocal chops, named by the words sung in them once Whisper has heard them. It knows a voice by its sound, never its file name, and if it hears wrong, you put it right in one click.</p>
+            </div>
+            <div class="tabs__panel" role="tabpanel" id="panel-flips" aria-labelledby="tab-flips" tabindex="0" hidden>
+              <figure class="shot shot--fit" style="--ar:2.14" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/flips.webp" width="2376" height="1110" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/flips.webp" width="2376" height="1110" loading="lazy" decoding="async" alt="Flips: rows of hooks the Studio Agent wrote from the words, each with what it says, its bars and pitch, its chops on the bars with their waveforms, Hear and Use it."></div>
+              </figure>
+              <p class="tabs__cap">The Studio Agent reads the words or the slices and writes flips the way a producer would: words in a new order so they say something new, pitched up like a soul sample, stuttered, answered, reversed into the downbeat. Each streams in as it's written; hear it loop, then put it on a Sampler with one click.</p>
+            </div>
+            <div class="tabs__panel" role="tabpanel" id="panel-stems" aria-labelledby="tab-stems" tabindex="0" hidden>
+              <figure class="shot shot--fit" style="--ar:1.21" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/stems.webp" width="1300" height="1074" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/stems.webp" width="1300" height="1074" loading="lazy" decoding="async" alt="Separate Stems: the model picked from a dropdown, how long it will take, the stems it gives and whether to mute the region."></div>
+              </figure>
+              <p class="tabs__cap">Vocals, drums, bass and the rest, by a separation model you add: Pina Studio ships none and downloads none without you. Each stem lands on a track of its own in a stack, playing as the region did. On Apple silicon and Windows.</p>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -532,6 +588,9 @@
             <button role="tab" type="button" id="tab-mod" aria-controls="panel-mod" aria-selected="false" tabindex="-1">Modulation</button>
             <button role="tab" type="button" id="tab-eq" aria-controls="panel-eq" aria-selected="false" tabindex="-1">Channel EQ</button>
             <button role="tab" type="button" id="tab-pan" aria-controls="panel-pan" aria-selected="false" tabindex="-1">Binaural panner</button>
+            <button role="tab" type="button" id="tab-sampler" aria-controls="panel-sampler" aria-selected="false" tabindex="-1">Sampler</button>
+            <button role="tab" type="button" id="tab-synth" aria-controls="panel-synth" aria-selected="false" tabindex="-1">Synth-0</button>
+            <button role="tab" type="button" id="tab-bloom" aria-controls="panel-bloom" aria-selected="false" tabindex="-1">Bloom</button>
           </div>
 
           <div class="tabs__panels">
@@ -541,7 +600,7 @@
                 <div class="bleed" aria-hidden="true"><img src="media/roll.webp" width="2376" height="900" alt="" loading="lazy" decoding="async"></div>
                 <div class="frame"><img src="media/roll.webp" width="2376" height="900" loading="lazy" decoding="async" alt="The piano roll: four chords as coloured notes, quantize, strength and swing, tools such as Humanize, Strum and Arpeggiate, and a velocity lane."></div>
               </figure>
-              <p class="tabs__cap">Chords as coloured notes, quantize and swing, tools that humanize, strum, chop and arpeggiate, and a velocity lane. Plus score view, musical typing, and MIDI and audio recording.</p>
+              <p class="tabs__cap">Chords as coloured notes, the chord names on the ruler, quantize and swing, tools that humanize, strum, chop and arpeggiate, a chance on every note, and MPE: each note's own pitch, slide and pressure. Plus MIDI FX, score view, musical typing, and MIDI and audio recording.</p>
             </div>
             <div class="tabs__panel" role="tabpanel" id="panel-steps" aria-labelledby="tab-steps" tabindex="0" hidden>
               <figure class="shot shot--fit" style="--ar:2.64" data-react>
@@ -557,7 +616,7 @@
                 <div class="bleed" aria-hidden="true"><img src="media/modulation.webp" width="2376" height="642" alt="" loading="lazy" decoding="async"></div>
                 <div class="frame"><img src="media/modulation.webp" width="2376" height="642" loading="lazy" decoding="async" alt="The Modulation pane: LFO, Steps, Envelope, Follower and Random cards, each mapped to a setting such as Pan, EQ band gain, Low cut or Volume."></div>
               </figure>
-              <p class="tabs__cap">LFO, steps, envelope, follower, random and macro, on any setting and any plugin parameter, and shared across a stack. Automation on every control too: Read, Touch, Latch, Trim and Write, with curves and shapes.</p>
+              <p class="tabs__cap">LFO, steps, envelope, follower, random and macro, up to 24 on a track, on any setting and any plugin parameter, and shared across a stack; an LFO's rate any length from a 64th to 32 bars, straight, triplet or dotted. Automation on every control too: Read, Touch, Latch, Trim and Write, with curves and shapes.</p>
             </div>
             <div class="tabs__panel" role="tabpanel" id="panel-eq" aria-labelledby="tab-eq" tabindex="0" hidden>
               <figure class="shot shot--fit" style="--ar:1.692" data-react>
@@ -574,6 +633,30 @@
                 <div class="frame"><img src="media/panner.webp" width="848" height="980" loading="lazy" decoding="async" alt="The binaural panner on the drums: a sound placed in front and to the right of a head, with Front, Left, Right, Behind, Above and Below buttons and Round, Height and Distance sliders."></div>
               </figure>
               <p class="tabs__cap">A binaural panner that places a sound all round the head: in front, beside, behind, above or below. Made for headphones.</p>
+            </div>
+            <div class="tabs__panel" role="tabpanel" id="panel-sampler" aria-labelledby="tab-sampler" tabindex="0" hidden>
+              <figure class="shot shot--fit" style="--ar:2.05" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/sampler.webp" width="2376" height="1160" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/sampler.webp" width="2376" height="1160" loading="lazy" decoding="async" alt="The Sampler: a sample cut into chops along the top, each in its colour, the Flip module under the keys with its cuts lane, chops and sequence."></div>
+              </figure>
+              <p class="tabs__cap">Repitch, Stretch or Grains; filters, envelopes and its own modulation. Slice a sample at its hits or on the grid, then Flip it as on an MPC: drag where it's cut, swap and stutter chops, turn it round, half or double time, and hear it alone. And a drum rack: sixteen pads at a time, each its own Drum Sampler with layers, chokes and a playback effect, macros across the kit, and hot-swap for the next sound like it.</p>
+            </div>
+            <div class="tabs__panel" role="tabpanel" id="panel-synth" aria-labelledby="tab-synth" tabindex="0" hidden>
+              <figure class="shot shot--fit" style="--ar:1.6" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/synth.webp" width="2754" height="1722" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/synth.webp" width="2754" height="1722" loading="lazy" decoding="async" alt="Synth-0's effects page: a rack of effects after its voices, each with its own controls."></div>
+              </figure>
+              <p class="tabs__cap">Synth-0, Pina Studio's own synth: its sources, filters, envelopes and a modulation matrix laid out the way sound flows, eight named macros on every patch, a rack of its own effects, and a library of sounds to search by name or by sound.</p>
+            </div>
+            <div class="tabs__panel" role="tabpanel" id="panel-bloom" aria-labelledby="tab-bloom" tabindex="0" hidden>
+              <figure class="shot shot--fit" style="--ar:1.54" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/bloom.webp" width="2638" height="1716" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/bloom.webp" width="2638" height="1716" loading="lazy" decoding="async" alt="Bloom: sounds grown from a seed, a field of variations to pick from and steer."></div>
+              </figure>
+              <p class="tabs__cap">Bloom grows sounds from a seed of 48 genes: pick the ones you like, steer the next generation toward them, and keep a sound when it's right.</p>
             </div>
           </div>
         </div>
@@ -599,7 +682,7 @@
           <li><kbd>R</kbd> records</li>
           <li><kbd>C</kbd> cycle</li>
           <li><kbd>K</kbd> metronome</li>
-          <li><kbd>⌘L</kbd> agent panel</li>
+          <li><kbd>⌘L</kbd> Studio Agent</li>
         </ul>
       </div>
     </section>
@@ -609,7 +692,7 @@
       <header class="wrap section-head">
         <p class="eyebrow reveal">Open by default</p>
         <h2 class="h2 reveal" id="open-title">Read it. Build it. <span class="tone-2">Change it.</span></h2>
-        <p class="lead reveal">MIT licensed and written in Rust from top to bottom. The interface is drawn on the GPU; the built-in effects and instruments are written in Faust. And it works with whichever agent you like.</p>
+        <p class="lead reveal">MIT licensed and written in Rust from top to bottom. The interface is drawn on the GPU; the built-in effects and instruments are Pina Studio's own DSP, in Rust too. And it works with whichever agent you like.</p>
       </header>
 
       <div class="wrap open__grid">
@@ -617,7 +700,7 @@
           <div><dt>License</dt><dd>MIT</dd></div>
           <div><dt>Written in</dt><dd>Rust</dd></div>
           <div><dt>Interface</dt><dd>Drawn on the GPU, with gpui</dd></div>
-          <div><dt>Effects and instruments</dt><dd>Faust</dd></div>
+          <div><dt>Effects and instruments</dt><dd>Its own, in Rust</dd></div>
           <div><dt>Agents</dt><dd>Claude Code and Codex built in; any other through MCP or the CLI</dd></div>
           <div><dt>Runs on</dt><dd>macOS, Apple silicon and Intel · Windows x64</dd></div>
         </dl>
@@ -630,9 +713,9 @@
           <div class="term reveal">
             <p class="term__h">Any agent, through MCP</p>
             <button class="term__cmd" type="button" data-copy="pina mcp"><code>pina mcp</code><span class="copy-state"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V7a2.5 2.5 0 0 0-2.5-2.5H7A2.5 2.5 0 0 0 4.5 7v6A2.5 2.5 0 0 0 7 15.5h1.5"/></svg><span class="copy-label">Copy</span></span></button>
-            <p class="term__d">An MCP server with 22 tools:</p>
-            <ul class="tools" aria-label="Some of the 22 tools">
-              <li>show</li><li>edit</li><li>analyze</li><li>render</li><li>critique</li><li>playbook</li><li>theory</li><li>mix</li><li>master</li><li>sounds</li><li>samples</li><li>plugins</li><li class="tools__more">and more</li>
+            <p class="term__d">An MCP server with 39 tools:</p>
+            <ul class="tools" aria-label="Some of the 39 tools">
+              <li>show</li><li>edit</li><li>analyze</li><li>render</li><li>critique</li><li>mix</li><li>master</li><li>stems</li><li>slices</li><li>lyrics</li><li>synth_sounds</li><li>samples</li><li>plugins</li><li class="tools__more">and more</li>
             </ul>
           </div>
           <div class="term reveal">
@@ -660,7 +743,7 @@
               <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg>
               <span data-dl-label="primary">Download Pina Studio</span>
             </a>
-            <p class="meta">Version <span data-version>0.3.0</span><span class="size" data-dl-size="primary"></span><span class="sep">/</span><a href="https://github.com/manyeya/pina-studio/blob/main/CHANGELOG.md">What's new</a></p>
+            <p class="meta">Version <span data-version>0.4.0</span><span class="size" data-dl-size="primary"></span><span class="sep">/</span><a href="https://github.com/manyeya/pina-studio/blob/main/CHANGELOG.md">What's new</a></p>
           </div>
 
           <div class="dl__grid">

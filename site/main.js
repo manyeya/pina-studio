@@ -1023,7 +1023,7 @@
     },
     { rootMargin: "-45% 0px -50% 0px" }
   );
-  ["replay", "agents", "craft", "listen", "studio", "open", "download"].forEach((id) => {
+  ["replay", "agents", "craft", "sampling", "listen", "studio", "open", "download"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) sectionIO.observe(el);
   });
