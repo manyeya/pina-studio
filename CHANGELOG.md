@@ -9,6 +9,8 @@ first for changes that break songs or commands made before.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-16
+
 ### Changed
 
 - Slicing a sample (Slice to Sampler, To Sampler, or Slice in the Sounds browser) before its
