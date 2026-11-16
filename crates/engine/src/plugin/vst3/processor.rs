@@ -200,8 +200,9 @@ impl ProcessorApi for Vst3Processor {
                 return;
             }
             let at = (e.sampleOffset.max(0) as u32).min(frames.saturating_sub(1) as u32);
-            match e.r#type as u32 {
-                t if t == kNoteOnEvent => {
+            // The event kinds are unsigned on macOS and signed on Windows: compared as i64.
+            match e.r#type as i64 {
+                t if t == kNoteOnEvent as i64 => {
                     let on = unsafe { e.__field0.noteOn };
                     out.push(Note {
                         offset: at,
@@ -210,7 +211,7 @@ impl ProcessorApi for Vst3Processor {
                         release: 0.0,
                     });
                 }
-                t if t == kNoteOffEvent => {
+                t if t == kNoteOffEvent as i64 => {
                     let off = unsafe { e.__field0.noteOff };
                     out.push(Note {
                         offset: at,
