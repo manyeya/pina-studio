@@ -7,6 +7,8 @@ mod drums;
 mod editors;
 mod eq;
 mod expression;
+// Their engine's stand-in is a shell script.
+#[cfg(unix)]
 mod flips;
 mod like;
 mod logic_keys;

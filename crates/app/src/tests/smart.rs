@@ -139,6 +139,7 @@ fn what_it_heard_is_put_right_and_a_voice_is_cut_into_vocal_chops(cx: &mut TestA
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[cfg(unix)]
 #[gpui::test]
 fn a_beats_slices_are_flipped_as_on_an_mpc_by_the_studio_agent(cx: &mut TestAppContext) {
     let (ws, cx, dir) = sliced(cx, "smart-flips");
