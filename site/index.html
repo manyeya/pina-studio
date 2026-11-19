@@ -50,6 +50,7 @@
         <a href="#sampling">Sampling</a>
         <a href="#listen">Listen</a>
         <a href="#studio">Studio</a>
+        <a href="#live">Live</a>
         <a href="#open">Open source</a>
       </nav>
       <div class="nav__end">
@@ -683,6 +684,76 @@
           <li><kbd>C</kbd> cycle</li>
           <li><kbd>K</kbd> metronome</li>
           <li><kbd>⌘L</kbd> Studio Agent</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============ PINA LIVE ============ -->
+    <section class="studio" id="live" aria-labelledby="live-title">
+      <header class="wrap section-head">
+        <p class="eyebrow reveal">Pina Live</p>
+        <h2 class="h2 reveal" id="live-title">Then take it to the decks. <span class="tone-2">Pina Live runs on the same engine.</span></h2>
+        <p class="lead reveal">Pina Live is a DJ app built on Pina Studio's engine: the same keylock stretch, the same ear for beat, bar and key, the same effects and limiter, and the same stem separation, made for playing live. Two decks or four, sync that lands on the bar, and stems you can pull apart mid-mix. It isn't out yet.</p>
+      </header>
+
+      <div class="wrap">
+        <div class="tabs reveal" data-tabs>
+          <div class="tabs__list" role="tablist" aria-label="Pina Live">
+            <button role="tab" type="button" id="tab-live-decks" aria-controls="panel-live-decks" aria-selected="true">Decks</button>
+            <button role="tab" type="button" id="tab-live-stems" aria-controls="panel-live-stems" aria-selected="false" tabindex="-1">Stems</button>
+            <button role="tab" type="button" id="tab-live-four" aria-controls="panel-live-four" aria-selected="false" tabindex="-1">Four decks</button>
+          </div>
+
+          <div class="tabs__panels">
+            <div class="tabs__panel" role="tabpanel" id="panel-live-decks" aria-labelledby="tab-live-decks" tabindex="0">
+              <figure class="shot shot--fit" style="--ar:1.6" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/live-decks.webp" width="2880" height="1800" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/live-decks.webp" width="2880" height="1800" loading="lazy" decoding="async" alt="Pina Live with Corner Store Blues on deck A and Midnight Drive on deck B, synced at 97.37 BPM: scrolling waveforms above, each deck's hot cues, loop pads, beat ring and pitch fader, the mixer between them and the library below."></div>
+              </figure>
+              <p class="tabs__cap">Drag a track onto the deck you want. Each deck has hot cues, loops, rolls and jumps on eight pads, keylock that holds the key at any tempo, slip, and sync that lands on the bar, then the beat. The waveforms scroll above, coloured by their lows, mids and highs, on the track's beat grid.</p>
+            </div>
+            <div class="tabs__panel" role="tabpanel" id="panel-live-stems" aria-labelledby="tab-live-stems" tabindex="0" hidden>
+              <figure class="shot shot--fit" style="--ar:1.6" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/live-stems.webp" width="2880" height="1800" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/live-stems.webp" width="2880" height="1800" loading="lazy" decoding="async" alt="Stems in Pina Live: deck A parting its track with BS-RoFormer SW, its progress and a Stop button; deck B with Drums, Bass and Rest pads and Beat only, No beat and All."></div>
+              </figure>
+              <p class="tabs__cap">Part a track into vocals, drums, bass and the rest, or just the part you need: vocals only or the beat only goes to the quickest model you have. Tracks are parted as they load, so the stems are usually there when you reach for them. Like Pina Studio, Pina Live ships no models: download one from where its maker hosts it, or add your own.</p>
+            </div>
+            <div class="tabs__panel" role="tabpanel" id="panel-live-four" aria-labelledby="tab-live-four" tabindex="0" hidden>
+              <figure class="shot shot--fit" style="--ar:1.6" data-react>
+                <div class="glow" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="bleed" aria-hidden="true"><img src="media/live-four.webp" width="2880" height="1800" alt="" loading="lazy" decoding="async"></div>
+                <div class="frame"><img src="media/live-four.webp" width="2880" height="1800" loading="lazy" decoding="async" alt="Pina Live with four decks: A and C left of the mixer, B and D right of it, four channel strips and the master between them, and the crossfader marked A C and B D."></div>
+              </figure>
+              <p class="tabs__cap">Four decks: A and C on the crossfader's left, B and D on its right. In a narrower window each side shows one deck at a time, switched between A and C or B and D. Every panel resizes by its edge, and the library closes or fills the window.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="spec">
+          <div class="spec__col reveal">
+            <h3 class="spec__h">Mix</h3>
+            <p>A three-band isolator EQ and a one-knob filter on every channel, auto gain to −10 LUFS, a crossfader with its curve, headphone cue on a second pair of outputs or split in one jack, and Pina Studio's limiter on the master. Record the mix to WAV.</p>
+          </div>
+          <div class="spec__col reveal">
+            <h3 class="spec__h">Effects</h3>
+            <p class="formats"><span>Echo</span><span>Reverb</span><span>Flanger</span><span>Tape Stop</span></p>
+            <p>Fifteen beat-synced effects in two units, each on any deck, after the fader, with tails that ring out when they're switched off.</p>
+          </div>
+          <div class="spec__col reveal">
+            <h3 class="spec__h">Library</h3>
+            <p>Folders, crates and history. Search by name, <code>bpm:</code> or <code>key:</code>, Match for the tracks that mix with a deck in key and tempo, and a preview in the headphones. MIDI learn for any controller.</p>
+          </div>
+        </div>
+
+        <ul class="keys reveal" aria-label="Pina Live shortcuts">
+          <li><kbd>⇧←</kbd> loads A</li>
+          <li><kbd>⇧→</kbd> loads B</li>
+          <li><kbd>⌘4</kbd> four decks</li>
+          <li><kbd>⌘L</kbd> library</li>
+          <li><kbd>⌘⇧L</kbd> full screen library</li>
         </ul>
       </div>
     </section>
