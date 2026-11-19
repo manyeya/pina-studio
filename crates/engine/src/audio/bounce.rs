@@ -471,7 +471,14 @@ fn write(l: &[f32], r: &[f32], opts: &Options, f: Format, file: &Path) -> Result
     }
 }
 
+/// No LAME in a web build: MP3s aren't written there.
+#[cfg(target_family = "wasm")]
+fn write_mp3(_l: &[f32], _r: &[f32], _rate: u32, _kbps: u32, file: &Path) -> Result<(), String> {
+    Err(format!("{}: MP3s aren't written here", file.display()))
+}
+
 /// An MP3 by LAME at a constant `kbps`; above 48 kHz (MP3's most) taken down to half its rate.
+#[cfg(not(target_family = "wasm"))]
 fn write_mp3(l: &[f32], r: &[f32], rate: u32, kbps: u32, file: &Path) -> Result<(), String> {
     use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushNoGap, Quality};
     let (l, r, rate) = match rate > 48_000 {

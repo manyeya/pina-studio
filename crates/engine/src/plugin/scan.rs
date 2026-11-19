@@ -148,6 +148,9 @@ pub fn inspect(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
     if bundle == Path::new(AUDIO_UNITS) {
         return Ok(plugin::au::list());
     }
+    #[cfg(target_family = "wasm")]
+    return Err(format!("{}: plugins aren't hosted here", bundle.display()));
+    #[cfg(not(target_family = "wasm"))]
     match format_of(bundle) {
         Some(Format::Vst3) => plugin::vst3::inspect(bundle),
         Some(Format::Clap) => plugin::clap::inspect(bundle),

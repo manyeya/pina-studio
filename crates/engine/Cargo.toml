@@ -5,20 +5,23 @@ edition.workspace = true
 
 [dependencies]
 cpal = "0.18"
-vst3 = "0.3"
 rtrb = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hound = "3.5"
-# MP3 bounces: LAME, built from its source.
-mp3lame-encoder = "0.2.5"
 midir = "0.11"
-rubberband = "0.1.5"
-clap-sys = "0.5"
 symphonia = { version = "0.6.1", default-features = false, features = ["aiff", "flac", "mp3", "wav", "pcm", "adpcm", "opt-simd"] }
 rustfft = "6.4"
 # Spectrogram pictures, read for a reference (the app already builds it, through its UI).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# Native only (not in a web build): plugin hosting (VST3, CLAP), Rubber Band's stretch (C++), and
+# MP3 bounces by LAME (C, built from its source).
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+vst3 = "0.3"
+clap-sys = "0.5"
+rubberband = "0.1.5"
+mp3lame-encoder = "0.2.5"
 
 # macOS: plugin bundles and editor windows, Audio Units.
 [target.'cfg(target_os = "macos")'.dependencies]

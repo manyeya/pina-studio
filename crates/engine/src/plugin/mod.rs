@@ -5,12 +5,16 @@
 
 #[cfg(target_os = "macos")]
 pub mod au;
+// The formats' hosts are native: a web build hosts no plugins.
+#[cfg(not(target_family = "wasm"))]
 pub mod clap;
 mod mpe;
 pub mod picture;
 pub mod platform;
 pub mod scan;
+#[cfg(not(target_family = "wasm"))]
 pub mod vst2;
+#[cfg(not(target_family = "wasm"))]
 pub mod vst3;
 
 use std::{
@@ -284,8 +288,11 @@ pub fn settle(p: &mut Processor, max_block: usize) {
 /// The libraries plugins are loaded from, each kept loaded once opened.
 #[derive(Default)]
 pub struct Libraries {
+    #[cfg(not(target_family = "wasm"))]
     vst3: HashMap<PathBuf, vst3::Module>,
+    #[cfg(not(target_family = "wasm"))]
     clap: HashMap<PathBuf, clap::Library>,
+    #[cfg(not(target_family = "wasm"))]
     vst2: HashMap<PathBuf, vst2::Library>,
 }
 
@@ -303,6 +310,12 @@ pub fn instantiate(
     max_block: usize,
     state: Option<&[u8]>,
 ) -> Result<(Plugin, Processor), String> {
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = (libs, rate, max_block, state);
+        return Err(format!("{}: plugins aren't hosted here", r.class));
+    }
+    #[cfg(not(target_family = "wasm"))]
     let (plugin, mut processor) = match r.format {
         Format::Vst3 => vst3::instantiate(&mut libs.vst3, r, rate, max_block, state),
         Format::Clap => clap::instantiate(&mut libs.clap, r, rate, max_block, state),
@@ -312,7 +325,9 @@ pub fn instantiate(
         #[cfg(not(target_os = "macos"))]
         Format::Au => Err(format!("{}: Audio Units are macOS's", r.class)),
     }?;
+    #[cfg(not(target_family = "wasm"))]
     processor.set_mpe(r.mpe_heard());
+    #[cfg(not(target_family = "wasm"))]
     Ok((plugin, processor))
 }
 

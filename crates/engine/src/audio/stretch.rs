@@ -266,8 +266,40 @@ pub fn onsets(channels: &[Vec<f32>], rate: f64) -> Vec<usize> {
     hits
 }
 
+/// No Rubber Band in a web build: the input resampled to its new length (its pitch moving with
+/// it, as a turntable's would), the pitch and pinned points let go.
+// shortcut: a web build's stretch is a plain resample; a Rust stretcher would keep the pitch.
+#[cfg(target_family = "wasm")]
+fn rubber_band(
+    input: &[Vec<f32>],
+    ratio: f64,
+    _pitch: f64,
+    _formants: bool,
+    _rate: f64,
+    _keys: &[(usize, usize)],
+) -> Vec<Vec<f32>> {
+    let n = input[0].len();
+    let len = out_len(n, ratio);
+    input
+        .iter()
+        .map(|c| {
+            (0..len)
+                .map(|i| {
+                    let at = i as f64 / ratio.max(1e-9);
+                    let k = at.floor() as usize;
+                    let f = (at - k as f64) as f32;
+                    let a = c.get(k).copied().unwrap_or(0.0);
+                    let b = c.get(k + 1).copied().unwrap_or(a);
+                    a + (b - a) * f
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// Rubber Band's finer engine, offline: the whole input studied, then stretched by `ratio` and
 /// moved by `pitch` (2 is an octave up), with `keys` (input frame, output frame) pinned.
+#[cfg(not(target_family = "wasm"))]
 fn rubber_band(
     input: &[Vec<f32>],
     ratio: f64,

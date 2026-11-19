@@ -1,3 +1,6 @@
+// A web build leaves plugin hosting, MP3 export and Rubber Band out; what only they used is idle.
+#![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
+
 pub mod audio;
 pub mod dsp;
 pub mod lyrics;

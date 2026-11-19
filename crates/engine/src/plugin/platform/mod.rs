@@ -3,10 +3,14 @@
 
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(not(any(target_os = "macos", windows)))]
+mod none;
 #[cfg(windows)]
 mod windows;
 
 #[cfg(target_os = "macos")]
 pub use mac::*;
+#[cfg(not(any(target_os = "macos", windows)))]
+pub use none::*;
 #[cfg(windows)]
 pub use windows::*;
