@@ -115,6 +115,7 @@ actions!(
         PreviousSample,
         NextSample,
         ShowSettings,
+        ShowAbout,
         ToolMenu,
         CopyRegion,
         CutRegion,

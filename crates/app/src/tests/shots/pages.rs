@@ -166,6 +166,12 @@ pub(super) fn set_up(
             ];
             ws.in_levels = vec![0.12];
         }
+        // About Pina Studio, its list of every crate open or not.
+        "settings-about" | "settings-about-all" => {
+            ws.settings_section = crate::pages::settings::Section::About;
+            ws.about_all = page == "settings-about-all";
+            ws.open_settings(cx);
+        }
         "settings-recording" | "settings-plugins" | "settings-sounds" | "settings-models"
         | "settings-saving" => {
             use crate::pages::settings::Section;

@@ -493,6 +493,8 @@ pub struct Workspace {
     pub tapping: Option<Tapping>,
     pub settings_find: Option<Entity<crate::ui::text::TextInput>>,
     pub settings_query: String,
+    /// About Pina Studio's list of every crate shown.
+    pub about_all: bool,
     pub _settings_typed: Option<gpui::Subscription>,
     pub play_from: u64,
     /// The Sampler editor: the zone picked and the waveforms read; where its waveform was drawn.
@@ -800,6 +802,7 @@ impl Workspace {
             tapping: None,
             settings_find: None,
             settings_query: String::new(),
+            about_all: false,
             _settings_typed: None,
             play_from: 0,
             sampler_ui: Default::default(),
@@ -1589,6 +1592,7 @@ impl Workspace {
             .on_action(cx.listener(|ws, _: &EditPlaybooks, _, cx| ws.open_genres(None, cx)))
             .on_action(cx.listener(|ws, _: &StudySong, _, cx| ws.open_study(cx)))
             .on_action(cx.listener(|ws, _: &ShowSettings, _, cx| ws.open_settings(cx)))
+            .on_action(cx.listener(|ws, _: &ShowAbout, _, cx| ws.open_about(cx)))
             .on_action(cx.listener(|ws, _: &ToolMenu, _, cx| {
                 // Under the toolbar, where the pointer would be.
                 let x = if ws.show_inspector { ws.side_w() } else { 0.0 } + 14.0;

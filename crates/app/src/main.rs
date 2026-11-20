@@ -1,3 +1,6 @@
+//! Pina Studio: a DAW where agents work in your song with you. By Manyeya Khutso Siema; the
+//! source is MIT-licensed, release builds GPL-3.0-or-later (they include Rubber Band): NOTICE.
+
 // On Windows, "Pina Studio.exe" (built with `windows-gui`) opens without a console window;
 // `pina.exe`, built without it, is the command line agents and scripts run.
 #![cfg_attr(all(windows, feature = "windows-gui"), windows_subsystem = "windows")]
@@ -5,6 +8,7 @@
 mod agent;
 mod arrange;
 mod cli;
+mod credits;
 mod editors;
 mod mix;
 mod pages;
@@ -577,6 +581,8 @@ fn open(dir: &Path) -> Result<(), String> {
         bind_keys(cx);
         cx.set_menus([
             Menu::new("Pina Studio").items([
+                MenuItem::action("About Pina Studio", ShowAbout),
+                MenuItem::separator(),
                 MenuItem::action("Settings…", ShowSettings),
                 MenuItem::separator(),
                 MenuItem::action("Quit Pina Studio", Quit),

@@ -209,11 +209,12 @@ pub enum Section {
     Sounds,
     Models,
     Saving,
+    About,
 }
 
 impl Section {
     /// Down the rail, by group: the studio, working, the library.
-    const ALL: [Section; 13] = [
+    const ALL: [Section; 14] = [
         Section::Audio,
         Section::Midi,
         Section::Recording,
@@ -227,6 +228,7 @@ impl Section {
         Section::Sounds,
         Section::Models,
         Section::Saving,
+        Section::About,
     ];
 
     /// The group it's under on the rail.
@@ -234,6 +236,7 @@ impl Section {
         match self {
             Section::Audio | Section::Midi | Section::Recording => "STUDIO",
             Section::Plugins | Section::Sounds | Section::Models | Section::Saving => "LIBRARY",
+            Section::About => "PINA STUDIO",
             _ => "WORKING",
         }
     }
@@ -254,6 +257,9 @@ impl Section {
             Section::Saving => "recovery backup songs folder autosave",
             Section::Transport => "play stop follow playhead",
             Section::Editing => "middle c octave note names c3 c4 c5",
+            Section::About => {
+                "about credits author made by manyeya khutso siema version licence license mit gpl copyright open source notices thanks"
+            }
             _ => "",
         }
     }
@@ -273,6 +279,7 @@ impl Section {
             Section::Sounds => "Sounds & packs",
             Section::Models => "Stems & lyrics",
             Section::Saving => "Saving & files",
+            Section::About => "About Pina Studio",
         }
     }
 
@@ -291,6 +298,7 @@ impl Section {
             Section::Sounds => Icon::Samples,
             Section::Models => Icon::Stack,
             Section::Saving => Icon::Folder,
+            Section::About => Icon::Heart,
         }
     }
 
@@ -321,6 +329,9 @@ impl Section {
                 "The models that part a recording into its vocals, drums, bass and the rest, and that hear the words sung. Pina Studio comes with none: you choose which to download."
             }
             Section::Saving => "Your songs, and getting back what you lost.",
+            Section::About => {
+                "Who made Pina Studio, which licence covers what, and the open-source software it's built on."
+            }
         }
     }
 }
@@ -425,6 +436,15 @@ impl Workspace {
             View::Settings => View::Arrange,
             _ => View::Settings,
         };
+        cx.notify();
+    }
+
+    /// Settings, on About Pina Studio (the app menu's About).
+    pub fn open_about(&mut self, cx: &mut Context<Self>) {
+        self.settings_section = Section::About;
+        if self.view != View::Settings {
+            self.open_settings(cx);
+        }
         cx.notify();
     }
 
@@ -903,6 +923,7 @@ impl Workspace {
             Section::Sounds => self.sound_settings(cx),
             Section::Models => self.models_page(cx),
             Section::Saving => self.saving_page(cx),
+            Section::About => self.about_page(cx),
             Section::Midi => {
                 let inputs = self.player.midi_inputs();
                 let input = |i: pina_engine::audio::midi::InputState, cx: &mut Context<Self>| {

@@ -1,5 +1,7 @@
 # Pina Studio
 
+**By Manyeya Khutso Siema.** Pina Live, its sister app for DJs: https://github.com/manyeya/pina-live
+
 A DAW written in Rust: gpui for the UI, VST3, CLAP, VST2 and Audio Unit plugins, and agents as
 first-class collaborators. macOS and Windows. Website and downloads:
 https://manyeya.github.io/pina-studio/ (`site/`, published from `dev` by
@@ -1034,6 +1036,24 @@ The engine's tests that need a real plugin are opt-in, each format by its own va
 
 Apple's own Audio Units (AUSampler, AUDelay, AULowpass…) are tested on every run.
 
-## License
+## Author
 
-MIT, in `LICENSE`.
+Pina Studio is designed and written by **Manyeya Khutso Siema** ([github.com/manyeya](https://github.com/manyeya)):
+the app, its engine, its agents and its website. Manyeya Khutso Siema also made
+[Pina Live](https://github.com/manyeya/pina-live), the DJ app that plays through Pina Studio's engine.
+
+## Licence
+
+Copyright (c) 2026 Manyeya Khutso Siema.
+
+- **The source code** is licensed under the MIT License (`LICENSE`).
+- **The release builds** (the macOS disk image, the Windows installer and zip) include the Rubber
+  Band Library (GPL-2.0-or-later), so as a whole they're distributed under the GNU General Public
+  License, version 3 or later (`COPYING`). Their source is this repository, at the release's tag.
+- `NOTICE` explains which covers what, and LAME's LGPL-3.0 in the builds too.
+- `THIRD-PARTY-NOTICES.md` lists every open-source component in the builds with its licence's
+  full text; the app lists them too, in Settings › About Pina Studio.
+
+When a dependency changes, run `scripts/credits.py "Pina Studio"` (the About page's list) and
+`scripts/notices.sh` (the notices; it needs `cargo install cargo-about --features cli`). A test
+fails if the credits fall behind `Cargo.lock`.
