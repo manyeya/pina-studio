@@ -1,5 +1,5 @@
-//! Pina Studio: a DAW where agents work in your song with you. By Manyeya Khutso Siema; the
-//! source is MIT-licensed, release builds GPL-3.0-or-later (they include Rubber Band): NOTICE.
+//! Pina Studio: a DAW where agents work in your song with you. The source is MIT-licensed, release
+//! builds GPL-3.0-or-later (they include Rubber Band): NOTICE.
 
 // On Windows, "Pina Studio.exe" (built with `windows-gui`) opens without a console window;
 // `pina.exe`, built without it, is the command line agents and scripts run.

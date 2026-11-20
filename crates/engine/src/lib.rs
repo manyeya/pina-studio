@@ -1,6 +1,3 @@
-//! Pina Studio's engine: its audio, song model, study, effects, plugins and stems. By Manyeya
-//! Khutso Siema; MIT License.
-
 // A web build leaves plugin hosting, MP3 export and Rubber Band out; what only they used is idle.
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 

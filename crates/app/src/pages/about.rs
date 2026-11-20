@@ -1,6 +1,6 @@
 //! About Pina Studio (Settings › About Pina Studio, and the app menu's About): who made it, which
-//! licence covers what, and the open-source software it's built on, credited. Pina Studio is
-//! designed and written by Manyeya Khutso Siema. Every crate in it is listed (`credits.rs`, made
+//! licence covers what, and the open-source software it's built on, credited. Every crate in it is
+//! listed (`credits.rs`, made
 //! from Cargo.lock by scripts/credits.py), the projects it leans on most named first.
 
 use std::sync::Arc;
@@ -169,12 +169,6 @@ impl Workspace {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(AUTHOR),
             )
-            .child(div().text_color(rgb(TEXT_2)).child(
-                "Pina Studio is designed and written by Manyeya Khutso Siema: the arrangement, the \
-                 editors, the mixer and its effects, the synths and samplers, the song study, the \
-                 Studio Agent and the engine under all of it. Manyeya Khutso Siema made Pina Live \
-                 too, Pina Studio's sister app for DJs, which plays through the same engine.",
-            ))
             .child(
                 div()
                     .pt(px(4.))

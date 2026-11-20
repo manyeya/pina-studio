@@ -13,8 +13,8 @@ first for changes that break songs or commands made before.
 
 ### Added
 
-- About Pina Studio, in the app menu and at the end of Settings: who made Pina Studio, Manyeya
-  Khutso Siema, with links to manyeya.dev, GitHub, the website and the source; which licence
+- About Pina Studio, in the app menu and at the end of Settings: who made it, with links to
+  their site, GitHub, the website and the source; which licence
   covers what; the open-source projects it's built on most; and every open-source component in
   it, with its version, authors and licence (Show all). Settings' search finds it by credits,
   licence or author.

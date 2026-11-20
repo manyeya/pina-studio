@@ -8,7 +8,7 @@ edition = "2024"
 authors = ["Manyeya Khutso Siema"]
 # The source; release builds are GPL-3.0-or-later as a whole (they include Rubber Band): NOTICE.
 license = "MIT"
-description = "A DAW where AI agents work in your song with you, by Manyeya Khutso Siema"
+description = "A DAW where AI agents work in your song with you"
 homepage = "https://manyeya.github.io/pina-studio/"
 repository = "https://github.com/manyeya/pina-studio"
 

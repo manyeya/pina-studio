@@ -1,6 +1,6 @@
 # Pina Studio
 
-**By Manyeya Khutso Siema.** Pina Live, its sister app for DJs: https://github.com/manyeya/pina-live
+Pina Live, its sister app for DJs: https://github.com/manyeya/pina-live
 
 A DAW written in Rust: gpui for the UI, VST3, CLAP, VST2 and Audio Unit plugins, and agents as
 first-class collaborators. macOS and Windows. Website and downloads:
@@ -1035,12 +1035,6 @@ The engine's tests that need a real plugin are opt-in, each format by its own va
     PINA_TEST_AU="aumu SgXT VmbA" cargo test -p pina-engine -- --ignored
 
 Apple's own Audio Units (AUSampler, AUDelay, AULowpass…) are tested on every run.
-
-## Author
-
-Pina Studio is designed and written by **Manyeya Khutso Siema** ([github.com/manyeya](https://github.com/manyeya)):
-the app, its engine, its agents and its website. Manyeya Khutso Siema also made
-[Pina Live](https://github.com/manyeya/pina-live), the DJ app that plays through Pina Studio's engine.
 
 ## Licence
 
