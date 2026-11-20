@@ -9,6 +9,8 @@
   doc.classList.add("js");
   doc.dataset.sound = "off";
 
+  // The site's root (this script's folder), so pages in folders (live/) find the media too.
+  const ROOT = document.currentScript ? new URL(".", document.currentScript.src).href : "";
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
@@ -101,7 +103,7 @@
       const el = new Audio();
       el.preload = "auto";
       el.loop = true;
-      el.src = "media/corner-store-blues.m4a";
+      el.src = ROOT + "media/corner-store-blues.m4a";
       song.el = el;
       const node = c.createMediaElementSource(el);
       song.gain = c.createGain();
@@ -1023,7 +1025,7 @@
     },
     { rootMargin: "-45% 0px -50% 0px" }
   );
-  ["replay", "agents", "craft", "sampling", "listen", "studio", "live", "open", "download"].forEach((id) => {
+  ["replay", "agents", "craft", "sampling", "listen", "studio", "open", "decks", "engine", "mix", "browser", "download"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) sectionIO.observe(el);
   });
