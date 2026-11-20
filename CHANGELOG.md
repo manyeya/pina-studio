@@ -9,6 +9,13 @@ first for changes that break songs or commands made before.
 
 ## [Unreleased]
 
+### Fixed
+
+- Settings › Audio offers only buffer sizes the output can be set to. A computer with no sound
+  output got every size, each failing to apply; Windows shows only Auto, since its shared mode
+  plays at the device's own period whatever's asked. The page no longer asks the system for the
+  sizes every frame.
+
 ## [0.4.1] - 2026-11-20
 
 ### Added

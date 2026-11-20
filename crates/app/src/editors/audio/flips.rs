@@ -88,7 +88,7 @@ pub struct Flips {
 impl Flips {
     /// Flips shown for `heard`, and one being written (by `kind`, at `stage`, `secs` in), for
     /// pictures of them.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn shown(heard: PathBuf, ideas: Vec<Flip>, finding: Option<(Kind, Stage, u64)>) -> Flips {
         let found = ideas.len();
         Flips {

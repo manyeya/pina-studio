@@ -26,6 +26,7 @@ pub(crate) use controls::*;
 pub(crate) use mouse::*;
 pub use panel::{NoteField, Panel};
 #[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 pub use write::Writer;
 pub use write::{Writing, WritingSet};
 

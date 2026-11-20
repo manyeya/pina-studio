@@ -12,7 +12,7 @@ pub struct Asked {
 
 impl Asked {
     /// Asked of no one: for pictures of an answer coming.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn idle() -> Asked {
         Asked {
             child: Arc::default(),

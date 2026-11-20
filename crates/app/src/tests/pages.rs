@@ -623,15 +623,17 @@ fn settings_choose_the_buffer_and_the_cpu_number_holds_still(cx: &mut TestAppCon
     cx.simulate_keystrokes("cmd-,");
     click_on(cx, "settings-Audio", Modifiers::none(), MouseButton::Left);
     cx.run_until_parked();
-    // Each size the output can do is a click away, and Auto hands it back to the system.
-    assert!(ws.read_with(cx, |ws, _| !ws.buffers.is_empty()));
-    let size = ws.read_with(cx, |ws, _| ws.buffers[0]);
-    let chip = format!("setting-buffer-{size}").leak();
-    click_on(cx, chip, Modifiers::none(), MouseButton::Left);
-    assert_eq!(
-        ws.read_with(cx, |ws, _| ws.settings.audio.buffer),
-        Some(size)
-    );
+    // Auto's always there. Each size the output can do is a click away (a Mac's are; Windows'
+    // shared mode, and a computer without sound, have none: buffer_sizes_none_offered).
+    assert!(cx.debug_bounds("setting-buffer-Auto").is_some());
+    if let Some(size) = ws.read_with(cx, |ws, _| ws.buffers.first().copied()) {
+        let chip = format!("setting-buffer-{size}").leak();
+        click_on(cx, chip, Modifiers::none(), MouseButton::Left);
+        assert_eq!(
+            ws.read_with(cx, |ws, _| ws.settings.audio.buffer),
+            Some(size)
+        );
+    }
     click_on(
         cx,
         "setting-buffer-Auto",
@@ -651,6 +653,33 @@ fn settings_choose_the_buffer_and_the_cpu_number_holds_still(cx: &mut TestAppCon
         ws.read_with(cx, |ws, _| ws.settings.audio.device.clone()),
         None
     );
+}
+
+/// An output with no size to pick (Windows' shared mode, or a computer without sound): only
+/// Auto, and it stays Auto.
+#[gpui::test]
+fn buffer_sizes_none_offered(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    click_on(cx, "settings-Audio", Modifiers::none(), MouseButton::Left);
+    cx.run_until_parked();
+    ws.update(cx, |ws, cx| {
+        ws.buffers.clear();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("setting-buffer-Auto").is_some());
+    for size in [32, 64, 128, 256, 512, 1024, 2048] {
+        let chip = format!("setting-buffer-{size}");
+        assert!(cx.debug_bounds(chip.leak()).is_none(), "{size} offered");
+    }
+    click_on(
+        cx,
+        "setting-buffer-Auto",
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    assert_eq!(ws.read_with(cx, |ws, _| ws.settings.audio.buffer), None);
 }
 
 #[gpui::test]

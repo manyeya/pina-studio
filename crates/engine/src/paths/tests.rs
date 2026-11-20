@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 use super::*;
 
 // tempo was only ever on macOS, so only there is what it kept moved (and linked back).

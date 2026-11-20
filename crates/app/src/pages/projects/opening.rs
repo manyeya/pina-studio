@@ -128,7 +128,7 @@ impl Opening {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 impl Opening {
     /// `n` channels loaded, for a picture: no more load till it's taken.
     pub(crate) fn steps_for_shot(&mut self, n: usize) {

@@ -11,13 +11,18 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{plugin, song::project::PluginRef};
+#[cfg(target_os = "macos")]
+use crate::plugin;
+use crate::song::project::PluginRef;
 
 /// How long a plugin gets to open, draw its window and be photographed.
 const TIMEOUT: Duration = Duration::from_secs(25);
 /// How long its window has to draw itself first.
+#[cfg(target_os = "macos")]
 const SETTLE: f64 = 1.5;
+#[cfg(target_os = "macos")]
 const RATE: f64 = 48_000.0;
+#[cfg(target_os = "macos")]
 const BLOCK: usize = 512;
 
 /// What taking a plugin's picture found: its load (0 to 1 of real time), and its picture's size

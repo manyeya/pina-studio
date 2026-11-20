@@ -2,7 +2,9 @@
 //! heard, narrowed and put on a Sampler; what it heard put right; and flipped as a beat.
 
 use super::*;
-use crate::{agent::Kind, editors::audio::SliceFilter, ui::menu::MenuAction};
+#[cfg(unix)]
+use crate::agent::Kind;
+use crate::{editors::audio::SliceFilter, ui::menu::MenuAction};
 use pina_engine::{smart::InIt, song::project::Instrument};
 
 /// The demo with its drums region in the Audio editor, Smart Sliced (one click): its folder.

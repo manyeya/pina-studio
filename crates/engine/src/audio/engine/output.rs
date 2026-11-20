@@ -114,14 +114,27 @@ pub fn output_devices() -> Vec<String> {
 
 /// The buffer sizes `name` can run at.
 pub fn buffer_sizes(name: Option<&str>) -> Vec<u32> {
-    let range = device_for(name).and_then(|d| {
-        let c = d.supported_output_configs().ok()?.next()?;
-        match *c.buffer_size() {
-            cpal::SupportedBufferSize::Range { min, max } => Some((min, max)),
-            cpal::SupportedBufferSize::Unknown => None,
-        }
-    });
-    let (min, max) = range.unwrap_or((0, u32::MAX));
+    // No output at all (a computer without sound): no size to pick, only Auto. (Offering every
+    // size here made each one fail to apply: "no audio output device".)
+    let Some(device) = device_for(name) else {
+        return Vec::new();
+    };
+    let range = device
+        .supported_output_configs()
+        .ok()
+        .and_then(|mut c| c.next())
+        .map(|c| *c.buffer_size());
+    sizes_within(range)
+}
+
+/// The sizes a device whose buffer can be `range` is offered. Windows' shared mode reports one
+/// size, its device period (480 frames at 48 kHz, say), and plays at it whatever's asked for:
+/// none of ours, so only Auto. One that doesn't say: all of them.
+fn sizes_within(range: Option<cpal::SupportedBufferSize>) -> Vec<u32> {
+    let (min, max) = match range {
+        Some(cpal::SupportedBufferSize::Range { min, max }) => (min, max),
+        _ => (0, u32::MAX),
+    };
     BUFFERS
         .into_iter()
         .filter(|b| (min..=max).contains(b))
@@ -426,4 +439,25 @@ fn open(engine: &Arc<Mutex<Engine>>, setup: &AudioSetup) -> Result<(cpal::Stream
         .map_err(|e| e.to_string())?;
     stream.play().map_err(|e| e.to_string())?;
     Ok((stream, name))
+}
+
+#[cfg(test)]
+mod sizes {
+    use super::*;
+    use cpal::SupportedBufferSize::{Range, Unknown};
+
+    /// What each kind of output is offered: a Mac's range, all of ours in it; Windows' shared
+    /// mode (one size, its device period, played at whatever's asked), none, so only Auto.
+    #[test]
+    fn sizes_are_what_the_output_can_be_set_to() {
+        assert_eq!(sizes_within(Some(Range { min: 14, max: 4096 })), BUFFERS);
+        assert_eq!(
+            sizes_within(Some(Range { min: 64, max: 512 })),
+            [64, 128, 256, 512]
+        );
+        assert!(sizes_within(Some(Range { min: 480, max: 480 })).is_empty());
+        assert!(sizes_within(Some(Range { min: 441, max: 441 })).is_empty());
+        assert_eq!(sizes_within(Some(Unknown)), BUFFERS);
+        assert_eq!(sizes_within(None), BUFFERS);
+    }
 }

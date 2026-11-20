@@ -8,7 +8,7 @@
 
 use gpui::{Context, Div, FontWeight, MouseButton, div, prelude::*, px, rgb};
 use pina_engine::audio::{
-    engine::{ClickStyle, DeviceInfo, RATES, buffer_sizes},
+    engine::{ClickStyle, DeviceInfo, RATES},
     record::Depth,
 };
 
@@ -691,7 +691,8 @@ impl Workspace {
             );
         }
         let buffers: Vec<Div> = std::iter::once(None)
-            .chain(buffer_sizes(audio.device.as_deref()).into_iter().map(Some))
+            // The sizes read with the outputs (read_outputs), not asked of the system each frame.
+            .chain(self.buffers.iter().copied().map(Some))
             .map(|size| {
                 let label = size.map_or("Auto".to_string(), |b| b.to_string());
                 let sel = format!("setting-buffer-{label}");

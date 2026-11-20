@@ -8,6 +8,7 @@ mod lyrics;
 mod smart;
 mod stems;
 #[cfg(test)]
+#[cfg(all(test, unix))]
 pub use flips::{Flips, Stage};
 pub use flips::{FlipsUi, LyricsTab};
 pub use lyrics::{Lyrics, LyricsWait};

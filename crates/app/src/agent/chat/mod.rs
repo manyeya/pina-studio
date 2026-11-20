@@ -374,7 +374,7 @@ impl Chat {
     }
 
     /// The agent let go, keeping what's said.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn agent_gone(&mut self) {
         self.run += 1;
         self.agent = None;
