@@ -1,0 +1,32 @@
+# Third-party notices
+
+{{!-- Made by scripts/notices.sh with cargo-about: don't edit it, run that again. --}}
+**Pina Studio** is © 2026 Manyeya Khutso Siema. Its source code is licensed under the MIT
+License (`LICENSE`); its release builds, which include the Rubber Band Library, are distributed
+under the GNU General Public License, version 3 or later (`COPYING`). `NOTICE` explains both.
+
+It's built from the open-source software below. Their authors hold their copyrights; each is used
+under the licence it's listed under, whose full text follows the list of what uses it. The
+components that aren't Rust crates (fonts, icons, native libraries) are at the end.
+
+## Licences
+
+{{#each overview}}
+- [{{{name}}}](#{{id}}) ({{count}})
+{{/each}}
+- [Not Rust crates](#not-crates)
+
+{{#each licenses}}
+## {{{name}}}
+
+<a id="{{id}}"></a>Used by:
+
+{{#each used_by}}
+- [{{crate.name}} {{crate.version}}]({{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}})
+{{/each}}
+
+```text
+{{{text}}}
+```
+
+{{/each}}

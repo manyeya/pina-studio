@@ -1,0 +1,37 @@
+# cargo-about's settings, for THIRD-PARTY-NOTICES.md (made by scripts/notices.sh): the platforms
+# Pina Studio ships on, and the licences its open-source dependencies are under.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "wasm32-unknown-unknown",
+]
+ignore-dev-dependencies = true
+ignore-build-dependencies = false
+# The app's own crates (publish = false) are Pina Studio itself: LICENSE covers them.
+private = { ignore = true }
+accepted = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "CC0-1.0",
+    "0BSD",
+    "NCSA",
+    "OFL-1.1",
+    "CDLA-Permissive-2.0",
+    "LGPL-2.1",
+    "LGPL-3.0",
+    "GPL-2.0",
+    "GPL-2.0-or-later",
+    "GPL-3.0",
+]

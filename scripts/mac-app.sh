@@ -18,6 +18,9 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/pina"
 cp "$ICON" "$APP/Contents/Resources/pina.icns"
+# Its licences (NOTICE says which covers what), and every open-source component's.
+for f in LICENSE COPYING NOTICE; do cp "$f" "$APP/Contents/Resources/$f.txt"; done
+cp THIRD-PARTY-NOTICES.md "$APP/Contents/Resources/THIRD-PARTY-NOTICES.md"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -33,7 +36,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
-  <key>NSHumanReadableCopyright</key><string>© $YEAR Pina Studio</string>
+  <key>NSHumanReadableCopyright</key><string>© $YEAR Manyeya Khutso Siema. MIT source; this build GPL-3.0-or-later.</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <!-- ONNX Runtime (stem separation), linked into Apple silicon's half, needs 13.4. -->
   <key>LSMinimumSystemVersionByArchitecture</key><dict><key>arm64</key><string>13.4</string><key>x86_64</key><string>13.0</string></dict>

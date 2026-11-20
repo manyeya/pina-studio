@@ -15,7 +15,18 @@
 AppId={{9E486707-A013-4C3C-A154-B9E3C2F96256}
 AppName=Pina Studio
 AppVersion={#Version}
-AppPublisher=Pina Studio
+AppPublisher=Manyeya Khutso Siema
+AppCopyright=Copyright (c) 2026 Manyeya Khutso Siema
+AppPublisherURL=https://manyeya.github.io/pina-studio/
+AppSupportURL=https://github.com/manyeya/pina-studio/issues
+AppUpdatesURL=https://github.com/manyeya/pina-studio/releases
+VersionInfoCompany=Manyeya Khutso Siema
+VersionInfoCopyright=Copyright (c) 2026 Manyeya Khutso Siema
+VersionInfoDescription=Pina Studio installer
+VersionInfoProductName=Pina Studio
+VersionInfoVersion={#Version}
+; Which licence covers what (MIT source, GPL-3.0-or-later build), shown before installing.
+LicenseFile={#Source}\NOTICE.txt
 DefaultDirName={autopf}\Pina Studio
 DefaultGroupName=Pina Studio
 DisableProgramGroupPage=yes
@@ -42,6 +53,11 @@ Source: "{#Source}\pina.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Visual C++'s redistributable, so it runs on a PC without it installed.
 Source: "{#Source}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\crates\app\icon\pina.ico"; DestDir: "{app}"; Flags: ignoreversion
+; Its licences, and every open-source component's.
+Source: "{#Source}\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Source}\COPYING.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Source}\NOTICE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Source}\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Pina Studio"; Filename: "{app}\Pina Studio.exe"; IconFilename: "{app}\pina.ico"

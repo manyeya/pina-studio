@@ -47,6 +47,9 @@ jobs:
             Sort-Object FullName -Descending
           if (-not ($crt | Where-Object Name -eq 'vcruntime140.dll')) { Write-Error "Visual C++'s runtime DLLs weren't found"; exit 1 }
           $crt | Group-Object Name | ForEach-Object { Copy-Item $_.Group[0].FullName staging\ }
+          # Its licences, and every open-source component's.
+          foreach ($f in 'LICENSE', 'COPYING', 'NOTICE') { Copy-Item $f "staging\$f.txt" }
+          Copy-Item THIRD-PARTY-NOTICES.md staging\
           Get-ChildItem staging
 
       - name: Make the installer

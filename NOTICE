@@ -1,0 +1,35 @@
+Pina Studio
+Copyright (c) 2026 Manyeya Khutso Siema
+https://manyeya.github.io/pina-studio/
+
+Pina Studio is designed and written by Manyeya Khutso Siema.
+
+
+THE SOURCE CODE
+
+Pina Studio's own source code, in this repository, is licensed under the MIT License (see
+LICENSE). You may use, copy, change and share it under that licence, keeping the copyright
+notice above and the licence with it.
+
+
+THE RELEASE BUILDS
+
+Pina Studio's release builds (the macOS disk image, the Windows installer and zip) include the
+Rubber Band Library, which is licensed under the GNU General Public License, version 2 or later.
+Those builds, taken as a whole, are therefore distributed under the GNU General Public License,
+version 3 or (at your option) any later version (see COPYING). Their complete corresponding
+source code is this repository, at the release's tag:
+https://github.com/manyeya/pina-studio
+
+They also include LAME, under the GNU Lesser General Public License, version 3; with this
+repository's source you can change it and build Pina Studio again with your changes.
+
+
+EVERYTHING ELSE IT'S BUILT ON
+
+Pina Studio is built from many other open-source projects, each under its own licence. Every one
+of them, with its licence's full text, is listed in THIRD-PARTY-NOTICES.md, and in the app under
+Settings > About Pina Studio.
+
+Pina Studio ships no machine-learning models: the stem separation and lyrics models are
+downloaded by you, from where their makers host them, each under its own licence.

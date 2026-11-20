@@ -53,6 +53,7 @@ cat > "$INSTALLER/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Install Pina Studio</string>
   <key>CFBundleIdentifier</key><string>studio.pina.installer</string>
   <key>CFBundleExecutable</key><string>pina-installer</string>
+  <key>NSHumanReadableCopyright</key><string>© $(date +%Y) Manyeya Khutso Siema</string>
   <key>CFBundleIconFile</key><string>pina</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
