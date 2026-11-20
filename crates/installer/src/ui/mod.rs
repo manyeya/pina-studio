@@ -462,16 +462,6 @@ impl Render for Installer {
                                         "Arrange, mix and produce, with agents as collaborators.",
                                     ),
                                 appear(now, 0.48, 0.6),
-                            ))
-                            // Its maker.
-                            .child(rise(
-                                div()
-                                    .pt(px(2.))
-                                    .text_size(px(11.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(TEXT_2))
-                                    .child("by Manyeya Khutso Siema"),
-                                appear(now, 0.56, 0.6),
                             )),
                     ),
             )

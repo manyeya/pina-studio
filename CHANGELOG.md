@@ -26,8 +26,8 @@ first for changes that break songs or commands made before.
   - `COPYING`: the GNU GPL, version 3, for the builds, which include the Rubber Band Library;
   - `NOTICE`: which covers what;
   - `THIRD-PARTY-NOTICES.md`: every open-source component's licence, in full.
-- The Windows installer shows `NOTICE` before it installs, and names its publisher and links.
-  The installers' windows and the Mac app's copyright line name Pina Studio's maker.
+- The Windows installer shows `NOTICE` before it installs, and names its publisher and links;
+  the Mac app's copyright line names Pina Studio's maker.
 
 ## [0.4.0] - 2026-11-16
 
