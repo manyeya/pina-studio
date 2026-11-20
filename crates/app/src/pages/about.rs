@@ -265,7 +265,7 @@ impl Workspace {
                 None => tally.push((c.license, 1)),
             }
         }
-        tally.sort_by(|a, b| b.1.cmp(&a.1));
+        tally.sort_by_key(|t| std::cmp::Reverse(t.1));
         let tally = tally
             .iter()
             .map(|(l, n)| format!("{l} {n}"))

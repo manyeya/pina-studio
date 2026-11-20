@@ -9,6 +9,26 @@ first for changes that break songs or commands made before.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-20
+
+### Added
+
+- About Pina Studio, in the app menu and at the end of Settings: who made Pina Studio, Manyeya
+  Khutso Siema, with links to manyeya.dev, GitHub, the website and the source; which licence
+  covers what; the open-source projects it's built on most; and every open-source component in
+  it, with its version, authors and licence (Show all). Settings' search finds it by credits,
+  licence or author.
+
+### Changed
+
+- The licences come with Pina Studio. The app, the Windows installer and the zip carry:
+  - `LICENSE`: the MIT License, for the source;
+  - `COPYING`: the GNU GPL, version 3, for the builds, which include the Rubber Band Library;
+  - `NOTICE`: which covers what;
+  - `THIRD-PARTY-NOTICES.md`: every open-source component's licence, in full.
+- The Windows installer shows `NOTICE` before it installs, and names its publisher and links.
+  The installers' windows and the Mac app's copyright line name Pina Studio's maker.
+
 ## [0.4.0] - 2026-11-16
 
 ### Changed
