@@ -563,6 +563,8 @@ fn the_same_plugin_goes_on_twice(cx: &mut TestAppContext) {
     assert_eq!((inserts, loaded), (2, 2), "{status:?}");
 }
 
+// Apple's AUGraphicEQ, loaded and turned: a Mac's own Audio Unit, so only on a Mac.
+#[cfg(target_os = "macos")]
 #[gpui::test]
 fn plugins_added_and_taken_out_leave_the_others_running_as_they_are(cx: &mut TestAppContext) {
     use pina_engine::audio::player::Which;

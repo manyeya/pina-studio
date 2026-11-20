@@ -106,12 +106,14 @@ fn speaks_mcp() {
     let one: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(one["bars"], 1);
     let first = one["file"].as_str().unwrap().to_string();
-    assert!(first.ends_with("MIDI/One.mid"), "{first}");
+    // By its folder and name, whichever way the system writes the slash.
+    let path_ends = |p: &str, end: &str| std::path::Path::new(p).ends_with(end);
+    assert!(path_ends(&first, "MIDI/One.mid"), "{first}");
     // The same name doesn't write over it.
     let (text, _) = write(31, "One", stabs, json!([first]));
     let two: Value = serde_json::from_str(&text).unwrap();
     assert!(
-        two["file"].as_str().unwrap().ends_with("MIDI/One 2.mid"),
+        path_ends(two["file"].as_str().unwrap(), "MIDI/One 2.mid"),
         "{two}"
     );
     assert!(two["likeness"]["score"].as_f64().unwrap() > 0.95, "{two}");
