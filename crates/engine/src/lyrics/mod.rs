@@ -92,17 +92,23 @@ pub fn available() -> bool {
 /// line starting where the voice does (`lines`).
 pub fn hear(model: &Path, sides: &[Vec<f32>], rate: f64) -> Result<Vec<Line>, String> {
     let mono = mono_16k(sides, rate);
-    #[cfg(any(
-        all(target_os = "macos", target_arch = "aarch64"),
-        all(windows, target_arch = "x86_64")
+    #[cfg(all(
+        feature = "lyrics",
+        any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(windows, target_arch = "x86_64")
+        )
     ))]
     {
         let heard = words(run(model, &mono)?);
         Ok(lines(&heard, &onsets(&mono, 16_000.0)))
     }
-    #[cfg(not(any(
-        all(target_os = "macos", target_arch = "aarch64"),
-        all(windows, target_arch = "x86_64")
+    #[cfg(not(all(
+        feature = "lyrics",
+        any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(windows, target_arch = "x86_64")
+        )
     )))]
     {
         let _ = (model, mono);
@@ -121,9 +127,12 @@ pub fn mono_16k(sides: &[Vec<f32>], rate: f64) -> Vec<f32> {
 }
 
 /// whisper.cpp's words: each a segment of its own (split on words), its times in seconds.
-#[cfg(any(
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(windows, target_arch = "x86_64")
+#[cfg(all(
+    feature = "lyrics",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(windows, target_arch = "x86_64")
+    )
 ))]
 fn run(model: &Path, mono: &[f32]) -> Result<Vec<Word>, String> {
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};

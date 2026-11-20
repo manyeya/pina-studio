@@ -376,7 +376,8 @@ mod tests {
     /// scripts/credits.py again after a dependency changes).
     #[test]
     fn credits_match_cargo_lock() {
-        let lock = include_str!("../../../../Cargo.lock");
+        // Checked out on Windows with CRLF line ends: compared as LF.
+        let lock = include_str!("../../../../Cargo.lock").replace("\r\n", "\n");
         for c in CRATES {
             let entry = format!("name = \"{}\"\nversion = \"{}\"", c.name, c.version);
             assert!(
