@@ -13,7 +13,11 @@ permissions:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    # windows-2025 (Visual Studio 2022), not windows-latest: the image's 2026-11-16 update moved to
+    # Visual Studio 2026 (MSVC 14.51), whose compiler CMake looks for where it isn't, so
+    # whisper.cpp's build (whisper-rs-sys, through Pina Studio's engine) stops at its first step.
+    # Back to windows-latest once whisper-rs-sys builds there.
+    runs-on: windows-2025
     env:
       # The C runtime is Microsoft's DLLs, beside the app (copied below): ONNX Runtime's library is
       # built against them, and a C runtime linked in can't be linked with it.
