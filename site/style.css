@@ -1472,3 +1472,34 @@ html[data-os="win"] .dl__os--win { order: -1; }
   .bleed { opacity: .5; }
   .flood i { --flood: .85; }
 }
+
+/* ============ PINA LIVE, THE SISTER APP ============ */
+.sister-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  background: rgba(255, 255, 255, .05);
+  box-shadow: inset 0 0 0 1px var(--line-2);
+  vertical-align: middle;
+}
+.btn--glass { background: rgba(255, 255, 255, .05); color: var(--text); box-shadow: inset 0 0 0 1px var(--line-2); }
+.btn--glass:hover { background: rgba(255, 255, 255, .09); box-shadow: inset 0 0 0 1px #3a3a48; }
+.btn--glass:active { transform: scale(.98); background: rgba(255, 255, 255, .07); }
+.live__cta { margin-top: 36px; }
+.dl--live { margin-top: 20px; }
+.dl__icon { width: 52px; height: 52px; flex: none; }
+.dl__brand { display: grid; gap: 6px; }
+.dl__name { display: flex; align-items: center; gap: 12px; font-size: var(--fs-h3); font-weight: 600; letter-spacing: -.01em; color: var(--text); }
+.dl__os--web .ico { transform: none; }
+.dl__os--web .dl__link:hover .ico { transform: none; }
+.dl--live .dl__top { flex-wrap: nowrap; }
+.dl__brand { min-width: 0; }
+@media (max-width: 560px) { .dl__icon { width: 44px; height: 44px; } }
