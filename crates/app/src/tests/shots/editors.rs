@@ -384,9 +384,148 @@ pub(super) fn set_up(
             ws.editor_h = 330.0;
             ws.show_bottom(Bottom::Modulation, cx);
         }
+        // Compose writing the keys and lead over bars 5–8: first run (no model yet), ready,
+        // writing (take 2 of 4 coming in), and the takes in, the second picked. Settings ›
+        // Composers too. The composers' folder is the shot's own.
+        "compose-first" | "compose-ready" | "compose-writing" | "compose-takes" | "composers" => {
+            compose_shot(page, ws, cx)
+        }
         // A stack of the keys and drums (gathered), its row and its lane; the keys'
         // volume lane moved by an LFO. Folded, its tracks go.
         _ => return false,
     }
     true
+}
+
+/// Notes a take might have written: chords on the keys, a line on the lead, over bars 5–8.
+fn composed(seed: u64, keys: u64, lead: u64) -> crate::composer::Take {
+    use pina_engine::song::project::Note;
+    let bar = 4 * pina_engine::song::project::PPQ;
+    let chords: [[u8; 3]; 4] = [[57, 60, 64], [53, 57, 60], [55, 59, 62], [52, 55, 59]];
+    let mut k = Vec::new();
+    let mut l = Vec::new();
+    let mut r = seed.wrapping_mul(2654435761) | 1;
+    let mut next = || {
+        r ^= r << 13;
+        r ^= r >> 7;
+        r ^= r << 17;
+        r
+    };
+    for b in 4..8u64 {
+        let c = chords[(b as usize + seed as usize) % 4];
+        let hits: &[u64] = match seed % 3 {
+            0 => &[0],
+            1 => &[0, 2],
+            _ => &[0, 1, 2, 3],
+        };
+        for &q in hits {
+            for &p in &c {
+                k.push(Note {
+                    start: (b * bar + q * bar / 4) as i64,
+                    length: bar / hits.len() as u64 - 40,
+                    pitch: p,
+                    velocity: 90,
+                    ..Default::default()
+                });
+            }
+        }
+        let mut at = 0;
+        while at < bar {
+            let len = [bar / 8, bar / 4, bar / 8, 3 * bar / 16][(next() % 4) as usize];
+            if next() % 5 != 0 {
+                l.push(Note {
+                    start: (b * bar + at) as i64,
+                    length: len - 20,
+                    pitch: [69, 71, 72, 74, 76, 79][(next() % 6) as usize],
+                    velocity: 100,
+                    ..Default::default()
+                });
+            }
+            at += len;
+        }
+    }
+    crate::composer::Take {
+        seed: seed as i64 * 7919 % 100_000,
+        notes: vec![(keys, k), (lead, l)],
+    }
+}
+
+fn compose_shot(page: &str, ws: &mut Workspace, cx: &mut gpui::Context<Workspace>) {
+    let dir = std::env::temp_dir().join(format!("pina-shot-composers-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let model = dir.join("midigpt-yellow-small");
+    if page != "compose-first" {
+        std::fs::create_dir_all(&model).unwrap();
+        std::fs::write(model.join("model.safetensors"), b"").unwrap();
+        let info = serde_json::json!({
+            "resolution": 12,
+            "attributes": { "note_density": 10, "min_polyphony": 10, "max_polyphony": 10,
+                "min_note_duration": 6, "max_note_duration": 6 },
+            "attribute_track_types": { "note_density": "drum", "min_polyphony": "melodic",
+                "max_polyphony": "melodic", "min_note_duration": "melodic",
+                "max_note_duration": "melodic" },
+        });
+        std::fs::write(model.join("info.json"), info.to_string()).unwrap();
+    }
+    std::fs::create_dir_all(dir.join("hf")).unwrap();
+    if page != "compose-first" {
+        std::fs::write(dir.join("hf").join("token"), "hf_shot").unwrap();
+    }
+    unsafe {
+        std::env::set_var("PINA_COMPOSERS", &dir);
+        std::env::set_var("HF_HOME", dir.join("hf"));
+    }
+    let bar = 4 * pina_engine::song::project::PPQ;
+    let p = &mut ws.session.project;
+    p.cycle = Some(pina_engine::song::project::Cycle {
+        start: 4 * bar,
+        end: 8 * bar,
+        off: false,
+    });
+    let ids: Vec<u64> = p.tracks.iter().map(|t| t.id).collect();
+    let (keys, lead) = (ids[0], ids[1]);
+    ws.track = 0;
+    ws.tracks_picked = vec![keys, lead];
+    ws.region = None;
+    ws.composer
+        .steer
+        .insert(lead, [("max_polyphony".to_string(), 0)].into());
+    if page == "composers" {
+        ws.composer.up = Some("midigpt-yellow-small".into());
+        ws.show_settings(crate::pages::settings::Section::Composers, cx);
+        return;
+    }
+    let target = crate::composer::Target {
+        tracks: vec![keys, lead],
+        bars: (4, 8),
+    };
+    match page {
+        "compose-writing" => {
+            let first = composed(1, keys, lead);
+            let second = composed(2, keys, lead);
+            ws.composer.target = Some(target);
+            ws.composer.takes = vec![first];
+            ws.composer.job = Some(crate::composer::Job {
+                stage: crate::composer::Stage::Writing { take: 2, of: 4 },
+                started: std::time::Instant::now() - std::time::Duration::from_secs(7),
+                stop: Default::default(),
+                run: 0,
+                tokens: 412,
+                live: second
+                    .notes
+                    .iter()
+                    .flat_map(|(id, n)| n.iter().map(|n| (*id, n.clone())))
+                    .filter(|(_, n)| n.start < (5 * bar + bar / 2) as i64)
+                    .collect(),
+            });
+        }
+        "compose-takes" => {
+            ws.composer.target = Some(target);
+            ws.composer.takes = (1..=4).map(|s| composed(s, keys, lead)).collect();
+            ws.composer.picked = Some(1);
+        }
+        _ => {}
+    }
+    ws.editor_h = 360.0;
+    ws.show_bottom(Bottom::Compose, cx);
 }

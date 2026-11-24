@@ -16,7 +16,7 @@ use std::{
 /// The name its folders go by.
 pub const NAME: &str = "Pina Studio";
 
-fn home() -> PathBuf {
+pub(crate) fn home() -> PathBuf {
     var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
 }
 

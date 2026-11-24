@@ -33,6 +33,9 @@ of it.
   - `lyrics/`: the lines sung in a recording, by Whisper (whisper.cpp), and its hooks.
   - `separate/`: stems, by a separation model the person adds, run in ONNX Runtime: its
     model.json, the STFT, segments overlapped and crossfaded.
+  - `composer/`: composer models (MIDI-GPT and its kind): the catalogue, the song as their
+    score and their takes back as notes, and each family's local server in a Python of its own
+    made by uv.
   - `study/`: finished songs taken apart: beats, harmony, form, groove and words.
   - `paths.rs`: where Pina Studio keeps its files.
 - `crates/app`, the gpui UI and the `pina` command:
@@ -540,6 +543,12 @@ In the app:
   downloads the tested ones from where their makers keep them, or adds one you have. Each stem goes on a track of its own in a stack, playing as the region
   did. On Apple silicon and Windows x64; `pina models` and `pina separate` from the command line.
   How to add one, and the models that have been run: `docs/separation-models.md`.
+- Compose: bars written by a composer model you download (MIDI-GPT and its kind; none come
+  with Pina Studio). Pick tracks and loop bars, and the Compose tab writes the parts together,
+  each hearing the others and the rest of the song, in its key; takes stream onto the lanes,
+  the one picked plays in the song, Keep puts it in. Settings › Composers signs in and
+  downloads; `pina compose` and the Studio Agent's `compose` from outside. How it runs, and
+  adding a model of the kind: `docs/composer-models.md`.
 - Smart Slice, in the Audio editor: any recording sliced as a producer would, in one click. It
   hears what's in it by its sound (a beat, a voice in a beat, a voice alone) and slices it that
   way: a beat at its hits (kick, snare, a chord in A minor), a voice into vocal chops named by

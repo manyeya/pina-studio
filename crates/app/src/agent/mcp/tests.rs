@@ -59,7 +59,8 @@ fn speaks_mcp() {
             "stem_models",
             "stems",
             "lyrics",
-            "slices"
+            "slices",
+            "compose"
         ]
     );
 

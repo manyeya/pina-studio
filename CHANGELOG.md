@@ -9,6 +9,26 @@ first for changes that break songs or commands made before.
 
 ## [Unreleased]
 
+### Added
+
+- Compose: bars of the song written by a composer model, MIDI-GPT and its kind, trained on
+  music itself. Pick the tracks in the headers (⌘-click for several) and loop the bars, then
+  the Compose tab writes the parts together, each hearing the others and the rest of the song,
+  in its key. Each part can be heard as another (Drums, Bass, Keys, Pad, Lead, Guitar,
+  Strings) and steered by the model's own controls (how many notes at once, how long, how
+  dense); temperature and how many takes are yours. Takes come in one at a time, their notes
+  drawn on the lanes as they're written; the take picked plays in the song in place of what's
+  there, and Keep puts it in with one undo. A track's menu has Compose… too.
+- Settings › Composers: how it works, signing in to Hugging Face for the models whose makers
+  ask (the token is kept where `hf auth login` keeps it), the four MIDI-GPT models to download
+  with their licence (non-commercial research only), and where they run (the GPU, or the CPU).
+  Pina Studio ships none. Each family runs in its own Python, made by uv apart from anything
+  else on the computer, as a server on this computer only that stops itself after ten idle
+  minutes.
+- `pina composers [get|remove|token]` and `pina compose <project> --track N[,N] --bars 9-16`
+  from the command line, each take a MIDI file in the song's MIDI folder; the Studio Agent's
+  `compose` tool writes them the same way, as cards in its panel to hear and drag in.
+
 ### Changed
 
 - Pina Studio keeps no musical templates of its own: its built-in chord progressions, its drum

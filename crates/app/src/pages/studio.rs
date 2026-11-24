@@ -48,7 +48,7 @@ fn mb(bytes: u64) -> String {
 }
 
 /// A card: its title, then its rows.
-fn card(title: &'static str, note: Option<&'static str>, rows: Vec<Div>) -> Div {
+pub(crate) fn card(title: &'static str, note: Option<&'static str>, rows: Vec<Div>) -> Div {
     div()
         .rounded(px(12.))
         .bg(rgb(CARD))
@@ -75,7 +75,7 @@ fn card(title: &'static str, note: Option<&'static str>, rows: Vec<Div>) -> Div 
 }
 
 /// A row: its title and what it does, then `right`.
-fn row(
+pub(crate) fn row(
     title: impl Into<gpui::SharedString>,
     what: impl Into<gpui::SharedString>,
     right: impl IntoElement,
@@ -84,7 +84,7 @@ fn row(
 }
 
 /// A row with something before its title (`lead`, a step's number) and beside it (`tag`).
-fn row_with(
+pub(crate) fn row_with(
     lead: Option<Div>,
     title: impl Into<gpui::SharedString>,
     tag: Option<Div>,

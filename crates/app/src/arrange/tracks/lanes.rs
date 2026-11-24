@@ -318,6 +318,7 @@ impl Workspace {
             .children(regions)
             .children(take)
             .children(lines)
+            .children(self.compose_overlay())
             .children(self.agent_marker())
             // The Zoom tool's drag: the bars it'll fill the window with.
             .children(self.zoom_shown().map(|(x, w)| {

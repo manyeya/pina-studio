@@ -278,6 +278,8 @@ pub enum MenuAction {
     SliceFilter(Option<crate::editors::audio::SliceFilter>),
     /// What's in a recording, put right (Smart Slice): sliced again that way.
     SliceHeardAs(pina_engine::smart::InIt),
+    /// Compose's and Settings › Composers' choices.
+    Compose(crate::composer::Act),
     /// A song sliced with its voice in, or taken out.
     SliceUnvoiced(bool),
     /// Makes an alias of a region, after it.
@@ -652,6 +654,7 @@ impl Workspace {
                 }
             }
             MenuAction::SliceHeardAs(h) => self.slice_heard_as(h, cx),
+            MenuAction::Compose(a) => self.compose_act(a, cx),
             MenuAction::SliceUnvoiced(u) => self.slice_unvoiced(u, cx),
         }
         cx.notify();

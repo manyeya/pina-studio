@@ -26,7 +26,7 @@ mod panel;
 mod placing;
 mod results;
 mod sound_map;
-mod widgets;
+pub(crate) mod widgets;
 
 pub(crate) use midi::{
     capital, midi_ghost_at, midi_legend, midi_line, outline, piano_roll, role_hue,

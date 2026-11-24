@@ -3,6 +3,7 @@
 
 mod agent;
 mod automation;
+mod compose;
 mod drums;
 mod editors;
 mod eq;

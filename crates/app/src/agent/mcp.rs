@@ -459,6 +459,26 @@ fn stem_tools(project: &Value) -> Vec<Value> {
                 },
                 "required": ["project", "track", "region"]
             }
+        },
+        {
+            "name": "compose",
+            "description": "Bars of the song written by a composer model (MIDI-GPT and its kind) the person has downloaded in Settings › Composers: trained on music itself, it writes the `tracks` (indexes, several together, each hearing the others) over `bars` (\"9-16\", from 1) hearing every other part the song plays, in its key. Each take is a MIDI file beside the song, shown as a card the person hears and drags onto the tracks; the song itself isn't changed. `parts`: what each track is heard as (Drums, Bass, Keys, Pad, Lead, Guitar, Strings), else as its notes sound. `takes` (1 to 8), `temperature` (1 as trained; lower safer, higher wilder), `seed` (a take again), `any_key` (not kept to the song's key), `name` (the files'). Says plainly when no model is downloaded or the person hasn't signed in for it; don't fall back to writing it yourself without saying so.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": project,
+                    "tracks": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+                    "bars": { "type": "string" },
+                    "parts": { "type": "array", "items": { "type": "string" } },
+                    "takes": { "type": "integer", "minimum": 1, "maximum": 8 },
+                    "temperature": { "type": "number" },
+                    "seed": { "type": "integer" },
+                    "model": { "type": "string" },
+                    "any_key": { "type": "boolean" },
+                    "name": { "type": "string" }
+                },
+                "required": ["project", "tracks", "bars"]
+            }
         }
     ]);
     match tools {
@@ -1028,6 +1048,46 @@ pub(crate) fn call(name: &str, args: &Value) -> Result<Value, String> {
             index(args, "track")?,
             index(args, "region")?,
         ),
+        "compose" => {
+            let tracks: Vec<String> = args["tracks"]
+                .as_array()
+                .map(|t| {
+                    t.iter()
+                        .filter_map(Value::as_u64)
+                        .map(|t| t.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut asked: Vec<String> = vec![
+                "--track".into(),
+                tracks.join(","),
+                "--bars".into(),
+                text(args, "bars").unwrap_or("").to_string(),
+            ];
+            for (flag, key) in [
+                ("--takes", "takes"),
+                ("--temperature", "temperature"),
+                ("--seed", "seed"),
+            ] {
+                if let Some(v) = args.get(key).filter(|v| v.is_number()) {
+                    asked.extend([flag.to_string(), v.to_string()]);
+                }
+            }
+            for (flag, key) in [("--model", "model"), ("--name", "name")] {
+                if let Some(v) = text(args, key) {
+                    asked.extend([flag.to_string(), v.to_string()]);
+                }
+            }
+            if args["any_key"].as_bool() == Some(true) {
+                asked.push("--any-key".into());
+            }
+            let parts: Vec<&str> = args["parts"]
+                .as_array()
+                .map(|p| p.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let asked: Vec<&str> = asked.iter().map(String::as_str).collect();
+            crate::cli::compose::compose_parts(&path(args, "project")?, &asked, &parts)
+        }
         "slices" => crate::cli::separate::slices_tool(
             &path(args, "project")?,
             index(args, "track")?,

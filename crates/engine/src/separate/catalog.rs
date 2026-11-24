@@ -135,6 +135,19 @@ pub fn fetch(
     url: &str,
     bytes: u64,
     to: &Path,
+    progress: impl FnMut(u64),
+    stop: &AtomicBool,
+) -> Result<(), String> {
+    fetch_as(url, bytes, to, None, progress, stop)
+}
+
+/// As `fetch`, sending `header` too ("Authorization: Bearer …" where a host asks the person
+/// to sign in). curl doesn't send it on to another host a download is redirected to.
+pub fn fetch_as(
+    url: &str,
+    bytes: u64,
+    to: &Path,
+    header: Option<&str>,
     mut progress: impl FnMut(u64),
     stop: &AtomicBool,
 ) -> Result<(), String> {
@@ -142,8 +155,13 @@ pub fn fetch(
     let gone = || {
         let _ = std::fs::remove_file(&part);
     };
-    let mut curl = Command::new("curl")
-        .args(["-L", "--fail", "-sS", "-A", "PinaStudio", "-o"])
+    let mut curl = Command::new("curl");
+    curl.args(["-L", "--fail", "-sS", "-A", "PinaStudio"]);
+    if let Some(h) = header {
+        curl.arg("-H").arg(h);
+    }
+    let mut curl = curl
+        .arg("-o")
         .arg(&part)
         .arg(url)
         .stderr(Stdio::piped())

@@ -224,6 +224,20 @@ impl Workspace {
             },
             rule(),
             op("Modulation…".into(), TrackOp::Modulation(t)),
+            match (
+                self.session.project.tracks[t].instrument.is_some(),
+                self.picked_tracks().len(),
+            ) {
+                (false, _) => (String::new(), MenuAction::Nothing),
+                (true, n @ 2..) if self.is_picked(t) => (
+                    format!("Compose {n} Tracks…"),
+                    MenuAction::Compose(crate::composer::Act::Open(t)),
+                ),
+                (true, _) => (
+                    "Compose…".to_string(),
+                    MenuAction::Compose(crate::composer::Act::Open(t)),
+                ),
+            },
             ("Bounce in Place".to_string(), MenuAction::BounceInPlace(t)),
             ("Export as Stem…".to_string(), MenuAction::ExportStem(t)),
             rule(),

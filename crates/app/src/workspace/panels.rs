@@ -14,6 +14,7 @@ pub enum Bottom {
     Score,
     Takes,
     Loops,
+    Compose,
 }
 
 /// The arrangement, or the mixer or the sample browser's page in its place.
@@ -60,6 +61,13 @@ impl Workspace {
         }
         if pane == Bottom::PianoRoll {
             self.focus_roll();
+        }
+        // A take picked is heard while Compose is open, and not once it isn't.
+        if self.composer.picked.is_some() {
+            self.heard_changed(cx);
+        }
+        if pane == Bottom::Compose {
+            self.editor_h = self.editor_h.max(340.0);
         }
         cx.notify();
     }

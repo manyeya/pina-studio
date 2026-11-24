@@ -167,6 +167,8 @@ pub enum Slider {
     Azimuth(usize),
     Elevation(usize),
     Distance(usize),
+    /// Compose's temperature.
+    Temperature,
 }
 
 impl Workspace {
@@ -334,6 +336,7 @@ impl Workspace {
     pub fn slider(&self, slider: Slider) -> f32 {
         match slider {
             Slider::Strength => self.roll.strength,
+            Slider::Temperature => (self.composer.temperature - 0.5) / 1.0,
             Slider::Swing => (self.roll.swing - 50.0) / 25.0,
             Slider::Zoom => (self.px_per_beat / 4.0).ln() / 200f32.ln(),
             Slider::Send { track, index } => {
@@ -359,6 +362,9 @@ impl Workspace {
     pub fn set_slider(&mut self, slider: Slider, v: f32) {
         match slider {
             Slider::Strength => self.roll.strength = (v * 100.0).round() / 100.0,
+            Slider::Temperature => {
+                self.composer.temperature = ((0.5 + v.clamp(0.0, 1.0)) * 20.0).round() / 20.0
+            }
             Slider::Swing => self.roll.swing = (50.0 + v * 25.0).round(),
             Slider::Zoom => {
                 let width = f32::from(self.lanes_bounds.get().size.width);

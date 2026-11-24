@@ -47,17 +47,26 @@ pub enum ChatPage {
     History,
 }
 
-/// The path a `midi_write` answered with.
-fn written(output: &str) -> Option<PathBuf> {
-    let v: Value = serde_json::from_str(output.trim()).ok()?;
-    v["file"].as_str().map(PathBuf::from)
+/// The paths a `midi_write` answered with (its file), or a `compose` (each take's).
+fn written(output: &str) -> Vec<PathBuf> {
+    let Ok(v) = serde_json::from_str::<Value>(output.trim()) else {
+        return Vec::new();
+    };
+    match v["takes"].as_array() {
+        Some(takes) => takes
+            .iter()
+            .filter_map(|t| t["file"].as_str().map(PathBuf::from))
+            .collect(),
+        None => v["file"].as_str().map(PathBuf::from).into_iter().collect(),
+    }
 }
 
 impl Chat {
-    /// Whether the tool call `id` is a `midi_write`.
+    /// Whether the tool call `id` is a `midi_write` or a `compose`.
     fn wrote_midi(&self, id: &str) -> bool {
         self.items.iter().rev().any(|i| {
-            matches!(i, Item::Tool { id: x, name, .. } if x == id && name.ends_with("midi_write"))
+            matches!(i, Item::Tool { id: x, name, .. }
+                if x == id && (name.ends_with("midi_write") || name.ends_with("compose")))
         })
     }
 
@@ -212,22 +221,23 @@ impl Workspace {
     }
 
     /// What a tool answered: a `midi_write`'s file goes on the shelf, and in the conversation.
-    pub(crate) fn heard_midi(&mut self, e: &Event) -> Option<PathBuf> {
+    pub(crate) fn heard_midi(&mut self, e: &Event) -> Vec<PathBuf> {
         let Event::ToolDone {
             id,
             ok: true,
             output,
         } = e
         else {
-            return None;
+            return Vec::new();
         };
         if !self.chat.wrote_midi(id) {
-            return None;
+            return Vec::new();
         }
-        let path = written(output)?;
         self.shelf_sync();
-        self.shelf_card(&path, true)?;
-        Some(path)
+        written(output)
+            .into_iter()
+            .filter(|path| self.shelf_card(path, true).is_some())
+            .collect()
     }
 
     /// Hears a card, at the song's tempo, in time with it while it plays.

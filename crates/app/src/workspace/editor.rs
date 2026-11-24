@@ -64,6 +64,22 @@ impl Workspace {
                 ),
                 None => ("Modulation".to_string(), String::new(), TEXT_4),
             },
+            (Bottom::Compose, _) => {
+                let ((b0, b1), _) = self.compose_bars();
+                let names: Vec<String> = self
+                    .compose_tracks()
+                    .iter()
+                    .map(|&t| self.session.project.tracks[t].name.clone())
+                    .collect();
+                (
+                    "Compose".to_string(),
+                    match names.is_empty() {
+                        true => format!("bars {}–{}", b0 + 1, b1),
+                        false => format!("bars {}–{} · {}", b0 + 1, b1, names.join(", ")),
+                    },
+                    ACCENT,
+                )
+            }
             (Bottom::Loops, _) => (
                 "Live Loops".to_string(),
                 format!("{} tracks", self.session.project.tracks.len()),
@@ -183,6 +199,9 @@ impl Workspace {
                                 MouseButton::Left,
                                 cx.listener(|ws, _, _, cx| {
                                     ws.bottom = None;
+                                    if ws.composer.picked.is_some() {
+                                        ws.heard_changed(cx);
+                                    }
                                     cx.notify();
                                 }),
                             ),
@@ -198,6 +217,7 @@ impl Workspace {
             Bottom::Score => self.score_body(cx).into_any_element(),
             Bottom::Takes => self.takes_body(cx).into_any_element(),
             Bottom::Loops => self.loops_body(cx).into_any_element(),
+            Bottom::Compose => self.compose_body(cx).into_any_element(),
         };
         let height = self.editor_height();
         let resizing = matches!(self.drag, Some(Drag::Editor { .. }));

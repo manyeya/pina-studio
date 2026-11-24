@@ -174,6 +174,10 @@ pub fn label(name: &str, input: &Value, bar: u64) -> (String, String) {
             format!("{} files", input["files"].as_array().map_or(0, Vec::len)),
         ),
         "midi_write" => ("Writing MIDI", s("name")),
+        "compose" => (
+            "Composing",
+            format!("bars {}", input["bars"].as_str().unwrap_or("")),
+        ),
         "samples_find" => ("Finding samples", words(&input["query"])),
         "samples_similar" => ("Finding sounds like", file("path")),
         "samples_kit" => ("Building a kit", words(&input["seed"])),

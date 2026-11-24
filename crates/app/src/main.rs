@@ -8,6 +8,7 @@
 mod agent;
 mod arrange;
 mod cli;
+mod composer;
 mod credits;
 mod editors;
 mod mix;
@@ -83,6 +84,17 @@ const USAGE: &str = "usage:
   pina models inspect <file.onnx> a model's inputs and outputs, to write its model.json from
   pina models get [name]          a model that's been run, downloaded from where its maker
                                    keeps it (its licence is its maker's); without a name, the list
+  pina composers                  the composer models (MIDI-GPT and its kind) that have been
+                                   run with Pina Studio, none of them shipped: downloaded or
+                                   not, their licence, and whether you're signed in for them
+  pina composers get <id>         one downloaded from where its makers host it, and its own
+                                   Python installed (uv); composers token <token> first for
+                                   one whose makers ask you to sign in
+  pina composers remove <id>      a downloaded one deleted
+  pina compose <project> --track N[,N] --bars 9-16 [--part bass] [--model <id>]
+                [--takes 3] [--temperature 0.9] [--seed N] [--set <name>=<level>] [--any-key]
+                                   bars written by a composer model with the rest of the song
+                                   heard, in its key: each take a MIDI file in its MIDI folder
   pina separate <audio file> [--model <name>] [--out <folder>]
                                    the file parted into its stems by a model: a WAV each
   pina lyrics <audio file> [--model base|small|turbo]
@@ -238,6 +250,11 @@ fn main() {
             }
         }
         ["samples", rest @ ..] => print(cli::samples::command(rest)),
+        ["composers"] => print(cli::compose::list()),
+        ["composers", "get", id] => print(cli::compose::get(id)),
+        ["composers", "remove", id] => print(cli::compose::remove(id)),
+        ["composers", "token", t] => print(cli::compose::token(t)),
+        ["compose", dir, rest @ ..] => print(cli::compose::compose(p(dir), rest)),
         ["models"] => print(cli::separate::models()),
         ["models", "inspect", file] => print(cli::separate::inspect(p(file))),
         ["models", "get"] => print(cli::separate::get(None)),

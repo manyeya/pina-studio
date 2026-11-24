@@ -653,7 +653,7 @@ impl Workspace {
                 | Drag::Key { .. }
                 | Drag::Comp { .. }
                 | Drag::Slider {
-                    slider: Slider::Strength | Slider::Swing | Slider::Zoom,
+                    slider: Slider::Strength | Slider::Swing | Slider::Zoom | Slider::Temperature,
                     ..
                 }
                 | Drag::Slider {

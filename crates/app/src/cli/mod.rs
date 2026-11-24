@@ -1,6 +1,7 @@
 //! What agents and scripts run: each returns JSON (or text), and goes to the running app when it
 //! has the project open, so edits land on screen and can be undone there.
 
+pub mod compose;
 pub mod midi;
 pub mod reference;
 pub mod samples;

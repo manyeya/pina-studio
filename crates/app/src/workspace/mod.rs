@@ -549,6 +549,8 @@ pub struct Workspace {
     pub stems_sheet: Option<crate::editors::audio::StemSheet>,
     /// Settings' Stem models page: downloads going, a file being added, a model to take out.
     pub models_ui: crate::pages::studio::ModelsUi,
+    /// Compose and Settings › Composers: what's asked, what's going on, the takes.
+    pub composer: crate::composer::ComposerUi,
     /// An audio region's lyrics, shown beside it in the Audio editor; and whether they're being heard.
     pub lyrics: Option<crate::editors::audio::Lyrics>,
     pub lyrics_wait: Option<crate::editors::audio::LyricsWait>,
@@ -850,6 +852,7 @@ impl Workspace {
             separating: None,
             stems_sheet: None,
             models_ui: Default::default(),
+            composer: Default::default(),
             lyrics: None,
             lyrics_wait: None,
             beat: None,
@@ -961,6 +964,12 @@ impl Workspace {
                 .and_then(|t| t.instrument.as_mut())
         {
             **poly = saved;
+        }
+        // A take Compose picked plays in place of what's in its bars.
+        if self.composer.picked.is_some() {
+            let mut q = p.into_owned();
+            self.compose_preview(&mut q);
+            p = Cow::Owned(q);
         }
         if let Some((t, u)) = self.rack_preview
             && let Some(pina_engine::song::project::Instrument::Poly(poly)) = p
@@ -1167,6 +1176,7 @@ impl Workspace {
             || self.reductions.values().any(|&g| g > 0.01)
             || self.agent_presence().is_some()
             || self.browser.auditioning()
+            || self.composer.working()
             || self.player.rendering()
             || self.eq_view.as_ref().is_some_and(|v| playing || v.moving())
             || (self.fx_view.is_some() && playing)

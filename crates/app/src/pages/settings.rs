@@ -96,6 +96,8 @@ pub struct Settings {
     pub middle_c: i8,
     /// The Songs page as a grid of covers (or a list).
     pub songs_grid: bool,
+    /// Composer models run on the CPU, even where there's a GPU.
+    pub compose_on_cpu: bool,
 }
 
 /// A MIDI input, by name, and how it's read.
@@ -154,6 +156,7 @@ impl Default for Settings {
             heard_later: Default::default(),
             middle_c: 4,
             songs_grid: false,
+            compose_on_cpu: false,
         }
     }
 }
@@ -208,13 +211,14 @@ pub enum Section {
     Plugins,
     Sounds,
     Models,
+    Composers,
     Saving,
     About,
 }
 
 impl Section {
     /// Down the rail, by group: the studio, working, the library.
-    const ALL: [Section; 14] = [
+    const ALL: [Section; 15] = [
         Section::Audio,
         Section::Midi,
         Section::Recording,
@@ -227,6 +231,7 @@ impl Section {
         Section::Plugins,
         Section::Sounds,
         Section::Models,
+        Section::Composers,
         Section::Saving,
         Section::About,
     ];
@@ -235,7 +240,11 @@ impl Section {
     fn group(self) -> &'static str {
         match self {
             Section::Audio | Section::Midi | Section::Recording => "STUDIO",
-            Section::Plugins | Section::Sounds | Section::Models | Section::Saving => "LIBRARY",
+            Section::Plugins
+            | Section::Sounds
+            | Section::Models
+            | Section::Composers
+            | Section::Saving => "LIBRARY",
             Section::About => "PINA STUDIO",
             _ => "WORKING",
         }
@@ -253,6 +262,9 @@ impl Section {
             Section::Sounds => "synth presets packs maker",
             Section::Models => {
                 "stems separate separation vocals drums bass download onnx ai lyrics whisper words"
+            }
+            Section::Composers => {
+                "compose midi gpt midi-gpt model write generate bars parts takes hugging face token download ai"
             }
             Section::Saving => "recovery backup songs folder autosave",
             Section::Transport => "play stop follow playhead",
@@ -278,6 +290,7 @@ impl Section {
             Section::Plugins => "Plugins",
             Section::Sounds => "Sounds & packs",
             Section::Models => "Stems & lyrics",
+            Section::Composers => "Composers",
             Section::Saving => "Saving & files",
             Section::About => "About Pina Studio",
         }
@@ -297,6 +310,7 @@ impl Section {
             Section::Plugins => Icon::Plug,
             Section::Sounds => Icon::Samples,
             Section::Models => Icon::Stack,
+            Section::Composers => Icon::Keys,
             Section::Saving => Icon::Folder,
             Section::About => Icon::Heart,
         }
@@ -328,6 +342,9 @@ impl Section {
             Section::Models => {
                 "The models that part a recording into its vocals, drums, bass and the rest, and that hear the words sung. Pina Studio comes with none: you choose which to download."
             }
+            Section::Composers => {
+                "Models trained on music itself, that write bars of a song with the rest of it heard. Pina Studio comes with none: each is downloaded from where its makers host it, on their terms."
+            }
             Section::Saving => "Your songs, and getting back what you lost.",
             Section::About => {
                 "Who made Pina Studio, which licence covers what, and the open-source software it's built on."
@@ -338,7 +355,7 @@ impl Section {
 
 impl Bottom {
     /// The editor's tabs, in order.
-    pub const ALL: [Bottom; 9] = [
+    pub const ALL: [Bottom; 10] = [
         Bottom::PianoRoll,
         Bottom::Audio,
         Bottom::Steps,
@@ -348,6 +365,7 @@ impl Bottom {
         Bottom::Score,
         Bottom::Takes,
         Bottom::Loops,
+        Bottom::Compose,
     ];
 
     pub fn key(self) -> &'static str {
@@ -361,6 +379,7 @@ impl Bottom {
             Bottom::Score => "score",
             Bottom::Takes => "takes",
             Bottom::Loops => "live_loops",
+            Bottom::Compose => "compose",
         }
     }
 
@@ -375,6 +394,7 @@ impl Bottom {
             Bottom::Score => "Score",
             Bottom::Takes => "Takes",
             Bottom::Loops => "Live Loops",
+            Bottom::Compose => "Compose",
         }
     }
 
@@ -401,6 +421,7 @@ impl Bottom {
             Bottom::Score => "A MIDI region as notation · N",
             Bottom::Takes => "Takes recorded over each other, to comp",
             Bottom::Loops => "Cells to launch, a column a scene · L",
+            Bottom::Compose => "Bars written by a composer model, the tracks picked together",
         }
     }
 }
@@ -922,6 +943,7 @@ impl Workspace {
             Section::Plugins => self.plugin_settings(cx),
             Section::Sounds => self.sound_settings(cx),
             Section::Models => self.models_page(cx),
+            Section::Composers => self.composers_page(cx),
             Section::Saving => self.saving_page(cx),
             Section::About => self.about_page(cx),
             Section::Midi => {

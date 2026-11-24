@@ -213,7 +213,7 @@ impl Workspace {
             self.note_changes();
         }
         self.chat.apply(e);
-        if let Some(path) = wrote {
+        for path in wrote {
             self.chat.items.push(Item::Midi { path, given: false });
         }
         if over {

@@ -1,0 +1,900 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Compose designs</title>
+<style>
+@font-face{font-family:Geist;src:url(../../crates/app/assets/fonts/Geist-Regular.ttf);font-weight:400}
+@font-face{font-family:Geist;src:url(../../crates/app/assets/fonts/Geist-Medium.ttf);font-weight:500}
+@font-face{font-family:Geist;src:url(../../crates/app/assets/fonts/Geist-SemiBold.ttf);font-weight:600}
+@font-face{font-family:Geist;src:url(../../crates/app/assets/fonts/Geist-Bold.ttf);font-weight:700}
+@font-face{font-family:"Geist Mono";src:url(../../crates/app/assets/fonts/GeistMono-Regular.ttf);font-weight:400}
+@font-face{font-family:"Geist Mono";src:url(../../crates/app/assets/fonts/GeistMono-Medium.ttf);font-weight:500}
+@font-face{font-family:"Geist Mono";src:url(../../crates/app/assets/fonts/GeistMono-SemiBold.ttf);font-weight:600}
+:root{
+  --bg:#0c0c0f;--surface:#131317;--card:#1a1a1f;--strip:#18181d;--well:#0f0f13;--field:#24242b;--raised:#2b2b33;
+  --off:#1e1e25;--lane:#0e0e12;--lane-alt:#121217;--headers:#101014;--header-sel:#1b1b21;
+  --line:#26262d;--soft:#1c1c22;--strong:#34343d;
+  --t1:#f4f4f6;--t2:#d4d4da;--t3:#8a8a95;--t4:#55555f;
+  --accent:#5b8cff;--accent-t:#a5c0ff;--record:#ff4d4d;--amber:#ffc53d;--mint:#3ddc97;
+  --coral:#ff7a59;--violet:#a78bfa;--sky:#38bdf8;--teal:#2dd4bf;--indigo:#818cf8;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#060608;color:var(--t1);font-family:Geist,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.mono{font-family:"Geist Mono",ui-monospace,monospace}
+
+/* The review bar: outside the app, so it's plain. */
+.review{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;padding:12px 20px;background:#060608;border-bottom:1px solid #1a1a20}
+.review h1{font-size:14px;font-weight:600;margin-right:4px}
+.review .grp{display:flex;align-items:center;gap:8px}
+.review .cap{font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em}
+.review .opts{display:flex;background:#111115;border:1px solid #23232a;border-radius:8px;padding:2px}
+.review .opts button{padding:5px 11px;border-radius:6px;font-size:12.5px;color:var(--t3)}
+.review .opts button.on{background:#26262e;color:var(--t1)}
+.stage{padding:18px 20px 8px}
+.frame{position:relative;transform-origin:top left}
+.about{max-width:1100px;padding:6px 20px 40px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;font-size:13px;line-height:1.55;color:var(--t2)}
+.about h3{font-size:12px;font-weight:600;color:var(--t1);margin-bottom:4px}
+.about p{color:var(--t3)}
+
+/* The app window. */
+.win{width:1440px;height:900px;background:var(--bg);border:1px solid #23232a;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;font-size:13px;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.win.narrow{width:1000px;height:800px}
+.cbar{height:52px;flex:none;display:flex;align-items:center;gap:10px;padding:0 10px;background:var(--surface);border-bottom:1px solid var(--line)}
+.cbar .appicon{width:26px;height:26px;border-radius:7px;display:grid;grid-template-columns:repeat(3,1fr);gap:2px;padding:4px;background:#1d1d24}
+.cbar .appicon i{display:block;background:var(--coral);border-radius:1.5px;opacity:.85}
+.cbar .song{font-weight:600;font-size:14px;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.pill{display:flex;align-items:center;gap:2px;background:var(--well);border:1px solid var(--line);border-radius:10px;padding:3px;height:38px}
+.ib{width:30px;height:30px;border-radius:7px;display:grid;place-items:center;color:var(--t2)}
+.ib.on{background:var(--raised);color:var(--t1)}
+.ib svg{width:16px;height:16px}
+.ro{display:flex;flex-direction:column;justify-content:center;padding:0 9px;line-height:1.05}
+.ro b{font-family:"Geist Mono";font-weight:500;font-size:16px}
+.ro span{font-family:"Geist Mono";font-size:8.5px;color:var(--t3);letter-spacing:.06em;margin-top:3px}
+.seg{display:flex;background:var(--well);border:1px solid var(--line);border-radius:9px;padding:2px;gap:2px}
+.seg button{padding:5px 12px;border-radius:7px;color:var(--t3);font-weight:500;font-size:12.5px;white-space:nowrap}
+.seg button.on{background:var(--raised);color:var(--t1)}
+.seg.mono button{font-family:"Geist Mono";font-size:12px}
+.export{background:var(--t1);color:var(--bg);font-weight:600;padding:8px 14px;border-radius:9px;font-size:13px}
+.grow{flex:1;min-width:0}
+.status{height:24px;flex:none;display:flex;align-items:center;gap:18px;padding:0 12px;border-top:1px solid var(--line);background:var(--surface);color:var(--t3);font-size:11.5px;white-space:nowrap;overflow:hidden}
+.status .grow{overflow:hidden;text-overflow:ellipsis}
+.status .busy{color:var(--t2);display:flex;align-items:center;gap:7px}
+
+/* Panels and controls. */
+.body{flex:1;display:flex;min-height:0}
+.insp{width:248px;flex:none;background:var(--surface);border-right:1px solid var(--line);padding:14px 14px;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+.insp h2{font-size:14px;font-weight:600}
+.sect{font-size:12px;color:var(--t3);font-weight:500;display:flex;justify-content:space-between}
+.knobs{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.knob{background:var(--card);border-radius:9px;padding:7px;display:flex;gap:7px;align-items:center}
+.knob div{line-height:1.2}
+.knob small{display:block;font-size:11px;color:var(--t3)}
+.knob b{font-family:"Geist Mono";font-weight:500;font-size:12px}
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.cap2{font-size:11px;color:var(--t3);font-weight:500}
+.lbl{font-size:12px;color:var(--t3)}
+.field{background:var(--field);border:1px solid transparent;border-radius:7px;height:28px;display:flex;align-items:center;gap:6px;padding:0 9px;font-size:12.5px;white-space:nowrap;min-width:0}
+.field .v{overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+.field svg{width:13px;height:13px;color:var(--t3);flex:none}
+.field.nf{font-family:"Geist Mono";justify-content:center;width:46px;padding:0}
+.field.dis{opacity:.45}
+.btn{height:28px;border-radius:7px;padding:0 11px;background:var(--raised);font-weight:500;font-size:12.5px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn svg{width:13px;height:13px}
+.btn.primary{background:var(--t1);color:var(--bg);font-weight:600}
+.btn.primary.dis{background:var(--raised);color:var(--t4)}
+.btn.big{height:34px;width:100%;justify-content:center;font-size:13px}
+.btn.ghost{background:transparent;border:1px solid var(--line)}
+.row{display:flex;align-items:center;gap:8px;min-width:0}
+.ctl{display:grid;grid-template-columns:86px 1fr;align-items:center;gap:8px;min-height:30px}
+.ctl .lbl{white-space:nowrap}
+.slider{position:relative;height:18px;display:flex;align-items:center;gap:8px}
+.slider .track{position:relative;flex:1;height:4px;border-radius:2px;background:var(--raised)}
+.slider .fill{position:absolute;top:0;bottom:0;border-radius:2px;background:var(--t2)}
+.slider .h{position:absolute;top:50%;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:6px;background:var(--t1);box-shadow:0 0 0 3px var(--bg)}
+.slider .rd{font-family:"Geist Mono";font-size:11.5px;color:var(--t2);min-width:38px;text-align:right}
+.ticks{display:flex;justify-content:space-between;font-size:10px;color:var(--t4);padding:0 0 0 94px;margin-top:-6px}
+.toggle{width:28px;height:16px;border-radius:8px;background:var(--raised);position:relative;flex:none}
+.toggle::after{content:"";position:absolute;width:12px;height:12px;border-radius:6px;top:2px;left:2px;background:var(--t3)}
+.toggle.on{background:var(--accent)}
+.toggle.on::after{left:14px;background:#fff}
+.hr{height:1px;background:var(--soft);flex:none}
+.lic{font-size:10.5px;font-weight:500;color:var(--amber);background:var(--well);border-radius:5px;padding:1px 6px;white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:4px;flex:none}
+.prog{height:4px;border-radius:2px;background:var(--raised);overflow:hidden;position:relative}
+.prog i{position:absolute;left:0;top:0;bottom:0;background:var(--accent);border-radius:2px}
+.shim{position:relative;overflow:hidden}
+.shim::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.07),transparent);animation:sh 1.6s infinite}
+@keyframes sh{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+.spin{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.blink{animation:bl 1s steps(2) infinite}
+@keyframes bl{50%{opacity:.35}}
+
+/* Tracks: headers and lanes. */
+.tracks{display:flex;min-height:0;flex:1}
+.heads{flex:none;background:var(--headers);border-right:1px solid var(--line);display:flex;flex-direction:column}
+.tools{height:48px;flex:none;display:flex;align-items:center;gap:6px;padding:0 10px;border-bottom:1px solid var(--line)}
+.head{display:flex;align-items:center;gap:10px;padding:0 10px;border-bottom:1px solid var(--soft);position:relative;flex:none}
+.head.sel{background:var(--header-sel)}
+.head .bar{position:absolute;left:0;top:0;bottom:0;width:3px}
+.head .ic{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;flex:none}
+.head .ic svg{width:16px;height:16px}
+.head .nm{line-height:1.25;min-width:0;flex:1}
+.head .nm b{font-weight:600;font-size:13.5px;white-space:nowrap}
+.head .nm b em{font-style:normal;font-family:"Geist Mono";font-size:11px;color:var(--t3);font-weight:400;margin-right:6px}
+.head .nm small{display:block;color:var(--t3);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ms{display:flex;gap:4px}
+.ms i{width:22px;height:20px;border-radius:5px;background:var(--off);font-style:normal;font-size:10.5px;color:var(--t3);display:grid;place-items:center;font-weight:600}
+.ms i.w{background:rgba(91,140,255,.18);color:var(--accent-t)}
+.vol{font-family:"Geist Mono";font-size:11.5px;color:var(--t2);background:var(--well);border-radius:5px;padding:2px 6px}
+.lanes{flex:1;min-width:0;position:relative;display:flex;flex-direction:column;background:var(--lane)}
+.ruler{height:48px;flex:none;border-bottom:1px solid var(--line);position:relative;background:var(--surface)}
+svg{display:block}
+
+/* Editor. */
+.editor{flex:none;border-top:1px solid var(--line);display:flex;flex-direction:column;background:var(--surface)}
+.ebar{height:40px;flex:none;display:flex;align-items:center;gap:10px;padding:0 10px;border-bottom:1px solid var(--line)}
+.ebar .tname{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;white-space:nowrap}
+.ebar .cnt{font-family:"Geist Mono";color:var(--t3);font-size:11.5px;font-weight:400}
+.etabs{display:flex;gap:2px;background:var(--well);border:1px solid var(--line);border-radius:9px;padding:2px;overflow:hidden;min-width:0}
+.etabs button{padding:4px 10px;border-radius:7px;color:var(--t3);font-size:12.5px;font-weight:500;white-space:nowrap}
+.etabs button.on{background:var(--raised);color:var(--t1)}
+.chip{height:28px;border-radius:7px;padding:0 10px;display:flex;align-items:center;gap:6px;background:#1c2540;color:var(--accent-t);font-weight:500;font-size:12.5px;white-space:nowrap}
+.ebody{flex:1;display:flex;min-height:0}
+.epanel{width:300px;flex:none;border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.ptabs{display:flex;gap:2px;margin:10px 12px 0;background:var(--well);border:1px solid var(--line);border-radius:9px;padding:2px}
+.ptabs button{flex:1;padding:4px 0;border-radius:7px;color:var(--t3);font-size:12px;font-weight:500}
+.ptabs button.on{background:var(--raised);color:var(--t1)}
+.pbody{flex:1;overflow:hidden;padding:12px 12px 12px;display:flex;flex-direction:column;gap:9px;min-height:0}
+.pfoot{padding:10px 12px 12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.readout{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--t2)}
+.readout .mono{color:var(--t3);font-size:11.5px}
+
+/* Rows (house pattern: dense, neutral, a soft line between). */
+.rows>div{border-top:1px solid var(--soft)}
+.rows>div:first-child{border-top:0}
+.take{display:grid;grid-template-columns:22px 1fr auto;align-items:center;gap:8px;padding:6px 6px;border-radius:7px;position:relative}
+.take.sel{background:var(--header-sel)}
+.take.sel::before{content:"";position:absolute;left:-12px;top:6px;bottom:6px;width:2px;border-radius:1px;background:var(--accent)}
+.take .n{font-family:"Geist Mono";font-size:12px;color:var(--t3);text-align:center}
+.take .meta{font-family:"Geist Mono";font-size:11px;color:var(--t3)}
+.step{display:grid;grid-template-columns:20px 1fr;gap:9px;padding:7px 0}
+.step .s{width:18px;height:18px;border-radius:9px;display:grid;place-items:center;font-size:10.5px;font-weight:600;margin-top:1px}
+.step b{font-weight:500;font-size:12.5px;display:block}
+.step small{color:var(--t3);font-size:11.5px;line-height:1.4;display:block;margin-top:2px}
+
+/* Settings. */
+.rail{width:220px;flex:none;background:var(--surface);border-right:1px solid var(--line);padding:14px 10px;display:flex;flex-direction:column;gap:2px;overflow:hidden}
+.rail .g{font-size:10.5px;letter-spacing:.07em;color:var(--t4);font-weight:600;padding:12px 8px 5px}
+.rail .it{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px;color:var(--t2);font-size:13px;white-space:nowrap}
+.rail .it svg{width:15px;height:15px;color:var(--t3)}
+.rail .it.on{background:var(--raised);color:var(--t1)}
+.spage{flex:1;overflow:hidden;padding:22px 28px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.spage h1{font-size:20px;font-weight:600}
+.spage .sub{color:var(--t3);font-size:13px;margin-top:4px;max-width:720px;line-height:1.5}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px}
+.card>.ct{padding:12px 16px 4px;font-weight:600;font-size:13.5px;display:flex;gap:8px;align-items:baseline}
+.card>.ct small{color:var(--t3);font-weight:400;font-size:12px}
+.srow{display:flex;align-items:center;gap:12px;padding:10px 16px;border-top:1px solid var(--soft);min-width:0}
+.card>.ct+.srow{border-top:0}
+.srow .tx{flex:1;min-width:0}
+.srow .tx b{font-weight:500;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.srow .tx small{display:block;color:var(--t3);font-size:12px;margin-top:2px;line-height:1.4}
+.num{width:22px;height:22px;border-radius:11px;background:var(--accent);color:#fff;font-size:11.5px;font-weight:600;display:grid;place-items:center;flex:none}
+
+/* Composer page grid. */
+.cgrid{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--lane)}
+.rhead{display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--soft);flex:none;position:relative}
+.rhead .bar{position:absolute;left:0;top:0;bottom:0;width:3px}
+.eye{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;color:var(--t3)}
+.eye svg{width:14px;height:14px}
+.part{font-size:11.5px;color:var(--t2);background:var(--field);border-radius:6px;height:22px;padding:0 6px 0 8px;display:flex;align-items:center;gap:4px;white-space:nowrap}
+.part svg{width:11px;height:11px;color:var(--t3)}
+.ctab{display:flex;gap:16px;border-bottom:1px solid var(--line);padding:0 12px;height:36px;align-items:flex-end}
+.ctab button{padding:0 0 9px;color:var(--t3);font-weight:500;font-size:12.5px;border-bottom:2px solid transparent;white-space:nowrap}
+.ctab button.on{color:var(--t1);border-color:var(--t1)}
+</style>
+</head>
+<body>
+<div class="review">
+  <h1>Compose · three designs</h1>
+  <div class="grp"><span class="cap">Design</span><div class="opts" id="o-design"></div></div>
+  <div class="grp"><span class="cap">State</span><div class="opts" id="o-state"></div></div>
+  <div class="grp"><span class="cap">Window</span><div class="opts" id="o-width"></div></div>
+</div>
+<div class="stage"><div class="frame" id="frame"></div></div>
+<div class="about" id="about"></div>
+
+<script>
+// ---------- Icons: Lucide's paths, the set the app draws with. ----------
+const P = {
+  play:'<polygon points="6 3 20 12 6 21 6 3"/>',
+  stop:'<rect x="5" y="5" width="14" height="14" rx="2"/>',
+  square:'<rect x="5" y="5" width="14" height="14" rx="2"/>',
+  start:'<polygon points="19 20 9 12 19 4 19 20"/><line x1="5" x2="5" y1="19" y2="5"/>',
+  rec:'<circle cx="12" cy="12" r="6" fill="currentColor"/>',
+  loop:'<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  metro:'<path d="M12 11.4V9.1"/><path d="m12 17 6.59-6.59"/><path d="m15.05 5.7-.218-.691a3 3 0 0 0-5.663 0L4.418 19.695A1 1 0 0 0 5.37 21h13.253a1 1 0 0 0 .951-1.31L18.45 16.2"/><circle cx="20" cy="9" r="2"/>',
+  chev:'<path d="m6 9 6 6 6-6"/>',
+  x:'<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  check:'<path d="M20 6 9 17l-5-5"/>',
+  panel:'<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
+  editor:'<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 15h18"/>',
+  mixer:'<line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="2" x2="6" y1="14" y2="14"/><line x1="10" x2="14" y1="8" y2="8"/><line x1="18" x2="22" y1="16" y2="16"/>',
+  grid:'<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>',
+  study:'<path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/>',
+  sliders:'<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>',
+  compose:'<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  pointer:'<path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z"/>',
+  pencil:'<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/>',
+  eraser:'<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
+  scissors:'<circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/>',
+  plus:'<path d="M5 12h14"/><path d="M12 5v14"/>',
+  drum:'<path d="m2 2 8 8"/><path d="m22 2-8 8"/><ellipse cx="12" cy="9" rx="10" ry="5"/><path d="M7 13.4v7.9"/><path d="M12 14v8"/><path d="M17 13.4v7.9"/><path d="M2 9v8a10 5 0 0 0 20 0V9"/>',
+  bass:'<path d="M9 17a3 3 0 1 1 0-6"/><path d="M9 11V3l9 3"/>',
+  keys:'<rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8v8M10 8v8M14 8v8M18 8v8"/>',
+  pad:'<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+  target:'<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  stabs:'<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/>',
+  eye:'<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+  eyeoff:'<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>',
+  download:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
+  ext:'<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  loader:'<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
+  key:'<path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/>',
+  cpu:'<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/>',
+  audio:'<path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2"/>',
+  midi:'<rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/>',
+  mic:'<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>',
+  plug:'<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
+  box:'<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+  layers:'<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+  save:'<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',
+  heart:'<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+  rows:'<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18M3 15h18"/>',
+  move:'<path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/>',
+  wave:'<path d="M2 12h2l3-9 4 18 4-14 3 5h4"/>',
+  lock:'<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  dice:'<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 8h.01M16 8h.01M12 12h.01M8 16h.01M16 16h.01"/>',
+  arrows:'<path d="m15 18-6-6 6-6"/>',
+  arrowr:'<path d="m9 18 6-6-6-6"/>',
+  undo:'<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11"/>',
+};
+const I = (n, s = 16, extra = '') => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${P[n] || ''}</svg>`;
+
+// ---------- The song: Corner Store Blues, the demo (95 BPM, 4/4, C minor). ----------
+const C = { bg:'#0c0c0f', lane:'#0e0e12', alt:'#121217', line:'#26262d', soft:'#1c1c22', strong:'#34343d', t1:'#f4f4f6', t2:'#d4d4da', t3:'#8a8a95', t4:'#55555f', accent:'#5b8cff', coral:'#ff7a59', red:'#f2555a', violet:'#a78bfa', mint:'#3ddc97', teal:'#2dd4bf', indigo:'#818cf8', amber:'#ffb648' };
+const SECTIONS = [['Intro',1,2],['Verse 1',3,20],['Hook',21,28],['Verse 2',29,44]];
+const TRACKS = [
+  { id:'drums', n:'', name:'Drums', sub:'Stack · 4 tracks', icon:'layers', col:C.coral, kind:'drum' },
+  { id:'808', n:'05', name:'808', sub:'Sampler · Sub', icon:'target', col:C.violet, kind:'808' },
+  { id:'bass', n:'06', name:'Bass', sub:'Analog Bass', icon:'bass', col:C.violet, kind:'bass' },
+  { id:'keys', n:'07', name:'Keys', sub:'Audio', icon:'keys', col:C.mint, kind:'audio' },
+  { id:'stabs', n:'08', name:'Stabs', sub:'3-piece kit', icon:'stabs', col:C.teal, kind:'stabs' },
+  { id:'pad', n:'09', name:'Pad', sub:'Sine Synth', icon:'pad', col:C.indigo, kind:'pad' },
+];
+// The chords under every four bars: i, VI, III, VII.
+const PROG = [[36,'Cm',[0,3,7]],[32,'Ab',[0,4,7]],[39,'Eb',[0,4,7]],[34,'Bb',[0,4,7]]];
+const chordAt = b => PROG[(b - 1) % 4];
+const NAMES = ['C','C#','D','Eb','E','F','F#','G','Ab','A','Bb','B'];
+const pname = p => NAMES[p % 12] + (Math.floor(p / 12) - 1);
+function rng(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+// The bass that's there (bars 3–28): root on the one, a push into the next bar.
+function bassBar(b) { const [r] = chordAt(b); return [{ s:b, l:.45, p:r, v:104 }, { s:b + .5, l:.11, p:r + 7, v:84 }, { s:b + .625, l:.11, p:r + 12, v:78 }, { s:b + .75, l:.24, p:r, v:96 }]; }
+// A take: the model's, here drawn from a seed (in the app, MIDI-GPT's notes).
+function bassTake(seed, b0, b1) {
+  const R = rng(seed), out = [];
+  for (let b = b0; b <= b1; b++) {
+    const [r, , iv] = chordAt(b);
+    const grid = [0, .25, .375, .5, .625, .75, .875].filter((g, i) => i === 0 || R() < .42);
+    grid.forEach((g, i) => {
+      const next = grid[i + 1] ?? 1;
+      const pick = R();
+      const p = pick < .45 ? r : pick < .65 ? r + 7 : pick < .8 ? r + 12 : pick < .92 ? r + iv[1] : r + (chordAt(b)[1] === 'Cm' ? 10 : 2);
+      out.push({ s:b + g, l:Math.max(.1, (next - g) * (R() < .75 ? .95 : .6)), p, v:70 + Math.floor(R() * 50) });
+    });
+  }
+  return out;
+}
+const VOICE = { Cm:[60,63,67], Ab:[60,63,68], Eb:[58,63,67], Bb:[58,62,65] };
+function padBars(b0, b1, seed = 0) {
+  const R = rng(seed + 7), out = [];
+  for (let b = b0; b <= b1; b++) { const v = VOICE[chordAt(b)[1]]; v.forEach(p => out.push({ s:b + (seed ? (R() < .3 ? .5 : 0) : 0), l:seed ? (R() < .5 ? .95 : .45) : .97, p:p + (seed && R() < .2 ? 12 : 0), v:80 })); }
+  return out;
+}
+const TAKES = [48213, 9177, 66502, 1204].map((seed, i) => {
+  const bass = bassTake(seed, 29, 36), pad = padBars(29, 36, seed);
+  return { k:i + 1, seed, bass, pad, notes:bass.length };
+});
+
+// ---------- Drawing: a piano roll, a keyboard, lanes, a ruler. ----------
+const BLACK = new Set([1,3,6,8,10]);
+function roll({ w, h, b0, b1, lo, hi, notes, col, sel, head, ghost = [] }) {
+  const bw = w / (b1 - b0 + 1), rh = h / (hi - lo + 1);
+  const X = b => (b - b0) * bw, Y = p => (hi - p) * rh;
+  let s = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`;
+  for (let p = lo; p <= hi; p++) {
+    const fill = p % 12 === 0 ? 'rgba(91,140,255,.07)' : BLACK.has(p % 12) ? C.lane : C.alt;
+    s += `<rect x="0" y="${Y(p)}" width="${w}" height="${rh}" fill="${fill}"/>`;
+  }
+  if (sel) s += `<rect x="${X(sel[0])}" y="0" width="${X(sel[1] + 1) - X(sel[0])}" height="${h}" fill="rgba(91,140,255,.06)"/>`;
+  for (let b = b0; b <= b1 + 1; b++) for (let q = 0; q < 4; q++) {
+    const x = X(b + q / 4);
+    if (x > w) break;
+    s += `<line x1="${x}" x2="${x}" y1="0" y2="${h}" stroke="${q ? C.soft : C.strong}" stroke-width="1"/>`;
+  }
+  if (sel) for (const e of [sel[0], sel[1] + 1]) s += `<line x1="${X(e)}" x2="${X(e)}" y1="0" y2="${h}" stroke="${C.accent}" stroke-opacity=".7"/>`;
+  const draw = (n, kind) => {
+    if (n.p < lo || n.p > hi) return;
+    if (head != null && kind !== 'solid' && n.s > head) return;
+    const x = X(n.s) + .5, y = Y(n.p) + 1.5, ww = Math.max(3, Math.min(n.l, head != null && kind !== 'solid' ? head - n.s : 99) * bw - 1.5), hh = rh - 3;
+    if (kind === 'solid') {
+      s += `<rect x="${x}" y="${y}" width="${ww}" height="${hh}" rx="2.5" fill="${col}"/>`;
+      if (ww > 24 && hh > 9) s += `<text x="${x + 4}" y="${y + hh / 2 + 3.5}" font-family="Geist Mono" font-size="9.5" font-weight="600" fill="#0c0c0f">${pname(n.p)}</text>`;
+    } else if (kind === 'ghost') {
+      s += `<rect x="${x}" y="${y}" width="${ww}" height="${hh}" rx="2.5" fill="${col}" fill-opacity=".09"/>`;
+    } else {
+      s += `<rect x="${x}" y="${y}" width="${ww}" height="${hh}" rx="2.5" fill="${col}" fill-opacity=".26" stroke="${col}" stroke-width="1" stroke-dasharray="3 2"/>`;
+      if (ww > 24 && hh > 9) s += `<text x="${x + 4}" y="${y + hh / 2 + 3.5}" font-family="Geist Mono" font-size="9.5" font-weight="600" fill="${col}">${pname(n.p)}</text>`;
+    }
+  };
+  ghost.forEach(n => draw(n, 'ghost'));
+  notes.forEach(n => draw(n, n.kind || 'solid'));
+  if (head != null) {
+    s += `<rect x="${X(head) - 26}" y="0" width="26" height="${h}" fill="url(#hd)"/><defs><linearGradient id="hd" x1="0" x2="1"><stop offset="0" stop-color="${C.accent}" stop-opacity="0"/><stop offset="1" stop-color="${C.accent}" stop-opacity=".18"/></linearGradient></defs>`;
+    s += `<line x1="${X(head)}" x2="${X(head)}" y1="0" y2="${h}" stroke="${C.accent}" stroke-width="1.5"/>`;
+  }
+  return s + '</svg>';
+}
+function keyboard(h, lo, hi, w = 52) {
+  const rh = h / (hi - lo + 1);
+  let s = `<svg width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="#dcdce2"/>`;
+  for (let p = lo; p <= hi; p++) {
+    const y = (hi - p) * rh;
+    if (BLACK.has(p % 12)) s += `<rect x="0" y="${y + 1}" width="${w * .62}" height="${rh - 2}" rx="2" fill="#16161a"/>`;
+    else s += `<line x1="0" x2="${w}" y1="${y + rh}" y2="${y + rh}" stroke="#b9b9c2"/>`;
+    if (p % 12 === 0) s += `<text x="${w - 4}" y="${y + rh / 2 + 3.5}" text-anchor="end" font-family="Geist Mono" font-size="9.5" font-weight="600" fill="${C.accent}">${pname(p)}</text>`;
+  }
+  return s + `<line x1="${w - .5}" x2="${w - .5}" y1="0" y2="${h}" stroke="${C.line}"/></svg>`;
+}
+// A ruler: section markers over bar numbers, the bars picked shown, and their handles.
+function ruler(w, b0, b1, sel, opts = {}) {
+  const bw = w / (b1 - b0 + 1), X = b => (b - b0) * bw;
+  let s = `<svg width="${w}" height="48">`;
+  SECTIONS.forEach(([n, a, z]) => {
+    if (z < b0 || a > b1) return;
+    const x = Math.max(0, X(a)), xe = Math.min(w, X(z + 1));
+    s += `<rect x="${x + 1}" y="3" width="${xe - x - 2}" height="17" rx="4" fill="#1d1d24"/><text x="${x + 7}" y="15.5" font-family="Geist" font-size="11.5" font-weight="600" fill="${C.t2}">${n}</text>`;
+  });
+  if (opts.extra) s += opts.extra(X, bw);
+  if (sel) {
+    const x = X(sel[0]), xe = X(sel[1] + 1);
+    s += `<rect x="${x}" y="24" width="${xe - x}" height="24" fill="${C.accent}" fill-opacity=".2"/><rect x="${x}" y="24" width="${xe - x}" height="2" fill="${C.accent}"/>`;
+    s += `<rect x="${x - 1}" y="24" width="3" height="24" fill="${C.accent}"/><rect x="${xe - 2}" y="24" width="3" height="24" fill="${C.accent}"/>`;
+  }
+  const every = bw < 22 ? 4 : bw < 40 ? 2 : 1;
+  for (let b = b0; b <= b1; b++) {
+    const x = X(b);
+    s += `<line x1="${x}" x2="${x}" y1="${(b - 1) % 4 ? 40 : 30}" y2="48" stroke="${C.strong}"/>`;
+    if ((b - 1) % every === 0) s += `<text x="${x + 4}" y="40" font-family="Geist Mono" font-size="11" fill="${sel && b >= sel[0] && b <= sel[1] ? C.t1 : C.t3}">${b}</text>`;
+  }
+  return s + '</svg>';
+}
+// A region on a lane: its box, its name, its notes small.
+function region(x, w, h, col, name, notes, b0, bw, lo, hi, dashed) {
+  let s = `<g><rect x="${x + 1}" y="3" width="${w - 2}" height="${h - 6}" rx="6" fill="${col}" fill-opacity="${dashed ? .08 : .15}" stroke="${col}" stroke-opacity="${dashed ? .9 : .45}" ${dashed ? 'stroke-dasharray="4 3"' : ''}/>`;
+  if (name && w > 34) s += `<text x="${x + 8}" y="18" font-family="Geist" font-size="11.5" font-weight="600" fill="${dashed ? col : C.t1}">${name}</text>`;
+  const top = 26, span = h - top - 8;
+  notes.forEach(n => {
+    const nx = (n.s - b0) * bw, nw = Math.max(1.5, n.l * bw - 1);
+    if (nx < x || nx > x + w - 2) return;
+    const ny = top + (1 - (n.p - lo) / Math.max(1, hi - lo)) * span;
+    s += `<rect x="${nx}" y="${ny}" width="${Math.min(nw, x + w - nx - 3)}" height="2" rx="1" fill="${col}"/>`;
+  });
+  return s + '</g>';
+}
+function drumNotes(b0, b1, dense) { const out = []; for (let b = b0; b <= b1; b++) for (let i = 0; i < 16; i++) { if (i % 4 === 0) out.push({ s:b + i / 16, l:.05, p:36 }); if (i % 8 === 4) out.push({ s:b + i / 16, l:.05, p:38 }); if (dense || i % 2 === 0) out.push({ s:b + i / 16, l:.03, p:42 }); } return out; }
+function stabNotes(b0, b1) { const out = []; for (let b = b0; b <= b1; b++) [0.25, 0.625].forEach(g => out.push({ s:b + g, l:.08, p:60 + (b % 3) })); return out; }
+
+// What plays where (the lanes' regions), from the demo.
+function lanePlan(id) {
+  switch (id) {
+    case 'drums': return [['Intro',1,2],['Verse',3,20],['Hook',21,28],['Verse',29,44]].map(([n, a, z]) => ({ n, a, z, notes:drumNotes(a, z, n === 'Hook'), lo:34, hi:44 }));
+    case '808': return [{ n:'Hook 808', a:21, z:28, notes:bassBarsRange(21, 28, -12), lo:20, hi:40 }];
+    case 'bass': { const out = [{ n:'Verse', a:3, z:20, notes:bassBarsRange(3, 20), lo:30, hi:50 }, { n:'Hook', a:21, z:28, notes:bassBarsRange(21, 28), lo:30, hi:50 }]; return out; }
+    case 'keys': return [{ n:'Keys', a:1, z:44, audio:true }];
+    case 'stabs': return [{ n:'Stabs', a:21, z:28, notes:stabNotes(21, 28), lo:56, hi:66 }, { n:'Stabs', a:29, z:44, notes:stabNotes(29, 44), lo:56, hi:66 }];
+    case 'pad': return [{ n:'Intro Pad', a:1, z:2, notes:padBars(1, 2), lo:56, hi:70 }, { n:'Hook Pad', a:21, z:28, notes:padBars(21, 28), lo:56, hi:70 }];
+  }
+  return [];
+}
+function bassBarsRange(a, z, shift = 0) { const out = []; for (let b = a; b <= z; b++) bassBar(b).forEach(n => out.push({ ...n, p:n.p + shift })); return out; }
+function audioWave(x, w, h, col) { let s = ''; const R = rng(4); for (let i = 0; i < w; i += 2) { const a = (.25 + R() * .6) * (h - 34) / 2; s += `<rect x="${x + i}" y="${(h + 18) / 2 - a}" width="1.2" height="${a * 2}" fill="${col}" fill-opacity=".85"/>`; } return s; }
+function lane(t, w, h, b0, b1, extra = '') {
+  const bw = w / (b1 - b0 + 1);
+  let s = `<svg width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="${C.lane}"/>`;
+  for (let b = b0; b <= b1 + 1; b++) s += `<line x1="${(b - b0) * bw}" x2="${(b - b0) * bw}" y1="0" y2="${h}" stroke="${(b - 1) % 4 ? C.soft : C.line}"/>`;
+  lanePlan(t.id).forEach(r => {
+    if (r.z < b0 || r.a > b1) return;
+    const x = Math.max(0, (r.a - b0) * bw), xe = Math.min(w, (r.z + 1 - b0) * bw);
+    if (r.audio) { s += `<rect x="${x + 1}" y="3" width="${xe - x - 2}" height="${h - 6}" rx="6" fill="${t.col}" fill-opacity=".12" stroke="${t.col}" stroke-opacity=".4"/>` + audioWave(x + 4, xe - x - 8, h, t.col); return; }
+    s += region(x, xe - x, h, t.col, r.n, r.notes, b0, bw, r.lo, r.hi);
+  });
+  return s + extra + `<line x1="0" x2="${w}" y1="${h - .5}" y2="${h - .5}" stroke="${C.soft}"/></svg>`;
+}
+function head(t, h, opts = {}) {
+  const sel = opts.sel ? ' sel' : '';
+  return `<div class="head${sel}" style="height:${h}px"><span class="bar" style="background:${t.col};opacity:${opts.sel ? 1 : .35}"></span>
+    <div class="ic" style="background:${t.col}22;color:${t.col}">${I(t.icon)}</div>
+    <div class="nm"><b>${t.n ? `<em>${t.n}</em>` : ''}${t.name}</b><small>${t.sub}</small></div>
+    ${opts.writing ? `<span class="part">${opts.part} ${I('chev')}</span>` : ''}
+    <div class="ms"><i>M</i><i>S</i>${opts.narrow ? '' : '<i>R</i>'}</div>
+    ${opts.narrow ? '' : `<span class="vol">${opts.vol || '-6.0'}</span>`}</div>`;
+}
+
+// ---------- Shared chrome. ----------
+function cbar(narrow, page) {
+  const ro = (b, s) => `<div class="ro"><b>${b}</b><span>${s}</span></div>`;
+  return `<div class="cbar">
+    <div class="appicon">${'<i></i>'.repeat(9)}</div>
+    <div class="song">Corner Store Blues ${I('chev', 14)}</div>
+    <div class="pill">${['start','square','play'].map(n => `<div class="ib">${I(n)}</div>`).join('')}<div class="ib" style="color:#ff4d4d">${I('rec')}</div><div class="ib">${I('loop')}</div>${narrow ? '' : `<div class="ib">${I('metro')}</div>`}</div>
+    <div class="pill" style="padding:0 4px">${ro('29.1.1.001', 'BAR · BEAT · DIV · TICK')}${narrow ? '' : ro('1:10.737', 'TIME')}${ro('95.00', 'BPM')}${narrow ? '' : ro('4/4', 'TIME SIG')}${ro('C min', 'KEY')}</div>
+    ${narrow ? '' : '<div class="seg"><button class="on">Song</button><button>Pattern</button></div>'}
+    <div class="grow"></div>
+    <div class="pill">${[['panel', page === 'arrange'], ['editor', page === 'arrange'], ['mixer'], ['grid'], ['compose', page === 'compose'], ['study'], ['sliders', page === 'settings']].filter((x, i) => !narrow || i !== 5).map(([n, on]) => `<div class="ib${on ? ' on' : ''}">${I(n)}</div>`).join('')}</div>
+    <div class="export">Export</div>
+  </div>`;
+}
+function status(text, busy) {
+  return `<div class="status"><span class="grow">${text}</span>${busy ? `<span class="busy">${I('loader', 12, 'class="spin"')} ${busy}</span>` : ''}<span>CPU 21%</span><span>48 kHz</span><span>Saved</span></div>`;
+}
+function inspector(narrow) {
+  const knob = (label, v, a) => `<div class="knob"><svg width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="11" fill="none" stroke="#2b2b33" stroke-width="3"/><path d="${arc(15, 15, 11, -135, -135 + 270 * a)}" fill="none" stroke="${C.violet}" stroke-width="3" stroke-linecap="round"/></svg><div><small>${label}</small><b>${v}</b></div></div>`;
+  return `<div class="insp">
+    <h2>Inspector</h2>
+    <div class="sect"><span>Region</span></div>
+    <div class="lbl" style="line-height:1.5">Verse 2 · bars 29–36<br><span style="color:var(--t4)">No notes yet</span></div>
+    <div class="sect"><span>Smart Controls</span><span>Bass</span></div>
+    <div class="knobs">${knob('Cutoff', '1.2 kHz', .55)}${knob('Drive', '18%', .3)}${knob('Glide', '40 ms', .2)}${knob('Sub', '-6 dB', .45)}</div>
+    <div class="sect"><span>Channel</span><span>→ Bus 1</span></div>
+    <div style="display:flex;gap:8px;flex:1;min-height:0">
+      ${['Analog Bass', 'Channel EQ', 'Compressor'].reduce((a, n) => a + `<div class="field" style="height:26px;font-size:12px"><span class="dot" style="background:${C.violet}"></span>${n}</div>`, '<div style="flex:1;display:flex;flex-direction:column;gap:5px">') + '</div>'}
+    </div>
+  </div>`;
+}
+function arc(cx, cy, r, a0, a1) {
+  const p = a => [cx + r * Math.cos((a - 90) * Math.PI / 180), cy + r * Math.sin((a - 90) * Math.PI / 180)];
+  const [x0, y0] = p(a0), [x1, y1] = p(a1);
+  return `M${x0} ${y0} A${r} ${r} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1} ${y1}`;
+}
+const field = (v, icon = 'chev', cls = '') => `<div class="field ${cls}"><span class="v">${v}</span>${icon ? I(icon) : ''}</div>`;
+const ctl = (label, body) => `<div class="ctl"><span class="lbl">${label}</span>${body}</div>`;
+function slider(a, rd, b = null) {
+  const lo = b == null ? 0 : a, hi = b == null ? a : b;
+  return `<div class="slider"><div class="track"><div class="fill" style="left:${lo * 100}%;right:${(1 - hi) * 100}%"></div>${b == null ? '' : `<div class="h" style="left:${lo * 100}%"></div>`}<div class="h" style="left:${hi * 100}%"></div></div><span class="rd">${rd}</span></div>`;
+}
+const toggle = on => `<span class="toggle${on ? ' on' : ''}"></span>`;
+
+// The model picker, as every design shows it: which model, and whether it's ready.
+function modelField(state, name = 'MIDI-GPT Yellow Small') {
+  const sub = state === 'first' ? 'not downloaded · 83 MB' : state === 'writing' ? 'running · Apple GPU' : 'ready · hears 8 bars';
+  const dot = state === 'first' ? C.t4 : C.mint;
+  return `<div class="field" style="height:40px;padding:0 10px"><span class="dot" style="background:${dot}"></span><span class="v" style="line-height:1.25"><span style="display:block;font-weight:500">${name}</span><span style="display:block;font-size:11px;color:var(--t3)">${sub}</span></span>${I('chev')}</div>`;
+}
+// First run, in place: each step, how far, and a way to stop it.
+function setup(compact) {
+  const st = (s, col, title, sub, extra = '') => `<div class="step"><span class="s" style="${col}">${s}</span><div><b>${title}</b><small>${sub}</small>${extra}</div></div>`;
+  return `<div class="rows">
+    ${st(I('check', 11), 'background:rgba(61,220,151,.16);color:var(--mint)', 'Signed in to Hugging Face', "Metacreation's terms accepted for this account")}
+    ${st(`<svg width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="7" fill="none" stroke="#2b2b33" stroke-width="2"/><path d="${arc(9, 9, 7, 0, 148)}" fill="none" stroke="${C.accent}" stroke-width="2" stroke-linecap="round"/></svg>`, '', 'Downloading Yellow Small', 'from Metacreation’s page, on its terms', `<div class="row" style="margin-top:7px"><div class="prog grow"><i style="width:41%"></i></div><span class="mono" style="font-size:11px;color:var(--t2)">34 / 83 MB</span><span class="btn" style="height:22px;padding:0 8px;font-size:11.5px">Stop</span></div>`)}
+    ${st('3', 'background:var(--raised);color:var(--t3)', 'Its own Python, by uv', compact ? 'Once for every MIDI-GPT model · 690 MB' : 'Python 3.12 and midigpt 0.4.2, apart from anything else on this Mac. Once, for every MIDI-GPT model · about 690 MB')}
+  </div>
+  <div class="row" style="gap:6px;margin-top:2px"><span class="lic">Non-commercial research only</span><span class="lbl" style="font-size:11.5px;display:flex;align-items:center;gap:4px">Licence ${I('ext', 11)}</span></div>`;
+}
+
+// ---------- Design 1: in the roll. ----------
+function d1(state, narrow) {
+  const W = narrow ? 1000 : 1440, H = narrow ? 800 : 900;
+  const headW = narrow ? 230 : 300, inspW = 248;
+  const editorH = narrow ? 470 : 520;
+  const topH = H - 52 - 24 - editorH;
+  const lanesW = W - inspW - headW;
+  const b0 = narrow ? 21 : 17, b1 = 44;
+  const rows = [TRACKS[0], TRACKS[2], TRACKS[3], TRACKS[5]];
+  const rowH = Math.floor((topH - 48) / rows.length);
+  const take = TAKES[1];
+  const sel = [29, 36];
+  const bw = lanesW / (b1 - b0 + 1);
+  const selBox = (h, t) => {
+    if (t.id !== 'bass') return '';
+    const x = (sel[0] - b0) * bw, w = (sel[1] - sel[0] + 1) * bw;
+    if (state === 'first' || state === 'ready') return `<rect x="${x + 1}" y="3" width="${w - 2}" height="${h - 6}" rx="6" fill="${C.accent}" fill-opacity=".08" stroke="${C.accent}" stroke-opacity=".8" stroke-dasharray="4 3"/>`;
+    const notes = state === 'writing' ? take.bass.filter(n => n.s < 32.4) : take.bass;
+    return region(x, w, h, C.violet, state === 'writing' ? 'Writing · take 2 of 4' : 'Take 2 of 4', notes, b0, bw, 30, 50, true);
+  };
+  const lanesHtml = rows.map(t => lane(t, lanesW, rowH, b0, b1, selBox(rowH, t))).join('');
+  // The editor.
+  const panelW = narrow ? 270 : 312, keyW = 52;
+  const rollW = W - inspW - panelW - keyW, rollH = editorH - 40 - 28;
+  const rb0 = narrow ? 27 : 25, rb1 = 36, lo = 28, hi = 52;
+  const before = bassBarsRange(rb0, 28);
+  let notes = before.slice(), ghost = [], hd = null;
+  if (state === 'writing') { notes = notes.concat(take.bass.map(n => ({ ...n, kind:'take' }))); hd = 32.4; ghost = TAKES[0].bass; }
+  if (state === 'takes') notes = notes.concat(take.bass.map(n => ({ ...n, kind:'take' })));
+  const panel = composePanel1(state, narrow);
+  return `${cbar(narrow, 'arrange')}
+  <div class="body">${inspector(narrow)}
+    <div class="main">
+      <div class="tracks" style="flex:none;height:${topH}px">
+        <div class="heads" style="width:${headW}px"><div class="tools"><div class="seg"><button class="on">${I('pointer', 13)}</button><button>${I('pencil', 13)}</button><button>${I('scissors', 13)}</button></div><div class="grow"></div><div class="ib">${I('plus')}</div></div>
+          ${rows.map(t => head(t, rowH, { sel:t.id === 'bass', narrow })).join('')}</div>
+        <div class="lanes"><div class="ruler">${ruler(lanesW, b0, b1, sel)}</div>${lanesHtml}</div>
+      </div>
+      <div class="editor" style="height:${editorH}px">
+        <div class="ebar"><div class="tname"><span class="dot" style="background:${C.violet};width:10px;height:10px;border-radius:3px"></span>Bass <span class="cnt">${state === 'first' || state === 'ready' ? '72 notes' : `72 + ${take.notes} written`}</span></div>
+          <div class="etabs"><button class="on">Piano Roll</button><button>Step Sequencer</button>${narrow ? '' : '<button>Modulation</button><button>Score</button>'}<button>Takes</button></div>
+          <div class="grow"></div><div class="chip">C min</div>${narrow ? '' : '<div class="chip">In key</div>'}<div class="ib">${I('x', 14)}</div></div>
+        <div class="ebody">
+          <div class="epanel" style="width:${panelW}px">${panel}</div>
+          <div style="display:flex;flex-direction:column">
+            <div style="height:28px;border-bottom:1px solid var(--line);background:var(--surface);width:${keyW}px"></div>${keyboard(rollH, lo, hi, keyW)}</div>
+          <div style="display:flex;flex-direction:column;min-width:0">
+            <div style="height:28px;border-bottom:1px solid var(--line);background:var(--surface)">${rollRuler(rollW, rb0, rb1, sel)}</div>
+            ${roll({ w:rollW, h:rollH, b0:rb0, b1:rb1, lo, hi, notes, col:C.violet, sel, head:hd, ghost })}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  ${status(state === 'writing' ? 'Writing bars 29–36 of Bass with MIDI-GPT Yellow Small · ← → to flip takes when they’re in' : state === 'takes' ? '← → flip takes · Space hears the song with this take · Return keeps it' : 'Drag on the ruler to pick the bars to write · the roll’s Compose tab writes them', state === 'first' ? 'Downloading Yellow Small 41%' : state === 'writing' ? 'MIDI-GPT · take 2 of 4' : '')}`;
+}
+function rollRuler(w, b0, b1, sel) {
+  const bw = w / (b1 - b0 + 1);
+  let s = `<svg width="${w}" height="28">`;
+  if (sel) { const x = (sel[0] - b0) * bw, xe = (sel[1] + 1 - b0) * bw; s += `<rect x="${x}" y="0" width="${xe - x}" height="28" fill="${C.accent}" fill-opacity=".16"/><rect x="${x}" y="0" width="${xe - x}" height="2" fill="${C.accent}"/>`; }
+  for (let b = b0; b <= b1; b++) { const x = (b - b0) * bw; s += `<line x1="${x}" x2="${x}" y1="14" y2="28" stroke="${C.strong}"/><text x="${x + 4}" y="19" font-family="Geist Mono" font-size="11" fill="${sel && b >= sel[0] && b <= sel[1] ? C.t1 : C.t3}">${b}</text>`; }
+  return s + '</svg>';
+}
+function composePanel1(state, narrow) {
+  const tabs = `<div class="ptabs"><button>Edit</button><button>Generate</button><button>Chords</button><button class="on">Compose</button></div>`;
+  const dis = state === 'writing' ? ' style="opacity:.5;pointer-events:none"' : '';
+  const controls = `<div style="display:flex;flex-direction:column;gap:7px"${dis}>
+      ${ctl('Bars', `<div class="row" style="gap:6px">${field('29', '', 'nf')}<span class="lbl">to</span>${field('36', '', 'nf')}<span class="lbl" style="font-size:11px">8 bars</span></div>`)}
+      ${ctl('Part', field('Bass <span style="color:var(--t3)">· as it sounds</span>'))}
+      ${ctl('Hears', field('Drums, Keys, Stabs, Pad'))}
+      <div class="hr" style="margin:3px 0"></div>
+      <div class="cap2" style="display:flex;justify-content:space-between"><span>STEERING</span><span style="font-weight:400">the model’s own · levels of 10</span></div>
+      ${ctl('Notes at once', slider(0, '1 – 2', .1))}
+      ${ctl('Note length', slider(.3, '3 – 6', .6))}
+      ${ctl('In C minor', `<div class="row">${toggle(true)}<span class="lbl" style="font-size:11.5px">the song’s key</span></div>`)}
+      ${ctl('Temperature', slider(.45, '0.90'))}
+      ${ctl('Takes', `<div class="row" style="gap:6px">${field('4', 'chev', '')}<span class="lbl" style="font-size:11.5px">seed new each time</span></div>`)}
+    </div>`;
+  if (state === 'first') return `${tabs}<div class="pbody">${modelField(state)}${setup(narrow)}</div>
+    <div class="pfoot"><div class="btn primary big dis">Write bars 29–36</div><div class="lbl" style="font-size:11.5px;text-align:center">Ready to write once it’s downloaded</div></div>`;
+  if (state === 'ready') return `${tabs}<div class="pbody">${modelField(state)}${controls}</div>
+    <div class="pfoot"><div class="btn primary big">${I('compose', 14)} Write bars 29–36</div></div>`;
+  if (state === 'writing') return `${tabs}<div class="pbody">${modelField(state)}
+      <div style="background:var(--well);border:1px solid var(--line);border-radius:9px;padding:10px">
+        <div class="readout" style="justify-content:space-between"><span style="font-weight:500">Writing take 2 of 4</span><span class="mono">0:07</span></div>
+        <div class="prog shim" style="margin:8px 0 7px"><i style="width:43%"></i></div>
+        <div class="readout"><span class="mono">bar 32 of 36 · 412 tokens · 31 notes</span></div>
+        <div class="rows" style="margin-top:8px">${takeRows(state, true)}</div>
+      </div>${controls}</div>
+    <div class="pfoot"><div class="btn big">${I('square', 12)} Stop</div></div>`;
+  return `${tabs}<div class="pbody">${modelField(state)}
+    <div class="cap2" style="display:flex;justify-content:space-between"><span>TAKES · bars 29–36</span><span style="font-weight:400">← → to flip</span></div>
+    <div class="rows">${takeRows(state)}</div>
+    <div class="row" style="gap:6px"><span class="btn ghost" style="flex:1;justify-content:center">${I('compose', 13)} Write 4 more</span><span class="btn ghost">${I('sliders', 13)} Steering</span></div>
+    ${ctl('Keep as', field('Replace bars 29–36'))}
+    </div>
+    <div class="pfoot"><div class="btn primary big">${I('check', 14)} Keep take 2</div></div>`;
+}
+function takeRows(state, mini) {
+  return TAKES.map((t, i) => {
+    let right, meta;
+    if (state === 'writing') {
+      if (i === 0) { meta = `seed ${t.seed} · ${t.notes} notes`; right = `<span class="ib" style="width:24px;height:24px">${I('play', 12)}</span>`; }
+      else if (i === 1) { meta = `<span class="blink" style="color:var(--accent-t)">writing · bar 32</span>`; right = `${I('loader', 13, 'class="spin" style="color:var(--accent)"')}`; }
+      else { meta = 'waiting'; right = ''; }
+    } else { meta = `seed ${t.seed} · ${t.notes} notes`; right = `<span class="ib" style="width:24px;height:24px">${I('play', 12)}</span>`; }
+    return `<div class="take${state === 'takes' && i === 1 ? ' sel' : ''}" style="${mini ? 'padding:4px 2px' : ''}"><span class="n">${t.k}</span><div style="min-width:0">${mini ? '' : miniTake(t.bass, 29, 36, C.violet, state === 'takes' && i === 1)}<div class="meta">${meta}</div></div>${right}</div>`;
+  }).join('');
+}
+function miniTake(notes, b0, b1, col, on, w = 200, h = 22) {
+  const bw = w / (b1 - b0 + 1);
+  let s = `<svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="margin-bottom:3px"><rect width="${w}" height="${h}" rx="4" fill="#0f0f13"/>`;
+  for (let b = b0 + 1; b <= b1; b++) s += `<line x1="${(b - b0) * bw}" x2="${(b - b0) * bw}" y1="0" y2="${h}" stroke="${(b - 1) % 4 ? C.soft : C.line}"/>`;
+  const ps = notes.map(n => n.p), lo = Math.min(...ps), hi = Math.max(...ps);
+  notes.forEach(n => s += `<rect x="${(n.s - b0) * bw}" y="${3 + (1 - (n.p - lo) / Math.max(1, hi - lo)) * (h - 8)}" width="${Math.max(1.5, n.l * bw - .8)}" height="2.2" rx="1" fill="${col}" fill-opacity="${on ? 1 : .7}"/>`);
+  return s + '</svg>';
+}
+
+// ---------- Design 2: across the song. ----------
+function d2(state, narrow) {
+  const W = narrow ? 1000 : 1440, H = narrow ? 800 : 900;
+  const inspW = 248, headW = narrow ? 230 : 320;
+  const sheetH = narrow ? 360 : 360;
+  const topH = H - 52 - 24 - sheetH;
+  const lanesW = W - inspW - headW;
+  const b0 = narrow ? 21 : 13, b1 = 44;
+  const rows = TRACKS;
+  const rowH = Math.floor((topH - 48) / rows.length);
+  const bw = lanesW / (b1 - b0 + 1);
+  const sel = [29, 36];
+  const take = TAKES[1];
+  const picked = new Set(['bass', 'pad']);
+  const overlay = (t, h) => {
+    if (!picked.has(t.id)) return '';
+    const x = (sel[0] - b0) * bw, w = (sel[1] - sel[0] + 1) * bw;
+    if (state === 'first' || state === 'ready') return `<rect x="${x + 1}" y="3" width="${w - 2}" height="${h - 6}" rx="6" fill="${C.accent}" fill-opacity=".08" stroke="${C.accent}" stroke-opacity=".8" stroke-dasharray="4 3"/>`;
+    const src = t.id === 'bass' ? take.bass : take.pad;
+    const notes = state === 'writing' ? src.filter(n => n.s < 31.6) : src;
+    const [lo, hi] = t.id === 'bass' ? [30, 50] : [56, 72];
+    let s = region(x, w, h, t.col, state === 'writing' ? 'Writing…' : 'Take 2', notes, b0, bw, lo, hi, true);
+    if (state === 'writing') s += `<line x1="${(31.6 - b0) * bw}" x2="${(31.6 - b0) * bw}" y1="4" y2="${h - 4}" stroke="${C.accent}" stroke-width="1.5"/>`;
+    return s;
+  };
+  // The bars picked, across the lanes not written, so it reads as one selection.
+  const band = `<div style="position:absolute;left:${(sel[0] - b0) * bw}px;width:${(sel[1] - sel[0] + 1) * bw}px;top:48px;bottom:0;background:rgba(91,140,255,.035);pointer-events:none;border-left:1px solid rgba(91,140,255,.35);border-right:1px solid rgba(91,140,255,.35)"></div>`;
+  const parts = { bass:'Bass', pad:'Pad' };
+  return `${cbar(narrow, 'arrange')}
+  <div class="body">${inspector(narrow)}
+    <div class="main">
+      <div class="tracks" style="flex:none;height:${topH}px">
+        <div class="heads" style="width:${headW}px"><div class="tools"><div class="seg"><button class="on">${I('pointer', 13)}</button><button>${I('pencil', 13)}</button><button>${I('scissors', 13)}</button></div><span class="lbl" style="font-size:11.5px">2 tracks picked</span><div class="grow"></div><div class="ib">${I('plus')}</div></div>
+          ${rows.map(t => head(t, rowH, { sel:picked.has(t.id), narrow, writing:picked.has(t.id) && !narrow, part:parts[t.id] })).join('')}</div>
+        <div class="lanes"><div class="ruler">${ruler(lanesW, b0, b1, sel)}</div>${rows.map(t => lane(t, lanesW, rowH, b0, b1, overlay(t, rowH))).join('')}${band}</div>
+      </div>
+      ${sheet2(state, narrow, sheetH, W - inspW)}
+    </div>
+  </div>
+  ${status(state === 'takes' ? 'Space hears the song with the take picked · ↑ ↓ pick another · Return keeps it' : 'Pick tracks in the headers and drag bars on the ruler · Compose writes them all at once, each hearing the others', state === 'first' ? 'Downloading Yellow Small 41%' : state === 'writing' ? 'MIDI-GPT · take 2 of 4' : '')}`;
+}
+function sheet2(state, narrow, h, w) {
+  const colA = narrow ? 290 : 340, colB = narrow ? 0 : 300;
+  const tr = (t, part, poly, len) => `<div class="srow" style="padding:7px 0;gap:10px"><span class="dot" style="background:${t.col};width:9px;height:9px;border-radius:3px"></span><span style="font-weight:500;width:40px">${t.name}</span><div style="width:84px;flex:none">${field(part, 'chev')}</div><span class="mono" style="font-size:11px;color:var(--t3);white-space:nowrap">${poly}${len ? ' · ' + len : ''}</span></div>`;
+  const what = `<div style="width:${colA}px;flex:none;padding:12px 16px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:8px;min-height:0">
+      <div class="cap2">WRITE · bars 29–36</div>
+      <div class="rows">${tr(TRACKS[2], 'Bass', 'notes 1–2', narrow ? '' : 'len 3–6')}${tr(TRACKS[5], 'Pad', 'notes 3–5', narrow ? '' : 'len 7–10')}</div>
+      <div class="lbl" style="font-size:11.5px;display:flex;gap:6px;align-items:center">${I('plus', 12)} Pick more tracks in the headers</div>
+      <div class="hr"></div>
+      ${narrow ? (state === 'first' ? `${modelField(state)}<div class="lbl" style="font-size:11.5px">Downloading · 41% · <u>Stop</u></div>` : `<div style="display:flex;flex-direction:column;gap:6px${state === 'writing' ? ';opacity:.5' : ''}">${modelField(state)}${ctl('Temperature', slider(.45, '0.90'))}${ctl('Takes · key', `<div class="row" style="gap:6px"><div style="width:56px">${field('4')}</div>${toggle(true)}<span class="lbl" style="font-size:11.5px">C minor</span></div>`)}</div>`)
+        : `<div class="cap2">HEARS</div><div class="lbl" style="font-size:12px;line-height:1.5;color:var(--t2)">Drums, 808, Stabs <span style="color:var(--t3)">· bars 21–40 · Keys is audio, not heard</span></div>`}
+    </div>`;
+  const how = narrow ? '' : state === 'first' ? `<div style="width:${colB}px;flex:none;padding:12px 16px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:8px">${modelField(state)}${setup(true)}</div>`
+    : `<div style="width:${colB}px;flex:none;padding:12px 16px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:7px${state === 'writing' ? ';opacity:.5' : ''}">
+      ${modelField(state)}
+      ${ctl('In C minor', `<div class="row">${toggle(true)}<span class="lbl" style="font-size:11.5px">the song’s key</span></div>`)}
+      ${ctl('Temperature', slider(.45, '0.90'))}
+      ${ctl('Takes', field('4'))}
+      ${ctl('Seed', field('New each time'))}
+    </div>`;
+  const W3 = w - colA - colB;
+  let takes;
+  if (state === 'first') takes = `<div style="flex:1;display:grid;place-items:center;color:var(--t3);text-align:center;font-size:12.5px;line-height:1.6;padding:0 16px">${narrow ? `<div style="width:100%;text-align:left">${setup(true)}</div>` : 'Takes come in here, each to hear in the song before you keep it'}</div>`;
+  else if (state === 'ready') takes = `<div style="flex:1;display:grid;place-items:center;color:var(--t3);text-align:center;font-size:12.5px;line-height:1.6">Each take writes Bass and Pad together,<br>hearing Drums, 808 and Stabs around them</div>`;
+  else {
+    const lw = Math.max(160, W3 - 230);
+    takes = `<div class="rows" style="flex:1;overflow:hidden">${TAKES.map((t, i) => {
+      const live = state === 'writing' && i === 1, wait = state === 'writing' && i > 1;
+      const bassN = live ? t.bass.filter(n => n.s < 31.6) : wait ? [] : t.bass, padN = live ? t.pad.filter(n => n.s < 31.6) : wait ? [] : t.pad;
+      const on = state === 'takes' && i === 1;
+      return `<div class="take${on ? ' sel' : ''}" style="grid-template-columns:22px 1fr 96px;padding:6px 8px;margin:0 4px">
+        <span class="n">${t.k}</span>
+        <div style="min-width:0">${wait ? `<div style="height:44px;border-radius:5px;background:#0f0f13;display:grid;place-items:center;color:var(--t4);font-size:11.5px">waiting</div>` : `<div style="display:flex;flex-direction:column;gap:2px">${miniTake(bassN.length ? bassN : [{ s:0, l:0, p:40 }], 29, 36, C.violet, on, lw, 21)}${miniTake(padN.length ? padN : [{ s:0, l:0, p:60 }], 29, 36, C.indigo, on, lw, 21)}</div>`}</div>
+        <div style="text-align:right">${live ? `<span class="mono blink" style="font-size:11px;color:var(--accent-t)">bar 31</span>` : wait ? '' : `<div class="mono" style="font-size:11px;color:var(--t3)">${t.seed}</div><div class="mono" style="font-size:11px;color:var(--t3)">${t.notes + t.pad.length} notes</div>`}
+          ${!wait && !live ? `<div class="row" style="justify-content:flex-end;gap:2px;margin-top:3px"><span class="ib" style="width:24px;height:22px">${I('play', 12)}</span><span class="ib" style="width:24px;height:22px">${I('lock', 12)}</span></div>` : ''}</div>
+      </div>`;
+    }).join('')}</div>`;
+  }
+  const foot = state === 'first' ? `<div class="btn primary dis">Write 4 takes</div>`
+    : state === 'ready' ? `<div class="btn primary">${I('compose', 13)} Write 4 takes</div>`
+    : state === 'writing' ? `<span class="readout" style="white-space:nowrap"><span class="mono">take 2 of 4 · 0:07</span></span><div class="btn">${I('square', 11)} Stop</div>`
+    : `<span class="btn ghost">${I('compose', 13)} 4 more</span><div class="btn primary">${I('check', 13)} Keep take 2</div>`;
+  return `<div class="editor" style="height:${h}px">
+    <div class="ebar"><div class="tname">${I('compose', 15)} Compose <span class="cnt">bars 29–36 · Bass, Pad</span></div>
+      <div class="etabs"><button>Piano Roll</button><button>Step Sequencer</button><button class="on">Compose</button></div>
+      <div class="grow"></div>${state === 'writing' ? `<div class="prog shim" style="width:120px"><i style="width:43%"></i></div>` : ''}<div class="ib">${I('x', 14)}</div></div>
+    <div class="ebody">${what}${how}
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+        <div class="cap2" style="padding:12px 16px 6px;display:flex;justify-content:space-between"><span>TAKES</span><span style="font-weight:400">${state === 'takes' ? 'each heard in the song: Space' : ''}</span></div>
+        ${takes}
+        <div class="row" style="justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--line)">${foot}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ---------- Design 3: a page of its own. ----------
+function d3(state, narrow) {
+  const W = narrow ? 1000 : 1440, H = narrow ? 800 : 900;
+  const sideW = narrow ? 268 : 300, rowHeadW = narrow ? 168 : 210;
+  const gridW = W - sideW - rowHeadW;
+  const b0 = narrow ? 17 : 1, b1 = 44;
+  const bw = gridW / (b1 - b0 + 1);
+  const drums = lanePlan('drums').flatMap(r => r.notes);
+  const rows = [
+    { id:'kick', name:'Kick', col:C.coral, part:'Drums', notes:drums.filter(n => n.p === 36), lo:30, hi:44, hit:true },
+    { id:'snare', name:'Snare', col:C.coral, part:'Drums', notes:drums.filter(n => n.p === 38), lo:30, hi:44, hit:true },
+    { id:'hats', name:'Hats', col:C.red, part:'Drums', notes:drums.filter(n => n.p === 42), lo:30, hi:44, hit:true },
+    { id:'808', name:'808', col:C.violet, part:'Bass', notes:bassBarsRange(21, 28, -12), lo:18, hi:40 },
+    { id:'bass', name:'Bass', col:C.violet, part:'Bass', write:true, notes:bassBarsRange(3, 28), lo:30, hi:50 },
+    { id:'keys', name:'Keys', col:C.mint, audio:true },
+    { id:'stabs', name:'Stabs', col:C.teal, part:'Keys', notes:stabNotes(21, 44), lo:56, hi:66 },
+    { id:'pad', name:'Pad', col:C.indigo, part:'Pad', write:true, notes:padBars(1, 2).concat(padBars(21, 28)), lo:56, hi:72 },
+  ];
+  const sel = [29, 36], win = [21, 36];
+  const rowH = narrow ? 44 : 52;
+  const laneH = Math.min(110, Math.floor((H - 52 - 24 - 36 - 48 - 22 - rows.length * rowH - 36) / 2));
+  const doneTo = state === 'writing' ? 32 : state === 'takes' ? 37 : 0;
+  const take = TAKES[1];
+  const cells = r => {
+    let s = `<svg width="${gridW}" height="${rowH}"><rect width="${gridW}" height="${rowH}" fill="${C.lane}"/>`;
+    if (state === 'writing') s += `<rect x="${(win[0] - b0) * bw}" y="0" width="${(win[1] - win[0] + 1) * bw}" height="${rowH}" fill="#fff" fill-opacity=".025"/>`;
+    for (let b = b0; b <= b1; b++) s += `<line x1="${(b - b0) * bw}" x2="${(b - b0) * bw}" y1="0" y2="${rowH}" stroke="${(b - 1) % 4 ? C.soft : C.line}"/>`;
+    const ny = (n, lo, hi) => 6 + (1 - (n.p - lo) / Math.max(1, hi - lo)) * (rowH - 14);
+    if (r.audio) { s += `<rect x="1" y="4" width="${gridW - 2}" height="${rowH - 8}" rx="4" fill="${r.col}" fill-opacity=".07"/>`; const R = rng(9); for (let x = 3; x < gridW - 3; x += 2) { const a = (.2 + R() * .55) * (rowH - 14) / 2; s += `<rect x="${x}" y="${rowH / 2 - a}" width="1" height="${a * 2}" fill="${r.col}" fill-opacity=".35"/>`; } return s + '</svg>'; }
+    // Bars it plays: a soft cell, its notes in it.
+    const bars = new Set(r.notes.map(n => Math.floor(n.s)));
+    bars.forEach(b => { if (b < b0 || b > b1 || (r.write && b >= sel[0] && b <= sel[1])) return; s += `<rect x="${(b - b0) * bw + 1.5}" y="3" width="${bw - 3}" height="${rowH - 6}" rx="3" fill="${r.col}" fill-opacity=".1"/>`; });
+    r.notes.forEach(n => {
+      if (n.s < b0 || n.s >= b1 + 1) return;
+      const x = (n.s - b0) * bw + 2;
+      if (r.hit) s += `<rect x="${x}" y="${rowH / 2 - (r.id === 'hats' ? 3 : 6)}" width="1.4" height="${r.id === 'hats' ? 6 : 12}" rx=".7" fill="${r.col}" fill-opacity="${r.id === 'hats' ? .55 : .9}"/>`;
+      else s += `<rect x="${x}" y="${ny(n, r.lo, r.hi)}" width="${Math.max(1.5, n.l * bw - 1)}" height="2" rx="1" fill="${r.col}"/>`;
+    });
+    if (r.write) for (let b = sel[0]; b <= sel[1]; b++) {
+      if (b < b0) continue;
+      const x = (b - b0) * bw, done = b < doneTo, cur = state === 'writing' && b === doneTo;
+      s += `<rect x="${x + 1.5}" y="3" width="${bw - 3}" height="${rowH - 6}" rx="3" fill="${done ? r.col : C.accent}" fill-opacity="${done ? .1 : .1}" stroke="${done ? r.col : C.accent}" stroke-opacity="${done ? .5 : cur ? 1 : .6}" ${done ? '' : 'stroke-dasharray="3 2"'}/>`;
+      if (done || cur) (r.id === 'bass' ? take.bass : take.pad).filter(n => n.s >= b && n.s < b + (cur ? .4 : 1)).forEach(n => s += `<rect x="${(n.s - b0) * bw + 2}" y="${ny(n, r.lo, r.hi)}" width="${Math.max(1.5, n.l * bw - 1)}" height="2" rx="1" fill="${r.col}"/>`);
+      if (cur) s += `<rect x="${x + 1.5}" y="3" width="${bw - 3}" height="${rowH - 6}" rx="3" fill="${C.accent}" fill-opacity=".16" class="blink"/>`;
+    }
+    return s + '</svg>';
+  };
+  const gridHead = `<div style="display:flex;height:48px;border-bottom:1px solid var(--line);background:var(--surface)"><div style="width:${rowHeadW}px;flex:none;border-right:1px solid var(--line);display:flex;align-items:center;gap:6px;padding:0 8px"><div class="seg"><button class="on" title="Paint bars to write">${I('pencil', 13)}</button><button>${I('eraser', 13)}</button></div>${narrow ? '' : '<span class="lbl" style="font-size:11.5px">paint bars</span>'}</div>${ruler(gridW, b0, b1, null)}</div>`;
+  // What the model hears as it writes: its window, moving a step at a time.
+  const wx = (win[0] - b0) * bw, ww = (win[1] - win[0] + 1) * bw, on = state === 'writing';
+  const winStrip = `<div style="display:flex;height:22px;border-bottom:1px solid var(--line);background:var(--surface)"><div style="width:${rowHeadW}px;flex:none;border-right:1px solid var(--line);font-size:11px;color:var(--t3);display:flex;align-items:center;padding-left:10px">Model hears</div><svg width="${gridW}" height="22">${state === 'takes' ? '' : `<path d="M${wx + 1} 16 V7 H${wx + ww - 1} V16" fill="none" stroke="${on ? C.t2 : C.t4}" stroke-width="1.2"/><rect x="${wx + ww / 2 - 92}" y="1" width="184" height="16" fill="#131317"/><text x="${wx + ww / 2}" y="13" text-anchor="middle" font-family="Geist Mono" font-size="10.5" fill="${on ? C.t1 : C.t3}">${on ? 'bars 21–36 · step 4 of 8' : 'bars 21–36, 16 at a time'}</text>`}</svg></div>`;
+  const rowsHtml = rows.map(r => `<div style="display:flex"><div class="rhead" style="width:${rowHeadW}px;height:${rowH}px;${r.write ? 'background:var(--header-sel)' : ''}"><span class="bar" style="background:${r.col};opacity:${r.write ? 1 : .35}"></span>
+      <span style="font-weight:${r.write ? 600 : 500};font-size:12.5px;flex:1;white-space:nowrap">${r.name}</span>
+      ${r.audio ? `<span class="lbl" style="font-size:11px">audio · not heard</span>` : `<span class="part">${r.part} ${I('chev')}</span><span class="eye">${I('eye')}</span>`}
+    </div>${cells(r)}</div>`).join('');
+  // Bar by bar: the steering for the track picked (Prism takes it per bar).
+  const barLane = (label, vals, col) => {
+    let s = `<svg width="${gridW}" height="${laneH}"><rect width="${gridW}" height="${laneH}" fill="${C.lane}"/>`;
+    for (let b = b0; b <= b1; b++) {
+      const x = (b - b0) * bw;
+      s += `<line x1="${x}" x2="${x}" y1="0" y2="${laneH}" stroke="${(b - 1) % 4 ? C.soft : C.line}"/>`;
+      const v = vals[b];
+      if (v != null) { const hh = (laneH - 16) * (v + 1) / 10; s += `<rect x="${x + 3}" y="${laneH - 4 - hh}" width="${bw - 6}" height="${hh}" rx="2" fill="${col}" fill-opacity=".45"/><rect x="${x + 3}" y="${laneH - 4 - hh}" width="${bw - 6}" height="2" rx="1" fill="${col}"/>`; if (bw > 18) s += `<text x="${x + bw / 2}" y="${laneH - 7 - hh}" text-anchor="middle" font-family="Geist Mono" font-size="9.5" fill="${C.t2}">${v + 1}</text>`; }
+      else if (b >= sel[0] && b <= sel[1]) s += `<rect x="${x + 3}" y="${laneH - 6}" width="${bw - 6}" height="2" rx="1" fill="${C.t4}"/>`;
+    }
+    return `<div style="display:flex;border-top:1px solid var(--soft)"><div class="rhead" style="width:${rowHeadW}px;height:${laneH}px;border:0;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px"><span style="font-size:12px;font-weight:500">${label}</span><span class="lbl" style="font-size:11px">Bass · a level per bar</span></div>${s}</svg></div>`;
+  };
+  const poly = {}; [29, 30, 31, 32, 33, 34, 35, 36].forEach((b, i) => poly[b] = [0, 0, 1, 0, 0, 0, 1, 2][i]);
+  const len = {}; [29, 30, 31, 32].forEach((b, i) => len[b] = [3, 4, 4, 6][i]);
+  const side = d3side(state, narrow, sideW);
+  return `${cbar(narrow, 'compose')}
+  <div class="body">
+    <div class="cgrid">
+      <div class="ctab"><button class="on">Song</button><button>Takes · ${state === 'takes' ? 4 : 0}</button><div class="grow"></div><span class="lbl" style="font-size:11.5px;padding-bottom:9px">${narrow ? 'Paint the bars to write' : 'Paint the bars to write · the eye hides a part from the model'}</span></div>
+      ${gridHead}${winStrip}${rowsHtml}
+      <div style="flex:1;background:var(--lane);border-top:1px solid var(--line);display:flex;flex-direction:column">
+        <div class="ctab" style="height:32px;background:var(--surface)"><button class="on">Steering</button><button>Notes at once</button><button>Note length</button>${narrow ? '' : '<button>Pitch range</button><button>Silence</button>'}<div class="grow"></div><span class="lbl" style="font-size:11.5px;padding-bottom:8px">${narrow ? 'blank: model’s choice' : 'draw a level per bar · blank is the model’s choice'}</span></div>
+        ${barLane('Notes at once', poly, C.violet)}${barLane('Note length', len, C.violet)}<div style="flex:1;display:flex"><div style="width:${rowHeadW}px;border-right:1px solid var(--line);background:var(--headers)"></div></div>
+      </div>
+    </div>
+    ${side}
+  </div>
+  ${status(state === 'writing' ? 'MIDI-GPT Prism Medium writes a bar at a time, hearing 16: bars 21–36 now' : 'Corner Store Blues · 44 bars · 2 parts painted, 16 bars to write', state === 'first' ? 'Downloading Prism Medium 41%' : state === 'writing' ? 'MIDI-GPT · step 4 of 8' : '')}`;
+}
+function d3side(state, narrow, w) {
+  const name = 'MIDI-GPT Prism Medium';
+  const field2 = (state) => `<div class="field" style="height:40px;padding:0 10px"><span class="dot" style="background:${state === 'first' ? C.t4 : C.mint}"></span><span class="v" style="line-height:1.25"><span style="display:block;font-weight:500">${name}</span><span style="display:block;font-size:11px;color:var(--t3)">${state === 'first' ? 'not downloaded · 358 MB' : 'ready · hears up to 16 bars'}</span></span>${I('chev')}</div>`;
+  const info = `<div class="rows" style="font-size:12px">${[['Writes', 'Bass, Pad · bars 29–36'], ['Hears', 'Drums, 808, Stabs · 21–36'], ['Window', '16 bars · 4096 tokens'], ['Runs on', 'Apple GPU']].map(([a, b]) => `<div class="row" style="justify-content:space-between;padding:5px 0"><span class="lbl">${a}</span><span style="color:var(--t2);text-align:right">${b}</span></div>`).join('')}</div>`;
+  const controls = `<div style="display:flex;flex-direction:column;gap:7px${state === 'writing' ? ';opacity:.5' : ''}">
+    ${ctl('Genre', field('Hip-hop'))}
+    ${ctl('Key', field('C minor <span style="color:var(--t3)">· song</span>'))}
+    ${ctl('Temperature', slider(.45, '0.90'))}
+    ${ctl('Takes', field('4'))}
+    ${ctl('Seed', field('New each time'))}</div>`;
+  let body, foot;
+  if (state === 'first') { body = `${field2(state)}${setup(narrow)}`; foot = `<div class="btn primary big dis">Write bars 29–36</div>`; }
+  else if (state === 'ready') { body = `${field2(state)}${info}<div class="hr"></div>${controls}`; foot = `<div class="btn primary big">${I('compose', 14)} Write bars 29–36 · 4 takes</div>`; }
+  else if (state === 'writing') {
+    body = `${field2(state)}<div style="background:var(--well);border:1px solid var(--line);border-radius:9px;padding:10px">
+      <div class="readout" style="justify-content:space-between"><span style="font-weight:500">Take 2 of 4 · bar 32</span><span class="mono">0:11</span></div>
+      <div class="prog shim" style="margin:8px 0"><i style="width:43%"></i></div>
+      <div class="rows" style="font-size:11.5px">${[['Hears', 'bars 21–36 (step 4 of 8)'], ['Tokens', '1,288 of 4,096'], ['Notes', '58 so far']].map(([a, b]) => `<div class="row" style="justify-content:space-between;padding:4px 0"><span class="lbl" style="font-size:11.5px">${a}</span><span class="mono" style="color:var(--t2);font-size:11px">${b}</span></div>`).join('')}</div></div>${controls}`;
+    foot = `<div class="btn big">${I('square', 12)} Stop</div>`;
+  } else {
+    body = `${field2(state)}<div class="cap2" style="display:flex;justify-content:space-between"><span>TAKES</span><span style="font-weight:400">Space hears it in the song</span></div>
+      <div class="rows">${TAKES.map((t, i) => `<div class="take${i === 1 ? ' sel' : ''}" style="grid-template-columns:22px 1fr auto"><span class="n">${t.k}</span><div style="min-width:0">${miniTake(t.bass, 29, 36, C.violet, i === 1, 200, 16)}${miniTake(t.pad, 29, 36, C.indigo, i === 1, 200, 16)}<div class="meta">seed ${t.seed} · ${t.notes + t.pad.length} notes</div></div><span class="ib" style="width:24px;height:24px">${I('play', 12)}</span></div>`).join('')}</div>
+      <span class="btn ghost" style="justify-content:center">${I('compose', 13)} Write 4 more</span>`;
+    foot = `<div class="btn primary big">${I('check', 14)} Keep take 2</div>`;
+  }
+  return `<div style="width:${w}px;flex:none;border-left:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column">
+    <div style="flex:1;overflow:hidden;padding:14px 14px;display:flex;flex-direction:column;gap:10px">${body}</div>
+    <div class="pfoot">${foot}</div></div>`;
+}
+
+// ---------- Settings › Composers: the same in every design. ----------
+function settings(state, narrow) {
+  const rail = [['STUDIO', [['audio', 'Audio'], ['midi', 'MIDI'], ['mic', 'Recording']]], ['WORKING', [['panel', 'Track headers'], ['grid', 'Regions & grid'], ['pointer', 'Editing'], ['play', 'Transport'], ['wave', 'Automation'], ['rows', 'Editor tabs']]], ['LIBRARY', [['plug', 'Plugins'], ['box', 'Sounds & packs'], ['layers', 'Stems & lyrics'], ['compose', 'Composers', true], ['save', 'Saving & files']]], ['PINA STUDIO', [['heart', 'About Pina Studio']]]];
+  const railHtml = rail.map(([g, its]) => `<div class="g">${g}</div>` + its.map(([i, n, on]) => `<div class="it${on ? ' on' : ''}">${I(i)}${n}</div>`).join('')).join('');
+  const signed = state !== 'first' || true;
+  const models = [
+    ['MIDI-GPT Yellow Small', 'The quickest: hears four or eight bars at a time. Drums steered by density, other parts by notes at once and note length', 83, state === 'first' ? 'going' : 'have'],
+    ['MIDI-GPT Yellow Medium', 'Yellow, larger: the same controls, more musical, slower', 351, 'get'],
+    ['MIDI-GPT Prism Medium', 'Hears up to sixteen bars; steered by key, pitch range, note length, density and genre, bar by bar', 358, state === 'takes' ? 'have' : 'get'],
+    ['MIDI-GPT Expressive Medium', 'Prism’s controls, and played: notes off the grid and 128 velocities, for parts that feel performed', 359, 'get'],
+  ];
+  const right = (st, mb) => st === 'have' ? `<span class="lbl" style="color:var(--t2)">Downloaded ✓</span><span class="btn ghost">Remove</span>`
+    : st === 'going' ? `<span class="mono" style="font-size:11.5px;min-width:34px">41%</span><div class="prog" style="width:90px"><i style="width:41%"></i></div><span class="btn">Stop</span>`
+    : `<span class="btn">${I('download', 13)} Download · ${mb} MB</span>`;
+  const modelRows = models.map(([n, a, mb, st]) => `<div class="srow"><div class="tx"><b>${n} <span class="lic">Non-commercial research only</span></b><small>${a}</small></div><div class="row" style="flex:none">${right(st, mb)}</div></div>`).join('');
+  const how = [['Accept the model’s terms at Hugging Face, and sign in below', 'Metacreation Lab asks everyone who downloads MIDI-GPT to; which you use, and on what terms, is up to you'], ['Download a model', 'The first brings its own Python with it (uv, about 690 MB, once), apart from anything else on this computer'], ['Pick bars and the parts to write, then Write', 'It hears the rest of the song while it writes, in the song’s key'], ['Hear each take in the song, and keep one', 'One undo takes it back']];
+  return `${cbar(narrow, 'settings')}
+  <div class="body"><div class="rail">${railHtml}</div>
+    <div class="spage">
+      <div><h1>Composers</h1><div class="sub">Models trained on music itself, that write bars of a song with the rest of it heard. None come with Pina Studio: each is downloaded from where its makers host it.</div></div>
+      <div class="card"><div class="ct">How it works</div>${how.map(([t, s], i) => `<div class="srow"><span class="num">${i + 1}</span><div class="tx"><b>${t}</b><small>${s}</small></div></div>`).join('')}</div>
+      <div class="card"><div class="ct">Hugging Face <small>for models whose makers ask you to sign in</small></div>
+        ${state === 'first' ? `<div class="srow"><div class="tx"><b>Not signed in</b><small>Paste an access token (read is enough). It’s kept where <span class="mono">hf auth login</span> keeps it, for every Hugging Face tool</small></div><div class="row" style="flex:none"><div class="field" style="width:${narrow ? 150 : 220}px;color:var(--t4)"><span class="mono v">hf_…</span></div><span class="btn">Save</span></div></div>
+        <div class="srow"><div class="tx"><b>MIDI-GPT’s terms</b><small>Accept them on its page with the same account first</small></div><span class="btn ghost">${I('ext', 12)} Open its page</span></div>`
+        : `<div class="srow"><div class="tx"><b>Signed in ✓</b><small>The token <span class="mono">hf auth login</span> saved · <span class="mono">~/.cache/huggingface/token</span></small></div><span class="btn ghost">Sign out</span></div>`}
+      </div>
+      <div class="card"><div class="ct">Download a model <small>from where its makers host it</small></div>${modelRows}</div>
+      <div class="card"><div class="ct">Running</div>
+        <div class="srow"><div class="tx"><b>MIDI-GPT’s Python</b><small>${state === 'first' ? 'Comes with the first model downloaded' : 'Python 3.12 · midigpt 0.4.2 · 687 MB'}</small></div>${state === 'first' ? '<span class="lbl">Not yet</span>' : '<span class="btn ghost">Reinstall</span>'}</div>
+        <div class="srow"><div class="tx"><b>Runs on</b><small>A model loads in a few seconds and stays up between takes; it stops itself after ten idle minutes</small></div><div style="width:190px;flex:none">${field('Auto · Apple GPU')}</div></div>
+        <div class="srow"><div class="tx"><b>${state === 'writing' ? 'Yellow Small is running' : 'Nothing running'}</b><small>${state === 'writing' ? 'on this computer only (127.0.0.1:53211) · writing for Corner Store Blues' : 'Started when you write, on this computer only'}</small></div>${state === 'writing' ? '<span class="btn">Stop it</span>' : ''}</div>
+        <div class="srow"><div class="tx"><b>Folder</b><small class="mono" style="font-size:11.5px">~/Library/Application Support/Pina Studio/Composers</small></div><span class="btn ghost">${I('folder', 13)} Show</span></div>
+      </div>
+    </div></div>
+  ${status('Settings', state === 'first' ? 'Downloading Yellow Small 41%' : '')}`;
+}
+
+// ---------- The review: which design, which state, which width. ----------
+const DESIGNS = [['1', '1 · In the roll'], ['2', '2 · Across the song'], ['3', '3 · Composer page'], ['s', 'Settings']];
+const STATES = [['first', 'First run'], ['ready', 'Ready'], ['writing', 'Writing'], ['takes', 'Takes']];
+const WIDTHS = [['wide', '1440 × 900'], ['narrow', '1000 × 800']];
+const ABOUT = {
+  '1': [['Where', 'A Compose tab in the piano roll’s side panel, beside Generate and Chords. Drag the bars on the ruler; the take is drawn in the roll itself, dashed, over what’s there.'], ['Best for', 'One part at a time, the way you already write in the roll: fill a gap, try a variation, flip takes with ← → and keep one.'], ['Gives up', 'Writing several parts at once (the model can, but here you’d do them one after the other), and per-bar steering.']],
+  '2': [['Where', 'Pick tracks in the headers and drag bars on the ruler, then Compose opens under the song like the editor. Each track picked gets its part; takes write them all together.'], ['Best for', 'MIDI-GPT’s strength: a whole section’s band at once (bass and pad written together, each hearing the other), auditioned in the song.'], ['Gives up', 'Room: the editor’s place is taken while it’s open; controls are per part in a short table, not bar by bar.']],
+  '3': [['Where', 'A page of its own, like Song Study: every track a row, every bar a cell. Paint the bars to write, hide parts from the model with the eye, and draw steering per bar under it.'], ['Best for', 'Prism and Expressive’s per-bar controls (notes at once, density, pitch range, silence), seeing the window the model hears move as it writes, longer stretches.'], ['Gives up', 'Being where you edit: you leave the arrangement to use it, and come back to the result.']],
+  's': [['Settings › Composers', 'The same whichever design you pick: sign in for the gated models, download them (amber: their licence isn’t open), the Python each family runs in, where it runs and how to stop it.'], ['First run', 'Also shown in place, in each design’s panel (State: First run), so nobody has to come here first.'], ['Licence', 'MIDI-GPT’s weights are non-commercial research only; Pina Studio ships none, and says so before every download.']],
+};
+let st = { design:'1', state:'takes', width:'wide' };
+try { st = { ...st, ...JSON.parse(localStorage.getItem('compose-review') || '{}') }; } catch (e) {}
+function opts(id, list, key) {
+  document.getElementById(id).innerHTML = list.map(([v, l]) => `<button class="${st[key] === v ? 'on' : ''}" data-k="${key}" data-v="${v}">${l}</button>`).join('');
+}
+function render() {
+  opts('o-design', DESIGNS, 'design'); opts('o-state', STATES, 'state'); opts('o-width', WIDTHS, 'width');
+  const narrow = st.width === 'narrow';
+  const f = { '1':d1, '2':d2, '3':d3, 's':settings }[st.design];
+  const frame = document.getElementById('frame');
+  frame.innerHTML = `<div class="win${narrow ? ' narrow' : ''}">${f(st.state, narrow)}</div>`;
+  const avail = document.querySelector('.stage').clientWidth - 40, w = narrow ? 1000 : 1440, h = narrow ? 800 : 900;
+  const k = Math.min(1, avail / w);
+  frame.style.transform = `scale(${k})`; frame.style.height = `${h * k}px`; frame.style.width = `${w}px`;
+  document.getElementById('about').innerHTML = ABOUT[st.design].map(([a, b]) => `<div><h3>${a}</h3><p>${b}</p></div>`).join('');
+  try { localStorage.setItem('compose-review', JSON.stringify(st)); } catch (e) {}
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (b) { st[b.dataset.k] = b.dataset.v; render(); } });
+addEventListener('resize', render);
+const q = new URLSearchParams(location.search);
+['design', 'state', 'width'].forEach(k => q.get(k) && (st[k] = q.get(k)));
+document.fonts.ready.then(render); render();
+</script>
+</body>
+</html>
