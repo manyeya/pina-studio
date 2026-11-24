@@ -304,8 +304,9 @@ impl Workspace {
             }));
 
         let cuts = self.cuts_lane(t, s, cx);
-        // Stopped after Play it was heard playing: the solo let go. (Not before it's heard: the
-        // audio thread starts a moment after the click.)
+        // Stopped after Play it was heard playing (the song came to its end, say): the solo let
+        // go. Not before it's heard: the audio thread starts a moment after the click. Stopping
+        // it lets go too (`stop`), even before a frame saw it play.
         match (&mut self.sampler_ui.flip_solo, self.player.playing()) {
             (Some((_, heard)), true) => *heard = true,
             (Some((_, true)), false) => self.unsolo_flip(cx),
@@ -615,7 +616,7 @@ impl Workspace {
 
 impl Workspace {
     /// The track Play it soloed, unsoloed.
-    fn unsolo_flip(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn unsolo_flip(&mut self, cx: &mut Context<Self>) {
         if let Some((t, _)) = self.sampler_ui.flip_solo.take()
             && let Some(track) = self.session.project.tracks.get_mut(t)
         {

@@ -62,6 +62,9 @@ first for changes that break songs or commands made before.
 
 ### Fixed
 
+- The chop flipper's Play it left its track soloed when it was stopped before the screen had
+  drawn it playing (a quick press, a quick computer). Stopping it, however it's stopped, lets the
+  solo go.
 - The Studio Agent couldn't see the song or its own command reference: `show` and `describe`
   answered with more than Claude Code passes on, so it was handed a file it isn't allowed to
   read, and wrote blind. Every tool now answers compactly; `describe` gives a line a command,

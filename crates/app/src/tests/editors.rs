@@ -1424,6 +1424,12 @@ fn a_chopped_sample_flips_its_chops_swap_go_where_theyre_dropped_and_stutter(
     ws.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     assert!(!solo(cx));
+    // Stopped before a frame saw it play (a quick machine, a quick press): let go all the same.
+    click_on(cx, "flip-play", Modifiers::none(), MouseButton::Left);
+    assert!(solo(cx));
+    ws.update(cx, |ws, cx| ws.stop(cx));
+    assert!(!solo(cx), "let go however it's stopped");
+    until(cx, &ws, |ws| !ws.player.playing());
     // Flip: a new order, the one still on the one.
     click_on(cx, "flip", Modifiers::none(), MouseButton::Left);
     let flipped = order(cx);

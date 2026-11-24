@@ -45,10 +45,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Stops playing, and recording if it was.
+    /// Stops playing, and recording if it was. A track the chop flipper's Play it soloed is let
+    /// go, however it's stopped.
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         self.player.stop();
         self.finish_recording(cx);
+        self.unsolo_flip(cx);
         cx.notify();
     }
 
