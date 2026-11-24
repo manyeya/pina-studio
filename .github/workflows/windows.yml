@@ -13,10 +13,7 @@ permissions:
 
 jobs:
   windows:
-    # Visual Studio 2022's image. On the one with Visual Studio 2026 (windows-latest since 2026-11,
-    # MSVC 14.51), whisper.cpp (lyrics) can't be built: CMake's first test link can't start
-    # link.exe, with either of its generators. Back to windows-latest once that builds.
-    runs-on: windows-2022
+    runs-on: windows-latest
     env:
       # The C runtime is Microsoft's DLLs, beside the app (copied below): ONNX Runtime's library is
       # built against them, and a C runtime linked in can't be linked with it.
@@ -40,7 +37,16 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # The build kept from run to run is the runner image's own: whisper.cpp's CMake remembers
+      # where Visual Studio's linker was, and on a new image (its Visual Studio moved) it would
+      # look there, fail to start it, and the build with it.
+      - name: Which image
+        shell: pwsh
+        run: echo "IMAGE=$env:ImageOS-$env:ImageVersion" >> $env:GITHUB_ENV
+
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.IMAGE }}
 
       - name: Build the app and the pina command
         shell: pwsh
