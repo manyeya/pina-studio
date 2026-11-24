@@ -1226,7 +1226,13 @@ impl Workspace {
                         "Syncopation",
                         format!("{:.0}%", s.groove.syncopation * 100.0),
                     ),
-                    ("Nearest groove", capital(&s.groove.nearest)),
+                    (
+                        "Nearest playbook beat",
+                        match s.groove.nearest.is_empty() {
+                            true => "None".into(),
+                            false => capital(&s.groove.nearest.replace('_', " ")),
+                        },
+                    ),
                 ],
                 vec![],
                 Some(Sure::Likely),

@@ -26,7 +26,6 @@ use gpui::{
 use pina_engine::{
     music::Key,
     music::playbook::{self, Part, Playbook, Section},
-    music::theory,
 };
 
 use crate::{
@@ -123,4 +122,14 @@ pub struct Genres {
     rendered:
         std::collections::HashMap<String, std::sync::Arc<pina_engine::audio::engine::AudioData>>,
     fields: Option<Fields>,
+}
+
+impl Genres {
+    /// With the person's playbooks read, as the editors offer their beats and progressions.
+    pub fn with_books() -> Genres {
+        Genres {
+            list: playbook::load().0,
+            ..Default::default()
+        }
+    }
 }

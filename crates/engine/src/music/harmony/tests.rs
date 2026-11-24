@@ -26,19 +26,11 @@ fn a_keys_chords_and_those_it_borrows() {
 }
 
 #[test]
-fn a_progression_reads_bar_by_bar_and_the_library_by_mood() {
-    let p = Progression {
-        numerals: "ii9 | V13 | Imaj9 V7",
-        minor: false,
-        suits: &[],
-    };
-    let chords = progression(&p, C);
+fn a_progression_reads_bar_by_bar() {
+    let chords = progression("ii9 | V13 | Imaj9 V7", C);
     let shares: Vec<f32> = chords.iter().map(|c| c.1).collect();
     assert_eq!(shares, [1.0, 1.0, 0.5, 0.5]);
     assert_eq!(chords[0].0.root, 2);
-    assert!(!progressions(true, None).is_empty());
-    let mood = moods()[0];
-    assert!(progressions(false, Some(mood)).len() + progressions(true, Some(mood)).len() > 0);
 }
 
 #[test]

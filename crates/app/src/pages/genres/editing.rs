@@ -7,6 +7,9 @@ use super::*;
 pub(crate) enum Text {
     Name,
     Harmony,
+    Groove,
+    /// One of its progressions; one past the last adds one.
+    Progression(usize),
     Sound(usize),
     Write(usize),
     Note(usize),
@@ -17,6 +20,9 @@ pub(crate) enum Text {
 pub(crate) struct Fields {
     pub(crate) name: Entity<TextInput>,
     pub(crate) harmony: Entity<TextInput>,
+    pub(crate) groove: Entity<TextInput>,
+    /// One a progression, and one more to add one.
+    pub(crate) progressions: Vec<Entity<TextInput>>,
     pub(crate) sounds: Vec<Entity<TextInput>>,
     pub(crate) writes: Vec<Entity<TextInput>>,
     pub(crate) notes: Vec<Entity<TextInput>>,
@@ -94,9 +100,30 @@ impl Workspace {
         let harmony = field(
             self,
             &p.harmony,
-            "Words for its chords: dark, soulful…",
+            "Words for its chords: dark, soulful, jazzy sevenths…",
             Text::Harmony,
         );
+        let groove = field(
+            self,
+            &p.groove,
+            "Words for its drums: four on the floor, log drum on the and…",
+            Text::Groove,
+        );
+        let progressions = p
+            .progressions
+            .iter()
+            .map(String::as_str)
+            .chain([""])
+            .enumerate()
+            .map(|(i, n)| {
+                field(
+                    self,
+                    n,
+                    "Add a progression: i9 | VImaj9 | iv9 | VII9",
+                    Text::Progression(i),
+                )
+            })
+            .collect();
         let sounds = (0..p.parts.len())
             .map(|i| {
                 field(
@@ -125,6 +152,8 @@ impl Workspace {
         self.genres.fields = Some(Fields {
             name,
             harmony,
+            groove,
+            progressions,
             sounds,
             writes,
             notes,
@@ -134,10 +163,30 @@ impl Workspace {
     }
 
     pub(crate) fn set_genre_text(&mut self, what: Text, t: String, cx: &mut Context<Self>) {
-        self.edit_genre(false, cx, move |p| match what {
+        let minor = self.genres.draft.as_ref().is_some_and(|p| p.minor);
+        if let Text::Progression(_) = what
+            && !t.trim().is_empty()
+            && playbook::progression_chords(&t, minor).is_none()
+        {
+            self.status = Some(format!(
+                "{t:?} isn't a progression: numerals a bar at a time, as i9 | VImaj9 | iv9 | VII9"
+            ));
+            cx.notify();
+            return;
+        }
+        // A progression added or taken out changes how many fields there are.
+        let shape = matches!(what, Text::Progression(_));
+        self.edit_genre(shape, cx, move |p| match what {
             Text::Name if !t.is_empty() => p.name = t,
             Text::Name => {}
             Text::Harmony => p.harmony = t,
+            Text::Groove => p.groove = t,
+            Text::Progression(i) => match (t.trim().is_empty(), i < p.progressions.len()) {
+                (true, true) => drop(p.progressions.remove(i)),
+                (false, true) => p.progressions[i] = t.trim().to_string(),
+                (false, false) => p.progressions.push(t.trim().to_string()),
+                (true, false) => {}
+            },
             Text::Sound(i) => {
                 if let Some(x) = p.parts.get_mut(i) {
                     x.sound = t
@@ -236,9 +285,10 @@ impl Workspace {
             name,
             tempo: (118.0, 126.0),
             minor: true,
-            groove: theory::GROOVES[0].id.to_string(),
+            groove: String::new(),
             swing: 50.0,
-            harmony: "warm".into(),
+            harmony: String::new(),
+            progressions: Vec::new(),
             parts: vec![Part {
                 role: "drums".into(),
                 sound: "drums".into(),

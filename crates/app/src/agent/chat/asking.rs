@@ -172,6 +172,9 @@ impl Workspace {
                 "(You and the person have talked about this song before. What was said:\n\n{said}\n\nCarry on from there.)\n\n{full}"
             );
         }
+        // The song's tempo, meter, key, length and tracks, with every message: written without
+        // them, parts land in the wrong key.
+        full = format!("{}\n\n{full}", song_line(&self.session.project));
         if !self.chat.busy {
             self.chat.before = Some(self.session.project.clone());
         }
@@ -305,4 +308,60 @@ impl Workspace {
     pub(crate) fn clear_chat(&mut self) {
         self.chat.forget();
     }
+}
+
+/// The song in a line, as each message to the agent starts: "(The song: 118 BPM, 4/4, Bb minor,
+/// 24 bars; tracks: 0 Kit, 1 Bass, 2 Synth loop (audio, 9 semitones down).)"
+pub(crate) fn song_line(p: &pina_engine::song::project::Project) -> String {
+    let bpm = |v: f64| match v.fract() == 0.0 {
+        true => format!("{v:.0}"),
+        false => format!("{v:.1}"),
+    };
+    let bar = p.bar().max(1);
+    let mut tempo = format!("{} BPM", bpm(p.tempo));
+    if !p.tempos.is_empty() {
+        let at: Vec<String> = p
+            .tempos
+            .iter()
+            .map(|c| format!("{} at bar {}", bpm(c.bpm), c.tick / bar + 1))
+            .collect();
+        tempo = format!("{tempo} (then {})", at.join(", "));
+    }
+    let key = match (p.key.as_deref(), p.song_key()) {
+        (Some(k), _) => k.to_string(),
+        (None, Some(k)) => format!("no key set (its notes read as {})", k.name()),
+        (None, None) => "no key set".into(),
+    };
+    let tracks: Vec<String> =
+        p.tracks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let audio = t.regions.iter().any(|r| {
+                    matches!(r.content, pina_engine::song::project::Content::Audio { .. })
+                });
+                let moved = t.regions.iter().map(|r| r.transpose).find(|&m| m != 0);
+                let how = match (audio, moved) {
+                    (true, Some(m)) => format!(
+                        " (audio, {} semitone{} {})",
+                        m.unsigned_abs(),
+                        if m.unsigned_abs() == 1 { "" } else { "s" },
+                        if m < 0 { "down" } else { "up" }
+                    ),
+                    (true, None) => " (audio)".into(),
+                    (false, _) => String::new(),
+                };
+                format!("{i} {}{how}", t.name)
+            })
+            .collect();
+    format!(
+        "(The song: {tempo}, {}/{}, {key}, {} bars; tracks: {}.)",
+        p.time_signature[0],
+        p.time_signature[1],
+        p.end().div_ceil(bar),
+        match tracks.is_empty() {
+            true => "none yet".to_string(),
+            false => tracks.join(", "),
+        }
+    )
 }

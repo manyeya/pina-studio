@@ -75,13 +75,13 @@ fn tools() -> Value {
     let mut all = json!([
         {
             "name": "describe",
-            "description": "The command reference: every edit, with examples, and how ticks, levels and notes work.",
-            "inputSchema": { "type": "object", "properties": {} }
+            "description": "The command reference: how ticks, levels and notes work, every edit with its example and what it does, and how to write and check music. With `commands` (names, as [\"set_notes\", \"set_synth\"]), those commands' whole entries: every setting they take.",
+            "inputSchema": { "type": "object", "properties": { "commands": { "type": "array", "items": { "type": "string" } } } }
         },
         {
             "name": "show",
-            "description": "A project's tracks, regions, notes, mixer, sends and auxes, as JSON.",
-            "inputSchema": { "type": "object", "properties": { "project": project }, "required": ["project"] }
+            "description": "A project's tracks, regions, notes, mixer, sends and auxes, as JSON. A song too big to show whole comes with each region's notes and each instrument summed up: `track` shows one track in full.",
+            "inputSchema": { "type": "object", "properties": { "project": project, "track": { "type": "integer" } }, "required": ["project"] }
         },
         {
             "name": "edit",
@@ -178,7 +178,7 @@ fn tools() -> Value {
         },
         {
             "name": "study",
-            "description": "Studies an existing song, loop or stem from its audio file (WAV, AIFF, FLAC, MP3). `nature` says what the file is, what's not in it, and how sure; everything else says only what can be true of it (a drum loop has no key, a piano loop no groove). `tempo.why` and `key.why` say where each comes from. Who it is (tags; online, its year and genre), its tempo and bars, key (and changes), chords beat by beat with numerals, its form (intro, verse, pre-chorus, chorus, bridge, outro, each with its bars, energy, loudness and the chord loop it goes round), its groove (kick, snare and hats on a 16-step grid, swing, syncopation, nearest Pina Studio groove), what plays in it (with confidence), its mix and dynamics overall and by section, the person's playbooks it's nearest (if they have any), and (online, from LRCLIB) its lyrics: each line in its section, rhyme schemes, syllables, hooks, point of view and recurring words. Interpret its theme, story and imagery from the lyrics yourself. `playbook: true` also saves a playbook made from it, to write songs like it: only when the person asks for one.",
+            "description": "Studies an existing song, loop or stem from its audio file (WAV, AIFF, FLAC, MP3). `nature` says what the file is, what's not in it, and how sure; everything else says only what can be true of it (a drum loop has no key, a piano loop no groove). `tempo.why` and `key.why` say where each comes from. Who it is (tags; online, its year and genre), its tempo and bars, key (and changes), chords beat by beat with numerals, its form (intro, verse, pre-chorus, chorus, bridge, outro, each with its bars, energy, loudness and the chord loop it goes round), its groove (kick, snare and hats on a 16-step grid, swing, syncopation, the person's playbook whose beat is nearest), what plays in it (with confidence), its mix and dynamics overall and by section, the person's playbooks it's nearest (if they have any), and (online, from LRCLIB) its lyrics: each line in its section, rhyme schemes, syllables, hooks, point of view and recurring words. Interpret its theme, story and imagery from the lyrics yourself. `playbook: true` also saves a playbook made from it, to write songs like it: only when the person asks for one.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -196,7 +196,7 @@ fn tools() -> Value {
         },
         {
             "name": "theory",
-            "description": "Chords for a key: its scale, its chords by degree, and progressions from the library that suit `words` (a genre or mood: \"lofi\", \"dark sad\", \"gospel\"), as numerals and as chords in the key, for set_chords.",
+            "description": "Chords for a key: its scale, its chords by degree, and the person's own progressions from the playbook `words` names (a genre: \"amapiano\", \"lofi\"), as numerals and as chords in the key, for set_chords. Pina Studio keeps no progressions of its own: with none, `none` says to write a small set yourself.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "key": { "type": "string", "description": "\"A minor\", \"Eb major\"." }, "words": { "type": "string" } },
@@ -518,7 +518,7 @@ fn reference_tools(project: &Value) -> Vec<Value> {
         },
         {
             "name": "midi_write",
-            "description": "Your own notes as a MIDI file beside the song, shown in the Agent panel as a card the person can hear and drag onto the tracks. It does NOT change the song. `parts`, each `{name, notes, drums, program}`: `notes` one note a line as midi_study writes them, `1.3 G#4 2 96` (bar.step from 1 in sixteenths, a step can be fractional like 1.3.5, note name or number, how many sixteenths, velocity). Tempo, key and meter are the song's unless given. Give `like` (the files it's meant to resemble) and it answers how close it came and what's off; rewrite and write it again under a new name until it's right, never copying them note for note.",
+            "description": "Your own notes as a MIDI file beside the song, shown in the Agent panel as a card the person can hear and drag onto the tracks. It does NOT change the song. `parts`, each `{name, notes, drums, program}`: `notes` one note a line as midi_study writes them, `1.3 G#4 2 96` (bar.step from 1 in sixteenths, a step can be fractional like 1.3.5, note name or number, how many sixteenths, velocity). Tempo, key and meter are the song's unless given; `key_check` says when your notes leave the key. Give `like` (the files it's meant to resemble) and it answers how close it came and what's off; rewrite and write it again under a new name until it's right, never copying them note for note.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -629,12 +629,159 @@ fn index(args: &Value, name: &str) -> Result<usize, String> {
         .ok_or(format!("`{name}` is needed, a whole number"))
 }
 
+/// The command reference as an agent can take it in: whole, it is past what Claude Code hands its
+/// model in one tool answer (the model then gets a file it can't read). So: how everything works,
+/// a line a command (its example and what it does), and how to write and check music; or, for
+/// `commands`, those commands' whole entries.
+pub(crate) fn describe(commands: &[&str]) -> String {
+    let (head, rest) = DESCRIBE.split_once("## Commands").unwrap_or((DESCRIBE, ""));
+    let (list, after) = match rest.find("\n## ") {
+        Some(i) => rest.split_at(i),
+        None => (rest, ""),
+    };
+    // A command's entry: its bullet and the lines under it, to the next bullet or blank line.
+    let mut entries: Vec<String> = Vec::new();
+    let mut open = false;
+    for line in list.lines() {
+        if line.starts_with("- ") {
+            entries.push(line.to_string());
+            open = true;
+        } else if line.trim().is_empty() {
+            open = false;
+        } else if open && let Some(e) = entries.last_mut() {
+            e.push('\n');
+            e.push_str(line);
+        }
+    }
+    let name = |e: &str| -> Option<String> {
+        let n = e.strip_prefix("- `")?.split('`').next()?;
+        n.chars()
+            .all(|c| c.is_ascii_lowercase() || c == '_')
+            .then(|| n.to_string())
+    };
+    if !commands.is_empty() {
+        let mut out: Vec<String> = Vec::new();
+        for c in commands {
+            let found: Vec<&String> = entries
+                .iter()
+                .filter(|e| name(e).as_deref() == Some(c))
+                .collect();
+            match found.is_empty() {
+                true => out.push(format!("- `{c}`: no such command")),
+                false => out.extend(found.into_iter().cloned()),
+            }
+        }
+        return out.join("\n");
+    }
+    let line = |e: &String| -> String {
+        let flat = e.split_whitespace().collect::<Vec<_>>().join(" ");
+        let Some(n) = name(e) else {
+            return flat;
+        };
+        // Its example, then what it does to the first stop.
+        let after_name = &flat[n.len() + 4..];
+        let (example, said) = match after_name.strip_prefix(" `") {
+            Some(x) => match x.split_once("`") {
+                Some((ex, said)) => (format!(" `{ex}`"), said),
+                None => (String::new(), after_name),
+            },
+            None => (String::new(), after_name),
+        };
+        let said = said.trim_start_matches(':').trim();
+        let mut first: String = said
+            .split_inclusive(". ")
+            .next()
+            .unwrap_or(said)
+            .trim()
+            .to_string();
+        if first.chars().count() > 90 {
+            let cut: String = first.chars().take(90).collect();
+            first = format!("{}…", cut.rsplit_once(' ').map_or(cut.as_str(), |c| c.0));
+        }
+        format!("- `{n}`{example}: {first}")
+    };
+    let index: Vec<String> = entries.iter().map(line).collect();
+    format!(
+        "{head}## Commands\n\nEach with its example and what it does. Before using one the first \
+time, `describe` with `commands` for its whole entry: every setting it takes.\n\n{}\n{after}",
+        index.join("\n")
+    )
+}
+
+/// The most a tool's answer should hold, in characters: past about 50,000 Claude Code keeps it
+/// from its model.
+pub(crate) const ANSWER_MOST: usize = 36_000;
+
+/// The song as `pina show` gives it; if that's more than an answer holds, each region's notes and
+/// each track's instrument summed up instead (`track` gives one in full).
+pub(crate) fn show(dir: &Path, track: Option<usize>) -> Result<Value, String> {
+    let mut shown = cli::show(dir)?;
+    if let Some(t) = track {
+        let one = shown["tracks"]
+            .get(t)
+            .cloned()
+            .ok_or(format!("no track {t}"))?;
+        return Ok(json!({ "track": t, "shown": one }));
+    }
+    if serde_json::to_string(&shown).map_or(0, |s| s.len()) <= ANSWER_MOST {
+        return Ok(shown);
+    }
+    for t in shown["tracks"].as_array_mut().into_iter().flatten() {
+        if let Some(i) = t.get_mut("instrument")
+            && i.is_object()
+        {
+            let kind = i.as_object().and_then(|o| o.keys().next().cloned());
+            let named = ["patch", "class", "name"]
+                .iter()
+                .find_map(|k| i.pointer(&format!("/{}/{k}", kind.as_deref().unwrap_or(""))))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            *i = json!(match (kind, named) {
+                (Some(k), Some(n)) => format!("{k}: {n}"),
+                (Some(k), None) => k,
+                _ => "instrument".into(),
+            });
+        }
+        for r in t["regions"].as_array_mut().into_iter().flatten() {
+            if let Some(notes) = r.pointer_mut("/midi/notes")
+                && let Some(list) = notes.as_array()
+            {
+                let pitches: Vec<u64> = list
+                    .iter()
+                    .filter_map(|n| n.get("pitch").and_then(Value::as_u64))
+                    .collect();
+                *notes = json!({
+                    "count": pitches.len(),
+                    "low": pitches.iter().min(),
+                    "high": pitches.iter().max(),
+                });
+            }
+        }
+    }
+    shown["summed_up"] = json!(
+        "The song is too big to show whole: each region's notes and each instrument are summed up. \
+`show` with `track` for one track in full."
+    );
+    Ok(shown)
+}
+
 pub(crate) fn call(name: &str, args: &Value) -> Result<Value, String> {
     match name {
-        "describe" => Ok(Value::String(DESCRIBE.to_string())),
+        "describe" => Ok(Value::String(describe(
+            &args
+                .get("commands")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+                .unwrap_or_default(),
+        ))),
         // The panel draws it from the call itself: there's nothing to do here.
         "present" => Ok(json!({ "shown": true })),
-        "show" => cli::show(&path(args, "project")?),
+        "show" => show(
+            &path(args, "project")?,
+            args.get("track")
+                .and_then(Value::as_u64)
+                .map(|t| t as usize),
+        ),
         "edit" => {
             let command: Command =
                 serde_json::from_value(args.get("command").cloned().unwrap_or_default())
@@ -932,7 +1079,8 @@ pub fn answer(msg: &Value) -> Option<Value> {
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             let (text, error) = match call(name, &args) {
                 Ok(Value::String(s)) => (s, false),
-                Ok(v) => (serde_json::to_string_pretty(&v).unwrap(), false),
+                // Compact: an agent reads it as well, and indenting doubles what it has to take in.
+                Ok(v) => (serde_json::to_string(&v).unwrap(), false),
                 Err(e) => (e, true),
             };
             json!({ "content": [{ "type": "text", "text": text }], "isError": error })

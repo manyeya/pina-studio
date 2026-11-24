@@ -4,8 +4,10 @@
   "tempo": [118.0, 128.0],
   "minor": true,
   "groove": "house",
+  "beat": {"kick": "X...X...X...X...", "snare": "....x.......x...", "hats": "goxogoxogoxogoxo"},
   "swing": 54,
   "harmony": "house",
+  "progressions": ["i7 | VImaj7 | iv7 | v7"],
   "parts": [
     {
       "role": "drums",

@@ -901,7 +901,8 @@ impl Workspace {
             chat,
             catalog,
             songs: Vec::new(),
-            genres: Default::default(),
+            // The playbooks' beats and progressions are offered in the editors, not only on their page.
+            genres: crate::pages::genres::Genres::with_books(),
             studies: Default::default(),
             edits: 0,
             opening: None,

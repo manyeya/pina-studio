@@ -447,13 +447,13 @@ fn generate_and_chords_show_one_thing_at_a_time_and_write_from_their_foot(cx: &m
     click(cx, "write-Write the shape");
     let rose = notes(cx);
     assert!(rose.len() > grown.len(), "added to what was there");
-    // Chords: a progression by mood, heard first (it isn't taken), then taken; played as an
-    // arpeggio from its menu, a bass under it, written.
+    // Chords: a progression from a playbook (the house book's own), heard first (it isn't taken),
+    // then taken; played as an arpeggio from its menu, a bass under it, written.
     click(cx, "roll-panel-Chords");
     click(cx, "write-tab-Progressions");
-    click(cx, "harmony-moods");
-    pick(cx, &ws, "lofi");
-    assert_eq!(writing(cx).mood, Some("lofi"));
+    click(cx, "harmony-books");
+    pick(cx, &ws, "House");
+    assert_eq!(writing(cx).book.as_deref(), Some("house"));
     click(cx, "harmony-hear-0");
     assert!(writing(cx).chords.is_empty());
     click(cx, "harmony-progression-0");

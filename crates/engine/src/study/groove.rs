@@ -1,15 +1,15 @@
 //! The groove: the kick, snare and hats on a 16-step grid (each bar's, and the bar it plays
-//! most), its swing (where the off-beats really land), how syncopated it is, and the groove of
-//! Pina Studio's that's nearest.
+//! most), its swing (where the off-beats really land), how syncopated it is, and the person's
+//! playbook whose beat is nearest.
 
 use serde::{Deserialize, Serialize};
 
 use super::features::{Frames, peaks_of};
-use crate::music::theory::{self, Drum};
+use crate::music::playbook::{self, Beat};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Groove {
-    /// Kick, snare, hats: a character a step, as Pina Studio's grooves are written (X accent, x hit,
+    /// Kick, snare, hats: a character a step, as playbooks' beats are written (X accent, x hit,
     /// o soft, g ghost, . rest).
     pub kick: String,
     pub snare: String,
@@ -19,7 +19,8 @@ pub struct Groove {
     pub swing_on: String,
     /// The share of kick and snare hits off the beat's 8ths: 0 square, 0.5 and up busy.
     pub syncopation: f32,
-    /// The nearest of Pina Studio's grooves, and how near (0 to 1).
+    /// The person's playbook whose beat is nearest (its id, none if no book has a beat), and how
+    /// near (0 to 1).
     pub nearest: String,
     pub likeness: f32,
 }
@@ -212,42 +213,19 @@ pub fn groove(f: &Frames, beats: &[f32], bars: &[f32], per_bar: usize, loud: &[b
     }
 }
 
-/// The groove of Pina Studio's whose kick, snare (or clap) and hats are most like these: hits shared
-/// against hits in either.
+/// The person's playbook whose beat is most like this one, and how alike.
 fn nearest(kick: &str, snare: &str, hats: &str) -> (String, f32) {
-    let on = |p: &str| -> Vec<bool> { p.chars().map(|c| c != '.' && c != 'g').collect() };
-    let jaccard = |a: &[bool], b: &[bool]| -> f32 {
-        let both = a.iter().zip(b).filter(|(x, y)| **x && **y).count() as f32;
-        let either = a.iter().zip(b).filter(|(x, y)| **x || **y).count() as f32;
-        if either == 0.0 { 1.0 } else { both / either }
+    let mine = Beat {
+        kick: kick.into(),
+        snare: snare.into(),
+        hats: hats.into(),
     };
-    let mine = [on(kick), on(snare), on(hats)];
-    theory::GROOVES
+    playbook::load()
+        .0
         .iter()
-        .map(|g| {
-            let row = |drums: &[Drum]| -> Vec<bool> {
-                let mut out = vec![false; 16];
-                for (d, bars) in g.rows {
-                    if drums.contains(d) {
-                        for (i, c) in bars[0].chars().enumerate().take(16) {
-                            out[i] |= c != '.' && c != 'g';
-                        }
-                    }
-                }
-                out
-            };
-            let theirs = [
-                row(&[Drum::Kick]),
-                row(&[Drum::Snare, Drum::Clap, Drum::Rim]),
-                row(&[Drum::HatClosed, Drum::HatOpen, Drum::Shaker]),
-            ];
-            let score = 0.45 * jaccard(&mine[0], &theirs[0])
-                + 0.35 * jaccard(&mine[1], &theirs[1])
-                + 0.2 * jaccard(&mine[2], &theirs[2]);
-            (g.id.to_string(), score)
-        })
+        .filter_map(|p| Some((p.id.clone(), mine.likeness(p.beat.as_ref()?))))
         .max_by(|a, b| a.1.total_cmp(&b.1))
-        .unwrap_or(("boom_bap".into(), 0.0))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

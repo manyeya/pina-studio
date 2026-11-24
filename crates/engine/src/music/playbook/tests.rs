@@ -21,16 +21,12 @@ fn every_playbook_is_whole() {
             }
             assert!(s.bars % 4 == 0);
         }
-        // The harmony words find progressions of its kind.
-        let key = crate::music::Key {
-            root: 9,
-            minor: p.minor,
-        };
-        assert_eq!(
-            crate::music::theory::suggest(&key, &p.harmony, 0).minor,
-            p.minor
-        );
+        // Its progressions read, a bar at a time.
+        for n in &p.progressions {
+            assert!(progression_chords(n, p.minor).is_some(), "{}: {n}", p.id);
+        }
     }
+    assert_eq!(find("house").unwrap().all_progressions().len(), 1);
     assert_eq!(find("Lo-fi hip-hop").unwrap().id, "lofi");
     assert!(find("polka").is_none());
 }
@@ -62,7 +58,8 @@ fn the_persons_playbooks_are_read_and_bad_ones_said() {
     };
     std::fs::write(dir.join("gqom.json"), serde_json::to_string(&gqom).unwrap()).unwrap();
     std::fs::write(dir.join("broken.json"), "{ \"id\": ").unwrap();
-    (gqom.id, gqom.groove) = ("bad".into(), "polka".into());
+    gqom.id = "bad".into();
+    gqom.progressions = vec!["i | polka".into()];
     std::fs::write(dir.join("bad.json"), serde_json::to_string(&gqom).unwrap()).unwrap();
     let (all, problems) = load_from(Some(&dir));
     assert_eq!(all.len(), 1);

@@ -4,6 +4,7 @@
   "tempo": [130.0, 160.0],
   "minor": true,
   "groove": "trap",
+  "beat": {"kick": "x.....x...x.....", "snare": "........X.......", "hats": "x.x.x.x.x.x.x.x."},
   "swing": 50,
   "harmony": "trap dark",
   "parts": [

@@ -25,8 +25,8 @@ of it.
     spectral modes), modulation, the compressor (`comp.rs`), the multiband saturator
     (`sat.rs`, its curves and filters under `sat/`) and the limiter (`limit.rs`, its loudness
     meter and Learn under `limit/`).
-  - `music/`: keys, scales and note edits (`mod.rs`), theory (chords, progressions, the step
-    sequencer's grooves), the chord track (`compose.rs`), copied bars and transition sounds
+  - `music/`: keys, scales and note edits (`mod.rs`), theory (chords from symbols and numerals,
+    a kit's drums: no progressions or grooves of its own), the chord track (`compose.rs`), copied bars and transition sounds
     (`arrange.rs`), playbooks, the critic, track looks and audio analysis.
   - `plugin/`: hosting VST3, CLAP, VST2 and Audio Units behind one interface, and the scan.
   - `samples/`: the sample library: analysis, the index, search, kits and the sound map.
@@ -490,7 +490,7 @@ In the app:
   above, and staccato, flam, grace, connect, 2× and ½ speed, crescendo, fade, recombine and into
   the key. Generate: one writer at a time, Euclidean rhythms (known ones by name), melodies grown
   from a seed, melodies following a drawn shape. Chords: the key's chords coloured by what they
-  do, borrowed ones, progressions by mood to hear first; the chords picked, how they're voiced and
+  do, borrowed ones, your playbooks' progressions, by playbook, to hear first; the chords picked, how they're voiced and
   played and the button to write them stay at the foot. MPE: shapes of expression with a click (scoop, fall, bends, vibrato, glide into the
   next note, slide and pressure swells and wobbles), copied from note to note, and whether the
   instrument hears them. The ruler names the chords the notes play. Lanes for Release, Chance,
@@ -612,8 +612,8 @@ In the app:
   and a distribution, be skipped, or run at their own rate. Automation rows step a track's
   volume, pan, sends, EQ, a plugin's parameters, a MIDI controller, pitch bend or pressure
   (held, or sliding). Learn makes rows from notes played and controls moved. The browser has
-  grooves, bass lines, melodies, experiments and templates, and keeps your own patterns and
-  templates in folders. Right-click a pattern region to convert it to MIDI, or a MIDI region
+  your playbooks' beats and empty templates (rows set up, no steps on), and keeps your own
+  patterns and templates in folders; Pina Studio has no patterns of its own. Right-click a pattern region to convert it to MIDI, or a MIDI region
   to a pattern (timing kept as offsets, lengths as ties and gates). Patterns loop over their
   region.
 - Modulation (its tab in the editor, or a track's right-click menu): a track's modulators as
@@ -842,7 +842,8 @@ agent can send, with examples. An agent can:
     progressions, and where its mixes sit (loudness and six-band balance). Make one from a song
     you love on the Song Study page, or write the JSON. The Playbooks page (File ▸ Genre Playbooks…, or a genre's Edit playbooks… in the Agent
     panel) shows each genre as its song's shape, and changes it in place: tempo range, swing,
-    key, groove (its kick, snare and hats shown), harmony words (and the progression they find),
+    key, its beat (kick, snare and hats, clicked step by step) and words for its drums, words
+    for its chords and your own progressions as numerals (each shown as chords),
     the song map (sections as blocks as long as they are and as tall as they're loud, and a grid
     of which part plays in which, clicked on and off), the parts (sounds to look for, how to
     write them), the mix target (six bands dragged, and loudness) and notes for the agent.
@@ -888,7 +889,7 @@ agent can send, with examples. An agent can:
     beat with numerals, its form (intro, verses, pre-chorus, choruses, bridge, outro, found from
     what repeats and named by it, with bars, energy, loudness and the chord loop each goes round;
     a song that never repeats is named by its energy: build, drop, breakdown), its groove (kick,
-    snare and hats on a sixteen-step bar, swing, syncopation, the nearest of Pina Studio's grooves),
+    snare and hats on a sixteen-step bar, swing, syncopation, the playbook whose beat is nearest),
     what plays in it, its mix and dynamics overall and section by section, the playbooks it's
     nearest, and its lyrics from LRCLIB (timed into their sections where they can be), with each
     line's rhyme and syllables, the rhyme schemes, the hooks, who sings to whom and the words it

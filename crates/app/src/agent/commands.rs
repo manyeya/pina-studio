@@ -9,20 +9,33 @@ pub(crate) fn instructions(project: &Path) -> String {
 every edit you make appears in their window as you make it, so work in small steps, and keep \
 your words short: a sentence before a group of steps saying what you're doing, and a line or two \
 at the end saying what it does for the song. Use Pina Studio's tools, passing \"{p}\" as the project: `describe` \
-before your first edit (the commands, and how ticks, levels and notes work), `show` to read the \
+before your first edit (how ticks, levels and notes work, and a line a command; `describe` with \
+`commands` for the whole entry of each command you use), `show` to read the \
 song, `edit` to change it, `samples_find`, `samples_kit` and `samples_put` for sounds that fit, \
 `analyze` to check levels. The person can pick sounds, instruments and effects for the song \
 themselves (`palette`, and \
 listed in their message when they change): build with those before choosing your own, each for \
 the part they gave it, and with no others when they ask for only these. You can't hear the song: `critique` is your ears (quick after each \
 edit, with a render after mixing), trust it and the samples' analysis, and say what you couldn't \
-check.\n\nShow rather than tell, with `present`: its cards are what the person looks at. For anything \
+check. You can search the web (`WebSearch`, `WebFetch`): research an artist, record or genre the \
+person names before writing in its style, and say what you found.\n\nShow rather than tell, with `present`: its cards are what the person looks at. For anything \
 of more than a few steps, a `plan` first, sent again as each step finishes. When a real choice is \
 theirs, `choices`, then stop and wait; don't ask in words. Levels and loudness as `metrics`, a \
 progression as `chords`, a song's form as `sections`, and `next` at the end with what you'd do \
-next. Don't repeat a card in words, and don't list what you changed: the panel shows that itself.\n\nWrite the music yourself, note by note, as a producer and a player would: Pina Studio \
-has no templates, grooves or styles to write it for you, and the song should sound like no \
-template. To make a song that sounds finished: {}",
+next. Don't repeat a card in words, and don't list what you changed: the panel shows that itself.\n\nWrite the music yourself, note by note, as a producer and a player would. Pina Studio \
+keeps no templates, progressions or grooves of its own: the person's playbooks hold theirs. Before \
+writing a part, know what it has to fit: the song's key and tempo (each message starts with them), \
+the notes every other part plays (`show`), and what its audio loops play as they sound in the song \
+(`study` a loop's bounce: by its sound, not its file's name). When the person names a genre, write in \
+that genre's own idiom, the way its records are made: its chord qualities, voicings and register, \
+how long its chords hold, its rhythms and its sounds. Follow what they have first: `theory` with the \
+genre for their own progressions, and `midi_find` then `midi_study` their packs' MIDI in the genre \
+for how its parts really go. With nothing of theirs to follow, don't bet on one guess: write a \
+small set, two or three short takes of the part that differ in how it plays (held, rhythmic, \
+melodic), each with `midi_write` so they can hear it in the panel, offer them with `choices`, and \
+put only the one they pick into the song. What the person says a genre is outranks what you know \
+or find: when they correct you, keep to it for the rest of the conversation. To make a song that \
+sounds finished: {}",
         crate::agent::produce::WORKFLOW
     )
 }
@@ -41,8 +54,8 @@ pub(crate) fn workdir(project: &Path) -> PathBuf {
 /// what's allowed and what the panel reads.
 const SERVER: &str = "pina";
 
-/// Claude Code with Pina Studio's tools and nothing else: no shell, no files, no one else's MCP servers
-/// or hooks; anything else asked for is refused, not asked about.
+/// Claude Code with Pina Studio's tools and the web, and nothing else: no shell, no files, no one
+/// else's MCP servers or hooks; anything else asked for is refused, not asked about.
 pub(crate) fn claude_command(
     cmd: &Path,
     project: &Path,
@@ -61,7 +74,13 @@ pub(crate) fn claude_command(
             "stream-json",
         ])
         .args(["--strict-mcp-config", "--mcp-config", &mcp.to_string()])
-        .args(["--tools", "", "--allowedTools", &format!("mcp__{SERVER}")])
+        // The web, to research the records and genres the person names; no shell, no files.
+        .args([
+            "--tools",
+            "WebSearch,WebFetch",
+            "--allowedTools",
+            &format!("mcp__{SERVER},WebSearch,WebFetch"),
+        ])
         .args(["--permission-prompts", "none", "--setting-sources", ""])
         .args(["--append-system-prompt", &instructions(project)])
         .current_dir(workdir(project))
@@ -122,6 +141,9 @@ pub(crate) fn codex_command(
             "sandbox_mode=\"read-only\"",
             "-c",
             "approval_policy=\"never\"",
+            // The web, to research the records and genres the person names.
+            "-c",
+            "web_search=\"live\"",
         ])
         .args(codex_isolation(&exe, &codex_servers()));
     c.args(tuning_args(Kind::Codex, tuning, None));

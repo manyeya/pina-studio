@@ -3,7 +3,7 @@
 //! cards it chooses, and its edits land in the song as it makes them; a `pina ask` from a terminal
 //! shows here too, and so does any other agent's editing. Conversations are kept with the song.
 
-mod asking;
+pub(crate) mod asking;
 mod cards;
 mod changes;
 mod history;

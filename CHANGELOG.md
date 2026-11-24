@@ -9,7 +9,49 @@ first for changes that break songs or commands made before.
 
 ## [Unreleased]
 
+### Changed
+
+- Pina Studio keeps no musical templates of its own: its built-in chord progressions, its drum
+  grooves and the step sequencer's factory drum, bass, melodic and experimental patterns are
+  gone. Progressions and beats are yours, in your playbooks:
+  - A playbook's Feel tab has a beat you click in, step by step (hit, accent, soft, ghost,
+    off), words for its drums, and your own progressions as numerals ("i9 | VImaj9 | iv9 |
+    VII9"), each shown as chords. A progression that doesn't read is said, not saved.
+  - The piano roll's Chords › Progressions lists your playbooks' progressions, by playbook.
+  - The step sequencer's browser has a Playbooks folder of your playbooks' beats. Its empty
+    templates (Drum Kit, Melodic, Bass, Chord Rows) stay.
+  - A song study names the playbook whose beat its drums are most like.
+  - Playbooks that named a built-in groove keep its drums, written into the file as their own
+    beat. Their `groove` is now words for their drums.
+- The Studio Agent writes in the genre you name, the way its records are made, and fits each
+  part to the song first: its key and tempo, every other part's notes, and what its audio
+  loops play. It follows your playbook's progressions and your packs' MIDI in the genre; with
+  nothing of yours to follow, it writes two or three short takes that play differently, puts
+  them in the panel to hear, and asks which goes in. What you say a genre is outranks what it
+  knows or finds.
+- The Studio Agent can search the web, with Claude Code or Codex, to research the artists,
+  records and genres you name.
+
 ### Fixed
+
+- The Studio Agent couldn't see the song or its own command reference: `show` and `describe`
+  answered with more than Claude Code passes on, so it was handed a file it isn't allowed to
+  read, and wrote blind. Every tool now answers compactly; `describe` gives a line a command,
+  and the whole entry for the commands named; a song too big to show whole comes with its
+  notes and instruments summed up, and `show` with `track` gives one track in full.
+- Every message to the Studio Agent starts with the song in a line: its tempo (and changes),
+  meter, key (or that none is set, and what its notes read as), length and tracks, with each
+  audio track's transpose.
+- `midi_write` says when the notes written leave the song's key (or the key given): "Your
+  notes read as E minor; the song is C minor". The file is stamped with the key, so reading it
+  back used to say the key whatever the notes played.
+- `critique` no longer calls a song "nothing wrong" when it couldn't check the parts against
+  its audio loops: it says so, and lists each loop's strongest notes by its sound, transpose
+  and all.
+- A study of one of Pina Studio's own bounces goes by its sound: a bounce is named after its
+  track's sample, so a loop played 9 semitones down at 118 BPM was read as the sample's G minor
+  at 124. Bounced WAVs now say Pina Studio made them (in their INFO chunk), so they're known
+  wherever they're saved.
 
 - Settings › Audio offers only buffer sizes the output can be set to. A computer with no sound
   output got every size, each failing to apply; Windows shows only Auto, since its shared mode

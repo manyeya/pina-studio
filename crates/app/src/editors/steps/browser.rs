@@ -1,5 +1,5 @@
-//! The pattern browser: Pina Studio's patterns and templates and the user's own, in folders,
-//! searched by name; a click loads one into the pattern region. Its action menu saves the
+//! The pattern browser: the user's own patterns, their playbooks' beats and Pina Studio's empty
+//! templates, in folders, searched by name; a click loads one into the pattern region. Its action menu saves the
 //! pattern (or a template of it), makes and removes folders, and puts patterns in the song's
 //! key.
 
@@ -59,6 +59,13 @@ impl Workspace {
                     )
                     .collect()
             }
+            [top] if top == "Playbooks" => self
+                .genres
+                .list
+                .iter()
+                .filter(|p| p.beat.is_some())
+                .map(|p| (p.name.clone(), Item::Pattern(Entry::Book(p.id.clone()))))
+                .collect(),
             [top] => {
                 let folder = library::FOLDERS
                     .iter()
@@ -84,6 +91,14 @@ impl Workspace {
             .collect();
         let hit = |n: &str| words.iter().all(|w| n.to_lowercase().contains(w));
         let mut out = Vec::new();
+        for p in self.genres.list.iter().filter(|p| p.beat.is_some()) {
+            if hit(&p.name) {
+                out.push((
+                    format!("{}  ·  Playbooks", p.name),
+                    Item::Pattern(Entry::Book(p.id.clone())),
+                ));
+            }
+        }
         for folder in &library::FOLDERS[1..] {
             for (n, _) in library::factory(folder) {
                 if hit(&n) {
@@ -365,10 +380,9 @@ impl Workspace {
     }
 
     /// A pattern from the browser into the shown region: a template's rows and settings, or the
-    /// whole pattern; one of Pina Studio's melodic ones in the song's key. The region grows to
-    /// hold it once through.
+    /// whole pattern. The region grows to hold it once through.
     pub(crate) fn load_pattern(&mut self, entry: &Entry, cx: &mut Context<Self>) {
-        let Some((name, mut p, _template)) = library::read(entry) else {
+        let Some((name, p, _template)) = library::read(entry) else {
             self.status = Some("That pattern couldn't be read.".into());
             cx.notify();
             return;
@@ -376,12 +390,6 @@ impl Workspace {
         let Some(at) = self.pattern() else {
             return;
         };
-        if let Entry::Factory(folder, _) = entry
-            && matches!(*folder, "Bass" | "Melodic")
-            && let Some(key) = self.session.project.song_key()
-        {
-            p.set_key(key.root, true);
-        }
         let span = p.step * p.steps() as u64;
         self.edit(cx, |ws| {
             let r = &mut ws.session.project.tracks[at.0].regions[at.1];

@@ -1,4 +1,5 @@
-//! A genre's feel: swing and groove.
+//! A genre's feel: tempo, swing and key, its beat (the person's, step by step) and its
+//! progressions (theirs, as numerals). Pina Studio has no grooves or progressions of its own.
 
 use super::*;
 
@@ -23,54 +24,6 @@ pub(crate) fn swing_dots(swing: f32, color: u32) -> Div {
                 } else {
                     alpha(color, 0.35)
                 })
-        }))
-}
-
-/// A groove's bar: its kick, snare (or clap) and hats as steps.
-pub(crate) fn groove_grid(id: &str, color: u32) -> Div {
-    let g = theory::groove(id);
-    let (steps, rows) = theory::drums(g, 1, 0, 1);
-    let fine = steps as usize / 16;
-    let pick = |notes: &[u8]| {
-        rows.iter()
-            .filter(|(n, _)| notes.contains(n))
-            .map(|(_, cells)| cells.clone())
-            .reduce(|a, b| a.iter().zip(&b).map(|(x, y)| (*x).max(*y)).collect())
-            .unwrap_or_default()
-    };
-    let lines = [
-        ("kick", pick(&[36])),
-        ("snare", pick(&[38, 39, 37])),
-        ("hats", pick(&[42, 46, 70])),
-    ];
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .children(lines.into_iter().map(move |(name, cells)| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(3.))
-                .child(
-                    div()
-                        .w(px(38.))
-                        .text_size(px(10.))
-                        .text_color(rgb(TEXT_4))
-                        .child(name),
-                )
-                .children((0..16).map(move |k| {
-                    let v = cells.get(k * fine.max(1)).copied().unwrap_or(0);
-                    div()
-                        .w(px(12.))
-                        .h(px(12.))
-                        .rounded(px(3.))
-                        .when(k % 4 == 0, |d| d.ml(px(2.)))
-                        .bg(match v {
-                            0 => rgb(WELL).into(),
-                            v => alpha(color, 0.25 + 0.75 * v as f32 / 127.0),
-                        })
-                }))
         }))
 }
 
@@ -167,56 +120,50 @@ impl Workspace {
                         }),
                     )
             }));
-        let grooves: Vec<_> = theory::GROOVES
-            .iter()
-            .map(|g| {
-                let on = g.id == p.groove;
-                let id = g.id;
-                div()
-                    .px(px(8.))
-                    .h(px(24.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(7.))
-                    .text_size(px(11.5))
-                    .cursor_pointer()
-                    .border_1()
-                    .when(on, |d| {
-                        d.bg(alpha(color, 0.18))
-                            .border_color(alpha(color, 0.6))
-                            .text_color(rgb(TEXT))
-                    })
-                    .when(!on, |d| {
-                        d.border_color(rgb(LINE))
-                            .text_color(rgb(TEXT_3))
-                            .hover(|d| d.text_color(rgb(TEXT_2)).bg(rgb(OFF)))
-                    })
-                    .child(id.replace('_', " "))
-                    .debug_selector(move || format!("groove-{id}"))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |ws, _, _, cx| {
-                            ws.edit_genre(false, cx, |p| p.groove = id.to_string())
-                        }),
-                    )
-            })
-            .collect();
+        let fields = self.genres.fields.as_ref();
+        let harmony = fields.map(|f| f.harmony.clone());
+        let groove = fields.map(|f| f.groove.clone());
         let key_for = Key {
             root: 9,
             minor: p.minor,
         };
-        let found = theory::suggest(&key_for, &p.harmony, 0);
-        let chords = found
-            .numerals
-            .split('|')
-            .map(|bar| {
-                bar.split_whitespace()
-                    .filter_map(|c| theory::numeral(c, &key_for).map(|c| c.name_in(Some(&key_for))))
-                    .collect::<Vec<_>>()
-                    .join(" ")
+        let rows: Vec<Div> = fields
+            .map(|f| f.progressions.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let chords = p
+                    .progressions
+                    .get(i)
+                    .and_then(|n| playbook::progression_chords(n, p.minor))
+                    .map(|bars| {
+                        bars.iter()
+                            .map(|bar| {
+                                bar.iter()
+                                    .map(|c| c.name_in(Some(&key_for)))
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            })
+                            .collect::<Vec<_>>()
+                            .join("  ·  ")
+                    });
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .child(field_box(Some(f), "genre-progression"))
+                    .when_some(chords, |d, c| {
+                        d.child(
+                            div()
+                                .font_family(MONO)
+                                .text_size(px(11.))
+                                .text_color(rgb(tint(color, 0.45)))
+                                .child(c),
+                        )
+                    })
             })
-            .collect::<Vec<_>>();
-        let harmony = self.genres.fields.as_ref().map(|f| f.harmony.clone());
+            .collect();
         div()
             .flex()
             .flex_col()
@@ -247,36 +194,117 @@ impl Workspace {
                     .flex()
                     .gap(px(12.))
                     .child(
-                        tile("Groove", "Its drum groove")
+                        tile("Beat", "Click a step: hit, accent, soft, ghost, off")
                             .flex_1()
-                            .child(groove_grid(&p.groove, color))
-                            .child(div().flex().flex_wrap().gap(px(5.)).children(grooves)),
+                            .child(self.beat_grid(p, color, cx))
+                            .child(field_box(groove, "genre-groove")),
                     )
                     .child(
-                        tile("Harmony", "Words its chords are found by")
+                        tile("Progressions", "Yours, as numerals a bar at a time")
                             .flex_1()
                             .child(field_box(harmony, "genre-harmony"))
-                            .child(div().flex().flex_wrap().gap(px(6.)).children(
-                                chords.into_iter().map(|c| {
-                                    div()
-                                        .px(px(9.))
-                                        .h(px(26.))
-                                        .flex()
-                                        .items_center()
-                                        .rounded(px(7.))
-                                        .bg(alpha(color, 0.1))
-                                        .border_1()
-                                        .border_color(alpha(color, 0.25))
-                                        .font_family(MONO)
-                                        .text_size(px(12.))
-                                        .text_color(rgb(tint(color, 0.45)))
-                                        .child(c)
-                                }),
-                            ))
+                            .children(rows)
                             .child(div().text_size(px(11.)).text_color(rgb(TEXT_4)).child(
-                                format!("In {}, the first progression they find", key_for.name()),
+                                format!(
+                                    "Chords shown in {}. Clear one to take it out. The Studio Agent \
+writes from these, and with none writes a few of its own.",
+                                    key_for.name()
+                                ),
                             )),
                     ),
             )
     }
+
+    /// The book's beat, a row a drum, each step clicked through hit, accent, soft, ghost and off.
+    fn beat_grid(&mut self, p: &Playbook, color: u32, cx: &mut Context<Self>) -> Div {
+        let blank = ".".repeat(16);
+        let b = p.beat.clone().unwrap_or(playbook::Beat {
+            kick: blank.clone(),
+            snare: blank.clone(),
+            hats: blank,
+        });
+        let lines = [
+            (0usize, "kick", b.kick),
+            (1, "snare", b.snare),
+            (2, "hats", b.hats),
+        ];
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .children(lines.into_iter().map(|(row, name, steps)| {
+                let steps: Vec<char> = steps
+                    .chars()
+                    .chain(std::iter::repeat('.'))
+                    .take(16)
+                    .collect();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .w(px(38.))
+                            .text_size(px(10.))
+                            .text_color(rgb(TEXT_4))
+                            .child(name),
+                    )
+                    .children(steps.into_iter().enumerate().map(|(k, c)| {
+                        let level = match c {
+                            'X' => 1.0,
+                            'x' => 0.78,
+                            'o' => 0.55,
+                            'g' => 0.3,
+                            _ => 0.0,
+                        };
+                        div()
+                            .w(px(14.))
+                            .h(px(14.))
+                            .rounded(px(3.))
+                            .when(k % 4 == 0, |d| d.ml(px(2.)))
+                            .cursor_pointer()
+                            .bg(match level > 0.0 {
+                                false => rgb(WELL).into(),
+                                true => alpha(color, level),
+                            })
+                            .hover(|d| d.border_1().border_color(rgb(LINE_STRONG)))
+                            .debug_selector(move || format!("beat-{name}-{k}"))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |ws, _, _, cx| {
+                                    ws.edit_genre(false, cx, |p| step_beat(p, row, k))
+                                }),
+                            )
+                    }))
+            }))
+    }
+}
+
+/// One step of a book's beat moved on: off, hit, accent, soft, ghost, off. A book with no beat
+/// gets one, empty but for this step.
+pub(crate) fn step_beat(p: &mut Playbook, row: usize, k: usize) {
+    let blank = ".".repeat(16);
+    let b = p.beat.get_or_insert(playbook::Beat {
+        kick: blank.clone(),
+        snare: blank.clone(),
+        hats: blank,
+    });
+    let line = match row {
+        0 => &mut b.kick,
+        1 => &mut b.snare,
+        _ => &mut b.hats,
+    };
+    let mut steps: Vec<char> = line
+        .chars()
+        .chain(std::iter::repeat('.'))
+        .take(16)
+        .collect();
+    steps[k] = match steps[k] {
+        '.' => 'x',
+        'x' => 'X',
+        'X' => 'o',
+        'o' => 'g',
+        _ => '.',
+    };
+    *line = steps.into_iter().collect();
 }

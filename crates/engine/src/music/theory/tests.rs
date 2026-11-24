@@ -33,15 +33,8 @@ fn chords_read_and_write_both_ways() {
 }
 
 #[test]
-fn progressions_suit_the_words_and_lay_out_by_bar() {
+fn progressions_lay_out_by_bar() {
     let am = key("A minor");
-    let p = suggest(&am, "lofi", 3);
-    assert!(p.minor && p.suits.contains(&"lofi"));
-    assert!(
-        suggest(&key("C major"), "afrobeats", 1)
-            .suits
-            .contains(&"afrobeats")
-    );
     let spans = lay_out("VImaj9 | V7b9 | i9 | vii9 III7b9", &am, 0, 8, 3840).unwrap();
     let names: Vec<String> = spans.iter().map(|s| s.chord.name()).collect();
     assert_eq!(names[..5], ["Fmaj9", "E7b9", "Am9", "Gm9", "C7b9"]);
@@ -53,24 +46,6 @@ fn progressions_suit_the_words_and_lay_out_by_bar() {
     // A chord held over the bar line is one.
     assert_eq!(lay_out("Am | Am | F", &am, 0, 3, 3840).unwrap().len(), 2);
     assert!(lay_out("Am | Xq", &am, 0, 2, 3840).is_err());
-}
-
-#[test]
-fn grooves_have_their_feel_fills_and_rolls() {
-    let (steps, rows) = drums(groove("boom bap"), 4, 4, 1);
-    assert_eq!(steps, 16);
-    let kick = &rows.iter().find(|r| r.0 == 36).unwrap().1;
-    assert!(kick[0] > 90 && kick.len() == 64);
-    // The fill: the fourth bar's back half rises (on snare or toms), and a crash would follow.
-    let at = |i: usize| rows.iter().map(|r| r.1[i]).max().unwrap();
-    assert!(at(62) > at(56) && at(56) >= 70);
-    // Trap: on a 32nd grid, its hats rolled at the end of bar two.
-    let (steps, rows) = drums(groove("trap"), 2, 0, 2);
-    assert_eq!(steps, 32);
-    let hats = &rows.iter().find(|r| r.0 == 42).unwrap().1;
-    assert!(hats[56..64].iter().filter(|&&v| v > 0).count() >= 4);
-    assert_eq!(groove("deep house").id, "house");
-    assert_eq!(groove("unknown").id, "boom_bap");
 }
 
 #[test]

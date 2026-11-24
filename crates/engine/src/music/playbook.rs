@@ -39,7 +39,7 @@ pub struct Section {
     pub lufs: Option<f32>,
 }
 
-/// A bar of drums as a song plays them: a character a step, as `theory::GROOVES` are written.
+/// A bar of drums, one character a step: X accent, x hit, o soft, g ghost, . rest.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Beat {
@@ -57,11 +57,16 @@ pub struct Playbook {
     pub tempo: (f64, f64),
     /// Its keys are mostly minor.
     pub minor: bool,
-    /// Its drum groove (one of `theory::GROOVES`), and the swing it has (50 straight).
+    /// Words for its drums ("four on the floor, open hats on the off-beat"), and the swing it
+    /// has (50 straight). Its drums themselves are `beat`.
+    #[serde(default)]
     pub groove: String,
     pub swing: f32,
-    /// Words `theory` finds progressions for it by.
+    /// Words for its chords ("dark, soulful, jazzy sevenths").
     pub harmony: String,
+    /// The person's own progressions for it, as numerals bar by bar ("i9 | VImaj9 | iv9 | VII9").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub progressions: Vec<String>,
     pub parts: Vec<Part>,
     pub sections: Vec<Section>,
     /// Integrated loudness of a finished master, LUFS.
@@ -134,15 +139,13 @@ fn check(p: &Playbook) -> Result<(), String> {
     if p.id.trim().is_empty() {
         return Err("no id".into());
     }
-    if !crate::music::theory::GROOVES
+    if let Some(bad) = p
+        .progressions
         .iter()
-        .any(|g| g.id == p.groove)
+        .find(|n| progression_chords(n, p.minor).is_none())
     {
-        let ids: Vec<&str> = crate::music::theory::GROOVES.iter().map(|g| g.id).collect();
         return Err(format!(
-            "groove {:?} isn't one of {}",
-            p.groove,
-            ids.join(", ")
+            "progression {bad:?}: numerals bar by bar, as \"i9 | VImaj9 | iv9 | VII9\""
         ));
     }
     if p.tempo.0 > p.tempo.1 || p.tempo.0 < 20.0 {
@@ -159,6 +162,55 @@ fn check(p: &Playbook) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// A progression's chords, bar by bar, in A of the mode (named in any key by the caller); none
+/// if a numeral isn't one.
+pub fn progression_chords(
+    numerals: &str,
+    minor: bool,
+) -> Option<Vec<Vec<crate::music::theory::Chord>>> {
+    let key = crate::music::Key { root: 9, minor };
+    let bars: Vec<Vec<_>> = numerals
+        .split('|')
+        .map(|bar| {
+            bar.split_whitespace()
+                .map(|n| crate::music::theory::numeral(n, &key))
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect::<Option<_>>()?;
+    (bars.iter().any(|b| !b.is_empty())).then_some(bars)
+}
+
+impl Playbook {
+    /// Every progression it has: the person's own, then its song's (in a book made from one).
+    pub fn all_progressions(&self) -> Vec<String> {
+        let mut out = self.progressions.clone();
+        if !self.numerals.is_empty() {
+            let song = self.numerals.join(" | ");
+            if !out.contains(&song) {
+                out.push(song);
+            }
+        }
+        out
+    }
+}
+
+impl Beat {
+    /// How alike two bars of drums are, 0 to 1: hits shared against hits in either, the kick
+    /// weighed most, then the snare, then the hats.
+    pub fn likeness(&self, other: &Beat) -> f32 {
+        let on = |p: &str| -> Vec<bool> { p.chars().map(|c| c != '.' && c != 'g').collect() };
+        let jaccard = |a: &str, b: &str| -> f32 {
+            let (a, b) = (on(a), on(b));
+            let both = a.iter().zip(&b).filter(|(x, y)| **x && **y).count() as f32;
+            let either = a.iter().zip(&b).filter(|(x, y)| **x || **y).count() as f32;
+            if either == 0.0 { 1.0 } else { both / either }
+        };
+        0.45 * jaccard(&self.kick, &other.kick)
+            + 0.35 * jaccard(&self.snare, &other.snare)
+            + 0.2 * jaccard(&self.hats, &other.hats)
+    }
 }
 
 /// Writes a playbook to the person's folder, as `<id>.json`, whole or not at all.

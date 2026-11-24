@@ -156,20 +156,38 @@ pub fn moves(p: &Playbook) -> Vec<Move> {
         }
     }
     round.truncate(4);
-    out.push(match round.is_empty() {
-        true => Move {
-            kind: Kind::Harmony,
-            title: format!("Write {} chords", p.harmony),
-            why: "This book keeps a word for its chords, not the chords themselves.".into(),
-            at: None,
-            ask: format!("Write me an 8-bar chord loop that feels {}", p.harmony),
-        },
-        false => Move {
+    let words = |s: &str| match s.trim() {
+        "" => String::new(),
+        w => format!("{w} "),
+    };
+    out.push(match (round.is_empty(), p.progressions.first()) {
+        (false, _) => Move {
             kind: Kind::Harmony,
             title: format!("Go round {}", round.join(" ")),
             why: "The song's own chords, its eight bars that move the most.".into(),
             at: None,
             ask: format!("Write me an 8-bar chord loop on {}", round.join(" ")),
+        },
+        (true, Some(first)) => Move {
+            kind: Kind::Harmony,
+            title: format!("Go round {}", first.replace('|', "·")),
+            why: match p.progressions.len() {
+                1 => "Its progression.".into(),
+                n => format!("The first of its {n} progressions."),
+            },
+            at: None,
+            ask: format!("Write me an 8-bar chord loop on {first}, in my song's key"),
+        },
+        (true, None) => Move {
+            kind: Kind::Harmony,
+            title: format!("Write {}chords", words(&p.harmony)),
+            why: "This book keeps words for its chords, not the chords themselves.".into(),
+            at: None,
+            ask: format!(
+                "Write me an 8-bar {}chord loop for {}",
+                words(&p.harmony),
+                p.name
+            ),
         },
     });
     if let Some(b) = &p.beat {
@@ -193,16 +211,20 @@ pub fn moves(p: &Playbook) -> Vec<Move> {
                 b.kick, b.snare, b.hats, p.swing
             ),
         });
-    } else {
+    } else if !p.groove.trim().is_empty() {
         out.push(Move {
             kind: Kind::Rhythm,
-            title: format!("Use the {} groove", p.groove.replace('_', " ")),
+            title: format!("Drums: {}", p.groove.trim()),
             why: format!(
                 "Swing {:.0}, at {:.0} to {:.0} BPM.",
                 p.swing, p.tempo.0, p.tempo.1
             ),
             at: None,
-            ask: format!("Program the {} groove in my song", p.groove),
+            ask: format!(
+                "Program drums in my song: {}, swing {:.0}",
+                p.groove.trim(),
+                p.swing
+            ),
         });
     }
     const BANDS: [&str; 6] = ["sub", "bass", "low mids", "mids", "presence", "air"];
@@ -258,25 +280,29 @@ fn part(name: &str, channel: u8, program: u8, notes: Vec<Note>) -> Part {
     }
 }
 
-/// A book's drums, one row a drum, as steps: its song's own, else its groove's first bar.
+/// A book's drums, one row a drum, as steps; none if it has no beat.
 pub fn beat_rows(p: &Playbook) -> Vec<(u8, String)> {
-    match &p.beat {
-        Some(b) => vec![
+    p.beat.as_ref().map_or(Vec::new(), |b| {
+        vec![
             (Drum::Kick.note(), b.kick.clone()),
             (Drum::Snare.note(), b.snare.clone()),
             (Drum::HatClosed.note(), b.hats.clone()),
-        ],
-        None => theory::groove(&p.groove)
-            .rows
-            .iter()
-            .filter_map(|(d, bars)| Some((d.note(), bars.first()?.to_string())))
-            .collect(),
-    }
+        ]
+    })
 }
 
-/// A book as notes: its chords a bar each over its drums, on an electric piano and a bass.
+/// A book as notes: its chords a bar each (its song's, else its first progression's, in A) over
+/// its drums, on an electric piano and a bass.
 pub fn hearing(p: &Playbook) -> MidiFile {
-    let chords: Vec<Chord> = p.chords.iter().filter_map(|c| Chord::parse(c)).collect();
+    let mut chords: Vec<Chord> = p.chords.iter().filter_map(|c| Chord::parse(c)).collect();
+    if chords.is_empty()
+        && let Some(bars) = p
+            .progressions
+            .first()
+            .and_then(|n| super::progression_chords(n, p.minor))
+    {
+        chords = bars.into_iter().flatten().collect();
+    }
     let bars = chords.len().max(2) as u64;
     let (mut keys, mut bass) = (Vec::new(), Vec::new());
     for (i, c) in chords.iter().enumerate() {
@@ -357,6 +383,7 @@ mod tests {
             groove: "house".into(),
             swing: 50.0,
             harmony: "dark".into(),
+            progressions: Vec::new(),
             parts: vec![role("drums"), role("bass"), role("lead")],
             sections: vec![
                 section("Intro", 16, &["drums", "bass"]),
@@ -443,7 +470,20 @@ mod tests {
         b.beat = None;
         let m = moves(&b);
         assert!(m.iter().any(|x| x.title == "Write dark chords"));
-        assert!(m.iter().any(|x| x.title == "Use the house groove"));
+        assert!(m.iter().any(|x| x.title == "Drums: house"));
+        // Its own progressions come before words.
+        b.progressions = vec!["i9 | VImaj9".into()];
+        assert!(moves(&b).iter().any(|x| x.title == "Go round i9 · VImaj9"));
+        // With no words and no beat, it says nothing of drums.
+        b.groove.clear();
+        assert!(moves(&b).iter().all(|x| x.kind != Kind::Rhythm));
+        // Its progression is what it plays.
+        let keys = hearing(&b)
+            .parts
+            .into_iter()
+            .find(|p| p.name == "Keys")
+            .unwrap();
+        assert!(keys.notes.iter().any(|n| n.pitch == 60 + 9)); // A, the i of A minor
     }
 
     #[test]

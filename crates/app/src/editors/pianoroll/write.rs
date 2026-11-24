@@ -33,14 +33,14 @@ pub struct Writing {
     pub writer: Writer,
     pub progressions: bool,
     /// Chords: sevenths or triads, those picked in order, how they're voiced and played, a bass
-    /// under them, how many beats each, and the mood the progressions are narrowed to.
+    /// under them, how many beats each, and the playbook (by id) the progressions are narrowed to.
     pub sevenths: bool,
     pub chords: Vec<Chord>,
     pub voicing: Voicing,
     pub performance: Performance,
     pub bass: bool,
     pub beats: u8,
-    pub mood: Option<&'static str>,
+    pub book: Option<String>,
 }
 
 impl Default for Writing {
@@ -63,7 +63,7 @@ impl Default for Writing {
             performance: Performance::Block,
             bass: false,
             beats: 4,
-            mood: None,
+            book: None,
         }
     }
 }
@@ -228,7 +228,12 @@ impl Workspace {
 
     /// Changes what the tabs are set to.
     fn set_writing(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Writing)) {
+        let was = self.roll_writing.progressions;
         f(&mut self.roll_writing);
+        // Progressions opened: the playbooks as they are now (the agent or a hand may have changed them).
+        if self.roll_writing.progressions && !was {
+            self.genres.list = pina_engine::music::playbook::load().0;
+        }
         cx.notify();
     }
 
@@ -715,7 +720,7 @@ impl Workspace {
             WritingSet::Voicing(v) => w.voicing = v,
             WritingSet::Performance(p) => w.performance = p,
             WritingSet::Beats(b) => w.beats = b,
-            WritingSet::Mood(m) => w.mood = m,
+            WritingSet::Book(b) => w.book = b,
         });
     }
 
@@ -898,39 +903,57 @@ impl Workspace {
                     .child(say("A click plays a chord and adds it to yours."))
             }
             true => {
-                let mood = w
-                    .mood
-                    .map_or("All moods".to_string(), |m| m.replace('_', " "));
-                let moods = button(format!("{mood}  ▾"), false)
+                // The person's own progressions: Pina Studio keeps none.
+                let books: Vec<(String, String, Vec<String>)> = self
+                    .genres
+                    .list
+                    .iter()
+                    .map(|p| (p.id.clone(), p.name.clone(), p.all_progressions()))
+                    .filter(|b| !b.2.is_empty())
+                    .collect();
+                let shown = w
+                    .book
+                    .as_ref()
+                    .and_then(|id| books.iter().find(|b| &b.0 == id))
+                    .map_or("All playbooks".to_string(), |b| b.1.clone());
+                let menu: Vec<(String, String)> =
+                    books.iter().map(|b| (b.0.clone(), b.1.clone())).collect();
+                let moods = button(format!("{shown}  ▾"), false)
                     .h(px(24.))
                     .px(px(10.))
                     .text_size(px(11.))
-                    .debug_selector(|| "harmony-moods".into())
+                    .debug_selector(|| "harmony-books".into())
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |ws, e: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            let now = ws.roll_writing.mood;
+                            let now = ws.roll_writing.book.clone();
                             let tick = |on: bool| if on { "✓ " } else { "" };
                             let items = std::iter::once((
-                                format!("{}All moods", tick(now.is_none())),
-                                WritingSet::Mood(None),
+                                format!("{}All playbooks", tick(now.is_none())),
+                                WritingSet::Book(None),
                             ))
-                            .chain(harmony::moods().into_iter().map(|m| {
+                            .chain(menu.iter().map(|(id, name)| {
                                 (
-                                    format!("{}{}", tick(now == Some(m)), m.replace('_', " ")),
-                                    WritingSet::Mood(Some(m)),
+                                    format!("{}{name}", tick(now.as_deref() == Some(id))),
+                                    WritingSet::Book(Some(id.clone())),
                                 )
                             }))
                             .collect();
                             ws.choices_menu(e.position, items, cx);
                         }),
                     );
-                let list: Vec<Div> = harmony::progressions(key.minor, w.mood)
+                let picked: Vec<(String, String)> = books
+                    .iter()
+                    .filter(|b| w.book.as_ref().is_none_or(|id| &b.0 == id))
+                    .flat_map(|b| b.2.iter().map(|n| (n.clone(), b.1.clone())))
+                    .collect();
+                let empty = picked.is_empty();
+                let list: Vec<Div> = picked
                     .into_iter()
                     .enumerate()
-                    .map(|(i, p)| {
-                        let chords: Vec<Chord> = harmony::progression(p, key)
+                    .map(|(i, (numerals, book))| {
+                        let chords: Vec<Chord> = harmony::progression(&numerals, key)
                             .into_iter()
                             .map(|c| c.0)
                             .collect();
@@ -971,9 +994,8 @@ impl Workspace {
                                             .overflow_hidden()
                                             .text_ellipsis()
                                             .child(format!(
-                                                "{}  ·  {}",
-                                                p.numerals.replace('|', "·"),
-                                                p.suits.join(", ").replace('_', " ")
+                                                "{}  ·  {book}",
+                                                numerals.replace('|', "·")
                                             )),
                                     ),
                             )
@@ -1008,10 +1030,16 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(part("By mood"))
-                            .child(moods),
+                            .child(part("By playbook"))
+                            .when(!books.is_empty(), |d| d.child(moods)),
                     )
-                    .child(say("A click makes it yours; ▶ plays it first."))
+                    .child(say(match empty {
+                        true => {
+                            "Your playbooks have no progressions yet. Add them on a playbook's \
+Feel tab, or ask the Studio Agent for a few."
+                        }
+                        false => "A click makes it yours; ▶ plays it first.",
+                    }))
                     .child(div().flex().flex_col().gap(px(4.)).children(list))
             }
         };
@@ -1182,10 +1210,10 @@ impl Workspace {
 }
 
 /// A Chords setting picked from its menu.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum WritingSet {
     Voicing(Voicing),
     Performance(Performance),
     Beats(u8),
-    Mood(Option<&'static str>),
+    Book(Option<String>),
 }

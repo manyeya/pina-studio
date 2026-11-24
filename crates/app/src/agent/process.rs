@@ -212,7 +212,14 @@ pub fn ask(kind: Kind, dir: &Path, words: &str) -> Result<(), String> {
     let song = dir
         .file_name()
         .map_or(String::new(), |n| n.to_string_lossy().into_owned());
-    agent.ask(words)?;
+    // As the app does: the song in a line before what's asked.
+    match crate::cli::project(&dir) {
+        Ok(p) => agent.ask(&format!(
+            "{}\n\n{words}",
+            crate::agent::chat::asking::song_line(&p)
+        ))?,
+        Err(_) => agent.ask(words)?,
+    }
     tell(&Event::Asked {
         text: words.to_string(),
     });

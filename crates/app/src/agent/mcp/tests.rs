@@ -137,6 +137,17 @@ fn speaks_mcp() {
         !named["summary"].as_str().unwrap().contains("drums"),
         "{named}"
     );
+    // In the key: nothing to say. Out of it (E major's G# and C# and D#, in A minor): said plainly.
+    assert!(one.get("key_check").is_none(), "{one}");
+    let e = "1.1 E4 4 100\n1.5 G#4 4 90\n1.9 B4 4 100\n1.13 C#5 4 90\n2.1 D#4 8 90";
+    let (text, _) = write(35, "Elsewhere", e, json!([]));
+    let off: Value = serde_json::from_str(&text).unwrap();
+    let said = off["key_check"].as_str().unwrap_or_default();
+    assert!(
+        said.starts_with("Your notes read as ")
+            && said.contains("; the key you gave is A minor: 3 of 5 notes are outside it"),
+        "{off}"
+    );
     let (text, err) = write(33, "Bad", "not a note", json!([]));
     assert!(err && text.contains("line 1"), "{text}");
     let (text, err) = tool(5, "analyze", json!({"path": project}));

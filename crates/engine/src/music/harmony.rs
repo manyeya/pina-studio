@@ -1,4 +1,4 @@
-//! Writing with chords: the ones a key holds and those it borrows, progressions from the library,
+//! Writing with chords: the ones a key holds and those it borrows, progressions laid out by bar,
 //! each chord voiced (close, open, spread, or led from the last by the fewest steps) and played
 //! (held, strummed, arpeggiated, pulsed, on the off-beats, in a rhythm, broken), a bass under it;
 //! and the chords some notes play, read back.
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Key,
-    theory::{Chord, PROGRESSIONS, Progression, name_notes, numeral},
+    theory::{Chord, name_notes, numeral},
 };
 use crate::song::project::Note;
 
@@ -40,8 +40,8 @@ fn read(key: Key, names: &[&str]) -> Vec<(String, Chord)> {
 
 /// A progression's chords in `key`, each with its share of a bar: "ii9 | V13 | Imaj9 V7" is a
 /// bar each, then two halves.
-pub fn progression(p: &Progression, key: Key) -> Vec<(Chord, f32)> {
-    p.numerals
+pub fn progression(numerals: &str, key: Key) -> Vec<(Chord, f32)> {
+    numerals
         .split('|')
         .flat_map(|bar| {
             let chords: Vec<Chord> = bar
@@ -52,29 +52,6 @@ pub fn progression(p: &Progression, key: Key) -> Vec<(Chord, f32)> {
             chords.into_iter().map(move |c| (c, share))
         })
         .collect()
-}
-
-/// The library's progressions for a key's mode, those suiting `mood` (any, with None).
-pub fn progressions(minor: bool, mood: Option<&str>) -> Vec<&'static Progression> {
-    PROGRESSIONS
-        .iter()
-        .filter(|p| p.minor == minor && mood.is_none_or(|m| p.suits.contains(&m)))
-        .collect()
-}
-
-/// Every mood and genre the library's progressions suit, most used first.
-pub fn moods() -> Vec<&'static str> {
-    let mut seen: Vec<(&'static str, usize)> = Vec::new();
-    for p in PROGRESSIONS {
-        for &s in p.suits {
-            match seen.iter_mut().find(|m| m.0 == s) {
-                Some(m) => m.1 += 1,
-                None => seen.push((s, 1)),
-            }
-        }
-    }
-    seen.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-    seen.into_iter().map(|m| m.0).collect()
 }
 
 /// How a chord's notes are stacked.

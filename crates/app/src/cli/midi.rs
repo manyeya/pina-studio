@@ -155,10 +155,14 @@ pub fn write(
     if notes == 0 {
         return Err("midi_write needs some notes".into());
     }
+    let asked = key.is_some();
     let key = match key {
         Some(k) => Some(Key::parse(k).ok_or(format!("no key {k}"))?),
         None => p.song_key(),
     };
+    // The file is stamped with the key, so reading it back says that key whatever the notes
+    // play: the notes themselves are held against it.
+    let check = key.and_then(|k| key_check(&made, k, asked));
     let file = MidiFile {
         parts: made,
         tempo: Some(tempo.unwrap_or(p.tempo)),
@@ -192,6 +196,9 @@ pub fn write(
         "said": "It's in the Studio Agent panel for them to hear and drag in. It isn't in the song: bring \
             it in with import_midi only if they ask.",
     });
+    if let Some(said) = check {
+        out["key_check"] = json!(said);
+    }
     if !like.is_empty() {
         let files = group_of(like)?;
         let refs: Vec<(&MidiFile, &midi::MidiStudy)> = files.iter().map(|(f, s)| (f, s)).collect();
@@ -204,6 +211,37 @@ pub fn write(
         }
     }
     Ok(out)
+}
+
+/// What to say when the pitched notes leave `key`: more than a sixth of their time outside it
+/// (a relative key, with the same notes, passes). `asked`: the key was given, not the song's.
+fn key_check(parts: &[Part], key: Key, asked: bool) -> Option<String> {
+    let notes: Vec<(u8, u64)> = parts
+        .iter()
+        .filter(|p| p.channel != DRUMS)
+        .flat_map(|p| p.notes.iter().map(|n| (n.pitch, n.length.max(1))))
+        .collect();
+    let total: u64 = notes.iter().map(|n| n.1).sum();
+    let outside: Vec<&(u8, u64)> = notes.iter().filter(|n| !key.contains(n.0)).collect();
+    let off: u64 = outside.iter().map(|n| n.1).sum();
+    if total == 0 || off * 6 <= total {
+        return None;
+    }
+    let heard = pina_engine::music::detect(notes.iter().copied())?;
+    let whose = if asked {
+        "the key you gave is"
+    } else {
+        "the song is"
+    };
+    Some(format!(
+        "Your notes read as {}; {whose} {}: {} of {} notes are outside it. Rewrite them in {} \
+unless the person asked for another key.",
+        heard.name(),
+        key.name(),
+        outside.len(),
+        notes.len(),
+        key.name()
+    ))
 }
 
 /// The library's MIDI files that fit: by `words`, `role`, `key` and `tempo` (a project's own key

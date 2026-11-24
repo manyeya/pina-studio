@@ -322,7 +322,7 @@ pub(super) fn set_up(
                 _ => None,
             };
             ws.steps.tab = InspectorTab::Row;
-            ws.steps.folder = vec!["Drums".into()];
+            ws.steps.folder = vec!["Playbooks".into()];
         }
         // The tracks with the sample browser beside them and the piano roll under them,
         // no inspector: the columns' edges, to line up.

@@ -392,11 +392,84 @@ fn write_wav(
             }
         }
     }
-    w.finalize().map_err(err)
+    w.finalize().map_err(err)?;
+    sign(file).map_err(|e| format!("{}: {e}", file.display()))
+}
+
+/// What a WAV Pina Studio bounced says made it (its INFO chunk's ISFT): a study then knows its
+/// name is its track's sample's, not how the song plays it.
+pub const MADE_BY: &[u8] = b"Pina Studio";
+
+/// Marks a WAV as Pina Studio's own: a LIST/INFO chunk at its end, naming Pina Studio as what
+/// made it (players pass over chunks they don't know).
+fn sign(file: &Path) -> std::io::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(file)?;
+    let mut end = f.seek(SeekFrom::End(0))?;
+    if end % 2 == 1 {
+        f.write_all(&[0])?;
+        end += 1;
+    }
+    let mut text = MADE_BY.to_vec();
+    text.push(0);
+    if text.len() % 2 == 1 {
+        text.push(0);
+    }
+    let mut list = b"INFO".to_vec();
+    list.extend_from_slice(b"ISFT");
+    list.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    list.extend_from_slice(&text);
+    f.write_all(b"LIST")?;
+    f.write_all(&(list.len() as u32).to_le_bytes())?;
+    f.write_all(&list)?;
+    // The RIFF size is the file's, less its first 8 bytes.
+    let riff = (end + list.len() as u64) as u32;
+    f.seek(SeekFrom::Start(4))?;
+    f.write_all(&riff.to_le_bytes())
+}
+
+/// Whether a WAV says Pina Studio made it (`sign`): its chunks walked, its audio not read.
+pub fn signed(file: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(file) else {
+        return false;
+    };
+    let mut head = [0u8; 12];
+    if f.read_exact(&mut head).is_err() || &head[..4] != b"RIFF" || &head[8..] != b"WAVE" {
+        return false;
+    }
+    let mut chunk = [0u8; 8];
+    while f.read_exact(&mut chunk).is_ok() {
+        let size = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]) as u64;
+        if &chunk[..4] == b"LIST" && size < 4096 {
+            let mut list = vec![0u8; size as usize];
+            if f.read_exact(&mut list).is_err() {
+                return false;
+            }
+            if list.starts_with(b"INFO") && list.windows(MADE_BY.len()).any(|w| w == MADE_BY) {
+                return true;
+            }
+            if size % 2 == 1 && f.seek(SeekFrom::Current(1)).is_err() {
+                return false;
+            }
+        } else if f.seek(SeekFrom::Current((size + size % 2) as i64)).is_err() {
+            return false;
+        }
+    }
+    false
 }
 
 /// One file of the audio in one format.
-fn write(l: &[f32], r: &[f32], opts: &Options, f: Format, file: &Path) -> Result<(), String> {
+pub(crate) fn write(
+    l: &[f32],
+    r: &[f32],
+    opts: &Options,
+    f: Format,
+    file: &Path,
+) -> Result<(), String> {
     match f {
         Format::Wav => write_wav(l, r, opts.rate, opts.bits, opts.dither, file),
         Format::Mp3 { kbps } => write_mp3(l, r, opts.rate, kbps, file),

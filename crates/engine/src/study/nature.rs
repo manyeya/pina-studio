@@ -358,12 +358,32 @@ pub fn of(l: &[f32], r: &[f32], rate: f64, path: &Path) -> Nature {
     )
 }
 
-/// What's known of a file before it's measured.
+/// Whether a file is one of Pina Studio's own renders: a WAV it signed, or anything in a song's
+/// Bounces folder (bounced before they were signed, or in another format).
+pub fn bounced(path: &Path) -> bool {
+    crate::audio::bounce::signed(path)
+        || path.parent().is_some_and(|d| {
+            d.file_name().is_some_and(|n| n == "Bounces")
+                && d.parent()
+                    .is_some_and(|song| song.join("project.json").is_file())
+        })
+}
+
+/// What's known of a file before it's measured. A bounce is named after its track's sample, not
+/// after how the song plays it (moved, or at another tempo), so its name gives no tempo or key.
 pub fn given(path: &Path, n: &Nature) -> Given {
     let name = path
         .file_name()
         .map_or(String::new(), |n| n.to_string_lossy().into_owned());
     let lower = name.to_lowercase();
+    if bounced(path) {
+        return Given {
+            tempo: None,
+            key: None,
+            looped: !n.song,
+            line: n.makeup == Makeup::Line,
+        };
+    }
     Given {
         // A bare number in a loop's name is its tempo: packs name them so.
         tempo: rhythm::named_tempo(&lower).map(|(v, weak)| (v, weak && !lower.contains("loop"))),
@@ -671,6 +691,37 @@ mod tests {
 
     fn window(heard: &[(Category, f32)]) -> Vec<(Category, f32)> {
         heard.to_vec()
+    }
+
+    #[test]
+    fn a_bounce_is_heard_not_read_by_its_name() {
+        let song = std::env::temp_dir().join(format!("pina-bounced-{}", std::process::id()));
+        std::fs::create_dir_all(song.join("Bounces")).unwrap();
+        std::fs::write(song.join("project.json"), "{}").unwrap();
+        let bounce = song.join("Bounces/ctx - Synth_019_124BPM_Gmin.wav");
+        let pack = song.join("Synth_019_124BPM_Gmin.wav");
+        let loop_ = Nature::default();
+        assert!(bounced(&bounce) && !bounced(&pack));
+        // Bounced anywhere else: known by what it says made it.
+        let elsewhere = song.join("Synth_019_124BPM_Gmin bounced.wav");
+        let opts = crate::audio::bounce::Options::default();
+        crate::audio::bounce::write(
+            &[0.1; 480],
+            &[0.1; 480],
+            &opts,
+            crate::audio::bounce::Format::Wav,
+            &elsewhere,
+        )
+        .unwrap();
+        assert!(bounced(&elsewhere) && given(&elsewhere, &loop_).key.is_none());
+        let (read, rate) = crate::audio::engine::read_audio(&elsewhere).unwrap();
+        assert_eq!((read[0].len(), rate as u32), (480, opts.rate));
+        let g = given(&bounce, &loop_);
+        assert!(g.tempo.is_none() && g.key.is_none() && g.looped);
+        // A pack's own file still says what it is.
+        let g = given(&pack, &loop_);
+        assert!(g.tempo.is_some() && g.key.is_some());
+        std::fs::remove_dir_all(&song).unwrap();
     }
 
     #[test]

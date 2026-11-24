@@ -415,13 +415,16 @@ pub fn summary(s: &Study) -> String {
     }
     if !s.groove.is_none() {
         out.push_str(&format!(
-            " Groove: kick {}, snare {}, hats {}, swing {:.0} on the {}, nearest Pina Studio groove {}.",
+            " Groove: kick {}, snare {}, hats {}, swing {:.0} on the {}{}.",
             s.groove.kick,
             s.groove.snare,
             s.groove.hats,
             s.groove.swing,
             s.groove.swing_on,
-            s.groove.nearest
+            match s.groove.nearest.is_empty() {
+                true => String::new(),
+                false => format!(", most like the {} playbook's beat", s.groove.nearest),
+            }
         ));
     }
     if let Some(g) = s.genres.first() {

@@ -1,4 +1,4 @@
-//! A producer's tools for agents: the critic, the person's playbooks, chord suggestions, a reference
+//! A producer's tools for agents: the critic, the person's playbooks, a key's chords, a reference
 //! song to aim at, sounds for a part, a mix by role, and a master to a loudness. Edits go through
 //! `cli::edit_with`, so they land live in the app when it has the song open.
 
@@ -9,7 +9,7 @@ use pina_engine::{
     music::analysis,
     music::critique::{self, Heard},
     music::playbook,
-    music::theory::{self, PROGRESSIONS},
+    music::theory,
     plugin::scan,
     song::commands::{ChannelRef, Command},
     song::project::{
@@ -425,21 +425,106 @@ pub fn critique(dir: &Path, quick: bool, range: Option<(u64, u64)>) -> Result<Va
             }),
         }
     }
+    // The notes are all the critic reads: audio loops have none, so what they play is said by
+    // their sound, and nothing is called right that they weren't checked against.
+    let loops = loops_heard(&p, dir);
+    if !loops.is_empty() {
+        let names: Vec<String> = loops
+            .iter()
+            .filter_map(|l| Some(format!("track {} ({})", l["track"], l["name"].as_str()?)))
+            .collect();
+        issues.push(critique::Issue {
+            level: "note",
+            area: "harmony",
+            what: format!(
+                "the parts weren't checked against {} audio {}: the critic reads notes, and audio has none",
+                loops.len(),
+                if loops.len() == 1 { "loop" } else { "loops" }
+            ),
+            at: Some(names.join(", ")),
+            fix: "fit what you write to `loops` (each loop's strongest notes by its sound, as it \
+plays in the song), and `study` a loop's bounce for its chords"
+                .into(),
+        });
+    }
     let count = |l: &str| issues.iter().filter(|i| i.level == l).count();
+    let unchecked = match loops.is_empty() {
+        true => "",
+        false => "; the audio loops weren't checked against the parts (see `loops`)",
+    };
     let verdict = match (count("fix"), count("improve")) {
-        (0, 0) => {
-            "nothing to fix: listen to it (render) and trust your ears over the numbers".to_string()
+        (0, 0) => format!(
+            "nothing to fix in the notes{unchecked}: listen to it (render) and trust your ears over the numbers"
+        ),
+        (0, n) => format!(
+            "nothing wrong in the notes, {n} things between it and a finished record{unchecked}"
+        ),
+        (1, n) => format!("1 thing sounds wrong (fix it first), {n} more to improve{unchecked}"),
+        (f, n) => {
+            format!("{f} things sound wrong (fix them first), {n} more to improve{unchecked}")
         }
-        (0, n) => format!("nothing wrong, {n} things between it and a finished record"),
-        (f, n) => format!("{f} things sound wrong (fix them first), {n} more to improve"),
     };
     Ok(json!({
         "verdict": verdict,
         "genre": p.genre,
         "heard": !quick,
         "like_reference": likeness,
+        "loops": loops,
         "issues": issues,
     }))
+}
+
+/// What each audio loop with notes in it plays, by its sound as the song plays it (moved by its
+/// region's transpose): its strongest pitch classes. Drum loops, with no notes to speak of,
+/// aren't listed.
+fn loops_heard(p: &Project, dir: &Path) -> Vec<Value> {
+    const NAMES: [&str; 12] = [
+        "C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B",
+    ];
+    let mut out: Vec<Value> = Vec::new();
+    let mut seen: Vec<(PathBuf, i8)> = Vec::new();
+    for (t, track) in p.tracks.iter().enumerate().filter(|(_, t)| !t.mute) {
+        for r in track.regions.iter().filter(|r| !r.mute) {
+            let pina_engine::song::project::Content::Audio { file, .. } = &r.content else {
+                continue;
+            };
+            let file = dir.join(file);
+            if seen.contains(&(file.clone(), r.transpose)) {
+                continue;
+            }
+            seen.push((file.clone(), r.transpose));
+            let Ok((l, rr, rate)) = cli::audio(&file) else {
+                continue;
+            };
+            let notes = analysis::analyze(&l, &rr, rate).notes;
+            // Drums and noise: no key to speak of.
+            if notes.key.is_empty() || notes.key_fit < 0.5 {
+                continue;
+            }
+            let shift = r.transpose as i32;
+            let mean = 100.0 / 12.0;
+            let mut strong: Vec<(usize, f32)> = (0..12)
+                .map(|i| {
+                    (
+                        (i as i32 + shift).rem_euclid(12) as usize,
+                        notes.classes[i].1,
+                    )
+                })
+                .filter(|(_, v)| *v >= mean * 1.2)
+                .collect();
+            strong.sort_by(|a, b| b.1.total_cmp(&a.1));
+            strong.truncate(4);
+            // Its strongest notes only: a key read from a loop's sound mistakes its mode (a root
+            // and fifth with no third reads major or minor alike), and overtones add notes.
+            out.push(json!({
+                "track": t,
+                "name": track.name,
+                "transpose": r.transpose,
+                "strongest": strong.iter().map(|(i, _)| NAMES[*i]).collect::<Vec<_>>(),
+            }));
+        }
+    }
+    out
 }
 
 /// A genre's playbook, or every genre's id and name.
@@ -462,12 +547,8 @@ pub fn playbook(genre: Option<&str>) -> Result<Value, String> {
                 ids if ids.is_empty() => format!("no playbook for {g:?}: the person has none"),
                 ids => format!("no playbook for {g:?}; theirs are {}", ids.join(", ")),
             })?;
-            let key = Key {
-                root: 9,
-                minor: b.minor,
-            };
             let mut out = serde_json::to_value(&b).map_err(|e| e.to_string())?;
-            out["progressions"] = json!(suggestions(&key, &b.harmony, 4));
+            out["progressions"] = json!(b.all_progressions());
             if let Some(d) = playbook::dir() {
                 out["file"] = json!(d.join(format!("{}.json", b.id)));
             }
@@ -501,53 +582,41 @@ pub fn edit_playbooks(genre: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// The library's progressions that suit `words`, best first, written in `key`.
-fn suggestions(key: &Key, words: &str, n: usize) -> Vec<Value> {
-    let words: Vec<String> = words
-        .to_lowercase()
-        .replace('-', "_")
-        .split([' ', ','])
-        .filter(|w| !w.is_empty())
-        .map(str::to_string)
-        .collect();
-    let mut ranked: Vec<(usize, &theory::Progression)> = PROGRESSIONS
+/// The person's own progressions, from their playbooks whose genre `words` name, written in
+/// `key`: Pina Studio has none of its own.
+fn suggestions(key: &Key, words: &str) -> Vec<Value> {
+    let said = words.trim().to_lowercase().replace([' ', '-'], "_");
+    if said.is_empty() {
+        return Vec::new();
+    }
+    let names =
+        |p: &playbook::Playbook| [p.id.clone(), p.name.to_lowercase().replace([' ', '-'], "_")];
+    playbook::load()
+        .0
         .iter()
-        .filter(|p| p.minor == key.minor)
-        .map(|p| {
-            (
-                p.suits
-                    .iter()
-                    .filter(|s| {
-                        words
-                            .iter()
-                            .any(|w| s.starts_with(w.as_str()) || w.starts_with(**s))
-                    })
-                    .count(),
-                p,
-            )
+        .filter(|p| {
+            names(p)
+                .iter()
+                .any(|n| said.contains(n.as_str()) || n.contains(&said))
         })
-        .collect();
-    ranked.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
-    ranked
-        .into_iter()
-        .take(n)
-        .map(|(_, p)| {
-            let chords: Vec<String> = p
-                .numerals
-                .split('|')
-                .map(|bar| {
-                    bar.split_whitespace()
-                        .filter_map(|c| theory::numeral(c, key).map(|c| c.name_in(Some(key))))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .collect();
-            json!({ "numerals": p.numerals, "chords": chords.join(" | "), "suits": p.suits })
+        .flat_map(|p| {
+            p.all_progressions().into_iter().map(move |numerals| {
+                let chords: Vec<String> = numerals
+                    .split('|')
+                    .map(|bar| {
+                        bar.split_whitespace()
+                            .filter_map(|c| theory::numeral(c, key).map(|c| c.name_in(Some(key))))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .collect();
+                json!({ "playbook": p.name, "numerals": numerals, "chords": chords.join(" | ") })
+            })
         })
         .collect()
 }
 
-/// Chords for a key: progressions that suit the words, and the key's own chords by degree.
+/// Chords for a key: its own by degree, and the person's progressions for the genre `words` name.
 pub fn theory(key: &str, words: &str) -> Result<Value, String> {
     let k = Key::parse(key).ok_or(format!(
         "{key:?} isn't a key: try \"A minor\" or \"Eb major\""
@@ -569,13 +638,28 @@ pub fn theory(key: &str, words: &str) -> Result<Value, String> {
             ][p as usize]
         })
         .collect();
-    Ok(json!({
+    let progressions = suggestions(&k, words);
+    let none = progressions.is_empty();
+    let mut out = json!({
         "key": k.name(),
         "scale": notes,
         "chords": own,
-        "progressions": suggestions(&k, words, 6),
+        "progressions": progressions,
         "write": "set_chords with the numerals or chords; then write the parts on them yourself",
-    }))
+    });
+    if none {
+        out["none"] = json!(format!(
+            "The person has no progressions{} in their playbooks, and Pina Studio keeps none of its \
+own. Write a small set yourself, three at most, in the genre's own idiom: the chord qualities, \
+voicings, register, rhythm and how long each chord holds in its records. Offer them with \
+`choices` and write only the one they pick.",
+            match words.trim() {
+                "" => String::new(),
+                w => format!(" for {w:?}"),
+            }
+        ));
+    }
+    Ok(out)
 }
 
 /// Measures a finished song to aim at; with a project, sets it as the song's reference and says

@@ -565,12 +565,14 @@ fn instruments(
             name: "Drums".into(),
             role: "drums".into(),
             confidence: (0.55 + busy * 0.6).min(0.95),
-            about: format!(
-                "{} on a {}-step bar, nearest Pina Studio {} groove",
-                parts.join(", "),
-                16,
-                g.nearest.replace('_', " ")
-            ),
+            about: match g.nearest.is_empty() {
+                true => format!("{} on a 16-step bar", parts.join(", ")),
+                false => format!(
+                    "{} on a 16-step bar, most like the beat of the {} playbook",
+                    parts.join(", "),
+                    g.nearest.replace('_', " ")
+                ),
+            },
             sections: in_sections(&|a: &Analysis| {
                 a.spectrum_db.presence > -24.0 || a.spectrum_db.bass > -10.0
             }),
@@ -663,7 +665,15 @@ fn genres(t: &Tempo, key: &Key, g: &Groove, mix: &Analysis) -> Vec<GenreMatch> {
             };
             let swing = (1.0 - (g.swing - b.swing).abs() / 15.0).max(0.0);
             let mode = if b.minor == key.minor { 1.0 } else { 0.4 };
-            let groove = if b.groove == g.nearest { 1.0 } else { 0.3 };
+            let groove = match (&b.beat, g.is_none()) {
+                (Some(beat), false) => playbook::Beat {
+                    kick: g.kick.clone(),
+                    snare: g.snare.clone(),
+                    hats: g.hats.clone(),
+                }
+                .likeness(beat),
+                _ => 0.3,
+            };
             let dist: f32 = (0..6).map(|i| (mine[i] - b.spectrum[i]).abs()).sum::<f32>() / 6.0;
             let balance = (1.0 - dist / 10.0).max(0.0);
             let score = 0.32 * tempo + 0.12 * swing + 0.1 * mode + 0.22 * groove + 0.24 * balance;
@@ -679,7 +689,7 @@ fn genres(t: &Tempo, key: &Key, g: &Groove, mix: &Analysis) -> Vec<GenreMatch> {
                 },
                 b.tempo.0,
                 b.tempo.1,
-                if groove >= 1.0 {
+                if groove >= 0.6 {
                     "like its"
                 } else {
                     "unlike its"
@@ -922,12 +932,10 @@ pub fn to_playbook(s: &Study, taken: &[String]) -> Playbook {
         name,
         tempo: ((bpm - 4.0).round(), (bpm + 4.0).round()),
         minor,
-        groove: match s.groove.nearest.is_empty() {
-            true => crate::music::theory::GROOVES[0].id.to_string(),
-            false => s.groove.nearest.clone(),
-        },
+        groove: String::new(),
         swing: s.groove.swing.round(),
-        harmony: if minor { "dark".into() } else { "warm".into() },
+        harmony: String::new(),
+        progressions: Vec::new(),
         parts,
         sections,
         lufs: (s.mix.overall.lufs * 2.0).round() / 2.0,
