@@ -16,6 +16,11 @@ use, and on what terms, is yours to decide.
 4. Pick tracks in the headers (⌘-click for several), loop the bars to write, and open Compose
    (its editor tab, or Compose… in a track's menu). Write.
 
+A model carries on what each track already plays: a bass line stays a bass line, a melody a
+melody. For chords, set the part's **Plays** to Chords (`--plays chords`): the track is then heard
+as keys and doesn't hear its own line, and the model is asked for three or more notes starting
+together. Single notes asks for one at a time; the model takes both as strong hints, not rules.
+
 The first write installs the model family's Python, which takes a few minutes and about 690 MB.
 After that, the model loads in seconds and stays up between takes, then stops itself after ten
 idle minutes.

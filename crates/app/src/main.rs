@@ -92,7 +92,8 @@ const USAGE: &str = "usage:
                                    one whose makers ask you to sign in
   pina composers remove <id>      a downloaded one deleted
   pina compose <project> --track N[,N] --bars 9-16 [--part bass] [--model <id>]
-                [--takes 3] [--temperature 0.9] [--seed N] [--set <name>=<level>] [--any-key]
+                [--plays chords|single] [--takes 3] [--temperature 0.9] [--seed N]
+                [--set <name>=<level>] [--any-key]
                                    bars written by a composer model with the rest of the song
                                    heard, in its key: each take a MIDI file in its MIDI folder
   pina separate <audio file> [--model <name>] [--out <folder>]

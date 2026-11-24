@@ -164,6 +164,20 @@ fn the_sheet_shows_where_it_is_at_every_step(cx: &mut TestAppContext) {
         ws.read_with(cx, |ws, _| ws.composer.parts.get(&id).copied()),
         Some(pina_engine::composer::score::Part::Strings)
     );
+    // Chords asked for: three notes or more starting together.
+    click_on(
+        cx,
+        leak(format!("compose-plays-{id}")),
+        Modifiers::none(),
+        MouseButton::Left,
+    );
+    pick(cx, &ws, "Chords");
+    assert_eq!(
+        ws.read_with(cx, |ws, _| ws.composer.steer[&id]
+            .get("min_polyphony")
+            .copied()),
+        Some(3)
+    );
     // Writing: where it's got, the notes so far, and Stop.
     ws.update(cx, |ws, cx| {
         ws.composer.job = Some(Job {

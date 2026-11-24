@@ -134,6 +134,46 @@ fn a_song_becomes_a_score_and_an_ask() {
 }
 
 #[test]
+fn chords_are_asked_for_by_how_many_notes_start_together() {
+    use super::score::Plays;
+    let mut steer = std::collections::BTreeMap::new();
+    steer.insert("max_polyphony".to_string(), 0);
+    steer.insert("note_density".to_string(), 4);
+    Plays::Chords.apply(&mut steer);
+    assert_eq!(steer.get("min_polyphony"), Some(&3));
+    assert_eq!(steer.get("max_polyphony"), None);
+    assert_eq!(Plays::of(&steer), Plays::Chords);
+    Plays::Single.apply(&mut steer);
+    assert_eq!(Plays::of(&steer), Plays::Single);
+    Plays::Any.apply(&mut steer);
+    assert_eq!(Plays::of(&steer), Plays::Any);
+    // What else it's steered by stays.
+    assert_eq!(steer.get("note_density"), Some(&4));
+    assert_eq!(Plays::named("chords"), Some(Plays::Chords));
+    // Chords on the bass: heard as keys, unless it's said what it is.
+    let p = song();
+    let mut ask = Ask {
+        tracks: vec![(1, None)],
+        bars: (2, 4),
+        ..Default::default()
+    };
+    Plays::Chords.apply(ask.steer.entry(1).or_default());
+    let pr = score::prompt(&p, &ask, &caps()).unwrap();
+    assert_eq!(
+        pr.body["score"]["tracks"][1]["instrument"],
+        Part::Keys.program()
+    );
+    // Its own line hidden from it, so it doesn't carry the line on: every bar but those written.
+    assert_eq!(pr.body["request"]["tracks"][1]["mask_bars"], json!([0, 1]));
+    ask.tracks[0].1 = Some(Part::Strings);
+    let pr = score::prompt(&p, &ask, &caps()).unwrap();
+    assert_eq!(
+        pr.body["score"]["tracks"][1]["instrument"],
+        Part::Strings.program()
+    );
+}
+
+#[test]
 fn what_cant_be_written_says_why() {
     let p = song();
     let none = |ask: Ask| score::prompt(&p, &ask, &caps()).err().unwrap();

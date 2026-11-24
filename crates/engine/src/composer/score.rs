@@ -136,6 +136,63 @@ impl Part {
     }
 }
 
+/// How a melodic part plays: chords, one note at a time, or as the model hears it. A model
+/// carries on what a track already plays (a bass line stays a bass line), so chords are asked
+/// for: MIDI-GPT's polyphony is how many notes start together, its level the count itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Plays {
+    Any,
+    Single,
+    Chords,
+}
+
+impl Plays {
+    pub const ALL: [Plays; 3] = [Plays::Any, Plays::Chords, Plays::Single];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Plays::Any => "As the model hears it",
+            Plays::Single => "Single notes",
+            Plays::Chords => "Chords",
+        }
+    }
+
+    pub fn named(s: &str) -> Option<Plays> {
+        match s.to_ascii_lowercase().as_str() {
+            "any" => Some(Plays::Any),
+            "single" | "single notes" | "notes" => Some(Plays::Single),
+            "chords" => Some(Plays::Chords),
+            _ => None,
+        }
+    }
+
+    /// `steer` (a part's controls) set to play this way: chords start three notes or more
+    /// together, single notes one at a time.
+    pub fn apply(self, steer: &mut BTreeMap<String, i64>) {
+        steer.remove("min_polyphony");
+        steer.remove("max_polyphony");
+        match self {
+            Plays::Any => {}
+            Plays::Chords => {
+                steer.insert("min_polyphony".into(), 3);
+            }
+            Plays::Single => {
+                steer.insert("max_polyphony".into(), 1);
+            }
+        }
+    }
+
+    /// How `steer` has a part play.
+    pub fn of(steer: &BTreeMap<String, i64>) -> Plays {
+        match (steer.get("min_polyphony"), steer.get("max_polyphony")) {
+            (Some(&m), _) if m >= 3 => Plays::Chords,
+            (_, Some(&m)) if m <= 1 => Plays::Single,
+            _ => Plays::Any,
+        }
+    }
+}
+
 /// What's asked of a model.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Ask {
@@ -208,8 +265,11 @@ pub fn prompt(p: &Project, ask: &Ask, caps: &Value) -> Result<Prompt, String> {
             .find(|(x, _)| *x == t)
             .map(|(_, part)| *part)
     };
-    // Every part that plays notes, heard; and those to write, even empty.
+    // Every part that plays notes, heard; and those to write, even empty. Those asked to play
+    // otherwise than they do (chords of a melody or bass line, single notes of chords) don't hear
+    // their own other bars, or they'd carry on as they were.
     let mut order = Vec::new();
+    let mut line = Vec::new();
     let mut tracks = Vec::new();
     for (t, tr) in p.tracks.iter().enumerate() {
         let Some(inst) = &tr.instrument else { continue };
@@ -219,10 +279,29 @@ pub fn prompt(p: &Project, ask: &Ask, caps: &Value) -> Result<Prompt, String> {
             continue;
         }
         let drums = inst.is_kit() || asked.flatten() == Some(Part::Drums);
-        let part = asked.flatten().unwrap_or_else(|| match drums {
-            true => Part::Drums,
-            false => Part::heard(&notes),
-        });
+        // Chords asked of a part that sounds like a lead or a bass: heard as keys, an
+        // instrument chords are written for (as a lead, the model mostly keeps to one note); and
+        // the other way round. Only what the model hears: the track sounds as it does.
+        let chords = ask.steer.get(&t).map(Plays::of) == Some(Plays::Chords);
+        // Asked to play otherwise than it does (chords of a line, single notes of chords).
+        let plays = ask.steer.get(&t).map_or(Plays::Any, Plays::of);
+        let otherwise = match (plays, Part::heard(&notes)) {
+            (Plays::Chords, Part::Lead | Part::Bass) => true,
+            (Plays::Single, Part::Keys) => !notes.is_empty(),
+            _ => false,
+        };
+        if otherwise && !drums {
+            line.push(t);
+        }
+        let part = asked
+            .flatten()
+            .unwrap_or_else(|| match (drums, Part::heard(&notes)) {
+                (true, _) => Part::Drums,
+                (false, Part::Lead | Part::Bass) if chords => Part::Keys,
+                // Single notes of what sounds like keys: heard as a lead, which plays them.
+                (false, Part::Keys) if plays == Plays::Single => Part::Lead,
+                (false, heard) => heard,
+            });
         let [n, d] = p.time_signature;
         let mut score_bars: Vec<Bar> = (0..bars)
             .map(|_| Bar {
@@ -272,6 +351,13 @@ pub fn prompt(p: &Project, ask: &Ask, caps: &Value) -> Result<Prompt, String> {
                 "bars": (b0..b1).collect::<Vec<u32>>(),
                 "attributes": attributes(&asked, caps, drum),
             });
+            if line.contains(&t) {
+                tp["mask_bars"] = json!(
+                    (0..bars as u32)
+                        .filter(|b| !(b0..b1).contains(b))
+                        .collect::<Vec<u32>>()
+                );
+            }
             if let (Some(mask), false) = (&key_mask, drum) {
                 tp["controls"] = json!({ "pitch_mask": mask });
             }

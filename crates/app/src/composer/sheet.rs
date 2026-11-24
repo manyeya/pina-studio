@@ -27,6 +27,8 @@ pub enum Act {
     Part(u64, Option<pina_engine::composer::score::Part>),
     /// A track's control (by its name) at a level, or left to the model.
     Steer(u64, String, Option<i64>),
+    /// How a track (by id) plays: chords, single notes, or as the model hears it.
+    Plays(u64, pina_engine::composer::score::Plays),
     Takes(u32),
     OnCpu(bool),
     /// Settings › Composers, to download another.
@@ -290,6 +292,33 @@ impl Workspace {
                         }),
                 );
             out.push(row.into_any_element());
+            // Chords or single notes: a model carries on what the track plays unless asked.
+            let plays = (!drum).then(|| {
+                use pina_engine::composer::score::Plays;
+                let now = self.composer.steer.get(&id).map_or(Plays::Any, Plays::of);
+                let items: Vec<(String, MenuAction)> = Plays::ALL
+                    .iter()
+                    .map(|&p| {
+                        (
+                            format!("{}{}", if p == now { "✓ " } else { "" }, p.name()),
+                            MenuAction::Compose(Act::Plays(id, p)),
+                        )
+                    })
+                    .collect();
+                dropdown(
+                    match now {
+                        Plays::Any => "Plays: any notes",
+                        Plays::Chords => "Plays: chords",
+                        Plays::Single => "Plays: single notes",
+                    },
+                    22.,
+                )
+                .flex_none()
+                .debug_selector(move || format!("compose-plays-{id}"))
+                .when(!busy, |d| {
+                    d.on_mouse_down(MouseButton::Left, menu(items, cx))
+                })
+            });
             // The model's own controls that fit this part: each a dropdown of its levels.
             let controls: Vec<(String, i64)> = info
                 .as_ref()
@@ -310,7 +339,7 @@ impl Workspace {
                         .collect()
                 })
                 .unwrap_or_default();
-            if controls.is_empty() {
+            if controls.is_empty() && plays.is_none() {
                 continue;
             }
             let chips = controls.into_iter().map(|(name, levels)| {
@@ -327,18 +356,28 @@ impl Workspace {
                     ),
                     MenuAction::Compose(Act::Steer(id, name.clone(), None)),
                 )];
-                items.extend((0..levels).map(|l| {
+                // Polyphony's level is how many notes start together (none is no level); the
+                // others' a step of theirs.
+                let counts = name.ends_with("polyphony");
+                let say = |l: i64| match counts {
+                    true => format!("{l}"),
+                    false => format!("{} of {levels}", l + 1),
+                };
+                items.extend((i64::from(counts)..levels).map(|l| {
                     (
-                        format!(
-                            "{}{} of {levels}",
-                            if set == Some(l) { "✓ " } else { "" },
-                            l + 1
-                        ),
+                        format!("{}{}", if set == Some(l) { "✓ " } else { "" }, say(l)),
                         MenuAction::Compose(Act::Steer(id, name.clone(), Some(l))),
                     )
                 }));
                 let label = match set {
-                    Some(l) => format!("{}: {}", control_name(&name), l + 1),
+                    Some(l) => format!(
+                        "{}: {}",
+                        control_name(&name),
+                        match counts {
+                            true => l.to_string(),
+                            false => (l + 1).to_string(),
+                        }
+                    ),
                     None => control_name(&name),
                 };
                 dropdown(label, 22.)
@@ -357,6 +396,7 @@ impl Workspace {
                     .flex_wrap()
                     .gap(px(4.))
                     .pl(px(19.))
+                    .children(plays)
                     .children(chips)
                     .into_any_element(),
             );

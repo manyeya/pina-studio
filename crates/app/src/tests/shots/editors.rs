@@ -489,7 +489,7 @@ fn compose_shot(page: &str, ws: &mut Workspace, cx: &mut gpui::Context<Workspace
     ws.region = None;
     ws.composer
         .steer
-        .insert(lead, [("max_polyphony".to_string(), 0)].into());
+        .insert(lead, [("min_polyphony".to_string(), 3)].into());
     if page == "composers" {
         ws.composer.up = Some("midigpt-yellow-small".into());
         ws.show_settings(crate::pages::settings::Section::Composers, cx);

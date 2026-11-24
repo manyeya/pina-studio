@@ -28,6 +28,11 @@ first for changes that break songs or commands made before.
 - `pina composers [get|remove|token]` and `pina compose <project> --track N[,N] --bars 9-16`
   from the command line, each take a MIDI file in the song's MIDI folder; the Studio Agent's
   `compose` tool writes them the same way, as cards in its panel to hear and drag in.
+- Compose writes chords when asked: each part's Plays is chords, single notes or as the model
+  hears it (`--plays` and the agent's `plays` too). A model carries on what a track already
+  plays, so a bass line stayed a bass line and a lead a lead: asked for chords, a track that
+  plays a line is heard as keys and doesn't hear its own line, and the takes come back as
+  chords. Polyphony's controls say how many notes start together.
 - A composer model Hugging Face won't give says why, in its terms: the token not taken, the
   account not given access to the model yet (agree to its terms on its page), or a
   fine-grained token that may not read gated models.

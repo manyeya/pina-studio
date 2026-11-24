@@ -8,7 +8,7 @@ use pina_engine::{
     composer::{
         self,
         catalog::{KNOWN, Known},
-        score::{self, Ask, Part},
+        score::{self, Ask, Part, Plays},
         server,
     },
     song::midi_file::{MidiFile, Part as MidiPart},
@@ -80,18 +80,25 @@ pub fn token(t: &str) -> Result<Value, String> {
     Ok(json!({ "signed_in": true }))
 }
 
-const COMPOSE_USAGE: &str = "pina compose <project> --track N[,N] --bars 9-16 [--part bass] [--model id] [--takes 3] [--temperature 0.9] [--seed N] [--set name=level] [--any-key] [--name <name>]";
+const COMPOSE_USAGE: &str = "pina compose <project> --track N[,N] --bars 9-16 [--part bass] [--plays chords|single] [--model id] [--takes 3] [--temperature 0.9] [--seed N] [--set name=level] [--any-key] [--name <name>]";
 
 /// Bars of the song at `dir` written by a downloaded composer model, each take a MIDI file in
 /// the song's MIDI folder. `args` as `COMPOSE_USAGE` says; bars count from 1, both ends kept.
 pub fn compose(dir: &Path, args: &[&str]) -> Result<Value, String> {
-    compose_parts(dir, args, &[])
+    compose_parts(dir, args, &[], &[])
 }
 
 /// As `compose`, each track (in the order `--track` gives them) heard as the part `parts`
-/// names, where it names one: the Studio Agent's `compose`.
-pub fn compose_parts(dir: &Path, args: &[&str], parts: &[&str]) -> Result<Value, String> {
+/// names and playing as `plays` says (chords, single), where they say: the Studio Agent's
+/// `compose`.
+pub fn compose_parts(
+    dir: &Path,
+    args: &[&str],
+    parts: &[&str],
+    plays: &[&str],
+) -> Result<Value, String> {
     let mut ask = Ask::default();
+    let mut every: Option<Plays> = None;
     let mut model = None;
     let mut name = None;
     let mut it = args.iter().copied();
@@ -109,6 +116,12 @@ pub fn compose_parts(dir: &Path, args: &[&str], parts: &[&str]) -> Result<Value,
                     let t = t.trim().parse().map_err(|_| format!("{t} isn't a track"))?;
                     ask.tracks.push((t, None));
                 }
+            }
+            "--plays" => {
+                let v = value()?;
+                every = Some(
+                    Plays::named(v).ok_or_else(|| format!("--plays {v}: chords, single or any"))?,
+                );
             }
             "--part" => {
                 let v = value()?;
@@ -148,6 +161,16 @@ pub fn compose_parts(dir: &Path, args: &[&str], parts: &[&str]) -> Result<Value,
     for (t, name) in ask.tracks.iter_mut().zip(parts) {
         if !name.is_empty() {
             t.1 = Some(Part::named(name).ok_or_else(|| format!("{name} isn't a part"))?);
+        }
+    }
+    let tracks: Vec<usize> = ask.tracks.iter().map(|t| t.0).collect();
+    for (i, &t) in tracks.iter().enumerate() {
+        let how = match plays.get(i).filter(|p| !p.is_empty()) {
+            Some(p) => Some(Plays::named(p).ok_or_else(|| format!("{p}: chords, single or any"))?),
+            None => every,
+        };
+        if let Some(how) = how {
+            how.apply(ask.steer.entry(t).or_default());
         }
     }
     let folder = composer::folder();

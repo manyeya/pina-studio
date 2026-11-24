@@ -48,6 +48,7 @@ impl Workspace {
                     }
                 }
             }
+            Act::Plays(id, p) => p.apply(self.composer.steer.entry(id).or_default()),
             Act::Takes(n) => self.composer.takes_n = n.clamp(1, 16),
             Act::OnCpu(on) => {
                 self.settings.compose_on_cpu = on;
