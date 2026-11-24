@@ -13,15 +13,16 @@ permissions:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    # Visual Studio 2022's image. On the one with Visual Studio 2026 (windows-latest since 2026-11,
+    # MSVC 14.51), whisper.cpp (lyrics) can't be built: CMake's first test link can't start
+    # link.exe, with either of its generators. Back to windows-latest once that builds.
+    runs-on: windows-2022
     env:
       # The C runtime is Microsoft's DLLs, beside the app (copied below): ONNX Runtime's library is
       # built against them, and a C runtime linked in can't be linked with it.
       CARGO_TERM_COLOR: always
-      # whisper.cpp (lyrics) is built with CMake. Its Visual Studio generator finds the compiler
-      # itself, and on the image with Visual Studio 2026 (MSVC 14.51) it looks where the compiler
-      # isn't. Ninja, inside Visual Studio's own build environment, is handed the compiler that's
-      # on the PATH instead (the cmake crate passes it), whatever the image.
+      # whisper.cpp is built with CMake, by Ninja inside Visual Studio's own build environment: it's
+      # handed the compiler that's on the PATH (the cmake crate passes it).
       CMAKE_GENERATOR: Ninja
     steps:
       - uses: actions/checkout@v4
