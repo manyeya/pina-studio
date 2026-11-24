@@ -28,6 +28,9 @@ first for changes that break songs or commands made before.
 - `pina composers [get|remove|token]` and `pina compose <project> --track N[,N] --bars 9-16`
   from the command line, each take a MIDI file in the song's MIDI folder; the Studio Agent's
   `compose` tool writes them the same way, as cards in its panel to hear and drag in.
+- A composer model Hugging Face won't give says why, in its terms: the token not taken, the
+  account not given access to the model yet (agree to its terms on its page), or a
+  fine-grained token that may not read gated models.
 
 ### Changed
 

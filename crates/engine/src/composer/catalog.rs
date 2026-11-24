@@ -5,6 +5,7 @@
 
 use std::{
     path::{Path, PathBuf},
+    process::Command,
     sync::atomic::AtomicBool,
 };
 
@@ -144,8 +145,8 @@ impl Known {
     }
 }
 
-/// `k` downloaded into `dir`, `token` sent where its makers ask the person to sign in. A model
-/// whose terms haven't been accepted says so, and where.
+/// `k` downloaded into `dir`, `token` sent where its makers ask the person to sign in. When the
+/// host won't give it, why, as the host says it, and what to do.
 pub fn download(
     k: &Known,
     dir: &Path,
@@ -153,24 +154,86 @@ pub fn download(
     progress: impl FnMut(u64),
     stop: &AtomicBool,
 ) -> Result<PathBuf, String> {
-    let sign_in = || {
-        format!(
+    if k.gated && token.is_none() {
+        return Err(format!(
             "{}'s makers ask you to sign in first: accept their terms at {}, then give Pina Studio a Hugging Face token",
             k.name, k.page
-        )
-    };
-    if k.gated && token.is_none() {
-        return Err(sign_in());
+        ));
+    }
+    if let Some(t) = token {
+        allowed(k, t)?;
     }
     let to = k.file_in(dir);
     if let Some(d) = to.parent() {
         std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
     }
     let header = token.map(|t| format!("Authorization: Bearer {t}"));
-    crate::separate::catalog::fetch_as(k.url, k.bytes, &to, header.as_deref(), progress, stop)
-        .map_err(|e| match e.contains(" 401") || e.contains(" 403") {
-            true => sign_in(),
-            false => e,
-        })?;
-    Ok(to)
+    let got =
+        crate::separate::catalog::fetch_as(k.url, k.bytes, &to, header.as_deref(), progress, stop);
+    if got.is_err()
+        && let Some(d) = to.parent()
+    {
+        // Nothing came down: no empty folder left to look like a model.
+        let _ = std::fs::remove_dir(d);
+    }
+    got.map(|_| to)
+}
+
+/// Whether the host gives `k` to whoever `token` is: its first byte asked for. Refused, why,
+/// in the host's terms: the token not taken, the account not given access yet, or a token
+/// that may not read gated models.
+fn allowed(k: &Known, token: &str) -> Result<(), String> {
+    let ask = |url: &str, range: bool| {
+        let mut c = Command::new("curl");
+        c.args([
+            "-sS",
+            "-L",
+            "-A",
+            "PinaStudio",
+            "--max-time",
+            "30",
+            "-o",
+            "-",
+        ])
+        .args(["-w", "\n%{http_code}", "-H"])
+        .arg(format!("Authorization: Bearer {token}"));
+        if range {
+            c.args(["-r", "0-0"]);
+        }
+        let out = c
+            .arg(url)
+            .output()
+            .map_err(|e| format!("Couldn't start curl: {e}"))?;
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let (body, code) = text.rsplit_once('\n').unwrap_or(("", &text));
+        Ok::<_, String>((body.to_string(), code.trim().to_string()))
+    };
+    let (body, code) = ask(k.url, true)?;
+    match code.as_str() {
+        "200" | "206" => Ok(()),
+        "401" => Err(
+            "Hugging Face didn't take the token: it may have been mistyped or deleted. Make a new one at huggingface.co/settings/tokens (Read is enough) and paste it in Settings › Composers"
+                .into(),
+        ),
+        "403" => {
+            // A fine-grained token may only read gated models when it's been allowed to.
+            let fine = ask("https://huggingface.co/api/whoami-v2", false)
+                .ok()
+                .and_then(|(b, _)| serde_json::from_str::<serde_json::Value>(&b).ok())
+                .is_some_and(|w| w["auth"]["accessToken"]["role"] == "fineGrained");
+            let token_too = match fine {
+                true => " Your token is fine-grained: in its settings on Hugging Face, tick “Read access to contents of all public gated repos you can access” (or make a Read token instead).",
+                false => "",
+            };
+            Err(match body.contains("authorized list") || body.contains("ask for access") {
+                true => format!(
+                    "Hugging Face hasn't given your account {} yet: open {} signed in to Hugging Face and agree to its terms (access comes straight away), then Download again.{token_too}",
+                    k.name, k.page
+                ),
+                false => format!("Hugging Face refused the download: {}{token_too}", body.trim()),
+            })
+        }
+        "" | "000" => Err("Couldn't reach Hugging Face: check the connection".into()),
+        c => Err(format!("Hugging Face answered {c}: {}", body.trim())),
+    }
 }
