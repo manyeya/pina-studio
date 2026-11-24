@@ -354,7 +354,11 @@ impl Workspace {
                 composer::save_info(m.known, &dir, &info);
                 say(Said::Info(m.known.id, info.clone()));
                 let prompt = score::prompt(&project, &ask, &info)?;
-                let resolution = info["resolution"].as_u64().unwrap_or(12) as u32;
+                // The ticks its notes come back in: not `info`'s resolution (the model's own), but
+                // what its tokenizer writes them out at, learned from its answers (1920 for
+                // MIDI-GPT).
+                let mut info = info;
+                let mut resolution = info["output_resolution"].as_u64().unwrap_or(1920) as u32;
                 for k in 0..n {
                     say(Said::Take(k + 1, n));
                     let answer = server::generate(
@@ -369,6 +373,14 @@ impl Workspace {
                         },
                         &stop,
                     )?;
+                    if let Some(r) = answer["score"]["resolution"]
+                        .as_u64()
+                        .filter(|&r| r as u32 != resolution && r > 0)
+                    {
+                        resolution = r as u32;
+                        info["output_resolution"] = r.into();
+                        composer::save_info(m.known, &dir, &info);
+                    }
                     for t in score::takes(&answer, &prompt, &ask)? {
                         say(Said::Done(Take {
                             seed: t.seed,

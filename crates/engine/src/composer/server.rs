@@ -40,7 +40,7 @@ pub struct Progress {
 }
 
 /// A note as it's written, before the take is done: its part (the request's track), its bar,
-/// and where in it, in the model's own ticks (`info`'s resolution).
+/// and where in it, in the ticks the model's answers come in (their score's resolution).
 #[derive(Clone, Debug, PartialEq, serde::Deserialize)]
 pub struct Written {
     pub track: usize,
@@ -164,7 +164,16 @@ pub fn install(
     if !tool(&env, "python").is_file() {
         say("Getting Python 3.12");
         let mut c = uv_cmd();
-        c.args(["venv", "--python", "3.12"]).arg(&env);
+        // uv's own Python, always: it needs none on the computer, and one there being changed or
+        // taken away later can't break the model's.
+        c.args([
+            "venv",
+            "--python",
+            "3.12",
+            "--python-preference",
+            "only-managed",
+        ])
+        .arg(&env);
         run(c, say, stop)?;
     }
     say(&format!("Installing {}", family.package()));

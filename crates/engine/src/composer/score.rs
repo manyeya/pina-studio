@@ -341,7 +341,8 @@ fn attributes(asked: &BTreeMap<String, i64>, caps: &Value, drum: bool) -> Value 
 }
 
 /// Notes streamed while a take is written, as the song's notes: by its track, at their ticks in
-/// the song. `resolution` is the model's own (`info`'s), the ticks they come in.
+/// the song. `resolution` is the ticks a quarter they come in: what the model writes its answers
+/// at (its score's resolution), which isn't `info`'s (the model's own grid).
 pub fn written(
     notes: &[super::server::Written],
     prompt: &Prompt,
