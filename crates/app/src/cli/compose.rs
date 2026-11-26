@@ -80,7 +80,7 @@ pub fn token(t: &str) -> Result<Value, String> {
     Ok(json!({ "signed_in": true }))
 }
 
-const COMPOSE_USAGE: &str = "pina compose <project> --track N[,N] --bars 9-16 [--part bass] [--plays chords|single] [--model id] [--takes 3] [--temperature 0.9] [--seed N] [--set name=level] [--any-key] [--name <name>]";
+const COMPOSE_USAGE: &str = "pina compose <project> --track N[,N] --bars 9-16 [--part bass] [--plays chords|held|single] [--model id] [--takes 3] [--temperature 0.9] [--seed N] [--set name=level] [--any-key] [--name <name>]";
 
 /// Bars of the song at `dir` written by a downloaded composer model, each take a MIDI file in
 /// the song's MIDI folder. `args` as `COMPOSE_USAGE` says; bars count from 1, both ends kept.

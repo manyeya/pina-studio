@@ -7,7 +7,10 @@ use gpui::{
     prelude::*, px, rgb, size,
 };
 use pina_engine::{
-    composer::catalog::{KNOWN, Known},
+    composer::{
+        catalog::{KNOWN, Known},
+        score,
+    },
     song::project::Note,
 };
 
@@ -309,6 +312,7 @@ impl Workspace {
                     match now {
                         Plays::Any => "Plays: any notes",
                         Plays::Chords => "Plays: chords",
+                        Plays::Held => "Plays: held chords",
                         Plays::Single => "Plays: single notes",
                     },
                     22.,
@@ -336,6 +340,10 @@ impl Workspace {
                                 _ => true,
                             }
                         })
+                        // By the one name each is known by here (a model's per-bar control
+                        // the same as another's for the whole part), those shown as a level.
+                        .filter(|(name, _)| score::shown(name))
+                        .map(|(name, levels)| (score::control(&name).to_string(), levels))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -356,12 +364,15 @@ impl Workspace {
                     ),
                     MenuAction::Compose(Act::Steer(id, name.clone(), None)),
                 )];
-                // Polyphony's level is how many notes start together (none is no level); the
-                // others' a step of theirs.
+                // Polyphony's level is how many notes start together (none is no level); a note
+                // length's its note value; the others' a step of theirs.
                 let counts = name.ends_with("polyphony");
-                let say = |l: i64| match counts {
-                    true => format!("{l}"),
-                    false => format!("{} of {levels}", l + 1),
+                let say = |l: i64| match (counts, name.ends_with("note_duration")) {
+                    (true, _) => format!("{l}"),
+                    (_, true) => score::NOTE_VALUES
+                        .get(l as usize)
+                        .map_or(format!("{}", l + 1), |v| v.to_string()),
+                    _ => format!("{} of {levels}", l + 1),
                 };
                 items.extend((i64::from(counts)..levels).map(|l| {
                     (
@@ -370,14 +381,7 @@ impl Workspace {
                     )
                 }));
                 let label = match set {
-                    Some(l) => format!(
-                        "{}: {}",
-                        control_name(&name),
-                        match counts {
-                            true => l.to_string(),
-                            false => (l + 1).to_string(),
-                        }
-                    ),
+                    Some(l) => format!("{}: {}", control_name(&name), say(l)),
                     None => control_name(&name),
                 };
                 dropdown(label, 22.)

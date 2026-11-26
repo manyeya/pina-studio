@@ -28,8 +28,10 @@ first for changes that break songs or commands made before.
 - `pina composers [get|remove|token]` and `pina compose <project> --track N[,N] --bars 9-16`
   from the command line, each take a MIDI file in the song's MIDI folder; the Studio Agent's
   `compose` tool writes them the same way, as cards in its panel to hear and drag in.
-- Compose writes chords when asked: each part's Plays is chords, single notes or as the model
-  hears it (`--plays` and the agent's `plays` too). A model carries on what a track already
+- Compose writes chords and pads when asked: each part's Plays is chords, held chords (pads:
+  long notes), single notes or as the model hears it (`--plays` and the agent's `plays` too).
+  Every model is asked by its own names: Prism and Expressive set their polyphony per bar, and
+  were never asked for chords before. A model carries on what a track already
   plays, so a bass line stayed a bass line and a lead a lead: asked for chords, a track that
   plays a line is heard as keys and doesn't hear its own line, and the takes come back as
   chords. Polyphony's controls say how many notes start together.
@@ -62,6 +64,10 @@ first for changes that break songs or commands made before.
 
 ### Fixed
 
+- A take could fail as "identical to original" when the bars it wrote already had notes: the
+  bars being written go to the model empty.
+- A composer model's server noted long ago is only ended if it's still a model's server, never
+  another program that's since been given its number.
 - The chop flipper's Play it left its track soloed when it was stopped before the screen had
   drawn it playing (a quick press, a quick computer). Stopping it, however it's stopped, lets the
   solo go.

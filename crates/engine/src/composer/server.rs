@@ -371,6 +371,11 @@ pub fn stop_server(family: Family, dir: &Path) {
 
 /// The process `pid` ended.
 fn end(pid: u32) {
+    // A server noted long ago may be gone, its number since given to something else: only a
+    // model's server is ended.
+    if !serves(pid) {
+        return;
+    }
     let _ = match cfg!(windows) {
         true => Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/F"])
@@ -383,6 +388,21 @@ fn end(pid: u32) {
             .stderr(Stdio::null())
             .status(),
     };
+}
+
+/// Whether process `pid` is a composer model's server (its Python, running its package).
+fn serves(pid: u32) -> bool {
+    let out = match cfg!(windows) {
+        true => Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output(),
+        false => Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "command="])
+            .output(),
+    };
+    out.ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase())
+        .is_some_and(|c| c.contains("midigpt") || (cfg!(windows) && c.contains("python")))
 }
 
 /// The server runs on its own, past this process (the app quitting, or the command that started

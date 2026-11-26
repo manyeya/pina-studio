@@ -145,16 +145,22 @@ pub enum Plays {
     Any,
     Single,
     Chords,
+    /// Chords held: a pad's.
+    Held,
 }
 
+/// Note lengths as their levels are (`min_note_duration`, `max_note_duration`): a 32nd up.
+pub const NOTE_VALUES: [&str; 6] = ["32nd", "16th", "8th", "Quarter", "Half", "Whole"];
+
 impl Plays {
-    pub const ALL: [Plays; 3] = [Plays::Any, Plays::Chords, Plays::Single];
+    pub const ALL: [Plays; 4] = [Plays::Any, Plays::Chords, Plays::Held, Plays::Single];
 
     pub fn name(self) -> &'static str {
         match self {
             Plays::Any => "As the model hears it",
             Plays::Single => "Single notes",
             Plays::Chords => "Chords",
+            Plays::Held => "Held chords (pads)",
         }
     }
 
@@ -163,19 +169,25 @@ impl Plays {
             "any" => Some(Plays::Any),
             "single" | "single notes" | "notes" => Some(Plays::Single),
             "chords" => Some(Plays::Chords),
+            "held" | "pads" | "pad" | "held chords" => Some(Plays::Held),
             _ => None,
         }
     }
 
     /// `steer` (a part's controls) set to play this way: chords start three notes or more
-    /// together, single notes one at a time.
+    /// together, held ones last a half note or more, single notes start one at a time.
     pub fn apply(self, steer: &mut BTreeMap<String, i64>) {
-        steer.remove("min_polyphony");
-        steer.remove("max_polyphony");
+        for k in ["min_polyphony", "max_polyphony", "min_note_duration"] {
+            steer.remove(k);
+        }
         match self {
             Plays::Any => {}
             Plays::Chords => {
                 steer.insert("min_polyphony".into(), 3);
+            }
+            Plays::Held => {
+                steer.insert("min_polyphony".into(), 3);
+                steer.insert("min_note_duration".into(), 4);
             }
             Plays::Single => {
                 steer.insert("max_polyphony".into(), 1);
@@ -185,12 +197,33 @@ impl Plays {
 
     /// How `steer` has a part play.
     pub fn of(steer: &BTreeMap<String, i64>) -> Plays {
+        let held = steer.get("min_note_duration").is_some_and(|&d| d >= 4);
         match (steer.get("min_polyphony"), steer.get("max_polyphony")) {
+            (Some(&m), _) if m >= 3 && held => Plays::Held,
             (Some(&m), _) if m >= 3 => Plays::Chords,
             (_, Some(&m)) if m <= 1 => Plays::Single,
             _ => Plays::Any,
         }
     }
+
+    fn chords(self) -> bool {
+        matches!(self, Plays::Chords | Plays::Held)
+    }
+}
+
+/// A control by the one name it's known by here, whatever a model calls it: some have it per
+/// bar (`bar_min_polyphony`), some for the whole part (`min_polyphony`).
+pub fn control(name: &str) -> &str {
+    name.strip_prefix("bar_").unwrap_or(name)
+}
+
+/// The controls a sheet can show as a level: not those that are sets or ranges (a pitch class
+/// set, a pitch range) or that the song decides (its key).
+pub fn shown(name: &str) -> bool {
+    !matches!(
+        control(name),
+        "pitch_class_set" | "pitch_range" | "key_signature"
+    )
 }
 
 /// What's asked of a model.
@@ -282,11 +315,10 @@ pub fn prompt(p: &Project, ask: &Ask, caps: &Value) -> Result<Prompt, String> {
         // Chords asked of a part that sounds like a lead or a bass: heard as keys, an
         // instrument chords are written for (as a lead, the model mostly keeps to one note); and
         // the other way round. Only what the model hears: the track sounds as it does.
-        let chords = ask.steer.get(&t).map(Plays::of) == Some(Plays::Chords);
         // Asked to play otherwise than it does (chords of a line, single notes of chords).
         let plays = ask.steer.get(&t).map_or(Plays::Any, Plays::of);
         let otherwise = match (plays, Part::heard(&notes)) {
-            (Plays::Chords, Part::Lead | Part::Bass) => true,
+            (p, Part::Lead | Part::Bass) if p.chords() => true,
             (Plays::Single, Part::Keys) => !notes.is_empty(),
             _ => false,
         };
@@ -297,7 +329,8 @@ pub fn prompt(p: &Project, ask: &Ask, caps: &Value) -> Result<Prompt, String> {
             .flatten()
             .unwrap_or_else(|| match (drums, Part::heard(&notes)) {
                 (true, _) => Part::Drums,
-                (false, Part::Lead | Part::Bass) if chords => Part::Keys,
+                (false, Part::Lead | Part::Bass) if plays == Plays::Held => Part::Pad,
+                (false, Part::Lead | Part::Bass) if plays.chords() => Part::Keys,
                 // Single notes of what sounds like keys: heard as a lead, which plays them.
                 (false, Part::Keys) if plays == Plays::Single => Part::Lead,
                 (false, heard) => heard,
@@ -313,6 +346,11 @@ pub fn prompt(p: &Project, ask: &Ask, caps: &Value) -> Result<Prompt, String> {
             .collect();
         for note in notes.iter().filter(|n| n.start >= 0) {
             let b = note.start as u64 / bar;
+            // The bars to write go empty: what's there is to be replaced, not copied (a take the
+            // same as what was there is turned down by the model, and fails).
+            if asked.is_some() && (b0 as u64..b1 as u64).contains(&b) {
+                continue;
+            }
             if let Some(sb) = score_bars.get_mut(b as usize) {
                 sb.notes.push(ScoreNote {
                     pitch: note.pitch,
@@ -346,11 +384,19 @@ pub fn prompt(p: &Project, ask: &Ask, caps: &Value) -> Result<Prompt, String> {
             let drum = score.tracks[i].track_type == "drum";
             let mut asked = ask.attributes.clone();
             asked.extend(ask.steer.get(&t).cloned().unwrap_or_default());
+            let (whole, per_bar) = attributes(&asked, caps, drum);
             let mut tp = json!({
                 "id": i,
                 "bars": (b0..b1).collect::<Vec<u32>>(),
-                "attributes": attributes(&asked, caps, drum),
+                "attributes": whole,
             });
+            if !per_bar.is_empty() {
+                tp["bar_attributes"] = json!(
+                    (b0..b1)
+                        .map(|b| (b.to_string(), Value::Object(per_bar.clone())))
+                        .collect::<serde_json::Map<String, Value>>()
+                );
+            }
             if line.contains(&t) {
                 tp["mask_bars"] = json!(
                     (0..bars as u32)
@@ -408,22 +454,40 @@ fn pitch_mask(p: &Project, caps: &Value) -> Option<Value> {
 }
 
 /// The controls asked for that the model has for this kind of part, each kept within its levels.
-fn attributes(asked: &BTreeMap<String, i64>, caps: &Value, drum: bool) -> Value {
-    let mut out = serde_json::Map::new();
+/// Each by the name the model has it under: those it has for the whole part, and those it has
+/// per bar (`bar_…`, and a pitch class set), to set on every bar written.
+fn attributes(
+    asked: &BTreeMap<String, i64>,
+    caps: &Value,
+    drum: bool,
+) -> (Value, serde_json::Map<String, Value>) {
+    let (mut whole, mut per_bar) = (serde_json::Map::new(), serde_json::Map::new());
     for (name, &level) in asked {
-        let Some(levels) = caps["attributes"][name].as_i64() else {
-            continue;
+        let name = control(name);
+        let bar_name = format!("bar_{name}");
+        let (named, levels) = match (
+            caps["attributes"][name].as_i64(),
+            caps["attributes"][&bar_name].as_i64(),
+        ) {
+            (Some(l), _) => (name.to_string(), l),
+            (None, Some(l)) => (bar_name, l),
+            (None, None) => continue,
         };
-        let fits = match caps["attribute_track_types"][name].as_str() {
+        let fits = match caps["attribute_track_types"][&named].as_str() {
             Some("drum") => drum,
             Some("melodic") => !drum,
             _ => true,
         };
-        if fits {
-            out.insert(name.clone(), json!(level.clamp(0, (levels - 1).max(0))));
+        if !fits {
+            continue;
         }
+        let level = json!(level.clamp(0, (levels - 1).max(0)));
+        match named.starts_with("bar_") || named == "pitch_class_set" {
+            true => per_bar.insert(named, level),
+            false => whole.insert(named, level),
+        };
     }
-    Value::Object(out)
+    (Value::Object(whole), per_bar)
 }
 
 /// Notes streamed while a take is written, as the song's notes: by its track, at their ticks in

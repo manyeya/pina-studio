@@ -150,6 +150,12 @@ fn chords_are_asked_for_by_how_many_notes_start_together() {
     // What else it's steered by stays.
     assert_eq!(steer.get("note_density"), Some(&4));
     assert_eq!(Plays::named("chords"), Some(Plays::Chords));
+    Plays::Held.apply(&mut steer);
+    assert_eq!(Plays::of(&steer), Plays::Held);
+    assert_eq!(steer.get("min_note_duration"), Some(&4));
+    Plays::Chords.apply(&mut steer);
+    assert_eq!(steer.get("min_note_duration"), None);
+    assert_eq!(Plays::named("pads"), Some(Plays::Held));
     // Chords on the bass: heard as keys, unless it's said what it is.
     let p = song();
     let mut ask = Ask {
@@ -170,6 +176,72 @@ fn chords_are_asked_for_by_how_many_notes_start_together() {
     assert_eq!(
         pr.body["score"]["tracks"][1]["instrument"],
         Part::Strings.program()
+    );
+}
+
+#[test]
+fn each_model_is_asked_by_its_own_names_and_per_bar_where_it_has_them() {
+    use super::score::Plays;
+    // Prism's polyphony is per bar (`bar_min_polyphony`), its note length for the whole part.
+    let prism = json!({
+        "attributes": { "bar_min_polyphony": 10, "bar_max_polyphony": 10, "min_note_duration": 6,
+            "bar_note_density": 10, "pitch_class_set": 13 },
+        "attribute_track_types": { "bar_min_polyphony": "melodic", "bar_max_polyphony": "melodic",
+            "min_note_duration": "melodic", "bar_note_density": "drum",
+            "pitch_class_set": "melodic" },
+    });
+    let p = song();
+    let mut ask = Ask {
+        tracks: vec![(1, None)],
+        bars: (2, 4),
+        ..Default::default()
+    };
+    Plays::Held.apply(ask.steer.entry(1).or_default());
+    let pr = score::prompt(&p, &ask, &prism).unwrap();
+    let tp = &pr.body["request"]["tracks"][1];
+    assert_eq!(tp["attributes"], json!({ "min_note_duration": 4 }));
+    assert_eq!(
+        tp["bar_attributes"],
+        json!({ "2": { "bar_min_polyphony": 3 }, "3": { "bar_min_polyphony": 3 } })
+    );
+    // Held chords of a bass: heard as a pad.
+    assert_eq!(
+        pr.body["score"]["tracks"][1]["instrument"],
+        Part::Pad.program()
+    );
+    // Yellow's for the whole part, under the same names.
+    let pr = score::prompt(&p, &ask, &caps()).unwrap();
+    assert_eq!(
+        pr.body["request"]["tracks"][1]["attributes"],
+        json!({ "min_polyphony": 3 })
+    );
+    assert!(
+        pr.body["request"]["tracks"][1]
+            .get("bar_attributes")
+            .is_none()
+    );
+    assert!(score::shown("bar_min_polyphony") && !score::shown("pitch_class_set"));
+}
+
+#[test]
+fn the_bars_written_go_empty_and_the_rest_is_heard() {
+    let p = song();
+    // The bass has notes in bars 1 and 2; writing bar 2 sends it without them.
+    let ask = Ask {
+        tracks: vec![(1, None)],
+        bars: (1, 2),
+        ..Default::default()
+    };
+    let pr = score::prompt(&p, &ask, &caps()).unwrap();
+    let bars = &pr.body["score"]["tracks"][1]["bars"];
+    assert_eq!(bars[0]["notes"].as_array().unwrap().len(), 1);
+    assert!(bars[1]["notes"].as_array().unwrap().is_empty());
+    // A part only heard keeps its bars.
+    assert!(
+        !pr.body["score"]["tracks"][0]["bars"][1]["notes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
 }
 
